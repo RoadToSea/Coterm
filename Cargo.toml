@@ -1,0 +1,41 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/coterm-proto",
+    "crates/coterm-core",
+    "crates/coterm-mcp",
+    "plugins/plugin-local",
+    "apps/desktop/src-tauri",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["Coterm Contributors"]
+license = "MIT"
+repository = "https://github.com/coterm/coterm"
+
+[workspace.dependencies]
+# Internal crates
+coterm-proto = { path = "crates/coterm-proto" }
+coterm-core = { path = "crates/coterm-core" }
+coterm-mcp = { path = "crates/coterm-mcp" }
+
+# Serialization & JSON
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Async & Runtime
+tokio = { version = "1.40", features = ["full"] }
+futures = "0.3"
+
+# Error Handling & Logging
+anyhow = "1.0"
+thiserror = "1.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Utility
+uuid = { version = "1.10", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+regex = "1.10"

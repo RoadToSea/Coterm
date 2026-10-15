@@ -1,0 +1,16 @@
+{
+  "name": "coterm-monorepo",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The Collaborative Terminal for Humans and AI Agents",
+  "scripts": {
+    "dev": "pnpm --filter coterm-desktop dev",
+    "build": "pnpm --filter coterm-desktop build",
+    "tauri": "pnpm --filter coterm-desktop tauri",
+    "tauri:dev": "pnpm --filter coterm-desktop tauri dev",
+    "tauri:build": "pnpm --filter coterm-desktop tauri build"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.0.0"
+  }
+}

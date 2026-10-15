@@ -1,0 +1,23 @@
+{
+  "$schema": "../../schemas/plugin-manifest.schema.json",
+  "id": "coterm-plugin-ssh",
+  "name": "SSH Client",
+  "version": "0.1.0",
+  "description": "Secure Shell remote connection plugin",
+  "protocol": "ssh",
+  "entry_point": "coterm-plugin-ssh",
+  "config_schema": {
+    "type": "object",
+    "required": ["host", "port", "username"],
+    "properties": {
+      "host": { "type": "string", "description": "Remote host IP or domain" },
+      "port": { "type": "integer", "default": 22 },
+      "username": { "type": "string", "default": "root" },
+      "auth_type": {
+        "type": "string",
+        "enum": ["password", "private_key", "agent"],
+        "default": "password"
+      }
+    }
+  }
+}

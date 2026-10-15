@@ -1,0 +1,24 @@
+{
+  "$schema": "../../schemas/plugin-manifest.schema.json",
+  "id": "coterm-plugin-local",
+  "name": "Local Terminal",
+  "version": "0.1.0",
+  "description": "Native local PTY shell (PowerShell, CMD, Bash)",
+  "protocol": "local",
+  "entry_point": "coterm-plugin-local",
+  "config_schema": {
+    "type": "object",
+    "properties": {
+      "shell": {
+        "type": "string",
+        "description": "Shell path (e.g. pwsh.exe, cmd.exe, /bin/bash)",
+        "default": "powershell.exe"
+      },
+      "cwd": {
+        "type": "string",
+        "description": "Initial working directory",
+        "default": ""
+      }
+    }
+  }
+}
