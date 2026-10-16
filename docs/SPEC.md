@@ -206,3 +206,9 @@ interface CotermTheme {
 ### 3. 主题存储与本地发现
 * 预设主题内置在编译资产中；
 * 用户自定义主题与外部导入主题统一落盘于用户主目录：`~/.coterm/themes/<theme-id>.json`，应用启动时自动扫描挂载。
+
+### 4. 水波浪涌过渡动效实现 (Wave Ripple View Transition)
+利用现代 Chromium / WebView2 原生支持的 **View Transitions API + CSS `clip-path` 硬件加速蒙版**：
+* 触发时通过 `document.startViewTransition()` 捕获旧界面快照；
+* 计算波源坐标 `(originX, originY)` 到视窗四角的最大距离 `endRadius = Math.hypot(maxDx, maxDy)`；
+* 驱动 `::view-transition-new(root)` 执行 `clipPath: circle(0px)` 至 `clipPath: circle(endRadius)` 的平滑扩张（450ms, `cubic-bezier(0.4, 0, 0.2, 1)`），呈现水流洗过屏幕的极客视觉效果。
