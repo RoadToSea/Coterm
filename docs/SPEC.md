@@ -153,3 +153,56 @@ interface CommandItem {
     * `target: "by_id"`（按 Block ID 指定获取）
     * `max_output_lines: 100`（防爆保护：自动提取头部 50 行与尾部 50 行，丢弃中间冗余输出）
 * **收益**：单次错误排障的 Token 消耗从上万 Token 极限压缩至 **100~300 Token**，且没有无关字符干扰，大模型诊断精准度大幅提升。
+
+---
+
+## 七、 全局主题系统实现架构 (Decision 14: Theme Engine)
+
+### 1. 主题数据结构定义 (Theme Schema)
+```typescript
+interface CotermTheme {
+  id: string;               // 唯一标识，如 "coterm-dark", "dracula"
+  name: string;             // 展示名称
+  isDark: boolean;
+  
+  // 终端字符层 (直接映射至 xterm.js ITheme)
+  terminal: {
+    background: string;
+    foreground: string;
+    cursor: string;
+    cursorAccent?: string;
+    selectionBackground: string;
+    black: string; red: string; green: string; yellow: string;
+    blue: string; magenta: string; cyan: string; white: string;
+    brightBlack: string; brightRed: string; brightGreen: string; brightYellow: string;
+    brightBlue: string; brightMagenta: string; brightCyan: string; brightWhite: string;
+  };
+
+  // 应用外壳 UI 层 (注入 CSS Variables)
+  shell: {
+    bgApp: string;          // 主背景色
+    bgSidebar: string;      // 侧边栏背景
+    bgHeader: string;       // 顶部标签栏背景
+    bgFooter: string;       // 底部状态栏背景
+    border: string;         // 边框描边
+    textPrimary: string;
+    textMuted: string;
+    accent: string;         // 主品牌色
+  };
+
+  // 人机协同特色元素
+  agent: {
+    commandBgTint: string;  // Agent 命令行微弱背景色
+    ghostTextColor: string; // Ghost Text 待审批拟真文字色
+    badgeColor: string;     // 🤖 胶囊指示灯色
+  };
+}
+```
+
+### 2. 双轨动态热重载机制 (Zero-Reload Hot-Swapping)
+1. **外壳层响应**：通过全局 `ThemeContext` 监听到切换事件，直接修改 `:root` 节点的 CSS Custom Properties（如 `--ct-bg-app`, `--ct-accent`），Tailwind 与 UI 依靠原生 CSS 变量瞬间重绘，零闪烁。
+2. **终端层响应**：多标签页/多分屏下的每个活跃 `Terminal` 实例，直接响应 `terminal.options.theme = newTheme.terminal`，无需释放/重新挂载 DOM 容器，输入缓冲区与历史屏幕字符完美保留。
+
+### 3. 主题存储与本地发现
+* 预设主题内置在编译资产中；
+* 用户自定义主题与外部导入主题统一落盘于用户主目录：`~/.coterm/themes/<theme-id>.json`，应用启动时自动扫描挂载。
