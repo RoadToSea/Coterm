@@ -240,7 +240,6 @@ export default function App() {
         <button type="button" aria-haspopup="dialog" onClick={() => setMcpOpen(true)} className="px-2 text-[11px] hover:bg-[#454545]">MCP</button>
       </div>
       <HostInteractions />
-      <HostApprovals />
       {mcpOpen && <McpConfiguration onClose={() => setMcpOpen(false)} />}
 
       <div className="flex min-h-0 flex-1">
@@ -338,8 +337,9 @@ export default function App() {
           {errorNotice}
         </aside>
 
-        <main aria-label="Plugin workspace" className="min-w-0 flex-1 bg-[#1e1e1e]">
+        <main aria-label="Plugin workspace" className="relative isolate min-w-0 flex-1 overflow-hidden bg-[#1e1e1e]">
           {activeInstance && <PluginWorkspace key={activeInstance.pluginInstanceId} instance={activeInstance} />}
+          <HostApprovals />
         </main>
       </div>
 

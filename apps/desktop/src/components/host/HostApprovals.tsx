@@ -1,19 +1,18 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { hostAPI, type InstanceInfo, type PluginSummary } from "../../host-api";
 import type { OperationRecord } from "@coterm/plugin-sdk";
-import { Modal } from "../ui/Modal";
+import { ApprovalCard } from "./ApprovalCard";
 
 /** Common approval fallback also works for inactive instances and headless plugins. */
 export function HostApprovals() {
   const [pending, setPending] = useState<{ instance?: InstanceInfo; plugin?: PluginSummary; record: OperationRecord } | null>(null);
-  const [draft, setDraft] = useState("{}");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
   const [pollingError, setPollingError] = useState("");
+  const revision = useRef(0);
   useEffect(() => {
     let disposed = false;
     let timer: number | undefined;
     const poll = async () => {
+      const startedAt = revision.current;
       try {
         const instances = await hostAPI.listInstances();
         let next: typeof pending = null;
@@ -29,7 +28,7 @@ export function HostApprovals() {
             if (record) { next = { plugin, record }; break; }
           }
         }
-        if (!disposed) {
+        if (!disposed && startedAt === revision.current) {
           setPollingError("");
           setPending((current) => current?.record.operationId === next?.record.operationId ? current : next);
         }
@@ -41,42 +40,34 @@ export function HostApprovals() {
     void poll();
     return () => { disposed = true; window.clearTimeout(timer); };
   }, []);
-  useEffect(() => {
-    const output = pending?.record.output;
-    const args = output && typeof output === "object" && "args" in output ? output.args : pending?.record.input;
-    setDraft(JSON.stringify(args ?? {}, null, 2));
-    setError("");
-  }, [pending?.record.operationId]);
-
-  const decide = async (approve: boolean) => {
-    if (!pending?.record.proposalId || busy) return;
-    setBusy(true);
-    setError("");
-    try {
-      if (approve) {
-        const args: unknown = JSON.parse(draft);
-        if (pending.instance) await hostAPI.approveProposal(pending.instance.pluginInstanceId, pending.record.proposalId, args);
-        else if (pending.plugin) await hostAPI.approvePluginProposal(pending.plugin.id, pending.record.proposalId, args);
-      } else {
-        if (pending.instance) await hostAPI.rejectProposal(pending.instance.pluginInstanceId, pending.record.proposalId);
-        else if (pending.plugin) await hostAPI.rejectPluginProposal(pending.plugin.id, pending.record.proposalId);
-      }
-      setPending(null);
-    } catch (reason) { setError(JSON.stringify(reason)); }
-    finally { setBusy(false); }
+  const decided = (operationId: string) => {
+    // A poll started before the decision must not reopen a stale proposal.
+    revision.current++;
+    setPending((current) => current?.record.operationId === operationId ? null : current);
   };
-  if (!pending) return pollingError
-    ? <p role="alert" className="shrink-0 px-3 py-2 text-xs text-[#f48771]">{pollingError}</p>
-    : null;
-  return <Modal title="Agent operation approval" onClose={() => { if (!busy) void decide(false); }}>
-    <p className="mb-2 text-sm">{pending.instance?.label ?? pending.plugin?.name}</p>
-    <p className="mb-3 font-mono text-xs">{pending.record.operation}</p>
-    <label className="mb-2 block text-xs" htmlFor="agent-draft">Review or edit the arguments before sending</label>
-    <textarea id="agent-draft" disabled={busy} spellCheck={false} value={draft} onChange={(event) => setDraft(event.target.value)} className="h-48 w-full border border-[#454545] bg-[#1e1e1e] p-3 font-mono text-xs" />
-    {error && <p role="alert" className="text-xs text-[#f48771]">{error}</p>}
-    <div className="mt-3 flex justify-end gap-2">
-      <button disabled={busy} onClick={() => void decide(false)} className="border border-[#454545] px-3 py-1 text-xs">Reject</button>
-      <button disabled={busy} onClick={() => void decide(true)} className="bg-[#0e639c] px-3 py-1 text-xs">Approve & send</button>
+  if (!pending && !pollingError) return null;
+  return (
+    <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20 flex flex-col items-center gap-2 px-4 pb-4 sm:px-6">
+      {pollingError && <p role="alert" className="pointer-events-auto w-full max-w-[760px] rounded-lg border border-[#65433d] bg-[#332626] px-3 py-2 text-xs text-[#f48771]">{pollingError}</p>}
+      {pending && <ApprovalCard
+        key={pending.record.operationId}
+        record={pending.record}
+        targetLabel={pending.instance?.label ?? pending.plugin?.name ?? pending.record.pluginId}
+        onApprove={async (args) => {
+          const proposalId = pending.record.proposalId;
+          if (!proposalId) return;
+          if (pending.instance) await hostAPI.approveProposal(pending.instance.pluginInstanceId, proposalId, args);
+          else if (pending.plugin) await hostAPI.approvePluginProposal(pending.plugin.id, proposalId, args);
+          decided(pending.record.operationId);
+        }}
+        onReject={async () => {
+          const proposalId = pending.record.proposalId;
+          if (!proposalId) return;
+          if (pending.instance) await hostAPI.rejectProposal(pending.instance.pluginInstanceId, proposalId);
+          else if (pending.plugin) await hostAPI.rejectPluginProposal(pending.plugin.id, proposalId);
+          decided(pending.record.operationId);
+        }}
+      />}
     </div>
-  </Modal>;
+  );
 }

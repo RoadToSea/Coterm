@@ -52,3 +52,16 @@ button:disabled {
 .host-secret-dialog button { padding: 6px 12px; background: #383838; }
 .host-secret-dialog button[type="submit"] { background: #0e639c; color: white; }
 .host-secret-dialog p { color: #f48771; margin-top: 8px; }
+
+.approval-card {
+  animation: approval-slide-in 240ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@keyframes approval-slide-in {
+  from { transform: translateY(calc(100% + 16px)); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .approval-card { animation: none; }
+}
