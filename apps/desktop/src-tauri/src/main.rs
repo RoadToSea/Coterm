@@ -352,7 +352,8 @@ async fn invoke_operation(
         .submit(
             CallerContext {
                 source: OperationSource::Human,
-                session_id: instance.session_id,
+                session_id: instance.session_id.clone(),
+                plugin_id: Some(instance.plugin_id.clone()),
             },
             SubmitOperation {
                 plugin_id: instance.plugin_id,
@@ -361,6 +362,103 @@ async fn invoke_operation(
                 args,
                 wait_timeout_ms,
             },
+        )
+        .await
+        .map_err(|error| format!("{}: {}", error.code, error.message))
+}
+
+#[tauri::command]
+async fn invoke_plugin_operation(
+    plugin_id: String,
+    operation: String,
+    args: Value,
+    wait_timeout_ms: Option<u64>,
+    state: tauri::State<'_, AppState>,
+) -> Result<coterm_proto::runtime::operation::OperationReceipt, String> {
+    state
+        .plugin_runtime
+        .submit(
+            CallerContext {
+                source: OperationSource::Human,
+                session_id: String::new(),
+                plugin_id: Some(plugin_id.clone()),
+            },
+            SubmitOperation {
+                plugin_id,
+                plugin_instance_id: None,
+                operation,
+                args,
+                wait_timeout_ms,
+            },
+        )
+        .await
+        .map_err(|error| format!("{}: {}", error.code, error.message))
+}
+
+#[tauri::command]
+async fn recent_plugin_operations(
+    plugin_id: String,
+    limit: usize,
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<coterm_proto::runtime::operation::OperationRecord>, String> {
+    Ok(state
+        .plugin_runtime
+        .recent_plugin_operations(&plugin_id, limit)
+        .await)
+}
+
+#[tauri::command]
+async fn approve_plugin_proposal(
+    plugin_id: String,
+    proposal_id: String,
+    args: Value,
+    state: tauri::State<'_, AppState>,
+) -> Result<coterm_proto::runtime::operation::OperationReceipt, String> {
+    let operation_id = state
+        .plugin_runtime
+        .pending_plugin_operation(&plugin_id, &proposal_id)
+        .await
+        .ok_or_else(|| "pending proposal not found for this plugin".to_owned())?;
+    state
+        .plugin_runtime
+        .approve(
+            CallerContext {
+                source: OperationSource::Human,
+                session_id: String::new(),
+                plugin_id: Some(plugin_id.clone()),
+            },
+            ApproveProposal {
+                operation_id,
+                proposal_id,
+                plugin_instance_id: None,
+                args,
+            },
+        )
+        .await
+        .map_err(|error| format!("{}: {}", error.code, error.message))
+}
+
+#[tauri::command]
+async fn reject_plugin_proposal(
+    plugin_id: String,
+    proposal_id: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
+    let operation_id = state
+        .plugin_runtime
+        .pending_plugin_operation(&plugin_id, &proposal_id)
+        .await
+        .ok_or_else(|| "pending proposal not found for this plugin".to_owned())?;
+    state
+        .plugin_runtime
+        .reject(
+            CallerContext {
+                source: OperationSource::Human,
+                session_id: String::new(),
+                plugin_id: Some(plugin_id),
+            },
+            &operation_id,
+            &proposal_id,
         )
         .await
         .map_err(|error| format!("{}: {}", error.code, error.message))
@@ -382,7 +480,8 @@ async fn get_operation(
         .get(
             CallerContext {
                 source: OperationSource::Human,
-                session_id: instance.session_id,
+                session_id: instance.session_id.clone(),
+                plugin_id: Some(instance.plugin_id.clone()),
             },
             &operation_id,
         )
@@ -406,7 +505,8 @@ async fn recent_operations(
         .recent(
             CallerContext {
                 source: OperationSource::Human,
-                session_id: instance.session_id,
+                session_id: instance.session_id.clone(),
+                plugin_id: Some(instance.plugin_id.clone()),
             },
             &plugin_instance_id,
             limit,
@@ -437,7 +537,8 @@ async fn approve_proposal(
         .approve(
             CallerContext {
                 source: OperationSource::Human,
-                session_id: instance.session_id,
+                session_id: instance.session_id.clone(),
+                plugin_id: Some(instance.plugin_id.clone()),
             },
             ApproveProposal {
                 operation_id,
@@ -471,7 +572,8 @@ async fn reject_proposal(
         .reject(
             CallerContext {
                 source: OperationSource::Human,
-                session_id: instance.session_id,
+                session_id: instance.session_id.clone(),
+                plugin_id: Some(instance.plugin_id.clone()),
             },
             &operation_id,
             &proposal_id,
@@ -496,7 +598,8 @@ async fn cancel_operation(
         .cancel(
             CallerContext {
                 source: OperationSource::Human,
-                session_id: instance.session_id,
+                session_id: instance.session_id.clone(),
+                plugin_id: Some(instance.plugin_id.clone()),
             },
             &operation_id,
         )
@@ -586,6 +689,10 @@ fn main() {
             create_instance,
             destroy_instance,
             invoke_operation,
+            invoke_plugin_operation,
+            recent_plugin_operations,
+            approve_plugin_proposal,
+            reject_plugin_proposal,
             get_operation,
             recent_operations,
             approve_proposal,

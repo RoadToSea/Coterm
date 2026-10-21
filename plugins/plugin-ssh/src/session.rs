@@ -163,6 +163,7 @@ enum Input {
     Data(Vec<u8>),
     Resize(u32, u32),
     Command(Command, Vec<u8>),
+    Cancel(String),
     Close,
 }
 
@@ -231,6 +232,19 @@ impl Connection {
                                 let _ = action.reply.send(Err(anyhow!("A command is still running or its completion is unknown")));
                                 continue;
                             }
+                            if let Input::Cancel(operation_id) = &action.input {
+                                let result = if active.as_ref().is_some_and(|command| command.operation_id == *operation_id) {
+                                    match timeout(IO_TIMEOUT, write.data(&[3][..])).await {
+                                        Ok(Ok(())) => Ok(()),
+                                        Ok(Err(_)) => Err(anyhow!("SSH interrupt delivery failed")),
+                                        Err(_) => Err(anyhow!("SSH interrupt delivery timed out")),
+                                    }
+                                } else {
+                                    Err(anyhow!("SSH operation is not active on this connection"))
+                                };
+                                let _ = action.reply.send(result);
+                                continue;
+                            }
                             if matches!(&action.input, Input::Close) {
                                 if let Some(command) = active.take() { fail_command(&events, &command, "ssh_disconnected_before_completion").await; }
                                 let _ = action.reply.send(Ok(()));
@@ -241,6 +255,7 @@ impl Connection {
                                     Input::Data(data) => write.data(&data[..]).await,
                                     Input::Resize(cols, rows) => write.window_change(cols, rows, 0, 0).await,
                                     Input::Command(command, data) => { active = Some(command); write.data(&data[..]).await },
+                                    Input::Cancel(_) => Ok(()),
                                     Input::Close => Ok(()),
                                 }
                             }).await;
@@ -316,6 +331,11 @@ impl Connection {
             bail!("Encoded command exceeds the shared PTY line limit; shorten the command");
         }
         self.submit(Input::Command(command, wire)).await
+    }
+
+    /// Sends an interrupt byte. The remote shell's completion boundary remains authoritative.
+    pub async fn cancel_command(&self, operation_id: String) -> Result<()> {
+        self.submit(Input::Cancel(operation_id)).await
     }
 
     pub async fn disconnect(&self) -> Result<()> {

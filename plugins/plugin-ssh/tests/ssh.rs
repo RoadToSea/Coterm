@@ -88,6 +88,7 @@ async fn process_host_routes_approval_snapshot_and_hides_terminal_input() -> Res
     let caller = |source| CallerContext {
         source,
         session_id: instance.session_id.clone(),
+        plugin_id: Some(instance.plugin_id.clone()),
     };
     let operation = |name: &str, args: Value| SubmitOperation {
         plugin_id: instance.plugin_id.clone(),
@@ -100,6 +101,47 @@ async fn process_host_routes_approval_snapshot_and_hides_terminal_input() -> Res
             None
         },
     };
+    let plugin_info = runtime
+        .submit(
+            CallerContext {
+                source: OperationSource::Human,
+                session_id: String::new(),
+                plugin_id: Some(instance.plugin_id.clone()),
+            },
+            SubmitOperation {
+                plugin_id: instance.plugin_id.clone(),
+                plugin_instance_id: None,
+                operation: "ssh.plugin_info".to_owned(),
+                args: json!({}),
+                wait_timeout_ms: None,
+            },
+        )
+        .await?;
+    assert_eq!(
+        plugin_info
+            .output
+            .as_ref()
+            .map(|output| output["instanceCount"].as_u64()),
+        Some(Some(1))
+    );
+    let denied = runtime
+        .submit(
+            CallerContext {
+                source: OperationSource::Agent,
+                session_id: String::new(),
+                plugin_id: Some("another.plugin".to_owned()),
+            },
+            SubmitOperation {
+                plugin_id: instance.plugin_id.clone(),
+                plugin_instance_id: None,
+                operation: "ssh.plugin_info".to_owned(),
+                args: json!({}),
+                wait_timeout_ms: None,
+            },
+        )
+        .await
+        .expect_err("plugin scope must be bound to the trusted caller target");
+    assert_eq!(denied.code, "plugin_scope_access_denied");
     let invalid = runtime
         .submit(
             caller(OperationSource::Human),
@@ -198,6 +240,24 @@ async fn process_host_routes_approval_snapshot_and_hides_terminal_input() -> Res
         }
     })
     .await??;
+    let pending_command = runtime
+        .submit(
+            caller(OperationSource::Human),
+            operation("ssh.command", json!({"text":"never-completes"})),
+        )
+        .await?;
+    assert_eq!(pending_command.status, OperationStatus::Running);
+    let cancellation = runtime
+        .cancel(
+            caller(OperationSource::Human),
+            &pending_command.operation_id,
+        )
+        .await?;
+    assert_eq!(cancellation.status, OperationStatus::Unknown);
+    assert_eq!(
+        cancellation.error.as_ref().map(|error| error.code.as_str()),
+        Some("operation_cancellation_unconfirmed")
+    );
     runtime.stop("coterm-plugin-ssh").await?;
     std::fs::remove_dir_all(directory)?;
     Ok(())
@@ -653,9 +713,21 @@ async fn external_mcp_uses_shared_ssh_and_host_secret_and_approval_paths() -> Re
     assert!(tools
         .iter()
         .any(|t| t["name"] == "coterm-plugin-ssh__ssh.command"));
+    assert!(tools
+        .iter()
+        .any(|t| t["name"] == "coterm-plugin-ssh__ssh.plugin_info"));
     assert!(!tools
         .iter()
         .any(|t| t["name"] == "coterm-plugin-ssh__ssh.input"));
+    let plugin_info = client
+        .tool("coterm-plugin-ssh__ssh.plugin_info", json!({}))
+        .await?;
+    let plugin_info: Value = serde_json::from_str(
+        plugin_info["content"][0]["text"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Missing plugin info"))?,
+    )?;
+    assert_eq!(plugin_info["instanceCount"], 2);
     let connect_args =
         json!({"pluginInstanceId":instance.plugin_instance_id,"fingerprint":ssh.fingerprint});
     let proposed = client
@@ -675,6 +747,7 @@ async fn external_mcp_uses_shared_ssh_and_host_secret_and_approval_paths() -> Re
     let human = || CallerContext {
         source: OperationSource::Human,
         session_id: instance.session_id.clone(),
+        plugin_id: Some(instance.plugin_id.clone()),
     };
     let approved = runtime
         .approve(
@@ -1087,7 +1160,8 @@ async fn external_mcp_uses_shared_ssh_and_host_secret_and_approval_paths() -> Re
         .recent(human(), &instance.plugin_instance_id, 100)
         .await?;
     assert!(!serde_json::to_string(&records)?.contains("local-test-password"));
-    // A disconnected command must release the original waiter with UNKNOWN, not success.
+    // A running command accepts a cancellation request but remains UNKNOWN until the
+    // remote shell confirms its completion boundary.
     client.next_id += 1;
     let interrupted_id = client.next_id;
     coterm_mcp::transport::write_frame(&mut client.writer, &json!({"jsonrpc":"2.0","id":interrupted_id,"method":"tools/call","params":{
@@ -1107,18 +1181,16 @@ async fn external_mcp_uses_shared_ssh_and_host_secret_and_approval_paths() -> Re
         }
     })
     .await??;
-    runtime
-        .submit(
-            human(),
-            SubmitOperation {
-                plugin_id: instance.plugin_id.clone(),
-                plugin_instance_id: Some(instance.plugin_instance_id.clone()),
-                operation: "ssh.disconnect".into(),
-                args: json!({}),
-                wait_timeout_ms: None,
-            },
-        )
-        .await?;
+    let active = runtime
+        .recent(human(), &instance.plugin_instance_id, 100)
+        .await?
+        .into_iter()
+        .find(|record| {
+            record.operation == "mcp.ssh.command" && record.status == OperationStatus::Running
+        })
+        .ok_or_else(|| anyhow::anyhow!("Running MCP operation not found"))?;
+    let cancel = client.tool("coterm.cancel_operation", json!({"pluginInstanceId":instance.plugin_instance_id,"operationId":active.operation_id})).await?;
+    assert_eq!(cancel["structuredContent"]["status"], "unknown");
     let interrupted = timeout(
         Duration::from_secs(3),
         coterm_mcp::transport::read_frame(&mut client.reader),

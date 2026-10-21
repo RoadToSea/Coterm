@@ -1,0 +1,68 @@
+# 当前已实现架构
+
+此图描述当前 MVP 实现，不代表尚未接通的目标能力。接口状态和已知限制见[架构与实现状态](interface-review.md)。
+
+## 运行组件
+
+```mermaid
+flowchart LR
+    Agent[外部 Agent]
+    MCP[固定 MCP HTTP<br/>127.0.0.1:23517/mcp]
+    Desktop[Tauri 桌面 UI]
+    HostAPI[宿主命令与事件 API]
+    Core[插件运行时与操作路由]
+    Ledger[(内存操作账本<br/>有界、脱敏)]
+    PluginUI[插件前端模块<br/>自有界面]
+    Plugin[插件后端进程<br/>JSON-RPC 行协议]
+    Protocol[协议连接与数据<br/>SSH / 其他插件协议]
+
+    Agent <--> MCP
+    MCP <--> Core
+    Desktop <--> HostAPI
+    HostAPI <--> Core
+    PluginUI <--> HostAPI
+    Core <--> Ledger
+    Core <--> Plugin
+    Plugin --> Protocol
+```
+
+桌面和 MCP 都进入同一操作路由及插件进程。MCP Tools 由插件注册；宿主按插件命名空间和操作目录决定目标。实例级调用必须带实例 ID，插件级调用由可信路由上下文绑定插件 ID。插件前端访问插件后端时使用绑定当前实例的 HostAPI。
+
+## 操作执行与审批
+
+```mermaid
+sequenceDiagram
+    participant Caller as 桌面或 Agent
+    participant Host as 操作路由与账本
+    participant UI as 桌面审批
+    participant Plugin as 插件后端
+    participant Device as 远端设备/服务
+
+    Caller->>Host: 操作名、参数、目标授权域
+    Host->>Host: 来源、scope/effect、JSON Schema 校验
+    alt Agent commit 且 Bypass 关闭
+        Host->>Plugin: PrepareProposal
+        Plugin-->>Host: 草稿
+        Host-->>UI: awaiting_approval
+        UI->>Host: 批准参数快照或拒绝
+        Host->>Host: 再次校验批准快照
+        Host->>Plugin: ApproveProposal
+    else 可直接执行
+        Host->>Plugin: Invoke
+    end
+    Plugin->>Device: 协议操作
+    Device-->>Plugin: 协议结果
+    Plugin-->>Host: 完成通知/结果
+    Host-->>Caller: 操作收据与原生结果
+```
+
+等待超时只结束本次等待，不取消操作。取消请求由宿主交给插件处理：只有插件确认未提交或已停止才记为 `cancelled`；不能确认时记为 `unknown`。例如 SSH 后端尽力发送 Ctrl+C，但不把字节送达当成远端命令已停止的证明。
+
+## 操作授权域
+
+| scope | 目标 | 授权依据 | 例子 |
+|---|---|---|---|
+| `instance` | 一个插件实例 | Tauri 从实例表解析 session；MCP 要求显式 `pluginInstanceId` | SSH connect、UART 读写 |
+| `plugin` | 插件本身，不绑定实例 | 宿主从 Tauri 命令或注册 Tool 名称构造 `pluginId` 授权上下文 | 插件版本、设备发现 |
+
+调用者不能在参数中自报来源或 effect。MCP 调用总是 Agent 来源；桌面命令总是 Human 来源。操作输出需符合可选 output schema，否则状态为 `unknown`。

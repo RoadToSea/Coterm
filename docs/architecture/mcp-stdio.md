@@ -18,13 +18,13 @@
 |---|---|
 | `coterm.list_instances` | 查找用户已创建的实例及 `pluginInstanceId` |
 | `coterm.get_operation` | 按实例和操作 ID 查询审批、交互及最终结果 |
-| `coterm.cancel_operation` | 取消尚未提交的审批或密码交互，不中断已经发往 Shell 的命令 |
+| `coterm.cancel_operation` | 请求取消操作；返回状态取决于插件能否确认未提交或已停止 |
 
 SSH 插件显式注册 `ssh.status`、`ssh.probe`、`ssh.connect`、`ssh.disconnect`、`ssh.command` 和 `ssh.read`。对外工具名为 `coterm-plugin-ssh__ssh.command` 等；参数保留插件定义，必须明确传入 `pluginInstanceId`。原始按键与密码输入不暴露为 MCP 工具。
 
 插件在运行时握手的 `mcpTools` 中提交原生 MCP Tool descriptor 和对应的内部 `operation`。基座只修改工具名，按内部操作目录确定 scope/effect 和审批策略；**不会把整个操作目录自动变为 MCP 工具**。`mcp.*` 是 SSH 插件选择的内部操作名，不是所有插件必须采用的命名格式。
 
-当前支持实例级 Tools，尚不接收插件级 MCP 工具。参数 schema 必须包含必填的字符串 `pluginInstanceId`。插件调用完成时必须返回自己构造的 MCP `CallToolResult`，例如 `content`、`isError`；基座保留原生结果，并在 `_meta["coterm/operation"]` 中附加操作凭据。默认等待原操作终态后直接返回；仅立即返回或等待超时时返回公共 pending 结果，调用方再通过 `coterm.get_operation` 读取状态，最终原生结果位于记录的 `output`。插件如声明 `outputSchema`，须兼容 pending 结果；SSH MVP 暂不声明此 schema。
+支持实例级和插件级 Tools。实例级工具的参数 schema 必须包含必填字符串 `pluginInstanceId`；插件级工具不得依赖当前标签页或隐式实例，宿主按已注册工具所属插件建立授权域。公共 `coterm.get_operation` / `coterm.cancel_operation` 可用 `pluginInstanceId` 或 `pluginId` 指定记录授权域。插件调用完成时必须返回自己构造的 MCP `CallToolResult`，例如 `content`、`isError`；基座保留原生结果，并在 `_meta["coterm/operation"]` 中附加操作凭据。默认等待原操作终态后直接返回；仅立即返回或等待超时时返回公共 pending 结果，调用方再通过 `coterm.get_operation` 读取状态，最终原生结果位于记录的 `output`。插件如声明 `outputSchema`，须兼容 pending 结果；SSH MVP 暂不声明此 schema。
 
 所有外部 MCP 调用来源固定为 Agent。Agent 不能通过参数改变来源、effect、Bypass 或批准自己的操作。当前本机客户端共用用户授权的实例权限，不提供多用户或每客户端 ACL。
 
@@ -91,6 +91,6 @@ SSH `ssh.command` 正常结果的 `content[0].text` 是 JSON，包含 `data`（b
 
 旧 BridgeServer 只监听 IPv4 回环随机端口，认证限时 5 秒，最多 8 个客户端；每帧最多 1 MiB，认证和协议数据不会混入转接程序 stdout。桌面退出时停止监听并关闭所属客户端任务。每客户端可并发等待；插件单次控制应答仍串行且限时 10 秒，长任务必须立即应答延迟受理，再用完成通知报告结果。等待审批、密码或 Shell 命令完成时不占用控制 RPC；实际连接握手最长 7 秒，期间其他控制请求仍会排队。外部客户端断开不会自动撤销已提交或待审批操作，用户仍可在桌面拒绝；不自动重试写操作。
 
-已支持默认等待、指定等待超时和 `waitTimeoutMs=0`。公共取消支持尚未派发、待审批和待密码交互操作；对已派发请求的可靠取消及 MCP cancellation notification 尚未实现。正式双向 MCP provider 和二进制流不应以本适配器为冻结协议。
+已支持默认等待、指定等待超时和 `waitTimeoutMs=0`。取消支持尚未派发、待审批、待密码交互操作，也会向运行中的插件发送取消请求。只有插件确认未提交或已停止时结果才为 `cancelled`；SSH 发送 Ctrl+C 后无法确认远端状态，因此返回 `unknown`。MCP cancellation notification、正式双向 MCP provider 和二进制流尚未实现。
 
 测试覆盖真实 stdio 转接子进程、认证失败、帧边界、真实 SSH 插件子进程与本地测试服务器之间的 MCP 路由、审批快照、密码隔离、共享终端、实例定位、Bypass、取消及目录变化。2026-10-21 远程实机复验已确认：人工修改审批后，原 MCP 请求直接返回修改后的输出与退出码 0；另一条使用默认等待的命令准确返回退出码 1 和 `isError=true`，无需轮询操作结果。高频读取的记录隔离已通过自动化验证；原审批显示问题和其余实机范围仍待验收，证据见 [SSH 实机验收](interface-review.md#ssh-实机验收2026-10-21)。

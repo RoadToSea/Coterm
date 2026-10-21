@@ -30,10 +30,11 @@ pnpm tauri:dev
 | `ssh.input` | commit | 人工终端原始字节输入；历史隐藏原始参数 |
 | `ssh.command` | commit | 在同一 POSIX PTY 中运行命令并识别完成边界，返回输出与退出码；支持 PrepareProposal/Approve/Reject |
 | `ssh.resize` | draft | 只改变终端尺寸 |
+| `ssh.plugin_info` | read | 插件级只读操作，不绑定某个 SSH 实例 |
 
 `ssh.input`、`ssh.connect` 是界面的人工作业入口。Agent 使用插件显式注册的 MCP 工具，映射到 `mcp.ssh.*` 内部操作；`mcp.ssh.connect` 不接收密码，审批后请求基座公共密码输入。Agent 命令走 `mcp.ssh.command`，由基座识别来源并执行审批/Bypass；插件准备提案时不发送，批准时使用用户修改后的参数快照。`ssh.input` 的 `submitted=true` 只表示字节交给 SSH 通道；`ssh.command` 则使用下述命令边界等待真实结束。命令块界面仍是后续工作。
 
-**MCP 固定 HTTP 外部连接已接通。** 顶部 MCP 按钮提供固定 URL，无需 Token；插件的六个原生工具、实例发现、审批和秘密输入共用现有实例。连接方式见 [固定 MCP 连接](mcp-http.md)，工具及秘密交互见 [MCP Tools 与后端秘密输入](mcp-stdio.md)。Resources、Prompts、订阅和完整双向 provider 尚未实现。
+**MCP 固定 HTTP 外部连接已接通。** 顶部 MCP 按钮提供固定 URL，无需 Token；插件原生实例级工具、实例发现、审批和秘密输入共用现有实例。插件级工具可不绑定实例，由宿主按插件授权域路由。连接方式见 [固定 MCP 连接](mcp-http.md)，工具及秘密交互见 [MCP Tools 与后端秘密输入](mcp-stdio.md)。Resources、Prompts、订阅和完整双向 provider 尚未实现。
 
 ## 本轮公共接口扩展
 
@@ -61,7 +62,7 @@ SSH 插件声明 `async-operations` 和 `plugin-events`。命令提交后控制 
 
 结果包含 base64 输出、退出码及截断标志，最多捕获 8 KiB；共享终端仍保留自身 256 KiB 回放。源命令最多 4096 字节，转义并包装后还须满足 4000 字节的 PTY 单行上限。每连接同一时刻只接受一个受跟踪命令；人工原始输入仍可用于交互和 Ctrl+C。
 
-命令最长跟踪 120 秒，与调用方的等待超时分别计时。`exit`、`exec`、不兼容 Shell、人工中断等可能让结束标记缺失；断线或跟踪到期时报告 `unknown`，不从提示符或输出静默推断成功，也不重发命令。到期后仍拒绝下一条受跟踪命令，直到收到原结束标记或重新连接，避免把运行中终端误当成空闲。后台任务结束不属于前台命令的完成语义。
+命令最长跟踪 120 秒，与调用方的等待超时分别计时。`exit`、`exec`、不兼容 Shell、人工中断等可能让结束标记缺失；取消操作会尽力发送 Ctrl+C，但不能确认远端进程是否停止，因此宿主记录 `unknown`。断线或跟踪到期也报告 `unknown`，不从提示符或输出静默推断成功，也不重发命令。到期后仍拒绝下一条受跟踪命令，直到收到原结束标记或重新连接，避免把运行中终端误当成空闲。后台任务结束不属于前台命令的完成语义。
 
 ## 界面输出通道
 

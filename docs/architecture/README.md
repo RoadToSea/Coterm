@@ -11,4 +11,5 @@
 - [MCP Tools、后端秘密输入与旧 stdio 适配器](mcp-stdio.md)
 - [插件开发者指南](plugin-development.md)
 - [接口文件与评审入口](interface-review.md)
+- [当前已实现架构图](current-architecture.md)
 - [SSH 插件 MVP 与运行方式](ssh-plugin.md)

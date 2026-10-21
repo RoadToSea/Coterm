@@ -12,9 +12,12 @@ use coterm_proto::runtime::{
 use serde_json::Value;
 
 /// source 由可信的 UI/MCP 适配层构造，不从领域 args 或 Tauri 参数反序列化。
+#[derive(Clone)]
 pub struct CallerContext {
     pub source: OperationSource,
     pub session_id: String,
+    /// Trusted route authority for plugin-scoped operations; never taken from args.
+    pub plugin_id: Option<PluginId>,
 }
 
 /// 外部调用不分配 operation_id，也不自行声明 effect；基座从目录读取。

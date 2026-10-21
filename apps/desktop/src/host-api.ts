@@ -62,6 +62,10 @@ export interface HostAPI {
     args: unknown,
     waitTimeoutMs?: number,
   ): Promise<OperationReceipt<T>>;
+  invokePluginOperation<T = unknown>(pluginId: string, operation: string, args: unknown, waitTimeoutMs?: number): Promise<OperationReceipt<T>>;
+  recentPluginOperations(pluginId: string, limit?: number): Promise<OperationRecord[]>;
+  approvePluginProposal<T = unknown>(pluginId: string, proposalId: string, args: unknown): Promise<OperationReceipt<T>>;
+  rejectPluginProposal(pluginId: string, proposalId: string): Promise<void>;
   getOperation(pluginInstanceId: string, operationId: string): Promise<OperationRecord>;
   recentOperations(pluginInstanceId: string, limit?: number): Promise<OperationRecord[]>;
   approveProposal<T = unknown>(
@@ -111,6 +115,12 @@ export const hostAPI: HostAPI = {
       args,
       waitTimeoutMs,
     }),
+  invokePluginOperation: <T = unknown>(pluginId: string, operation: string, args: unknown, waitTimeoutMs?: number) => invoke<OperationReceipt<T>>("invoke_plugin_operation", {
+    pluginId, operation, args, waitTimeoutMs,
+  }),
+  recentPluginOperations: (pluginId, limit) => invoke<OperationRecord[]>("recent_plugin_operations", { pluginId, limit }),
+  approvePluginProposal: <T = unknown>(pluginId: string, proposalId: string, args: unknown) => invoke<OperationReceipt<T>>("approve_plugin_proposal", { pluginId, proposalId, args }),
+  rejectPluginProposal: (pluginId, proposalId) => invoke<void>("reject_plugin_proposal", { pluginId, proposalId }),
   getOperation: (pluginInstanceId, operationId) =>
     invoke<OperationRecord>("get_operation", { pluginInstanceId, operationId }),
   recentOperations: (pluginInstanceId, limit) =>

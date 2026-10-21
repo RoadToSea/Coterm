@@ -2,7 +2,7 @@
 
 > 插件作者的实例定位、工具入口和用户交互流程见 [插件开发者指南](plugin-development.md#8-原生-mcp)。具体传输和命名规范仍需接口冻结，本文件记录架构职责。
 
-当前已实现固定本机地址的 MCP Streamable HTTP、实例级 Tools 和后端秘密交互。用户只填写 URL，无需 Token；应用重启后地址不变。传输由基座提供，插件无需各自实现 HTTP 服务。入口与访问边界见 [固定 MCP 连接](mcp-http.md)，工具和交互细节见 [MCP Tools 与秘密输入](mcp-stdio.md)。下面的 Resources、Prompts、订阅及完整双向路由仍是目标架构。
+当前已实现固定本机地址的 MCP Streamable HTTP、实例级及插件级 Tools 和后端秘密交互。用户只填写 URL，无需 Token；应用重启后地址不变。传输由基座提供，插件无需各自实现 HTTP 服务。入口与访问边界见 [固定 MCP 连接](mcp-http.md)，工具和交互细节见 [MCP Tools 与秘密输入](mcp-stdio.md)。Resources、Prompts、订阅及完整双向路由仍是目标架构。
 
 ## 1. 目标
 
@@ -43,7 +43,7 @@ Coterm 对外提供一个 MCP 入口。这个入口由一个很薄的 MCP Bridge
 
 Bridge 不修改插件工具的领域参数和返回值，也不把所有工具包装成 `execute`、`read_output` 等统一接口。原样转发指保留领域语义；工具名、资源 URI 和请求 ID 等路由信息仍可能需要映射。
 
-多个连接实例必须有显式定位方式。建议由插件自己的工具 schema 声明 `pluginInstanceId`，并提供实例发现入口；不能用当前标签页隐式选择 MCP 操作目标，也不能另建一条与用户界面无关的连接。
+实例级工具必须由工具 schema 声明 `pluginInstanceId`，并提供实例发现入口；插件级工具不带实例目标，由宿主根据注册工具所属插件构造授权上下文。不能用当前标签页隐式选择 MCP 操作目标，也不能另建一条与用户界面无关的连接。
 
 ```text
 Agent

@@ -261,8 +261,8 @@ pub(crate) fn rpc_error(id: Value, code: i32, message: &str) -> Value {
 pub async fn tools_list(runtime: &ProcessPluginRuntime) -> Result<Value, RuntimeError> {
     let mut tools = vec![
         json!({"name":"coterm.list_instances","description":"List existing shared plugin instances. Create and configure instances in Coterm.","inputSchema":{"type":"object","properties":{},"additionalProperties":false}}),
-        json!({"name":"coterm.get_operation","description":"Query a pending or completed operation. Plugin-native MCP result is in output.","inputSchema":{"type":"object","properties":{"pluginInstanceId":{"type":"string"},"operationId":{"type":"string"}},"required":["pluginInstanceId","operationId"],"additionalProperties":false}}),
-        json!({"name":"coterm.cancel_operation","description":"Cancel a pending approval or password interaction. Does not interrupt already submitted shell commands.","inputSchema":{"type":"object","properties":{"pluginInstanceId":{"type":"string"},"operationId":{"type":"string"}},"required":["pluginInstanceId","operationId"],"additionalProperties":false}}),
+        json!({"name":"coterm.get_operation","description":"Query an operation using its explicit pluginInstanceId or pluginId scope.","inputSchema":{"type":"object","properties":{"pluginInstanceId":{"type":"string"},"pluginId":{"type":"string"},"operationId":{"type":"string"}},"required":["operationId"],"oneOf":[{"required":["pluginInstanceId"],"not":{"required":["pluginId"]}},{"required":["pluginId"],"not":{"required":["pluginInstanceId"]}}],"additionalProperties":false}}),
+        json!({"name":"coterm.cancel_operation","description":"Request cancellation. The result can be cancelled, unknown, or unsupported depending on protocol confirmation.","inputSchema":{"type":"object","properties":{"pluginInstanceId":{"type":"string"},"pluginId":{"type":"string"},"operationId":{"type":"string"}},"required":["operationId"],"oneOf":[{"required":["pluginInstanceId"],"not":{"required":["pluginId"]}},{"required":["pluginId"],"not":{"required":["pluginInstanceId"]}}],"additionalProperties":false}}),
     ];
     for (plugin, registration) in runtime.native_mcp_tools().await {
         let mut descriptor = registration.descriptor;
@@ -303,34 +303,32 @@ pub async fn call_tool(runtime: &ProcessPluginRuntime, params: &Value) -> anyhow
             json!({"instances":runtime.list_instances(None).await?}),
         ));
     }
-    let instance_id = args["pluginInstanceId"]
-        .as_str()
-        .ok_or_else(|| anyhow::anyhow!("Explicit pluginInstanceId required"))?;
-    let instance = runtime
-        .get_instance(instance_id)
-        .await
-        .ok_or_else(|| anyhow::anyhow!("Instance not found"))?;
-    // Source is constructed here, never read from external args or operation metadata.
-    let caller = CallerContext {
-        source: OperationSource::Agent,
-        session_id: instance.session_id,
-    };
     if name == "coterm.get_operation" || name == "coterm.cancel_operation" {
+        let instance_id = args["pluginInstanceId"].as_str();
+        let plugin_id = args["pluginId"].as_str();
+        if instance_id.is_some() == plugin_id.is_some() {
+            anyhow::bail!("Specify exactly one pluginInstanceId or pluginId");
+        }
+        let (authorized_plugin, session_id) = if let Some(instance_id) = instance_id {
+            let instance = runtime
+                .get_instance(instance_id)
+                .await
+                .ok_or_else(|| anyhow::anyhow!("Instance not found"))?;
+            (instance.plugin_id, instance.session_id)
+        } else {
+            (plugin_id.unwrap_or_default().to_owned(), String::new())
+        };
         let id = args["operationId"]
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("operationId required"))?;
-        // Verify the explicit target as well as the session before querying/cancelling.
-        let record = runtime
-            .get(
-                CallerContext {
-                    source: OperationSource::Agent,
-                    session_id: caller.session_id.clone(),
-                },
-                id,
-            )
-            .await?;
-        if record.plugin_instance_id.as_deref() != Some(instance_id) {
-            anyhow::bail!("Operation instance mismatch");
+        let caller = CallerContext {
+            source: OperationSource::Agent,
+            session_id,
+            plugin_id: Some(authorized_plugin),
+        };
+        let record = runtime.get(caller.clone(), id).await?;
+        if record.plugin_instance_id.as_deref() != instance_id {
+            anyhow::bail!("Operation target mismatch");
         }
         return if name == "coterm.get_operation" {
             Ok(text_result(serde_json::to_value(record)?))
@@ -340,9 +338,8 @@ pub async fn call_tool(runtime: &ProcessPluginRuntime, params: &Value) -> anyhow
             )?))
         };
     }
-    let (plugin, tool) = runtime
-        .native_mcp_tools()
-        .await
+    let native = runtime.native_mcp_tools().await;
+    let (plugin, tool) = native
         .into_iter()
         .find(|(plugin, tool)| {
             tool.descriptor["name"]
@@ -350,15 +347,47 @@ pub async fn call_tool(runtime: &ProcessPluginRuntime, params: &Value) -> anyhow
                 .is_some_and(|native| format!("{plugin}__{native}") == name)
         })
         .ok_or_else(|| anyhow::anyhow!("Tool not found"))?;
-    if plugin != instance.plugin_id {
-        anyhow::bail!("Tool instance mismatch");
-    }
+    let descriptor = runtime
+        .operation_catalog(&plugin)
+        .await
+        .into_iter()
+        .find(|op| op.name == tool.operation)
+        .ok_or_else(|| anyhow::anyhow!("Operation descriptor not found"))?;
+    let instance_id =
+        if descriptor.scope == coterm_proto::runtime::operation::OperationScope::Instance {
+            Some(
+                args["pluginInstanceId"]
+                    .as_str()
+                    .ok_or_else(|| anyhow::anyhow!("Explicit pluginInstanceId required"))?
+                    .to_owned(),
+            )
+        } else {
+            None
+        };
+    let session_id = if let Some(instance_id) = instance_id.as_deref() {
+        let instance = runtime
+            .get_instance(instance_id)
+            .await
+            .ok_or_else(|| anyhow::anyhow!("Instance not found"))?;
+        if instance.plugin_id != plugin {
+            anyhow::bail!("Tool instance mismatch");
+        }
+        instance.session_id
+    } else {
+        String::new()
+    };
+    // Source and plugin authorization are derived from the trusted tool directory.
+    let caller = CallerContext {
+        source: OperationSource::Agent,
+        session_id,
+        plugin_id: Some(plugin.clone()),
+    };
     let receipt = runtime
         .submit(
             caller,
             SubmitOperation {
                 plugin_id: plugin,
-                plugin_instance_id: Some(instance_id.to_owned()),
+                plugin_instance_id: instance_id,
                 operation: tool.operation,
                 args,
                 wait_timeout_ms,

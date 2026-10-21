@@ -9,10 +9,10 @@ use coterm_proto::runtime::{
         InteractionResult, InteractionValue, SecretDelivery, SecretHandle,
     },
     lifecycle::{CreateInstance, HelloResult, McpToolRegistration, RuntimeHello},
-    message::{DeferredOperation, PluginNotification},
+    message::{CancelTarget, DeferredOperation, PluginNotification},
     operation::{
         ApproveProposal, DispatchMode, InvokeRequest, OperationDescriptor, OperationEffect,
-        OperationSource,
+        OperationScope, OperationSource,
     },
 };
 use serde::de::DeserializeOwned;
@@ -105,13 +105,22 @@ pub fn catalog() -> Vec<OperationDescriptor> {
     ];
     let mut operations: Vec<_> = definitions.into_iter().map(|(name, effect, sensitive_input, properties)| OperationDescriptor {
         name: name.to_owned(),
-        scope: coterm_proto::runtime::operation::OperationScope::Instance,
+        scope: OperationScope::Instance,
         effect,
         input_schema: json!({"type":"object","properties":properties,"additionalProperties":false}),
         output_schema: None,
         sensitive_input,
         transient: matches!(name, "ssh.read" | "ssh.status" | "ssh.resize" | "ssh.input"),
     }).collect();
+    operations.push(OperationDescriptor {
+        name: "ssh.plugin_info".to_owned(),
+        scope: OperationScope::Plugin,
+        effect: OperationEffect::Read,
+        input_schema: json!({"type":"object","properties":{},"additionalProperties":false}),
+        output_schema: None,
+        sensitive_input: false,
+        transient: false,
+    });
     for registration in mcp_tools() {
         let native = registration.operation.trim_start_matches("mcp.");
         if let Some(base) = operations.iter().find(|item| item.name == native).cloned() {
@@ -127,7 +136,7 @@ pub fn catalog() -> Vec<OperationDescriptor> {
 
 /// MCP is an explicit plugin API. Raw terminal input and password handles are excluded.
 pub fn mcp_tools() -> Vec<McpToolRegistration> {
-    [
+    let mut tools: Vec<_> = [
         ("ssh.status", "Read connection status.", json!({}), vec![]),
         ("ssh.probe", "Probe the host key without authenticating. Verify it before connect.", json!({}), vec![]),
         ("ssh.connect", "Connect the existing instance. Waits for host approval and a human password prompt; never supply a password.", json!({"fingerprint":{"type":"string"}}), vec!["fingerprint"]),
@@ -142,7 +151,12 @@ pub fn mcp_tools() -> Vec<McpToolRegistration> {
             operation: format!("mcp.{name}"),
             descriptor: json!({"name":name,"description":description,"inputSchema":{"type":"object","properties":properties,"required":required,"additionalProperties":false}}),
         }
-    }).collect()
+    }).collect();
+    tools.push(McpToolRegistration {
+        operation: "mcp.ssh.plugin_info".to_owned(),
+        descriptor: json!({"name":"ssh.plugin_info","description":"Read plugin-level SSH backend information without selecting an instance.","inputSchema":{"type":"object","properties":{},"additionalProperties":false}}),
+    });
+    tools
 }
 
 fn validate_mcp_args(operation: &str, args: &Value) -> Result<()> {
@@ -341,6 +355,24 @@ impl Backend {
                 }
             }
             "invoke" => self.invoke(decode(params)?).await,
+            "cancel" => {
+                let target: CancelTarget = decode(params)?;
+                let CancelTarget::Operation(operation_id) = target else {
+                    return Ok(json!({"outcome":"unsupported"}));
+                };
+                for instance in self.instances.values() {
+                    if let Some(connection) = instance.connection.as_ref() {
+                        if connection
+                            .cancel_command(operation_id.clone())
+                            .await
+                            .is_ok()
+                        {
+                            return Ok(json!({"outcome":"unknown"}));
+                        }
+                    }
+                }
+                Ok(json!({"outcome":"unsupported"}))
+            }
             "approve" => {
                 let approve: ApproveProposal = decode(params)?;
                 let proposal = self
@@ -383,6 +415,20 @@ impl Backend {
     }
 
     async fn invoke(&mut self, request: InvokeRequest) -> Result<Value> {
+        if matches!(
+            request.operation.as_str(),
+            "ssh.plugin_info" | "mcp.ssh.plugin_info"
+        ) {
+            if request.plugin_instance_id.is_some() || request.effect != OperationEffect::Read {
+                bail!("SSH plugin operation context mismatch");
+            }
+            let info = json!({"pluginId":PLUGIN_ID,"instanceCount":self.instances.len()});
+            return Ok(if request.operation.starts_with("mcp.") {
+                mcp_result(info)
+            } else {
+                info
+            });
+        }
         let id = request
             .plugin_instance_id
             .ok_or_else(|| anyhow!("An explicit SSH instance is required"))?;

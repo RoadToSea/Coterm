@@ -26,8 +26,10 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [bypass, setBypass] = useState(false);
   const [operations, setOperations] = useState<OperationDescriptor[]>([]);
+  const [pluginOperations, setPluginOperations] = useState<OperationDescriptor[]>([]);
   const [operationHistory, setOperationHistory] = useState<OperationRecord[]>([]);
   const [selectedOperation, setSelectedOperation] = useState("");
+  const [selectedPluginOperation, setSelectedPluginOperation] = useState("");
   const [operationArgs, setOperationArgs] = useState("{}");
   const [operationResult, setOperationResult] = useState<OperationReceipt | null>(null);
 
@@ -118,6 +120,19 @@ export default function App() {
       current = false;
     };
   }, [activeInstance]);
+
+  useEffect(() => {
+    if (!selectedPlugin) { setPluginOperations([]); return; }
+    let current = true;
+    void hostAPI.listOperations(selectedPlugin.id).then((catalog) => {
+      if (current) {
+        const scoped = catalog.filter((item) => item.scope === "plugin");
+        setPluginOperations(scoped);
+        setSelectedPluginOperation((selected) => scoped.some((item) => item.name === selected) ? selected : scoped[0]?.name ?? "");
+      }
+    }).catch((reason) => { if (current) setError(String(reason)); });
+    return () => { current = false; };
+  }, [selectedPlugin]);
 
   const runPluginAction = async (pluginId: string, action: () => Promise<void>) => {
     setBusyId(pluginId);
@@ -358,6 +373,22 @@ export default function App() {
               {selectedPlugin.running ? "Stop plugin" : "Start plugin"}
             </button>
           </div>
+          {pluginOperations.length > 0 && (
+            <section className="mb-5 border-t border-[#383838] pt-4">
+              <h3 className="mb-3 text-xs font-semibold uppercase text-[#cccccc]">Plugin operations</h3>
+              <select aria-label="Plugin operation" value={selectedPluginOperation} onChange={(event) => setSelectedPluginOperation(event.target.value)} className="mb-2 h-8 w-full border border-[#454545] bg-[#252526] px-2 text-xs">
+                {pluginOperations.map((item) => <option key={item.name} value={item.name}>{item.name} · {item.effect}</option>)}
+              </select>
+              <textarea aria-label="Plugin operation arguments JSON" value={operationArgs} onChange={(event) => setOperationArgs(event.target.value)} spellCheck={false} className="h-24 w-full border border-[#454545] bg-[#1e1e1e] p-2 font-mono text-xs" />
+              <button type="button" onClick={() => {
+                try {
+                  const args: unknown = JSON.parse(operationArgs);
+                  void hostAPI.invokePluginOperation(selectedPlugin.id, selectedPluginOperation, args).then(setOperationResult).catch((reason) => setError(String(reason)));
+                } catch (reason) { setError(String(reason)); }
+              }} className="mt-2 h-8 bg-[#0e639c] px-3 text-xs text-white hover:bg-[#1177bb]">Invoke plugin operation</button>
+              {operationResult && <pre className="mt-2 max-h-32 overflow-auto border border-[#383838] bg-[#1e1e1e] p-2 font-mono text-xs">{JSON.stringify(operationResult, null, 2)}</pre>}
+            </section>
+          )}
           {selectedPlugin.hasFrontend && (
             <PluginConfiguration key={selectedPlugin.id} pluginId={selectedPlugin.id} onSubmit={(config) => createConfiguredInstance(selectedPlugin.id, config)} />
           )}

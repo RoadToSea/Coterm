@@ -19,8 +19,9 @@ use coterm_proto::runtime::{
     manifest::PluginManifest,
     message::{DeferredOperation, HostCommand, PluginNotification},
     operation::{
-        ApproveProposal, DispatchMode, InvokeRequest, OperationDescriptor, OperationEffect,
-        OperationReceipt, OperationRecord, OperationScope, OperationSource, OperationStatus,
+        ApproveProposal, CancellationOutcome, DispatchMode, InvokeRequest, OperationDescriptor,
+        OperationEffect, OperationReceipt, OperationRecord, OperationScope, OperationSource,
+        OperationStatus,
     },
     ErrorCategory, RuntimeError, RuntimeFuture,
 };
@@ -129,6 +130,30 @@ impl ProcessPluginRuntime {
                 pending.1.as_deref() == Some(instance_id) && pending.2 == proposal_id
             })
             .map(|(operation_id, _)| operation_id.clone())
+    }
+
+    pub async fn pending_plugin_operation(
+        &self,
+        plugin_id: &str,
+        proposal_id: &str,
+    ) -> Option<String> {
+        self.state
+            .lock()
+            .await
+            .pending_approvals
+            .iter()
+            .find(|(_, pending)| {
+                pending.0 == plugin_id && pending.1.is_none() && pending.2 == proposal_id
+            })
+            .map(|(operation_id, _)| operation_id.clone())
+    }
+
+    pub async fn recent_plugin_operations(
+        &self,
+        plugin_id: &str,
+        limit: usize,
+    ) -> Vec<OperationRecord> {
+        self.history.recent(plugin_id, None, limit).await
     }
 
     /// Only returns the package's validated, self-contained frontend entry.
@@ -673,6 +698,14 @@ impl PluginRuntime for ProcessPluginRuntime {
                     .and_then(Value::as_str)
                     .unwrap_or("");
                 let schema = tool.descriptor.get("inputSchema");
+                let operation_scope = catalog.get(&tool.operation).map(|op| op.scope);
+                let requires_instance = operation_scope == Some(OperationScope::Instance);
+                let has_instance_param = schema
+                    .and_then(|s| s.get("required"))
+                    .and_then(Value::as_array)
+                    .is_some_and(|required| {
+                        required.iter().any(|value| value == "pluginInstanceId")
+                    });
                 if name.is_empty()
                     || name.len() > 64
                     || plugin_id.len() + 2 + name.len() > 128
@@ -680,21 +713,17 @@ impl PluginRuntime for ProcessPluginRuntime {
                         .bytes()
                         .all(|b| b.is_ascii_alphanumeric() || b"_.-".contains(&b))
                     || !tool_names.insert(name)
-                    || !catalog
-                        .get(&tool.operation)
-                        .is_some_and(|op| op.scope == OperationScope::Instance)
+                    || operation_scope.is_none()
                     || !result
                         .enabled_features
                         .iter()
                         .any(|f| f == "native-mcp-tools")
-                    || !schema
-                        .and_then(|s| s.get("required"))
-                        .and_then(Value::as_array)
-                        .is_some_and(|r| r.iter().any(|v| v == "pluginInstanceId"))
-                    || schema
-                        .and_then(|s| s.pointer("/properties/pluginInstanceId/type"))
-                        .and_then(Value::as_str)
-                        != Some("string")
+                    || has_instance_param != requires_instance
+                    || (requires_instance
+                        && schema
+                            .and_then(|s| s.pointer("/properties/pluginInstanceId/type"))
+                            .and_then(Value::as_str)
+                            != Some("string"))
                     || schema.and_then(|s| s.get("type")).and_then(Value::as_str) != Some("object")
                     || schema.is_none_or(|schema| jsonschema::validator_for(schema).is_err())
                 {
@@ -988,11 +1017,10 @@ impl Operations for ProcessPluginRuntime {
                 .and_then(|catalog| catalog.get(&request.operation))
                 .cloned()
                 .ok_or_else(|| runtime_error(ErrorCategory::NotFound, "operation_not_found"))?;
-            validate_scope_target(
-                descriptor.scope,
-                caller.source,
-                request.plugin_instance_id.is_some(),
-            )?;
+            validate_scope_target(descriptor.scope, request.plugin_instance_id.is_some())?;
+            if descriptor.scope == OperationScope::Plugin {
+                validate_plugin_authority(&caller, &request.plugin_id)?;
+            }
             if let Some(instance_id) = request.plugin_instance_id.as_deref() {
                 let instance = state.instances.get(instance_id).ok_or_else(|| {
                     runtime_error(ErrorCategory::NotFound, "plugin_instance_not_found")
@@ -1240,6 +1268,8 @@ impl Operations for ProcessPluginRuntime {
                 {
                     return Err(runtime_error(ErrorCategory::Conflict, "session_mismatch"));
                 }
+            } else {
+                validate_plugin_authority(&caller, &pending.0)?;
             }
             let record = self
                 .history
@@ -1315,6 +1345,8 @@ impl Operations for ProcessPluginRuntime {
                 {
                     return Err(runtime_error(ErrorCategory::Conflict, "session_mismatch"));
                 }
+            } else {
+                validate_plugin_authority(&caller, &pending.0)?;
             }
             let process = state
                 .processes
@@ -1391,10 +1423,44 @@ impl Operations for ProcessPluginRuntime {
                 record.status,
                 OperationStatus::Accepted | OperationStatus::Dispatched | OperationStatus::Running
             ) {
-                return Err(runtime_error(
-                    ErrorCategory::Unsupported,
-                    "dispatched_operation_cancellation_not_supported",
-                ));
+                let process = state
+                    .processes
+                    .get(&record.plugin_id)
+                    .ok_or_else(|| runtime_error(ErrorCategory::Conflict, "plugin_not_started"))?;
+                let response = process
+                    .request(HostCommand::Cancel(
+                        coterm_proto::runtime::message::CancelTarget::Operation(
+                            operation_id.to_owned(),
+                        ),
+                    ))
+                    .await?;
+                let outcome: CancellationOutcome =
+                    serde_json::from_value(response.get("outcome").cloned().unwrap_or(Value::Null))
+                        .map_err(|_| {
+                            runtime_error(ErrorCategory::Transport, "cancel_result_invalid")
+                        })?;
+                let (status, error) = match outcome {
+                    CancellationOutcome::NotSubmitted | CancellationOutcome::Stopped => {
+                        (OperationStatus::Cancelled, None)
+                    }
+                    CancellationOutcome::Unknown => (
+                        OperationStatus::Unknown,
+                        Some(runtime_error(
+                            ErrorCategory::Transport,
+                            "operation_cancellation_unconfirmed",
+                        )),
+                    ),
+                    CancellationOutcome::Unsupported => {
+                        return Err(runtime_error(
+                            ErrorCategory::Unsupported,
+                            "operation_cancellation_unsupported",
+                        ))
+                    }
+                };
+                self.history
+                    .transition(operation_id, status, None, error)
+                    .await
+                    .map_err(map_history_error)?;
             }
             Ok(receipt(
                 &self
@@ -1434,7 +1500,7 @@ async fn verify_record_access(
     record: &OperationRecord,
 ) -> Result<(), RuntimeError> {
     let Some(instance_id) = record.plugin_instance_id.as_deref() else {
-        return if caller.source == OperationSource::System {
+        return if caller.plugin_id.as_deref() == Some(record.plugin_id.as_str()) {
             Ok(())
         } else {
             Err(runtime_error(
@@ -1454,11 +1520,18 @@ async fn verify_record_access(
     Ok(())
 }
 
-fn validate_scope_target(
-    scope: OperationScope,
-    source: OperationSource,
-    has_instance: bool,
-) -> Result<(), RuntimeError> {
+fn validate_plugin_authority(caller: &CallerContext, plugin_id: &str) -> Result<(), RuntimeError> {
+    if caller.plugin_id.as_deref() == Some(plugin_id) {
+        Ok(())
+    } else {
+        Err(runtime_error(
+            ErrorCategory::Conflict,
+            "plugin_scope_access_denied",
+        ))
+    }
+}
+
+fn validate_scope_target(scope: OperationScope, has_instance: bool) -> Result<(), RuntimeError> {
     match scope {
         OperationScope::Instance if !has_instance => Err(runtime_error(
             ErrorCategory::InvalidRequest,
@@ -1467,10 +1540,6 @@ fn validate_scope_target(
         OperationScope::Plugin if has_instance => Err(runtime_error(
             ErrorCategory::InvalidRequest,
             "plugin_operation_does_not_accept_instance",
-        )),
-        OperationScope::Plugin if source != OperationSource::System => Err(runtime_error(
-            ErrorCategory::Unsupported,
-            "plugin_scope_operation_unavailable",
         )),
         _ => Ok(()),
     }
@@ -1542,7 +1611,10 @@ fn runtime_error_with(category: ErrorCategory, code: &str, message: String) -> R
 mod tests {
     use coterm_proto::runtime::operation::{OperationEffect, OperationSource};
 
-    use super::{failure_status, requires_proposal, schema_is_valid, validate_scope_target};
+    use super::{
+        failure_status, requires_proposal, schema_is_valid, validate_plugin_authority,
+        validate_scope_target,
+    };
     use serde_json::json;
 
     #[test]
@@ -1590,29 +1662,40 @@ mod tests {
     }
 
     #[test]
-    fn plugin_scope_is_system_only_until_host_exposes_a_plugin_session() {
-        use coterm_proto::runtime::operation::{OperationScope, OperationSource};
+    fn plugin_scope_has_no_instance_target_and_instance_scope_requires_one() {
+        use coterm_proto::runtime::operation::OperationScope;
 
-        assert!(
-            validate_scope_target(OperationScope::Plugin, OperationSource::System, false).is_ok()
-        );
+        assert!(validate_scope_target(OperationScope::Plugin, false).is_ok());
         assert_eq!(
-            validate_scope_target(OperationScope::Plugin, OperationSource::Agent, false)
-                .expect_err("Agent cannot address a plugin without an authorized session")
-                .code,
-            "plugin_scope_operation_unavailable"
-        );
-        assert_eq!(
-            validate_scope_target(OperationScope::Plugin, OperationSource::Human, true)
+            validate_scope_target(OperationScope::Plugin, true)
                 .expect_err("plugin operation cannot accept an instance target")
                 .code,
             "plugin_operation_does_not_accept_instance"
         );
         assert_eq!(
-            validate_scope_target(OperationScope::Instance, OperationSource::Human, false)
+            validate_scope_target(OperationScope::Instance, false)
                 .expect_err("instance operation requires a target")
                 .code,
             "plugin_instance_required"
+        );
+    }
+
+    #[test]
+    fn plugin_scope_authority_is_bound_to_the_routed_plugin() {
+        use crate::plugin_runtime::CallerContext;
+        use coterm_proto::runtime::operation::OperationSource;
+
+        let caller = CallerContext {
+            source: OperationSource::Agent,
+            session_id: String::new(),
+            plugin_id: Some("com.example.alpha".to_owned()),
+        };
+        assert!(validate_plugin_authority(&caller, "com.example.alpha").is_ok());
+        assert_eq!(
+            validate_plugin_authority(&caller, "com.example.beta")
+                .expect_err("cross-plugin routing must be denied")
+                .code,
+            "plugin_scope_access_denied"
         );
     }
 
