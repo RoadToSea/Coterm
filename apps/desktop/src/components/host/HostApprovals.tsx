@@ -47,7 +47,7 @@ export function HostApprovals() {
   };
   if (!pending && !pollingError) return null;
   return (
-    <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20 flex flex-col items-center gap-2 px-4 pb-4 sm:px-6">
+    <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20 flex flex-col items-center gap-2">
       {pollingError && <p role="alert" className="pointer-events-auto w-full max-w-[760px] rounded-lg border border-[#65433d] bg-[#332626] px-3 py-2 text-xs text-[#f48771]">{pollingError}</p>}
       {pending && <ApprovalCard
         key={pending.record.operationId}

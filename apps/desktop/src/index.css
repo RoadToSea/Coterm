@@ -58,7 +58,7 @@ button:disabled {
 }
 
 @keyframes approval-slide-in {
-  from { transform: translateY(calc(100% + 16px)); opacity: 0; }
+  from { transform: translateY(100%); opacity: 0; }
   to { transform: translateY(0); opacity: 1; }
 }
 
