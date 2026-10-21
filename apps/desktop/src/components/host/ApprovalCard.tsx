@@ -51,7 +51,7 @@ export function ApprovalCard({ record, targetLabel, onApprove, onReject }: Appro
     <form
       aria-label="Agent operation approval"
       aria-busy={busy}
-      className="approval-card pointer-events-auto w-full rounded-t-2xl border border-b-0 border-[#4c4c4c] bg-[#252526] px-5 pb-4 pt-4 text-[#cccccc] shadow-[0_-6px_24px_rgb(0_0_0/18%)]"
+      className="approval-card pointer-events-auto w-full rounded-t-[32px] border border-b-0 border-[#4c4c4c] bg-[#252526] px-5 pb-4 pt-4 text-[#cccccc] shadow-[0_-6px_24px_rgb(0_0_0/18%)]"
       onSubmit={(event) => { event.preventDefault(); void decide(true); }}
       onKeyDown={(event) => {
         if (event.key === "Enter" && (event.repeat || event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229)) {
