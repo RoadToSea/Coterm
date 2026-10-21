@@ -414,11 +414,13 @@ interface PluginAPI {
   requestSecret(request: SecretRequest): Promise<SecretHandle>;
   requestConfirmation(request: ConfirmationRequest): Promise<boolean>;
 
-  components?: CommonComponents;
+  components: CommonComponents;
 }
 ```
 
 上面的类型用于说明职责，`TextRequest` 等完整类型尚待 SDK 接口冻结。这里的 `subscribe` 订阅插件界面事件，与 MQTT 的协议订阅无关。
+
+基座向实例 API 注入可选的通用块列表组件 `api.components.blocks(container, props)`。插件传入自己识别和保存的块，字段包括稳定 `id`、显示序号、命令摘要、`human`/`robot` 来源和可选退出码；组件以左侧编号栏、选中颜色标记和来源文字呈现。`update(props)` 更新列表，`unmount()` 清理挂载。选择变化通过 `onSelectionChange(selectedBlockIds)` 回传插件，插件决定选择如何影响自己的 MCP 上下文。该组件不切分协议数据、不保存块，也不授权操作；来源标签只是展示值，插件应从可靠的调用上下文生成，基座的安全审批仍以运行时识别的来源为准。插件可完全不使用它并实现自有界面。
 
 前端必须通过 `PluginAPI` 访问后端，不得直接创建本地连接、访问插件进程、读取其他插件状态或调用 Tauri 内部 API。基座应将 API 绑定到当前实例，调用方不从输入参数中选择另一个实例。协议后端独立校验目标资源，不能把前端传来的标识视为授权。
 

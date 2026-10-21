@@ -10,6 +10,7 @@ flowchart LR
     MCP[固定 MCP HTTP<br/>127.0.0.1:23517/mcp]
     Desktop[Tauri 桌面 UI]
     HostAPI[宿主命令与事件 API]
+    CommonUI[可选通用块列表组件]
     Core[插件运行时与操作路由]
     Ledger[(内存操作账本<br/>有界、脱敏)]
     PluginUI[插件前端模块<br/>自有界面]
@@ -21,6 +22,8 @@ flowchart LR
     Desktop <--> HostAPI
     HostAPI <--> Core
     PluginUI <--> HostAPI
+    HostAPI --> CommonUI
+    PluginUI -. 按需挂载 .-> CommonUI
     Core <--> Ledger
     Core <--> Plugin
     Plugin --> Protocol

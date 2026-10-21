@@ -17,6 +17,7 @@ import type {
 } from "./plugin-api";
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { promptForSecret } from "./secret-input";
+import { mountBlockList } from "./common-components";
 
 export interface PluginSummary {
   id: string;
@@ -170,6 +171,7 @@ export function createPluginAPI(instance: InstanceInfo): PluginAPI {
     pluginId: instance.pluginId,
     pluginInstanceId: instance.pluginInstanceId,
     sessionId: instance.sessionId,
+    components: { blocks: mountBlockList },
     invoke: <T = unknown>(operation: string, args: unknown, options?: { waitTimeoutMs?: number }) =>
       hostAPI.invokeOperation<T>(
         instance.pluginInstanceId,

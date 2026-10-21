@@ -92,15 +92,35 @@ export interface StreamSubscription {
   cancel(): Promise<void>;
 }
 
-/** 可选组件的领域数据仍由使用该组件的插件定义，组件不访问基座内部。 */
-export type CommonComponent = (container: HTMLElement, props: unknown) => PluginFrontend;
+export interface CommandBlock {
+  id: string;
+  index: number;
+  command: string;
+  actor: "human" | "robot";
+  exitCode?: number | null;
+  selected?: boolean;
+}
+
+export interface BlockListProps {
+  blocks: CommandBlock[];
+  onSelectionChange?: (selectedBlockIds: string[]) => void;
+}
+
+export interface BlockListView extends PluginFrontend {
+  update(props: BlockListProps): void;
+}
+
+/** Common UI is optional; block boundaries and records remain plugin-owned. */
+export interface CommonComponents {
+  blocks: (container: HTMLElement, props: BlockListProps) => BlockListView;
+}
 
 /** 绑定当前实例；不允许从调用参数改目标、伪造来源或选择低风险 effect。 */
 export interface PluginAPI {
   readonly pluginId: string;
   readonly pluginInstanceId: string;
   readonly sessionId: string;
-  readonly components?: Readonly<Record<string, CommonComponent>>;
+  readonly components: Readonly<CommonComponents>;
 
   invoke<T = unknown>(operation: string, args: unknown, options?: InvokeOptions): Promise<OperationReceipt<T>>;
   getOperation(operationId: string): Promise<OperationRecord>;
