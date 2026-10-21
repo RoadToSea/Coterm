@@ -14,10 +14,10 @@ import type {
   StreamOptions,
   StreamSubscription,
   PluginInstanceEvent,
-} from "./plugin-api";
+} from "@coterm/plugin-sdk";
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { promptForSecret } from "./secret-input";
-import { mountBlockList } from "./common-components";
+import { mountBlockList } from "@coterm/plugin-sdk/components/block-list";
 
 export interface PluginSummary {
   id: string;

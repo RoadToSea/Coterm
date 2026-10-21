@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { hostAPI } from "../host-api";
-import { Modal } from "./Modal";
+import { hostAPI } from "../../host-api";
+import { Modal } from "../ui/Modal";
 
 export function McpConfiguration({ onClose }: { onClose: () => void }) {
   const [config, setConfig] = useState("");

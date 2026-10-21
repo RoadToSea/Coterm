@@ -1,0 +1,10 @@
+{
+  "name": "@coterm/plugin-sdk",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./components/block-list": "./src/components/block-list.ts"
+  }
+}

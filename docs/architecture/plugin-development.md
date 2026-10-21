@@ -4,7 +4,7 @@
 
 可运行示例见 [SSH 插件 MVP](ssh-plugin.md)，包括单文件前端构建、可选配置界面、人工秘密输入及当前限制。其受控适配器不代表本文所有运行时能力均已实现。
 
-已建立供评审的[接口声明文件](interface-review.md)：Rust `coterm_proto::runtime` 和 TypeScript `plugin-api.ts`。以下历史示例仍用于解释设计，完整返回类型和消息清单以本轮接口评审入口为准，评审通过后统一更新示例。
+已建立供评审的[接口声明文件](interface-review.md)：Rust `coterm_proto::runtime` 和 TypeScript `packages/plugin-sdk`。以下历史示例仍用于解释设计，完整返回类型和消息清单以本轮接口评审入口为准，评审通过后统一更新示例。
 
 本文面向通信协议插件的开发者。阅读本文后，开发者应能在不了解 Coterm 基座内部实现的前提下，划分插件模块、设计实例和数据模型、实现领域逻辑，并明确接入基座时需要满足的公开契约。
 

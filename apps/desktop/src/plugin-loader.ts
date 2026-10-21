@@ -1,5 +1,5 @@
 import { hostAPI } from "./host-api";
-import type { PluginFrontendModule } from "./plugin-api";
+import type { PluginFrontendModule } from "@coterm/plugin-sdk";
 
 const modules = new Map<string, Promise<PluginFrontendModule | null>>();
 

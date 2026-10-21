@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import type { PluginFrontend } from "../plugin-api";
-import { loadPluginFrontend } from "../plugin-loader";
+import type { PluginFrontend } from "@coterm/plugin-sdk";
+import { loadPluginFrontend } from "../../plugin-loader";
 
 export function PluginConfiguration({ pluginId, onSubmit }: { pluginId: string; onSubmit(config: unknown): Promise<void> }) {
   const containerRef = useRef<HTMLDivElement>(null);

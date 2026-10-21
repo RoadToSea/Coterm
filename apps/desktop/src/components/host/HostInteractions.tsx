@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { hostAPI } from "../host-api";
-import { cancelSecretInput, promptForSecret } from "../secret-input";
+import { hostAPI } from "../../host-api";
+import { cancelSecretInput, promptForSecret } from "../../secret-input";
 
 /** Lives outside the plugin workspace, so inactive/headless instances can prompt. */
 export function HostInteractions() {

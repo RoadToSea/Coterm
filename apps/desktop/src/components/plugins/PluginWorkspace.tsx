@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import { createPluginAPI, type InstanceInfo } from "../host-api";
-import type { PluginFrontend } from "../plugin-api";
-import { loadPluginFrontend } from "../plugin-loader";
-import { cancelSecretInput } from "../secret-input";
+import { createPluginAPI, type InstanceInfo } from "../../host-api";
+import type { PluginFrontend } from "@coterm/plugin-sdk";
+import { loadPluginFrontend } from "../../plugin-loader";
+import { cancelSecretInput } from "../../secret-input";
 
 export function PluginWorkspace({ instance }: { instance: InstanceInfo }) {
   const containerRef = useRef<HTMLDivElement>(null);

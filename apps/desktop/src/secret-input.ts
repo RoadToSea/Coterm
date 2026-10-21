@@ -1,4 +1,4 @@
-import type { InteractionOptions, InteractionOutcome, SecretHandle } from "./plugin-api";
+import type { InteractionOptions, InteractionOutcome, SecretHandle } from "@coterm/plugin-sdk";
 
 const pending = new Map<string, () => void>();
 

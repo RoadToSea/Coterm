@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
-import { hostAPI, type InstanceInfo, type PluginSummary } from "../host-api";
-import type { OperationRecord } from "../plugin-api";
-import { Modal } from "./Modal";
+import { hostAPI, type InstanceInfo, type PluginSummary } from "../../host-api";
+import type { OperationRecord } from "@coterm/plugin-sdk";
+import { Modal } from "../ui/Modal";
 
 /** Common approval fallback also works for inactive instances and headless plugins. */
 export function HostApprovals() {

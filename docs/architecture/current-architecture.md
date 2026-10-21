@@ -2,6 +2,8 @@
 
 此图描述当前 MVP 实现，不代表尚未接通的目标能力。接口状态和已知限制见[架构与实现状态](interface-review.md)。
 
+插件可用的 TypeScript 契约和通用 UI 位于 `packages/plugin-sdk`，不依赖桌面 React 应用。桌面自有组件按区域放在 `apps/desktop/src/components/{host,plugins,mcp,ui,terminal}`；插件只能通过 SDK 接口取得通用组件，不能导入桌面源码。
+
 ## 运行组件
 
 ```mermaid

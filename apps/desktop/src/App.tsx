@@ -1,17 +1,17 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Box, ChevronDown, CircleStop, MoreHorizontal, Plus, PlugZap, ShieldAlert, ShieldCheck, SlidersHorizontal, Trash2 } from "lucide-react";
-import { HostInteractions } from "./components/HostInteractions";
-import { HostApprovals } from "./components/HostApprovals";
-import { McpConfiguration } from "./components/McpConfiguration";
-import { Modal } from "./components/Modal";
-import { PluginWorkspace } from "./components/PluginWorkspace";
-import { PluginConfiguration } from "./components/PluginConfiguration";
+import { HostInteractions } from "./components/host/HostInteractions";
+import { HostApprovals } from "./components/host/HostApprovals";
+import { McpConfiguration } from "./components/mcp/McpConfiguration";
+import { Modal } from "./components/ui/Modal";
+import { PluginWorkspace } from "./components/plugins/PluginWorkspace";
+import { PluginConfiguration } from "./components/plugins/PluginConfiguration";
 import {
   hostAPI,
   type InstanceInfo,
   type PluginSummary,
 } from "./host-api";
-import type { OperationDescriptor, OperationRecord, OperationReceipt } from "./plugin-api";
+import type { OperationDescriptor, OperationRecord, OperationReceipt } from "@coterm/plugin-sdk";
 
 export default function App() {
   const [mcpOpen, setMcpOpen] = useState(false);

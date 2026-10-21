@@ -4,6 +4,6 @@
   "private": true,
   "type": "module",
   "scripts": { "build": "tsc --noEmit && vite build" },
-  "dependencies": { "@xterm/xterm": "^5.5.0", "@xterm/addon-fit": "^0.10.0" },
+  "dependencies": { "@coterm/plugin-sdk": "workspace:*", "@xterm/xterm": "^5.5.0", "@xterm/addon-fit": "^0.10.0" },
   "devDependencies": { "vite": "^5.4.9", "typescript": "^5.6.3" }
 }

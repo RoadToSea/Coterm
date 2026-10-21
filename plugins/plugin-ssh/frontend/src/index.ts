@@ -1,7 +1,7 @@
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import terminalCSS from "@xterm/xterm/css/xterm.css?inline";
-import type { PluginAPI, PluginConfigurationAPI, PluginFrontend, OperationReceipt } from "../../../../apps/desktop/src/plugin-api";
+import type { PluginAPI, PluginConfigurationAPI, PluginFrontend, OperationReceipt } from "@coterm/plugin-sdk";
 
 const css = `
   :host { display:block; height:100%; min-height:0; color:#ccc; font:13px "Segoe UI",sans-serif; }

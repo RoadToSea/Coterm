@@ -1,4 +1,4 @@
-import type { BlockListProps, BlockListView, CommandBlock } from "./plugin-api";
+import type { BlockListProps, BlockListView, CommandBlock } from "../plugin-api";
 
 const style = `
   .coterm-blocks { height:100%; overflow:auto; color:#cccccc; background:#1e1e1e; font:12px "Segoe UI",sans-serif; }
