@@ -5,6 +5,7 @@
   "description": "The Collaborative Terminal for Humans and AI Agents",
   "scripts": {
     "plugin:ssh:build": "node scripts/build-ssh.mjs",
+    "plugin:serial:build": "node scripts/build-serial.mjs",
     "dev": "pnpm --filter coterm-desktop dev",
     "build": "pnpm --filter coterm-desktop build",
     "tauri": "pnpm --filter coterm-desktop tauri",

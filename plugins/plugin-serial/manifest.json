@@ -1,24 +1,22 @@
 {
-  "$schema": "../../schemas/plugin-manifest.schema.json",
+  "manifestVersion": 1,
   "id": "coterm-plugin-serial",
-  "name": "Serial Port (UART)",
+  "name": "Serial",
   "version": "0.1.0",
-  "description": "Hardware serial port communication for embedded boards",
-  "protocol": "serial",
-  "entry_point": "coterm-plugin-serial",
-  "config_schema": {
-    "type": "object",
-    "required": ["port", "baud_rate"],
-    "properties": {
-      "port": { "type": "string", "description": "COM port or /dev/ttyUSB0" },
-      "baud_rate": {
-        "type": "integer",
-        "enum": [9600, 19200, 38400, 57600, 115200, 230400, 921600, 1500000],
-        "default": 115200
-      },
-      "data_bits": { "type": "integer", "enum": [5, 6, 7, 8], "default": 8 },
-      "stop_bits": { "type": "integer", "enum": [1, 2], "default": 1 },
-      "parity": { "type": "string", "enum": ["none", "odd", "even"], "default": "none" }
-    }
-  }
+  "runtime": {
+    "interfaceMajor": 1,
+    "requires": ["instances", "backend-calls", "operation-catalog", "native-mcp-tools", "async-operations", "plugin-events"]
+  },
+  "backend": {
+    "windows-x64": "backend/coterm-plugin-serial.exe",
+    "windows-arm64": "backend/coterm-plugin-serial.exe",
+    "linux-x64": "backend/coterm-plugin-serial",
+    "linux-arm64": "backend/coterm-plugin-serial",
+    "macos-x64": "backend/coterm-plugin-serial",
+    "macos-arm64": "backend/coterm-plugin-serial"
+  },
+  "frontend": { "entry": "frontend/index.js" },
+  "mcp": { "provider": "backend" },
+  "instances": { "type": "serial-port", "multiple": true },
+  "capabilities": ["confirmation"]
 }

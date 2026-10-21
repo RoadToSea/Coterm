@@ -166,6 +166,18 @@ fn get_version() -> String {
 
 #[tauri::command]
 async fn list_plugins(state: tauri::State<'_, AppState>) -> Result<Vec<PluginSummary>, String> {
+    // One broken package must not hide every healthy one; failures are logged and skipped.
+    async fn load(state: &AppState, package: &std::path::Path) {
+        if let Err(error) = state.plugin_runtime.load(package).await {
+            eprintln!(
+                "skipping plugin package {}: {}: {}",
+                package.display(),
+                error.code,
+                error.message
+            );
+        }
+    }
+
     // Development packages remain inside the workspace; installed packages win by ID.
     #[cfg(debug_assertions)]
     {
@@ -174,11 +186,7 @@ async fn list_plugins(state: tauri::State<'_, AppState>) -> Result<Vec<PluginSum
             while let Ok(Some(entry)) = entries.next_entry().await {
                 let package = entry.path().join("dist");
                 if package.join("manifest.json").is_file() {
-                    state
-                        .plugin_runtime
-                        .load(&package)
-                        .await
-                        .map_err(|error| format!("{}: {}", error.code, error.message))?;
+                    load(&state, &package).await;
                 }
             }
         }
@@ -198,12 +206,7 @@ async fn list_plugins(state: tauri::State<'_, AppState>) -> Result<Vec<PluginSum
         if !file_type.is_dir() {
             continue;
         }
-        let package_path = entry.path();
-        state
-            .plugin_runtime
-            .load(&package_path)
-            .await
-            .map_err(|error| format!("{}: {}", error.code, error.message))?;
+        load(&state, &entry.path()).await;
     }
     let manifests = state.plugin_runtime.loaded_manifests().await;
     let mut plugins = Vec::with_capacity(manifests.len());

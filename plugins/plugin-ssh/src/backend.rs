@@ -9,11 +9,12 @@ use coterm_proto::runtime::{
         InteractionResult, InteractionValue, SecretDelivery, SecretHandle,
     },
     lifecycle::{CreateInstance, HelloResult, McpToolRegistration, RuntimeHello},
-    message::{CancelTarget, DeferredOperation, PluginNotification},
+    message::{CancelTarget, DeferredOperation, HostCommand, PluginNotification},
     operation::{
         ApproveProposal, DispatchMode, InvokeRequest, OperationDescriptor, OperationEffect,
         OperationScope, OperationSource,
     },
+    ErrorCategory, RuntimeError,
 };
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
@@ -135,8 +136,7 @@ pub fn catalog() -> Vec<OperationDescriptor> {
 }
 
 /// MCP is an explicit plugin API. Raw terminal input and password handles are excluded.
-pub fn mcp_tools() -> Vec<McpToolRegistration> {
-    let mut tools: Vec<_> = [
+pub fn mcp_tools() -> Vec<McpToolRegistration> {    let mut tools: Vec<_> = [
         ("ssh.status", "Read connection status.", json!({}), vec![]),
         ("ssh.probe", "Probe the host key without authenticating. Verify it before connect.", json!({}), vec![]),
         ("ssh.connect", "Connect the existing instance. Waits for host approval and a human password prompt; never supply a password.", json!({"fingerprint":{"type":"string"}}), vec!["fingerprint"]),
@@ -191,6 +191,79 @@ fn validate_mcp_args(operation: &str, args: &Value) -> Result<()> {
 fn mcp_result(value: Value) -> Value {
     json!({"content":[{"type":"text","text":value.to_string()}],"isError":false})
 }
+
+impl coterm_proto::runtime::transport::PluginBackend for Backend {
+    async fn request(&mut self, command: HostCommand) -> Result<Value, RuntimeError> {
+        // Only the transport knows the JSON-RPC method names; the domain dispatch below
+        // stays exactly as the host contract expects it.
+        let (method, params) = match command {
+            HostCommand::Hello(hello) => ("initialize", serde_json::to_value(hello)),
+            HostCommand::CreateInstance(create) => {
+                ("create_instance", serde_json::to_value(create))
+            }
+            HostCommand::DestroyInstance {
+                plugin_instance_id,
+            } => (
+                "destroy_instance",
+                Ok(json!({ "pluginInstanceId": plugin_instance_id })),
+            ),
+            HostCommand::Invoke(request) => ("invoke", serde_json::to_value(request)),
+            HostCommand::Approve(request) => ("approve", serde_json::to_value(request)),
+            HostCommand::Reject {
+                operation_id,
+                proposal_id,
+                reason,
+            } => (
+                "reject",
+                Ok(json!({
+                    "operationId": operation_id,
+                    "proposalId": proposal_id,
+                    "reason": reason,
+                })),
+            ),
+            HostCommand::Cancel(target) => ("cancel", serde_json::to_value(target)),
+            HostCommand::InteractionResult(result) => {
+                ("interaction_result", serde_json::to_value(result))
+            }
+            HostCommand::ProvideSecret(secret) => {
+                ("provide_secret", serde_json::to_value(secret))
+            }
+            HostCommand::Shutdown => ("shutdown", Ok(Value::Null)),
+            // SSH 不实现流式订阅；基座按能力握手决定是否调用。
+            HostCommand::StreamSubscribe(_)
+            | HostCommand::StreamUnsubscribe { .. }
+            | HostCommand::StreamCredit { .. } => {
+                return Err(RuntimeError {
+                    category: ErrorCategory::Unsupported,
+                    code: "ssh_stream_unsupported".to_owned(),
+                    message: "SSH plugin does not support stream subscriptions".to_owned(),
+                    details: None,
+                })
+            }
+        };
+        let params = params.map_err(|error| RuntimeError {
+            category: ErrorCategory::InvalidRequest,
+            code: "ssh_request_encode_failed".to_owned(),
+            message: error.to_string(),
+            details: None,
+        })?;
+        self.request(method, params).await.map_err(|error| RuntimeError {
+            category: ErrorCategory::Domain,
+            code: "ssh_domain_error".to_owned(),
+            message: error.to_string(),
+            details: None,
+        })
+    }
+
+    fn tick(&mut self) {
+        self.expire_secrets();
+    }
+
+    fn take_notifications(&mut self) -> Option<tokio::sync::mpsc::Receiver<PluginNotification>> {
+        self.notifications.take()
+    }
+}
+
 
 impl Backend {
     pub fn take_notifications(

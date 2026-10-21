@@ -8,6 +8,7 @@ pub mod manifest;
 pub mod message;
 pub mod operation;
 pub mod stream;
+pub mod transport;
 
 use std::{future::Future, pin::Pin};
 
