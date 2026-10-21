@@ -1,24 +1,21 @@
 {
-  "$schema": "../../schemas/plugin-manifest.schema.json",
+  "manifestVersion": 1,
   "id": "coterm-plugin-local",
-  "name": "Local Terminal",
+  "name": "Local",
   "version": "0.1.0",
-  "description": "Native local PTY shell (PowerShell, CMD, Bash)",
-  "protocol": "local",
-  "entry_point": "coterm-plugin-local",
-  "config_schema": {
-    "type": "object",
-    "properties": {
-      "shell": {
-        "type": "string",
-        "description": "Shell path (e.g. pwsh.exe, cmd.exe, /bin/bash)",
-        "default": "powershell.exe"
-      },
-      "cwd": {
-        "type": "string",
-        "description": "Initial working directory",
-        "default": ""
-      }
-    }
-  }
+  "runtime": {
+    "interfaceMajor": 1,
+    "requires": ["instances", "backend-calls", "operation-catalog", "plugin-events"]
+  },
+  "backend": {
+    "windows-x64": "backend/coterm-plugin-local.exe",
+    "windows-arm64": "backend/coterm-plugin-local.exe",
+    "linux-x64": "backend/coterm-plugin-local",
+    "linux-arm64": "backend/coterm-plugin-local",
+    "macos-x64": "backend/coterm-plugin-local",
+    "macos-arm64": "backend/coterm-plugin-local"
+  },
+  "mcp": { "provider": "backend" },
+  "instances": { "type": "local-shell", "multiple": true },
+  "capabilities": []
 }
