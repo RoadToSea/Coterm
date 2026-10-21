@@ -1,23 +1,22 @@
 {
-  "$schema": "../../schemas/plugin-manifest.schema.json",
+  "manifestVersion": 1,
   "id": "coterm-plugin-ssh",
-  "name": "SSH Client",
+  "name": "SSH",
   "version": "0.1.0",
-  "description": "Secure Shell remote connection plugin",
-  "protocol": "ssh",
-  "entry_point": "coterm-plugin-ssh",
-  "config_schema": {
-    "type": "object",
-    "required": ["host", "port", "username"],
-    "properties": {
-      "host": { "type": "string", "description": "Remote host IP or domain" },
-      "port": { "type": "integer", "default": 22 },
-      "username": { "type": "string", "default": "root" },
-      "auth_type": {
-        "type": "string",
-        "enum": ["password", "private_key", "agent"],
-        "default": "password"
-      }
-    }
-  }
+  "runtime": {
+    "interfaceMajor": 1,
+    "requires": ["instances", "backend-calls", "operation-catalog", "secret-delivery", "native-mcp-tools", "deferred-interactions", "async-operations", "plugin-events"]
+  },
+  "backend": {
+    "windows-x64": "backend/coterm-plugin-ssh.exe",
+    "windows-arm64": "backend/coterm-plugin-ssh.exe",
+    "linux-x64": "backend/coterm-plugin-ssh",
+    "linux-arm64": "backend/coterm-plugin-ssh",
+    "macos-x64": "backend/coterm-plugin-ssh",
+    "macos-arm64": "backend/coterm-plugin-ssh"
+  },
+  "frontend": { "entry": "frontend/index.js" },
+  "mcp": { "provider": "backend" },
+  "instances": { "type": "ssh-connection", "multiple": true },
+  "capabilities": ["secret-input", "confirmation"]
 }

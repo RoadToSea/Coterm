@@ -1,226 +1,539 @@
-import { useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { Box, ChevronDown, CircleStop, MoreHorizontal, Plus, PlugZap, ShieldAlert, ShieldCheck, SlidersHorizontal, Trash2 } from "lucide-react";
+import { HostInteractions } from "./components/HostInteractions";
+import { HostApprovals } from "./components/HostApprovals";
+import { McpConfiguration } from "./components/McpConfiguration";
+import { Modal } from "./components/Modal";
+import { PluginWorkspace } from "./components/PluginWorkspace";
+import { PluginConfiguration } from "./components/PluginConfiguration";
 import {
-  Terminal as TerminalIcon,
-  Server,
-  Cpu,
-  Layers,
-  ShieldCheck,
-  Bot,
-  Plus,
-  Sliders,
-  Sparkles,
-} from "lucide-react";
-import { TerminalView } from "./components/Terminal";
-import type { CommandBlock, GhostTextProposal } from "./components/Terminal";
+  hostAPI,
+  type InstanceInfo,
+  type PluginSummary,
+} from "./host-api";
+import type { OperationDescriptor, OperationRecord, OperationReceipt } from "./plugin-api";
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState("local-1");
-  const [isBypass, setIsBypass] = useState(false);
-  const [guardrailEnabled, setGuardrailEnabled] = useState(true);
+  const [mcpOpen, setMcpOpen] = useState(false);
+  const [plugins, setPlugins] = useState<PluginSummary[]>([]);
+  const [instances, setInstances] = useState<InstanceInfo[]>([]);
+  const [activeInstanceId, setActiveInstanceId] = useState<string | null>(null);
+  const [selectedPluginId, setSelectedPluginId] = useState<string | null>(null);
+  const [instanceToolsOpen, setInstanceToolsOpen] = useState(false);
+  const [configText, setConfigText] = useState("{}");
+  const [loading, setLoading] = useState(true);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [bypass, setBypass] = useState(false);
+  const [operations, setOperations] = useState<OperationDescriptor[]>([]);
+  const [operationHistory, setOperationHistory] = useState<OperationRecord[]>([]);
+  const [selectedOperation, setSelectedOperation] = useState("");
+  const [operationArgs, setOperationArgs] = useState("{}");
+  const [operationResult, setOperationResult] = useState<OperationReceipt | null>(null);
 
-  // 模拟已捕获的结构化命令块数据 (OSC 133)
-  const [blocks, setBlocks] = useState<CommandBlock[]>([
-    {
-      id: "cmd_1",
-      index: 1,
-      command: "git status",
-      exitCode: 0,
-      actor: "human",
-      isSelected: false,
-      timestamp: "18:00:12",
-    },
-    {
-      id: "cmd_2",
-      index: 2,
-      command: "cargo check --workspace",
-      exitCode: 0,
-      actor: "agent",
-      isSelected: false,
-      timestamp: "18:01:45",
-    },
-    {
-      id: "cmd_3",
-      index: 3,
-      command: "pnpm run deploy-stage",
-      exitCode: 1,
-      actor: "human",
-      isSelected: true,
-      timestamp: "18:03:20",
-    },
-  ]);
+  const activeInstance = useMemo(
+    () => instances.find((instance) => instance.pluginInstanceId === activeInstanceId) ?? null,
+    [instances, activeInstanceId],
+  );
 
-  // 模拟 Agent 待批准的 Ghost Text 提议
-  const [ghostProposal, setGhostProposal] = useState<GhostTextProposal | null>({
-    command: "docker restart coterm-db-service",
-    isRisky: false,
-  });
+  const selectedPlugin = plugins.find((plugin) => plugin.id === selectedPluginId) ?? null;
+  const selectedOperationDescriptor = operations.find((item) => item.name === selectedOperation) ?? null;
 
-  const handleApproveGhost = (command: string) => {
-    // 审批通过：推入新的已执行命令块
-    const newBlock: CommandBlock = {
-      id: `cmd_${blocks.length + 1}`,
-      index: blocks.length + 1,
-      command,
-      exitCode: 0,
-      actor: "agent",
-      isSelected: false,
-      timestamp: new Date().toLocaleTimeString(),
+  const updateOperationArgument = (name: string, value: unknown) => {
+    let current: Record<string, unknown> = {};
+    try {
+      const parsed: unknown = JSON.parse(operationArgs);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        current = parsed as Record<string, unknown>;
+      }
+    } catch {
+      current = {};
+    }
+    setOperationArgs(JSON.stringify({ ...current, [name]: value }, null, 2));
+  };
+
+  const operationSchema = selectedOperationDescriptor?.inputSchema;
+  const schemaProperties = operationSchema && typeof operationSchema === "object"
+    ? (operationSchema as { properties?: Record<string, { type?: string; title?: string; description?: string; enum?: unknown[]; minimum?: number; maximum?: number }> }).properties
+    : undefined;
+  const schemaRequired = operationSchema && typeof operationSchema === "object"
+    ? (operationSchema as { required?: string[] }).required ?? []
+    : [];
+
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const [nextPlugins, nextInstances, nextBypass] = await Promise.all([
+        hostAPI.listPlugins(),
+        hostAPI.listInstances(),
+        hostAPI.getBypass(),
+      ]);
+      setPlugins(nextPlugins);
+      setInstances(nextInstances);
+      setBypass(nextBypass);
+      setActiveInstanceId((current) =>
+        nextInstances.some((instance) => instance.pluginInstanceId === current)
+          ? current
+          : nextInstances[0]?.pluginInstanceId ?? null,
+      );
+    } catch (reason) {
+      setError(String(reason));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  useEffect(() => {
+    if (!activeInstance) {
+      setOperations([]);
+      setOperationHistory([]);
+      setSelectedOperation("");
+      return;
+    }
+    let current = true;
+    Promise.all([
+      hostAPI.listOperations(activeInstance.pluginId),
+      hostAPI.recentOperations(activeInstance.pluginInstanceId, 20),
+    ])
+      .then(([catalog, history]) => {
+        if (!current) return;
+        const instanceOperations = catalog.filter((item) => item.scope === "instance");
+        setOperations(instanceOperations);
+        setSelectedOperation((selected) =>
+          instanceOperations.some((item) => item.name === selected)
+            ? selected
+            : instanceOperations[0]?.name ?? "",
+        );
+        setOperationHistory(history);
+      })
+      .catch((reason) => {
+        if (current) setError(String(reason));
+      });
+    return () => {
+      current = false;
     };
-    setBlocks((prev) => [...prev, newBlock]);
-    setGhostProposal(null);
+  }, [activeInstance]);
+
+  const runPluginAction = async (pluginId: string, action: () => Promise<void>) => {
+    setBusyId(pluginId);
+    setError(null);
+    try {
+      await action();
+      await refresh();
+    } catch (reason) {
+      setError(String(reason));
+    } finally {
+      setBusyId(null);
+    }
   };
 
-  const handleRejectGhost = () => {
-    setGhostProposal(null);
+  const createConfiguredInstance = async (pluginId: string, config: unknown) => {
+    setBusyId(pluginId);
+    setError(null);
+    try {
+      if (!plugins.find((plugin) => plugin.id === pluginId)?.running) {
+        await hostAPI.startPlugin(pluginId);
+      }
+      const instance = await hostAPI.createInstance(pluginId, config);
+      await refresh();
+      setActiveInstanceId(instance.pluginInstanceId);
+      setSelectedPluginId(null);
+    } catch (reason) {
+      setError(String(reason));
+      throw reason;
+    } finally {
+      setBusyId(null);
+    }
   };
 
-  const handleAskAgentFix = (_block: CommandBlock) => {
-    setGhostProposal({
-      command: `journalctl -u coterm-service -n 50 --no-pager`,
-      isRisky: false,
-    });
+  const createInstance = async (pluginId: string) => {
+    try {
+      const config: unknown = JSON.parse(configText);
+      await createConfiguredInstance(pluginId, config);
+    } catch (reason) {
+      setError(String(reason));
+    }
   };
+
+  const submitOperation = async () => {
+    if (!activeInstance || !selectedOperation) return;
+    setError(null);
+    setOperationResult(null);
+    try {
+      const args: unknown = JSON.parse(operationArgs);
+      const receipt = await hostAPI.invokeOperation(
+        activeInstance.pluginInstanceId,
+        selectedOperation,
+        args,
+      );
+      setOperationResult(receipt);
+      setOperationHistory(await hostAPI.recentOperations(activeInstance.pluginInstanceId, 20));
+    } catch (reason) {
+      setError(String(reason));
+    }
+  };
+
+  const respondToProposal = async (record: OperationRecord, approve: boolean) => {
+    if (!activeInstance || !record.proposalId) return;
+    try {
+      if (approve) {
+        const args: unknown = JSON.parse(operationArgs);
+        await hostAPI.approveProposal(
+          activeInstance.pluginInstanceId,
+          record.proposalId,
+          args,
+        );
+      } else {
+        await hostAPI.rejectProposal(activeInstance.pluginInstanceId, record.proposalId);
+      }
+      setOperationHistory(await hostAPI.recentOperations(activeInstance.pluginInstanceId, 20));
+    } catch (reason) {
+      setError(String(reason));
+    }
+  };
+
+  const toggleBypass = async () => {
+    if (!bypass && !window.confirm(
+      "Enable Bypass? Agent commit operations will skip Coterm approval. You assume the risk.",
+    )) return;
+    try {
+      await hostAPI.setBypass(!bypass);
+      setBypass(!bypass);
+    } catch (reason) {
+      setError(String(reason));
+    }
+  };
+
+  const errorNotice = error && (
+    <div role="alert" className="break-words border-l-2 border-[#f48771] bg-[#332626] px-3 py-2 text-xs leading-relaxed text-[#f4b8aa]">
+      {error}
+    </div>
+  );
 
   return (
-    <div className="flex h-screen w-screen flex-col bg-slate-950 text-slate-200">
-      {/* 顶部标签栏 */}
-      <header className="flex h-10 items-center justify-between border-b border-slate-800 bg-slate-900 px-3">
-        <div className="flex items-center space-x-1">
-          <div className="flex items-center space-x-2 pr-4 font-semibold text-emerald-400">
-            <Layers className="h-5 w-5" />
-            <span>Coterm</span>
-          </div>
+    <div className="flex h-dvh flex-col overflow-hidden bg-[#1e1e1e] text-[#cccccc]">
+      <div
+        role="toolbar"
+        aria-label="Workspace tools"
+        className="flex h-8 shrink-0 items-center gap-2 border-b border-[#2b2b2b] bg-[#323233] px-3"
+      >
+        <button type="button" aria-haspopup="dialog" onClick={() => setMcpOpen(true)} className="px-2 text-[11px] hover:bg-[#454545]">MCP</button>
+      </div>
+      <HostInteractions />
+      <HostApprovals />
+      {mcpOpen && <McpConfiguration onClose={() => setMcpOpen(false)} />}
 
-          <div className="flex items-center space-x-1">
+      <div className="flex min-h-0 flex-1">
+        <aside aria-label="Installed plugins" className="flex w-[72px] shrink-0 flex-col border-r border-[#2b2b2b] bg-[#333333]">
+          <h1 className="px-1 pb-3 pt-4 text-center text-[9px] font-medium leading-[14px] tracking-[0.04em] text-[#b7b7b7]">
+            INSTALLED<br />PLUGINS
+          </h1>
+          <nav aria-label="Plugin list" aria-busy={loading} className="min-h-0 flex-1 overflow-y-auto">
+            {loading && plugins.length === 0 ? (
+              <div aria-label="Loading plugins" className="flex flex-col items-center gap-4 py-2">
+                {[0, 1, 2].map((item) => <div key={item} className="h-8 w-8 rounded bg-[#484848]" />)}
+              </div>
+            ) : plugins.map((plugin) => (
+              <button
+                key={plugin.id}
+                type="button"
+                title={`${plugin.name} · ${plugin.version} · ${plugin.running ? "Running" : "Stopped"}`}
+                aria-label={`Manage ${plugin.name}`}
+                aria-haspopup="dialog"
+                aria-pressed={selectedPluginId === plugin.id}
+                onClick={() => setSelectedPluginId(plugin.id)}
+                className={`group relative flex min-h-16 w-full flex-col items-center justify-center gap-1 border-l-2 px-1 py-2 hover:bg-[#3e3e3e] ${selectedPluginId === plugin.id ? "border-[#75beff] bg-[#3e3e3e]" : "border-transparent"}`}
+              >
+                <span className="relative grid h-7 w-8 place-items-center">
+                  <PlugZap size={25} strokeWidth={1.5} className={plugin.running ? "text-[#eeeeee]" : "text-[#aaaaaa]"} />
+                  <span className={`absolute bottom-0 right-0 h-2 w-2 rounded-full border-2 border-[#333333] ${plugin.running ? "bg-[#75beff]" : "bg-[#969696]"}`} />
+                </span>
+                <span className="w-full truncate text-center text-[10px] text-[#bcbcbc]">{plugin.name}</span>
+              </button>
+            ))}
+            {!loading && plugins.length === 0 && <p className="px-1 py-3 text-center text-[10px] leading-relaxed text-[#aaaaaa]">No plugins</p>}
+          </nav>
+          <div className="flex justify-center border-t border-[#414141] py-3">
             <button
-              onClick={() => setActiveTab("local-1")}
-              className={`flex items-center space-x-2 rounded-t px-3 py-1.5 text-xs font-medium transition ${
-                activeTab === "local-1"
-                  ? "bg-slate-950 text-slate-100 border-t-2 border-emerald-500"
-                  : "bg-slate-900 text-slate-400 hover:bg-slate-800"
-              }`}
+              type="button"
+              title={bypass ? "Bypass on — click to require approval" : "Agent approval on — click to enable bypass"}
+              aria-label={bypass ? "Disable approval bypass" : "Enable approval bypass"}
+              aria-pressed={bypass}
+              onClick={() => void toggleBypass()}
+              className="icon-button h-9 w-9"
             >
-              <TerminalIcon className="h-3.5 w-3.5 text-sky-400" />
-              <span>Local Terminal</span>
-            </button>
-            <button className="rounded p-1 text-slate-400 hover:bg-slate-800 hover:text-slate-200">
-              <Plus className="h-4 w-4" />
-            </button>
-          </div>
-        </div>
-
-        {/* 模式与安全控制区 */}
-        <div className="flex items-center space-x-3 text-xs">
-          <button
-            onClick={() => setIsBypass(!isBypass)}
-            className={`flex items-center space-x-1 rounded px-2.5 py-1 font-medium transition ${
-              isBypass
-                ? "bg-amber-500/20 text-amber-300 border border-amber-500/30"
-                : "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30"
-            }`}
-          >
-            <Bot className="h-3.5 w-3.5" />
-            <span>{isBypass ? "Bypass 模式 (全自动)" : "人类抢占 / 审核模式"}</span>
-          </button>
-
-          <button
-            onClick={() => setGuardrailEnabled(!guardrailEnabled)}
-            className={`flex items-center space-x-1 rounded px-2 py-1 transition ${
-              guardrailEnabled
-                ? "text-emerald-400 hover:bg-slate-800"
-                : "text-rose-400 hover:bg-slate-800"
-            }`}
-            title="高危命令熔断保护"
-          >
-            <ShieldCheck className="h-4 w-4" />
-            <span>{guardrailEnabled ? "熔断开启" : "熔断关闭"}</span>
-          </button>
-
-          {/* 模拟触发一次 Agent 提案的测试按钮 */}
-          {!ghostProposal && (
-            <button
-              onClick={() =>
-                setGhostProposal({
-                  command: "systemctl status coterm-worker",
-                  isRisky: false,
-                })
-              }
-              className="flex items-center space-x-1 rounded bg-purple-600/30 px-2 py-1 text-purple-200 hover:bg-purple-600 hover:text-white"
-            >
-              <Sparkles className="h-3 w-3" />
-              <span>测试 Agent 建议</span>
-            </button>
-          )}
-        </div>
-      </header>
-
-      {/* 主工作区 */}
-      <div className="flex flex-1 overflow-hidden">
-        {/* 左侧资产树与插件栏 */}
-        <aside className="w-56 border-r border-slate-800 bg-slate-900/50 p-3">
-          <div className="mb-4">
-            <h2 className="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-400">
-              会话连接
-            </h2>
-            <ul className="space-y-1 text-xs">
-              <li>
-                <button className="flex w-full items-center space-x-2 rounded px-2 py-1.5 text-slate-200 bg-slate-800/80">
-                  <TerminalIcon className="h-4 w-4 text-sky-400" />
-                  <span>本地终端</span>
-                </button>
-              </li>
-              <li>
-                <button className="flex w-full items-center space-x-2 rounded px-2 py-1.5 text-slate-400 hover:bg-slate-800 hover:text-slate-300">
-                  <Server className="h-4 w-4 text-emerald-400" />
-                  <span>SSH 远程连接</span>
-                </button>
-              </li>
-              <li>
-                <button className="flex w-full items-center space-x-2 rounded px-2 py-1.5 text-slate-400 hover:bg-slate-800 hover:text-slate-300">
-                  <Cpu className="h-4 w-4 text-amber-400" />
-                  <span>串口调试 (UART)</span>
-                </button>
-              </li>
-            </ul>
-          </div>
-
-          <div>
-            <h2 className="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-400">
-              插件生态
-            </h2>
-            <button className="flex w-full items-center space-x-2 rounded px-2 py-1.5 text-xs text-slate-400 hover:bg-slate-800 hover:text-slate-300">
-              <Sliders className="h-4 w-4 text-purple-400" />
-              <span>插件市场 (Market)</span>
+              {bypass ? <ShieldAlert size={22} className="text-[#cca770]" /> : <ShieldCheck size={22} />}
             </button>
           </div>
         </aside>
 
-        {/* 右侧终端与命令块工作台 */}
-        <main className="relative flex flex-1 flex-col bg-slate-950 p-2">
-          <TerminalView
-            blocks={blocks}
-            ghostProposal={ghostProposal}
-            onApproveGhost={handleApproveGhost}
-            onRejectGhost={handleRejectGhost}
-            onAskAgentFix={handleAskAgentFix}
-          />
+        <aside aria-label="Instances" className="flex w-[240px] min-w-0 shrink-0 flex-col border-r border-[#2b2b2b] bg-[#252526] max-[900px]:w-[200px]">
+          <div className="flex h-10 shrink-0 items-center px-5">
+            <h2 className="text-[11px] font-medium tracking-[0.06em]">INSTANCES</h2>
+          </div>
+          <div className="flex h-7 shrink-0 items-center gap-1 border-y border-[#2b2b2b] bg-[#2d2d2d] px-2 text-[11px] font-semibold">
+            <ChevronDown size={14} className="text-[#b7b7b7]" />
+            <span>WORKSPACE</span>
+            <span className="ml-auto pr-1 font-mono text-[10px] font-normal text-[#969696]">{instances.length}</span>
+          </div>
+          <nav aria-label="Instance list" aria-busy={loading} className="min-h-0 flex-1 overflow-y-auto py-1">
+            {loading && instances.length === 0 ? (
+              <div aria-label="Loading instances" className="space-y-3 px-5 py-3">
+                {["w-3/4", "w-1/2"].map((width) => <div key={width} className={`h-3 bg-[#333333] ${width}`} />)}
+              </div>
+            ) : instances.map((instance) => (
+              <div key={instance.pluginInstanceId} className={`group flex h-8 items-center ${activeInstanceId === instance.pluginInstanceId ? "bg-[#37373d]" : "hover:bg-[#2a2d2e]"}`}>
+                <button
+                  type="button"
+                  title={`${instance.pluginId} · ${instance.status}`}
+                  aria-current={activeInstanceId === instance.pluginInstanceId ? "true" : undefined}
+                  onClick={() => setActiveInstanceId(instance.pluginInstanceId)}
+                  className="flex h-full min-w-0 flex-1 items-center gap-2 pl-5 pr-1 text-left text-xs"
+                >
+                  <Box size={15} strokeWidth={1.5} className="shrink-0 text-[#75beff]" />
+                  <span className="truncate">{instance.label}</span>
+                </button>
+                <button
+                  type="button"
+                  title={`Manage ${instance.label}`}
+                  aria-label={`Manage ${instance.label}`}
+                  aria-haspopup="dialog"
+                  onClick={() => {
+                    setActiveInstanceId(instance.pluginInstanceId);
+                    setInstanceToolsOpen(true);
+                  }}
+                  className="icon-button mr-1 opacity-0 focus:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100"
+                >
+                  <MoreHorizontal size={16} />
+                </button>
+              </div>
+            ))}
+            {!loading && instances.length === 0 && (
+              <div className="px-5 py-5 text-xs leading-5 text-[#969696]">
+                <p>No instances yet.</p>
+                <p className="mt-1">Select a plugin on the left to create one.</p>
+              </div>
+            )}
+          </nav>
+          {errorNotice}
+        </aside>
+
+        <main aria-label="Plugin workspace" className="min-w-0 flex-1 bg-[#1e1e1e]">
+          {activeInstance && <PluginWorkspace key={activeInstance.pluginInstanceId} instance={activeInstance} />}
         </main>
       </div>
 
-      {/* 底部状态栏 */}
-      <footer className="flex h-6 items-center justify-between border-t border-slate-800 bg-slate-900 px-3 text-[11px] text-slate-500">
-        <div className="flex items-center space-x-4">
-          <span className="flex items-center space-x-1">
-            <span className="h-1.5 w-1.5 rounded-full bg-emerald-400"></span>
-            <span>协议: Local PTY</span>
-          </span>
-          <span>MCP 网关: 监听中 (端口 8090)</span>
-          <span className="text-purple-400">已就绪支持 OSC 133 分块</span>
+      <footer className="flex h-[22px] shrink-0 items-center justify-between border-t border-[#2b2b2b] bg-[#252526] px-3 text-[11px] text-[#a8a8a8]">
+        <div className="flex items-center gap-4">
+          <span>{plugins.length} plugins</span>
+          <span>{instances.length} instances</span>
+          {busyId && <span role="status">Updating…</span>}
         </div>
-        <div>
-          <span>Coterm v0.1.0 (feat/terminal-ui)</span>
-        </div>
+        <span className={bypass ? "text-[#cca770]" : ""}>{bypass ? "Bypass on" : "Agent approval on"}</span>
       </footer>
+
+      {selectedPlugin && (
+        <Modal title={selectedPlugin.name} onClose={() => setSelectedPluginId(null)}>
+          <div className="mb-5 flex items-start gap-3">
+            <PlugZap size={28} strokeWidth={1.5} className="mt-1 text-[#75beff]" />
+            <div className="min-w-0">
+              <h3 className="text-sm font-medium">{selectedPlugin.name}</h3>
+              <p className="mt-1 break-all text-xs text-[#969696]">{selectedPlugin.id} · {selectedPlugin.version}</p>
+              <p className="mt-2 text-xs">{selectedPlugin.running ? "Running" : "Stopped"}</p>
+            </div>
+          </div>
+          <div className="mb-5 flex gap-2">
+            <button
+              type="button"
+              disabled={busyId !== null || loading}
+              onClick={() => void runPluginAction(selectedPlugin.id, () => selectedPlugin.running ? hostAPI.stopPlugin(selectedPlugin.id) : hostAPI.startPlugin(selectedPlugin.id))}
+              className="flex h-8 items-center gap-2 border border-[#454545] px-3 text-xs hover:bg-[#383838] disabled:opacity-50"
+            >
+              {selectedPlugin.running ? <CircleStop size={14} /> : <PlugZap size={14} />}
+              {selectedPlugin.running ? "Stop plugin" : "Start plugin"}
+            </button>
+          </div>
+          {selectedPlugin.hasFrontend && (
+            <PluginConfiguration key={selectedPlugin.id} pluginId={selectedPlugin.id} onSubmit={(config) => createConfiguredInstance(selectedPlugin.id, config)} />
+          )}
+          <details className="border-t border-[#383838] pt-4" open={!selectedPlugin.hasFrontend}>
+            <summary className="mb-3 cursor-pointer text-xs text-[#969696]">Advanced JSON configuration</summary>
+            <h3 className="mb-4 flex items-center gap-2 text-xs font-medium"><SlidersHorizontal size={14} /> New instance</h3>
+            <label htmlFor="instance-config" className="mb-2 block text-xs text-[#aaaaaa]">Configuration (JSON)</label>
+            <textarea
+              id="instance-config"
+              value={configText}
+              onChange={(event) => setConfigText(event.target.value)}
+              spellCheck={false}
+              className="h-24 w-full resize-y border border-[#454545] bg-[#1e1e1e] p-2 font-mono text-xs outline-none focus:border-[#007fd4]"
+            />
+            <button
+              type="button"
+              disabled={busyId !== null || loading}
+              onClick={() => void createInstance(selectedPlugin.id)}
+              className="mt-3 inline-flex h-8 items-center gap-1.5 bg-[#0e639c] px-3 text-xs text-white hover:bg-[#1177bb] disabled:opacity-50"
+            >
+              <Plus size={14} /> Create instance
+            </button>
+          </details>
+          <div className="mt-4">{errorNotice}</div>
+        </Modal>
+      )}
+      {instanceToolsOpen && activeInstance && (
+        <Modal title="Instance tools" onClose={() => setInstanceToolsOpen(false)}>
+          {errorNotice}
+          <div className="max-w-3xl">
+            <div className="flex items-start justify-between gap-4 border-b border-[#383838] pb-4">
+              <div className="min-w-0">
+                <h2 className="truncate text-lg font-medium">{activeInstance.label}</h2>
+                <p className="mt-1 break-all font-mono text-xs text-[#969696]">
+                  {activeInstance.pluginInstanceId}
+                </p>
+              </div>
+              <button
+                type="button"
+                title="Destroy instance"
+                disabled={busyId !== null}
+                onClick={() => void runPluginAction(activeInstance.pluginInstanceId, async () => {
+                  await hostAPI.destroyInstance(activeInstance.pluginInstanceId);
+                })}
+                className="grid h-8 w-8 shrink-0 place-items-center text-[#cccccc] hover:bg-[#3c3c3c]"
+              >
+                <Trash2 className="h-4 w-4" />
+              </button>
+            </div>
+            <dl className="grid grid-cols-[140px_1fr] gap-y-3 py-4 text-sm">
+              <dt className="text-[#969696]">Plugin</dt>
+              <dd>{activeInstance.pluginId}</dd>
+              <dt className="text-[#969696]">Session</dt>
+              <dd className="break-all font-mono text-xs">{activeInstance.sessionId}</dd>
+              <dt className="text-[#969696]">Status</dt>
+              <dd>{activeInstance.status}</dd>
+            </dl>
+            <div className="border-t border-[#383838] py-4 text-sm text-[#aaaaaa]">
+              <div className="mb-3 flex items-center justify-between">
+                <h3 className="text-xs font-semibold uppercase text-[#cccccc]">Operations</h3>
+                <span className="text-xs text-[#969696]">{operations.length} registered</span>
+              </div>
+              {operations.length > 0 ? (
+                <>
+                  <label className="mb-1 block text-xs text-[#aaaaaa]" htmlFor="operation-name">
+                    Operation
+                  </label>
+                  <select
+                    id="operation-name"
+                    value={selectedOperation}
+                    onChange={(event) => setSelectedOperation(event.target.value)}
+                    className="mb-3 h-9 w-full border border-[#454545] bg-[#252526] px-2 text-sm text-[#cccccc]"
+                  >
+                    {operations.map((operation) => (
+                      <option key={operation.name} value={operation.name}>
+                        {operation.name} · {operation.effect}
+                      </option>
+                    ))}
+                  </select>
+                  {schemaProperties && Object.keys(schemaProperties).length > 0 && (
+                    <fieldset className="mb-3 space-y-3 border border-[#383838] p-3">
+                      <legend className="px-1 text-xs text-[#969696]">Operation arguments</legend>
+                      {Object.entries(schemaProperties).map(([name, property]) => {
+                        let current: Record<string, unknown> = {};
+                        try {
+                          const parsed: unknown = JSON.parse(operationArgs);
+                          if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) current = parsed as Record<string, unknown>;
+                        } catch { current = {}; }
+                        const value = current[name];
+                        const required = schemaRequired.includes(name);
+                        return (
+                          <label key={name} className="block text-xs text-[#aaaaaa]">
+                            <span className="mb-1 flex items-center gap-1">
+                              <span>{property.title ?? name}</span>
+                              {required && <span className="text-[#f48771]">*</span>}
+                            </span>
+                            {property.description && <span className="mb-1 block text-[11px] text-[#888888]">{property.description}</span>}
+                            {property.enum ? (
+                              <select value={value === undefined ? "" : JSON.stringify(value)} onChange={(event) => updateOperationArgument(name, event.target.value ? JSON.parse(event.target.value) : undefined)} className="h-8 w-full border border-[#454545] bg-[#1e1e1e] px-2 text-xs text-[#cccccc]">
+                                <option value="">Select…</option>
+                                {property.enum.map((option) => <option key={JSON.stringify(option)} value={JSON.stringify(option)}>{String(option)}</option>)}
+                              </select>
+                            ) : property.type === "boolean" ? (
+                              <input type="checkbox" checked={value === true} onChange={(event) => updateOperationArgument(name, event.target.checked)} className="accent-[#0e639c]" />
+                            ) : property.type === "object" || property.type === "array" ? (
+                              <textarea aria-label={name} value={value === undefined ? "" : JSON.stringify(value, null, 2)} onChange={(event) => { try { updateOperationArgument(name, JSON.parse(event.target.value)); } catch { /* Keep the last valid structured value. */ } }} spellCheck={false} className="h-20 w-full border border-[#454545] bg-[#1e1e1e] p-2 font-mono text-xs text-[#cccccc] outline-none focus:border-[#75beff]" />
+                            ) : (
+                              <input type={property.type === "integer" || property.type === "number" ? "number" : "text"} required={required} min={property.minimum} max={property.maximum} value={value === undefined ? "" : String(value)} onChange={(event) => updateOperationArgument(name, event.target.value === "" ? undefined : property.type === "integer" ? Number.parseInt(event.target.value, 10) : property.type === "number" ? Number(event.target.value) : event.target.value)} className="h-8 w-full border border-[#454545] bg-[#1e1e1e] px-2 text-xs text-[#cccccc] outline-none focus:border-[#75beff]" />
+                            )}
+                          </label>
+                        );
+                      })}
+                    </fieldset>
+                  )}
+                  <details>
+                    <summary className="mb-2 cursor-pointer text-xs text-[#969696]">Advanced JSON</summary>
+                    <label className="mb-1 block text-xs text-[#aaaaaa]" htmlFor="operation-args">Arguments (JSON)</label>
+                    <textarea id="operation-args" value={operationArgs} onChange={(event) => setOperationArgs(event.target.value)} spellCheck={false} className="h-28 w-full resize-y border border-[#454545] bg-[#1e1e1e] p-2 font-mono text-xs text-[#cccccc] outline-none focus:border-[#75beff]" />
+                  </details>
+                  <button
+                    type="button"
+                    onClick={() => void submitOperation()}
+                    className="mt-2 h-8 bg-[#0e639c] px-3 text-xs text-white hover:bg-[#1177bb]"
+                  >
+                    Invoke as human
+                  </button>
+                </>
+              ) : (
+                <p className="text-xs text-[#969696]">This plugin has no instance operations.</p>
+              )}
+              {operationResult && (
+                <pre className="mt-3 max-h-48 overflow-auto border border-[#383838] bg-[#1e1e1e] p-3 font-mono text-xs text-[#cccccc]">
+                  {JSON.stringify(operationResult, null, 2)}
+                </pre>
+              )}
+              <div className="mt-5 border-t border-[#383838] pt-4">
+                <h3 className="mb-2 text-xs font-semibold uppercase text-[#cccccc]">Recent operations</h3>
+                <div className="divide-y divide-[#383838]">
+                  {operationHistory.map((record) => (
+                    <article key={record.operationId} className="py-2.5">
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="truncate text-xs text-[#cccccc]">{record.operation}</span>
+                        <span className="shrink-0 text-[11px] text-[#969696]">{record.status}</span>
+                      </div>
+                      <div className="mt-1 break-all font-mono text-[10px] text-[#969696]">
+                        {record.operationId}
+                      </div>
+                      {record.status === "awaiting_approval" && record.proposalId && (
+                        <div className="mt-2 flex gap-2">
+                          <button
+                            type="button"
+                            onClick={() => void respondToProposal(record, true)}
+                            className="h-7 bg-[#0e639c] px-2 text-xs text-white hover:bg-[#1177bb]"
+                          >
+                            Approve current JSON
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => void respondToProposal(record, false)}
+                            className="h-7 border border-[#454545] px-2 text-xs text-[#cccccc] hover:bg-[#383838]"
+                          >
+                            Reject
+                          </button>
+                        </div>
+                      )}
+                    </article>
+                  ))}
+                  {operationHistory.length === 0 && (
+                    <p className="py-3 text-xs text-[#969696]">No operations recorded.</p>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }

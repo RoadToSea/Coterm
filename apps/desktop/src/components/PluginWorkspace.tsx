@@ -1,0 +1,34 @@
+import { useEffect, useRef, useState } from "react";
+import { createPluginAPI, type InstanceInfo } from "../host-api";
+import type { PluginFrontend } from "../plugin-api";
+import { loadPluginFrontend } from "../plugin-loader";
+import { cancelSecretInput } from "../secret-input";
+
+export function PluginWorkspace({ instance }: { instance: InstanceInfo }) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    let disposed = false;
+    let frontend: PluginFrontend | undefined;
+    const container = containerRef.current;
+    if (!container) return;
+    void loadPluginFrontend(instance.pluginId).then((module) => {
+      if (disposed || !module) return;
+      frontend = module.mount(container, createPluginAPI(instance));
+    }).catch((reason) => {
+      if (!disposed) setError(String(reason));
+    });
+    return () => {
+      disposed = true;
+      cancelSecretInput(instance.pluginInstanceId);
+      frontend?.unmount();
+      container.replaceChildren();
+    };
+  }, [instance.pluginId, instance.pluginInstanceId, instance.sessionId]);
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      {error && <p role="alert" className="px-4 py-2 text-xs text-[#f48771]">{error}</p>}
+      <div ref={containerRef} className="min-h-0 flex-1" />
+    </div>
+  );
+}

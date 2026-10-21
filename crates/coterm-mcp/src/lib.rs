@@ -1,5 +1,10 @@
 use serde::{Deserialize, Serialize};
 
+pub mod bridge;
+pub mod http;
+pub mod server;
+pub mod transport;
+
 /// 获取命令块的 MCP 工具入参
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GetCommandBlocksParams {

@@ -1,0 +1,112 @@
+use coterm_core::plugin_manager::ProcessPluginRuntime;
+use coterm_mcp::{
+    server::BridgeServer,
+    transport::{read_frame, write_frame},
+};
+use coterm_proto::runtime::{lifecycle::RuntimeLimits, stream::FlowWindow};
+use serde_json::{json, Value};
+use std::{process::Stdio, sync::Arc, time::Duration};
+use tokio::{
+    io::{AsyncWriteExt, BufReader},
+    net::TcpStream,
+    process::Command,
+    time::timeout,
+};
+
+#[tokio::test]
+async fn real_stdio_adapter_negotiates_and_routes_to_desktop_runtime() -> anyhow::Result<()> {
+    let runtime = Arc::new(ProcessPluginRuntime::new(
+        "test",
+        RuntimeLimits {
+            max_control_bytes: 1024 * 1024,
+            max_data_chunk_bytes: 8192,
+            initial_window: FlowWindow {
+                chunks: 16,
+                bytes: 1024 * 1024,
+            },
+        },
+    ));
+    let server = BridgeServer::bind(runtime).await?;
+    let info = server.connection_info();
+    // A loopback socket alone is insufficient: authentication is mandatory.
+    let mut unauthorized = TcpStream::connect(&info.address).await?;
+    write_frame(&mut unauthorized, &json!({"token":"wrong"})).await?;
+    assert!(timeout(
+        Duration::from_secs(2),
+        read_frame(&mut BufReader::new(unauthorized))
+    )
+    .await??
+    .is_none());
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_coterm-mcp-stdio"))
+        .env("COTERM_MCP_ADDR", &info.address)
+        .env("COTERM_MCP_TOKEN", &info.token)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()?;
+    let mut input = child
+        .stdin
+        .take()
+        .ok_or_else(|| anyhow::anyhow!("stdin missing"))?;
+    let mut output = BufReader::new(
+        child
+            .stdout
+            .take()
+            .ok_or_else(|| anyhow::anyhow!("stdout missing"))?,
+    );
+    write_frame(&mut input, &json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","clientInfo":{"name":"test","version":"1"},"capabilities":{}}})).await?;
+    let initialized: Value = serde_json::from_slice(
+        &timeout(Duration::from_secs(5), read_frame(&mut output))
+            .await??
+            .ok_or_else(|| anyhow::anyhow!("No initialize response"))?,
+    )?;
+    assert_eq!(initialized["result"]["protocolVersion"], "2025-06-18");
+    assert_eq!(
+        initialized["result"]["capabilities"],
+        json!({"tools":{"listChanged":true}})
+    );
+    write_frame(
+        &mut input,
+        &json!({"jsonrpc":"2.0","method":"notifications/initialized"}),
+    )
+    .await?;
+    write_frame(
+        &mut input,
+        &json!({"jsonrpc":"2.0","id":"list","method":"tools/list"}),
+    )
+    .await?;
+    let tools: Value = serde_json::from_slice(
+        &timeout(Duration::from_secs(5), read_frame(&mut output))
+            .await??
+            .ok_or_else(|| anyhow::anyhow!("No tools response"))?,
+    )?;
+    assert_eq!(tools["id"], "list");
+    assert_eq!(tools["result"]["tools"][0]["name"], "coterm.list_instances");
+    write_frame(&mut input, &json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"coterm.list_instances","arguments":{}}})).await?;
+    let instances: Value = serde_json::from_slice(
+        &timeout(Duration::from_secs(5), read_frame(&mut output))
+            .await??
+            .ok_or_else(|| anyhow::anyhow!("No instances response"))?,
+    )?;
+    assert_eq!(
+        instances["result"]["structuredContent"],
+        json!({"instances":[]})
+    );
+    assert!(!instances.to_string().contains(&info.token));
+    input.shutdown().await?;
+    drop(input);
+    assert!(timeout(Duration::from_secs(5), child.wait())
+        .await??
+        .success());
+    Ok(())
+}
+
+#[tokio::test]
+async fn bounds_frames_even_without_a_newline() {
+    let oversized = vec![b'x'; coterm_mcp::transport::MAX_FRAME_BYTES + 1];
+    let mut reader = BufReader::new(oversized.as_slice());
+    assert!(read_frame(&mut reader).await.is_err());
+    assert!(coterm_mcp::server::loopback_address("192.0.2.1:1234").is_err());
+}

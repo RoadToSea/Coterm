@@ -5,6 +5,7 @@ members = [
     "crates/coterm-core",
     "crates/coterm-mcp",
     "plugins/plugin-local",
+    "plugins/plugin-ssh",
     "apps/desktop/src-tauri",
 ]
 
