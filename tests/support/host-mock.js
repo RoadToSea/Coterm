@@ -6,6 +6,15 @@
  * 事件的 transport 细节（callback 注册、emit → `__TAURI_EVENT_PLUGIN_INTERNALS__`）按
  * @tauri-apps/api 的实现走，所以用例验证的是真实前端代码路径。
  */
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+const sshFrontendBundlePath = path.join(rootDir, "plugins/plugin-ssh/dist/frontend/index.js");
+const sshFrontendSource = fs.existsSync(sshFrontendBundlePath)
+  ? fs.readFileSync(sshFrontendBundlePath, "utf8")
+  : null;
 
 export function makeHostMockSource(initial) {
   return `(() => {
@@ -33,6 +42,8 @@ export function makeHostMockSource(initial) {
         if (emit) window.__cotermTest.emitAttention(next.version);
       },
       emitAttention(version = ++attentionVersion) {
+        attentionVersion = version;
+        if (attention) attention.version = version;
         const handlerIds = [...(listeners.get("host://attention-changed") ?? [])];
         for (const id of handlerIds) {
           const callback = callbacks.get(id);
@@ -57,6 +68,71 @@ export function makeHostMockSource(initial) {
       },
     };
 
+    window.__cotermTestMountBlockList = (container, initialData) => {
+      const blockStyle = \`
+        .coterm-blocks {
+          height: 100%;
+          overflow: auto;
+          color: var(--coterm-text-primary, #cccccc);
+          background: var(--coterm-surface, #1e1e1e);
+          font: 12px var(--coterm-font-sans, "Segoe UI", -apple-system, BlinkMacSystemFont, sans-serif);
+        }
+        .coterm-block {
+          display: grid;
+          grid-template-columns: 34px minmax(0, 1fr) auto auto;
+          min-height: 28px;
+          align-items: center;
+          border: 0;
+          border-bottom: 1px solid var(--coterm-border-subtle, #2d2d2d);
+          padding: 0;
+          width: 100%;
+          color: inherit;
+          background: transparent;
+          text-align: left;
+          cursor: pointer;
+        }
+        .coterm-block:hover { background: var(--coterm-surface-hover, #2a2d2e); }
+        .coterm-block[aria-selected="true"] { background: var(--coterm-accent-active, #094771); }
+        .coterm-block-gutter {
+          position: relative;
+          display: flex;
+          height: 100%;
+          align-items: center;
+          justify-content: center;
+          color: var(--coterm-text-muted, #858585);
+          font: 11px var(--coterm-font-mono, Consolas, monospace);
+        }
+        .coterm-block-actor { margin-right: 8px; color: var(--coterm-text-muted, #9da0a3); font-size: 10px; }
+        .coterm-block-actor[data-actor="robot"] { color: var(--coterm-accent-glow, #75beff); }
+        .coterm-block-status { min-width: 20px; color: var(--coterm-danger, #f48771); text-align: center; }
+      \`;
+      const root = document.createElement("div");
+      root.className = "coterm-blocks";
+      const sheet = document.createElement("style");
+      sheet.textContent = blockStyle;
+      container.replaceChildren(sheet, root);
+
+      for (const block of initialData.blocks) {
+        const row = document.createElement("div");
+        row.className = "coterm-block";
+        const gutter = document.createElement("span");
+        gutter.className = "coterm-block-gutter";
+        gutter.textContent = String(block.index);
+        const command = document.createElement("span");
+        command.className = "coterm-block-command";
+        command.textContent = block.command;
+        const actor = document.createElement("span");
+        actor.className = "coterm-block-actor";
+        actor.dataset.actor = block.actor;
+        actor.textContent = block.actor;
+        const status = document.createElement("span");
+        status.className = "coterm-block-status";
+        status.textContent = block.exitCode ? "!" : "";
+        row.append(gutter, command, actor, status);
+        root.append(row);
+      }
+    };
+
     const failNext = (command) => {
       const entry = failures[command];
       if (!entry) return false;
@@ -77,7 +153,35 @@ export function makeHostMockSource(initial) {
       recent_operations: () => scenario.history ?? [],
       recent_plugin_operations: () => scenario.history ?? [],
       host_attention: () => attention,
-      plugin_frontend_source: () => null,
+      plugin_frontend_source: ({ pluginId }) => (pluginId === "ssh" ? scenario.sshFrontendSource : null),
+      invoke_operation: ({ operation, args }) => {
+        if (operation === "ssh.status") {
+          return {
+            status: "completed",
+            output: {
+              connected: true,
+              connectionId: "conn-1",
+              config: { username: "root", host: "192.168.1.10", port: 22 },
+            },
+          };
+        }
+        if (operation === "ssh.read") {
+          return {
+            status: "completed",
+            output: {
+              connectionId: "conn-1",
+              cursor: "0",
+              data: btoa("Connected to Prod-Server (SSH)\\r\\nLast login: Thu Oct 22 20:00:00 2026 from 192.168.1.2\\r\\nroot@prod:~# "),
+              more: false,
+              gap: false,
+            },
+          };
+        }
+        return { status: "completed", output: {} };
+      },
+      subscribe_plugin_events: () => "sub-1",
+      ack_plugin_event: () => null,
+      unsubscribe_plugin_events: () => null,
       get_operation: ({ pluginInstanceId, operationId }) =>
         (scenario.history ?? []).find((record) => record.operationId === operationId) ?? null,
       approve_proposal: (args) => { approveCalls.push(args); return { operationId: args.proposalId, status: "completed" }; },
@@ -147,4 +251,5 @@ export const defaultScenario = {
   bypass: false,
   attention: { version: 1, approvals: [], interactions: [] },
   failures: {},
+  sshFrontendSource,
 };

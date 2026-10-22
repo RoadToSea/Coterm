@@ -55,6 +55,10 @@ export function assertFreshBuild() {
   if (!fs.existsSync(entry)) {
     throw new Error(`apps/desktop/dist is missing; run "pnpm build" before the browser suite`);
   }
+  const sshDist = path.join(rootDir, "plugins/plugin-ssh/dist/frontend/index.js");
+  if (!fs.existsSync(sshDist)) {
+    throw new Error(`plugins/plugin-ssh/dist/frontend/index.js is missing; run "pnpm --filter coterm-plugin-ssh-ui build"`);
+  }
   const builtAt = fs.statSync(entry).mtimeMs;
   const stale = [];
   const walk = (dir) => {
@@ -239,9 +243,18 @@ function connectCdp(wsUrl, expired) {
       `event ${method}`,
     );
 
+    const on = (method, handler, sessionId) => {
+      const key = eventKey(sessionId, method);
+      listeners.set(key, [...(listeners.get(key) ?? []), handler]);
+      return () => {
+        listeners.set(key, (listeners.get(key) ?? []).filter((item) => item !== handler));
+      };
+    };
+
     socket.onopen = () => resolve({
       send,
       waitFor,
+      on,
       dispose() {
         closed = true;
         try { socket.close(); } catch { /* 已经关闭 */ }

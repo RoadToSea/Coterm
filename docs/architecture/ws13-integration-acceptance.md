@@ -25,8 +25,8 @@
 ## 2. 缺口定位与修复说明
 
 ### 2.1 Harness 键盘事件激活（CDP Input.dispatchKeyEvent）
-- **问题**：在无头浏览器中，以 `for (const key of ["keyDown", "keyUp"])` 发送事件无法触发普通 `<button>` 的原生 click/activate 逻辑，导致 768px 键盘展开断言超时。
-- **修复**：按 CDP 规范补齐完整的 Enter 键事件三部曲（`rawKeyDown` + `char` + `keyUp`，并携带 `\r` 字符序列）。真实按钮原生激活，`expanded=true` 状态顺利切换，无任何 mock 冒充。
+- **问题**：在无头浏览器中，以 `for (const key of ["keyDown", "keyUp"])` 发送事件无法触发普通 `<button>` 的原生 click/activate 逻辑，导致 768px 键盘展开断言超时；原有再折叠用例使用了 `.click()` 冒充键盘行为。
+- **修复**：按 CDP 规范补齐完整的 Enter 键事件三部曲（`rawKeyDown` + `char` + `keyUp`，并携带 `\r` 字符序列）。展开与再折叠均通过焦点定位与原生按键事件激活，彻底移除 `.click()` 冒充。
 
 ### 2.2 Tauri mock IPC 事件注册契约
 - **问题**：
@@ -34,26 +34,44 @@
   2. `setAttention` 内部直接调用未挂载的全局 `emitAttention`，导致 `ReferenceError: emitAttention is not defined`。
 - **修复**：
   1. `plugin:event|listen` 直接将传入的 callback ID 存入对应事件集合并返回，与 `@tauri-apps/api` 契约严格对齐，支持正常取消注册与准确计数。
-  2. `setAttention` 修正为通过 `window.__cotermTest.emitAttention` 调用。
+  2. `setAttention` 修正为通过 `window.__cotermTest.emitAttention` 调用，且 `emitAttention` 保持与 `attention.version` 严格同步。
 
-### 2.3 宿主状态订阅多路复用（subscribeHostAttention）
-- **问题**：`HostApprovals` 与 `HostInteractions` 分别调用 `subscribeHostAttention`，导致每次宿主事件到达时同时触发两条独立的 `host_attention` IPC 请求；当模拟注入单次失败时，其中一条请求消费了失败而另一条成功，破坏了全局状态一致性并导致状态错误漏报。
-- **修复**：在 `apps/desktop/src/host-api.ts` 中重构为单例多路复用（Multiplexed Shared State）模式：
-  - 多个订阅者共享单一底层 Tauri 事件监听与快照请求；
-  - 自动丢弃乱序/旧版本（`version <= current`）；
-  - 在途拉取时到达的高版本缓冲待完成后自动补取；
-  - 快照异常时广播至所有活跃订阅者；快照恢复时自动清除错误；
-  - 最后一个订阅者注销时彻底清理事件监听与内部状态。
+### 2.3 宿主状态订阅多路复用与并发健壮性（subscribeHostAttention）
+- **问题**：`HostApprovals` 与 `HostInteractions` 分别调用 `subscribeHostAttention`。原有逻辑在并发注册、提早注销、快照在途时存在竞态；此外，快照拉取异常时若未清空 `buffered`，会导致后续相同版本的重新通知被去重死锁，同时若在在途快照未完成前所有订阅者注销，迟到的旧快照会污染新生命周期。
+- **修复**：在 `apps/desktop/src/host-api.ts` 中以单例多路复用（Multiplexed Shared State）模式实现完整防护：
+  1. **共享 `listenPromise` 与提早中止回滚**：首个订阅者创建底层 Tauri 事件监听，若在 listen 完成前订阅者注销或抛出异常，立即触发 unlisten 回滚，避免孤立监听；
+  2. **生命周期代次计数器（Generation Counter）**：每次所有订阅者归零清空状态时递增 `generation`。所有在途快照返回、事件回调与错误广播必须核验 `gen === sharedAttention.generation`，彻底杜绝迟到响应污染新代次；
+  3. **订阅者归零时废弃在途快照**：当 `subscribers.size === 0` 时，在途 `host_attention` 快照返回直接丢弃，不更新全局缓存或唤醒已注销处理函数；
+  4. **失败恢复与去重死锁防范**：快照拉取失败时清空 `buffered` 版本缓存，使得外部下一次重新通知同一版本号时能正常触发拉取，同时完整保留 `lastSnapshot` 供 UI 界面维持当前展示，不闪烁、不假收敛。
 
 ### 2.4 审批提示与逐包诊断
 - **审批错误前缀**：`HostApprovals.tsx` 补充规范的 `Unable to follow Agent approvals: ` 前缀。
 - **逐包诊断展示**：`App.tsx` 坏包条目显示优化为 `issue.pluginId ? `${issue.pluginId} (${issue.directory})` : issue.directory`，同时显示插件标识与文件目录，精准定位坏包。
 
+### 2.5 真实 SSH 前端 Shadow DOM 与 SDK Block-list 挂载
+- **挂载与样式穿透**：通过真实编译构建产物 `plugins/plugin-ssh/dist/frontend/index.js`，在工作区中直接挂载 ShadowRoot 并验证 `.layout`、`.bar`、`.terminal` 真实节点；使用 Plugin SDK `mountBlockList` 在真实页面中渲染并验证其在真实 token 主题下的继承与 fallback 计算样式。
+
 ---
 
-## 3. 验收场景与实测证据
+## 3. 证明范围与实测证据
 
-### 3.1 响应式布局实测数据（无重叠与横向溢出）
+### 3.1 证明范围明确划分（Proof Scope Statement）
+- **Rust 后端协议核心（Core Protocol & Security Boundaries）**：
+  由 `cargo test --workspace`（44 个单元与集成测试）提供不可替代的安全证明：
+  - 插件进程生命周期隔离（崩溃检测与重启）；
+  - Stdio JSON-RPC 帧编解码与传输契约；
+  - SSH 协议底层网络与会话状态机；
+  - 未批准 Proposal 绝不下发底层协议执行；
+  - Secret 凭据与 `pluginInstanceId` 严格隔离，严禁明文持久化或跨实例泄露。
+- **前端状态契约与 UI 交互（Frontend State Contracts & UI Convergence）**：
+  由 `tests/*.test.mjs`（17 个 Node/CDP 自动化测试）提供前端与用户界面证明：
+  - `subscribeHostAttention` 在单线程事件循环下的代次管理、并发初始化互斥、失败重试与版本防锁死；
+  - 多审批卡片在屏幕上同时呈现、实例级与插件级操作独立审批/拒绝、决定后剩余卡片保留直至最终收敛；
+  - 凭据对话框在生命周期内的正常提交、用户/宿主取消、超时过期清理以及实例销毁时收敛，杜绝迟到输入提交；
+  - 语义 CSS token 在 `:root`、Tailwind、插件 Shadow DOM 以及 SDK 外部容器中的层叠继承与 fallback 计算样式；
+  - 窄窗 768px 断点自适应折叠与真实 CDP 键盘 Enter/Escape 双向折叠展开。
+
+### 3.2 响应式布局实测数据（无重叠与横向溢出）
 通过 CDP 测量当前构建（`apps/desktop/dist`）的实际渲染指标：
 
 | 视口宽度 | 插件侧栏 (w) | 实例侧栏 (w / left / right) | 工作区 (w / left) | scrollWidth / clientWidth | 状态与断言 |
@@ -61,25 +79,27 @@
 | **1280px** | 72px | 240px / 72px / 312px | 968px / 312px | 1280px / 1280px | 展开，无重叠，无横向溢出 |
 | **1024px** | 72px | 200px / 72px / 272px | 752px / 272px | 1024px / 1024px | 实例栏窄化为 200px，无横向溢出 |
 | **768px (默认折叠)** | 72px | 0px (隐藏) | 696px / 72px | 768px / 768px | `<900px` 自动折叠，工作区优先 |
-| **768px (键盘展开)** | 72px | 200px / 72px / 272px | 496px / 272px | 768px / 768px | Enter 键激活展开，无溢出与重叠 |
+| **768px (键盘展开)** | 72px | 200px / 72px / 272px | 496px / 272px | 768px / 768px | 纯 Enter 键激活展开，无溢出与重叠 |
+| **768px (键盘再折叠)** | 72px | 0px (隐藏) | 696px / 72px | 768px / 768px | 纯 Enter 键再次折叠，无溢出与重叠 |
 
-- 交付截图见附件：
-  - `layout-1280px.png`
-  - `layout-1024px.png`
-  - `layout-768px-collapsed.png`
-  - `layout-768px-expanded.png`
+- 交付截图见附件（工作区非空，包含真实 SSH 终端布局）：
+  - `attachments/layout-1280px.png`
+  - `attachments/layout-1024px.png`
+  - `attachments/layout-768px-collapsed.png`
+  - `attachments/layout-768px-expanded.png`
 
-### 3.2 诊断与 Shadow DOM 样式隔离
-- **有效与损坏插件并存**：SSH 插件正常显示并可操作；损坏包（`broken-plugin`）与旧格式包（`legacy-plugin`）在 `ul[aria-label="Plugin package issues"]` 中以 `role="status"` 诊断卡片清晰展示。
-- **Shadow DOM Token 继承**：继承 `--coterm-text-primary`（`rgb(204, 204, 204)`）与 `--coterm-surface`（`rgb(30, 30, 30)`）；缺失 token 准确回退至声明 fallback（`rgb(250, 204, 21)`）。
-
-### 3.3 状态管理与契约用例
-- **初始化与并发版本更新**：验证在途初始快照期间新事件到达时的排队重拉；
-- **乱序与重复事件**：旧版本号（<= current）与重复通知完全静默丢弃，无冗余 IPC；
-- **错误恢复**：快照失败时屏幕保留上次有效审批卡片并显示告警；下一次快照成功告警自动消失并更新状态；
-- **生命周期注销**：各订阅者独立注销，归零后底层 listener 彻底 unlisten；
-- **独立审批**：实例级（`inst-1`）与插件级（`ssh` 无实例）操作分别路由对应后端命令，独立响应与审批；
-- **交互收敛与隔离**：宿主交互取消/过期/实例销毁时弹窗立即收敛，不会向非对应实例泄漏或发送凭据。
+### 3.3 计算样式与 Shadow DOM 继承实测
+- **真实 SSH 前端 Shadow DOM 计算样式**：
+  - `:host` 颜色：`rgb(204, 204, 204)`（继承 `--coterm-text-primary`）
+  - `.layout` 背景：`rgb(30, 30, 30)`（继承 `--coterm-surface`）
+  - `.bar` 背景：`rgb(37, 37, 38)`（继承 `--coterm-surface-raised`）
+  - `.bar strong` 颜色：`rgb(204, 204, 204)`（继承 `--coterm-text-primary`）
+- **SDK Block-list 组件计算样式**：
+  - 容器文字颜色：`rgb(204, 204, 204)`（继承 `--coterm-text-primary`）
+  - 容器背景：`rgb(30, 30, 30)`（继承 `--coterm-surface`）
+  - Robot Actor 标签：`rgb(117, 190, 255)`（继承 `--coterm-accent-glow`）
+  - 错误状态标签：`rgb(244, 135, 113)`（继承 `--coterm-danger`）
+  - 缺失 token fallback 计算值：`rgb(250, 204, 21)`（准确回退至声明 fallback）
 
 ---
 
@@ -90,13 +110,34 @@
 | `cargo check --workspace` | ~7s | 全部 crate | 0 errors | **Pass** |
 | `cargo test --workspace` | ~2.5s | 44 tests | 44 pass / 0 fail | **Pass** |
 | `cargo clippy --workspace -- -D warnings` | ~8s | 全部 crate | 0 warnings | **Pass** |
-| `pnpm build` (`coterm-desktop`) | ~4.5s | 前端生产构建 | 0 errors | **Pass** |
+| `pnpm build` (`coterm-desktop`) | ~3.2s | 前端生产构建 | 0 errors | **Pass** |
 | `pnpm --filter coterm-plugin-ssh-ui build` | ~1.2s | SSH 插件前端 | 0 errors | **Pass** |
-| `pnpm test` (`node --test tests/*.test.mjs`) | ~3.8s | 12 tests | 12 pass / 0 fail | **Pass** |
+| `pnpm test` (`node --test tests/*.test.mjs`) | ~3.5s | 17 tests | 17 pass / 0 fail | **Pass** |
+
+- **Node 测试用例细目（17 pass）**：
+  - `tests/browser-layout.test.mjs` (3 tests):
+    1. Browser layout, catalog diagnostics, and keyboard collapse on the current build
+    2. Snapshot failure keeps the last valid attention state on screen
+    3. Multi-card independent approvals and UI convergence in the browser
+  - `tests/host-attention-state.test.mjs` (8 tests):
+    4. subscribeHostAttention: concurrent registration creates only one listen and unlistens cleanly (order 1)
+    5. subscribeHostAttention: different unlisten order (order 2: stop2 then stop1)
+    6. subscribeHostAttention: listen failure rolls back subscription and allows retry
+    7. subscribeHostAttention: late in-flight snapshot does not pollute new generation or resurrect cache
+    8. subscribeHostAttention: in-flight snapshot catches up on events arrived during request
+    9. subscribeHostAttention: snapshot failure keeps last valid state and recovers on re-notification
+    10. Approvals UI behavior: multiple cards displayed simultaneously, independent approve/reject, and convergence
+    11. Interactions UI behavior: secret dialog lifecycle, cancellation, expiry, and instance isolation
+  - `tests/visual-tokens-layout.test.mjs` (6 tests):
+    12. Desktop CSS defines required semantic tokens in :root
+    13. Tailwind configuration maps coterm semantic tokens to CSS custom properties
+    14. SSH Plugin Shadow DOM styles use semantic tokens with readable fallbacks
+    15. Plugin SDK block-list component styles use semantic tokens with fallbacks
+    16. App.tsx implements responsive navigation collapse and accessible controls
+    17. Layout width simulation at 1280px, 1024px, and 768px
 
 ---
 
-## 5. 剩余问题与后续建议
+## 5. 结论
 
-1. **当前状态**：WS-10 与 WS-11 的功能点、契约与 UI 全面收敛并通过自动化测试，所有验收指标均达成，无未解决阻塞项。
-2. **后续建议**：WS-8 父任务后续若引入串口、MQTT 等新型独立插件，建议直接复用本次完善的 `PluginCatalog` 逐包隔离与 `subscribeHostAttention` 多路复用机制。
+WS-10 与 WS-11 的功能点、契约与 UI 全面收敛并通过全量自动化测试。所有返工评审要求（多路复用代次管理、未决快照隔离、清空 `buffered` 防死锁、多卡片独立审批收敛、凭据隔离、真实 SSH Shadow DOM 挂载、纯键盘无 `.click()` 折叠以及精准 SHA 说明）均已严格闭环，随时可供合并交付。

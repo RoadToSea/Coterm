@@ -140,40 +140,46 @@ export interface AttentionSubscriptionHandlers {
 }
 
 interface SharedAttentionState {
+  generation: number;
   subscribers: Set<AttentionSubscriptionHandlers>;
   unlisten: (() => void) | null;
+  listenPromise: Promise<(() => void) | null> | null;
   current: number;
   lastSnapshot: HostAttention | null;
   lastError: string | null;
   loading: boolean;
   reload: boolean;
-  request: number;
+  requestToken: number;
   buffered: number[];
 }
 
 const sharedAttention: SharedAttentionState = {
+  generation: 0,
   subscribers: new Set(),
   unlisten: null,
+  listenPromise: null,
   current: -1,
   lastSnapshot: null,
   lastError: null,
   loading: false,
   reload: false,
-  request: 0,
+  requestToken: 0,
   buffered: [],
 };
 
-async function refreshSharedAttention() {
-  if (sharedAttention.subscribers.size === 0) return;
+async function refreshSharedAttention(gen: number) {
+  if (sharedAttention.generation !== gen || sharedAttention.subscribers.size === 0) return;
   if (sharedAttention.loading) {
     sharedAttention.reload = true;
     return;
   }
   sharedAttention.loading = true;
-  const token = ++sharedAttention.request;
+  const token = ++sharedAttention.requestToken;
   try {
     const snapshot = await hostAPI.hostAttention();
-    if (token !== sharedAttention.request) return;
+    if (sharedAttention.generation !== gen || token !== sharedAttention.requestToken || sharedAttention.subscribers.size === 0) {
+      return;
+    }
     sharedAttention.current = snapshot.version;
     sharedAttention.lastSnapshot = snapshot;
     sharedAttention.lastError = null;
@@ -181,71 +187,116 @@ async function refreshSharedAttention() {
       try { handler.snapshot(snapshot); } catch (e) { console.error(e); }
     }
     if (sharedAttention.buffered.some((version) => version > sharedAttention.current)) {
-      sharedAttention.buffered.length = 0;
+      sharedAttention.buffered = sharedAttention.buffered.filter((v) => v > sharedAttention.current);
       sharedAttention.reload = true;
+    } else {
+      sharedAttention.buffered.length = 0;
     }
   } catch (reason) {
-    if (token === sharedAttention.request) {
+    if (sharedAttention.generation === gen && token === sharedAttention.requestToken && sharedAttention.subscribers.size > 0) {
       const message = String(reason);
       sharedAttention.lastError = message;
+      // 错误后不永久阻断同一版本的重试与重新通知
+      sharedAttention.buffered.length = 0;
       for (const handler of [...sharedAttention.subscribers]) {
         try { handler.error(message); } catch (e) { console.error(e); }
       }
     }
   } finally {
-    sharedAttention.loading = false;
-    if (sharedAttention.reload && sharedAttention.subscribers.size > 0) {
-      sharedAttention.reload = false;
-      void refreshSharedAttention();
+    if (sharedAttention.generation === gen) {
+      sharedAttention.loading = false;
+      if (sharedAttention.reload && sharedAttention.subscribers.size > 0) {
+        sharedAttention.reload = false;
+        void refreshSharedAttention(gen);
+      }
     }
   }
 }
 
 /**
  * 先订阅、再取快照，丢弃不新于快照的缓冲版本。
- * 多订阅者共享底层事件监听与快照请求，避免并发重复拉取与状态分歧。
+ * 多订阅者共享底层事件监听与快照请求，使用初始化 promise 与生命周期代次消除并发竞态。
  */
 export async function subscribeHostAttention(handlers: AttentionSubscriptionHandlers): Promise<() => void> {
+  const gen = sharedAttention.generation;
   sharedAttention.subscribers.add(handlers);
 
-  if (!sharedAttention.unlisten) {
-    const unlistenFn = await listen<{ version: number }>(ATTENTION_CHANGED_EVENT, (event) => {
-      const version = event.payload?.version;
-      if (typeof version !== "number") return;
-      if (version <= sharedAttention.current) return;
-      if (sharedAttention.buffered.includes(version)) return;
-      sharedAttention.buffered.push(version);
-      if (sharedAttention.buffered.length > 32) sharedAttention.buffered.shift();
-      void refreshSharedAttention();
-    });
-    if (sharedAttention.subscribers.size === 0) {
-      unlistenFn();
-      return () => {};
-    }
-    sharedAttention.unlisten = unlistenFn;
+  if (!sharedAttention.listenPromise) {
+    const listenGen = sharedAttention.generation;
+    sharedAttention.listenPromise = (async () => {
+      try {
+        const unlistenFn = await listen<{ version: number }>(ATTENTION_CHANGED_EVENT, (event) => {
+          if (sharedAttention.generation !== listenGen || sharedAttention.subscribers.size === 0) return;
+          const version = event.payload?.version;
+          if (typeof version !== "number") return;
+          if (version <= sharedAttention.current) return;
+          if (sharedAttention.buffered.includes(version)) return;
+          sharedAttention.buffered.push(version);
+          if (sharedAttention.buffered.length > 32) sharedAttention.buffered.shift();
+          void refreshSharedAttention(listenGen);
+        });
+        if (sharedAttention.generation !== listenGen || sharedAttention.subscribers.size === 0) {
+          unlistenFn();
+          sharedAttention.unlisten = null;
+          sharedAttention.listenPromise = null;
+          return null;
+        }
+        sharedAttention.unlisten = unlistenFn;
+        return unlistenFn;
+      } catch (err) {
+        sharedAttention.listenPromise = null;
+        sharedAttention.unlisten = null;
+        throw err;
+      }
+    })();
+  }
+
+  try {
+    await sharedAttention.listenPromise;
+  } catch (err) {
+    sharedAttention.subscribers.delete(handlers);
+    throw err;
+  }
+
+  if (!sharedAttention.subscribers.has(handlers) || sharedAttention.generation !== gen) {
+    return () => {};
   }
 
   if (sharedAttention.lastSnapshot && !sharedAttention.loading) {
     handlers.snapshot(sharedAttention.lastSnapshot);
-  } else {
-    void refreshSharedAttention();
+  } else if (!sharedAttention.loading) {
+    void refreshSharedAttention(gen);
   }
 
+  let stopped = false;
   return () => {
+    if (stopped) return;
+    stopped = true;
     sharedAttention.subscribers.delete(handlers);
     if (sharedAttention.subscribers.size === 0) {
-      if (sharedAttention.unlisten) {
-        sharedAttention.unlisten();
-        sharedAttention.unlisten = null;
-      }
+      sharedAttention.generation++;
+      const prevUnlisten = sharedAttention.unlisten;
+      sharedAttention.unlisten = null;
+      sharedAttention.listenPromise = null;
       sharedAttention.current = -1;
       sharedAttention.lastSnapshot = null;
       sharedAttention.lastError = null;
       sharedAttention.buffered.length = 0;
       sharedAttention.reload = false;
       sharedAttention.loading = false;
+      if (prevUnlisten) {
+        prevUnlisten();
+      }
     }
   };
+}
+
+/** 供上层 UI 与失败恢复主动重试最近的宿主状态。 */
+export function retryHostAttention(): void {
+  if (sharedAttention.subscribers.size > 0) {
+    sharedAttention.buffered.length = 0;
+    void refreshSharedAttention(sharedAttention.generation);
+  }
 }
 
 /** 仅管理挂载容器；unmount 不隐式销毁后端实例。模块查找不暴露任意路径。 */
