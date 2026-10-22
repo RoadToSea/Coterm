@@ -1,333 +1,277 @@
+/**
+ * 当前构建的真实浏览器验收：布局（1280/1024/768）、键盘折叠恢复、PluginCatalog 逐包诊断、
+ * Shadow DOM token 继承与 fallback。
+ *
+ * 这里验证的是 App.tsx + index.css + plugin-sdk 的实际渲染结果，不是源码字符串断言。
+ * 没有浏览器时整组 skip 并写明原因；skip 不等于通过。
+ */
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
-import http from "node:http";
-import { spawn, execSync } from "node:child_process";
+import {
+  assertFreshBuild,
+  delay,
+  distDir,
+  evaluate,
+  findBrowser,
+  openSession,
+  rootDir,
+  startStaticServer,
+  waitForValue,
+} from "./support/browser-harness.mjs";
+import { defaultScenario, makeHostMockSource } from "./support/host-mock.js";
 
-const rootDir = process.cwd();
-const distDir = path.join(rootDir, "apps/desktop/dist");
+const browserPath = findBrowser();
 
-function findBrowser() {
-  const candidates = [
-    process.env.CHROME_BIN,
-    process.env.EDGE_BIN,
-    "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
-    "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
-    "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
-    "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
-    "/usr/bin/google-chrome",
-    "/usr/bin/google-chrome-stable",
-    "/usr/bin/chromium-browser",
-    "/usr/bin/chromium",
-    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-    "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
-  ].filter(Boolean);
+/** 新建一页并注入宿主替身，返回可用页面对象。 */
+async function openPage(session, scenario = defaultScenario, viewport = { width: 1280, height: 800 }) {
+  const { client } = session;
+  const target = await client.send("Target.createTarget", { url: "about:blank" });
+  const attached = await client.send("Target.attachToTarget", { targetId: target.targetId, flatten: true });
+  const sessionId = attached.sessionId;
+  const send = (method, params = {}) => client.send(method, params, sessionId);
+  const waitFor = (method, timeoutMs) => client.waitFor(method, timeoutMs, sessionId);
 
-  for (const p of candidates) {
-    if (fs.existsSync(p)) return p;
-  }
-  return null;
+  await send("Page.enable");
+  await send("Runtime.enable");
+  await send("Log.enable");
+  await send("Page.addScriptToEvaluateOnNewDocument", { source: makeHostMockSource(scenario) });
+  await send("Emulation.setDeviceMetricsOverride", { ...viewport, deviceScaleFactor: 1, mobile: false });
+
+  const loaded = waitFor("Page.loadEventFired", 20_000);
+  await send("Page.navigate", { url: serverUrl });
+  await loaded;
+
+  const page = {
+    send,
+    waitFor,
+    evaluate: (expression) => evaluate({ send }, expression),
+    async resize(width, height) {
+      await send("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: 1, mobile: false });
+      await delay(250);
+    },
+    async close() {
+      await client.send("Target.closeTarget", { targetId: target.targetId }).catch(() => {});
+    },
+  };
+  return page;
 }
 
-test("Browser automated layout verification at 1280px, 1024px, and 768px", async (t) => {
-  const browserPath = findBrowser();
+let serverUrl;
+let server;
+
+test("Browser layout, catalog diagnostics, and keyboard collapse on the current build", async (t) => {
   if (!browserPath) {
-    t.skip("No Chrome/Edge browser found in environment for headless layout testing");
+    t.skip("No Chrome/Edge binary found; browser verification did not run and is not counted as passing");
     return;
   }
-
-  // Ensure desktop build exists
-  if (!fs.existsSync(path.join(distDir, "index.html"))) {
-    execSync("pnpm --filter coterm-desktop build", { stdio: "inherit", cwd: rootDir });
-  }
-
-  const mimeTypes = {
-    ".html": "text/html",
-    ".js": "application/javascript",
-    ".css": "text/css",
-    ".svg": "image/svg+xml",
-    ".json": "application/json",
-  };
-
-  const server = http.createServer((req, res) => {
-    let reqPath = req.url.split("?")[0];
-    if (reqPath === "/") reqPath = "/index.html";
-    const filePath = path.join(distDir, reqPath);
-    if (fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
-      const ext = path.extname(filePath);
-      res.writeHead(200, { "Content-Type": mimeTypes[ext] || "application/octet-stream" });
-      fs.createReadStream(filePath).pipe(res);
-    } else {
-      res.writeHead(404);
-      res.end("Not Found");
-    }
-  });
-
-  const serverPort = await new Promise((resolve) => {
-    server.listen(0, "127.0.0.1", () => resolve(server.address().port));
-  });
-
-  // Pick an ephemeral debugging port
-  const debugPort = 9224;
-  const browserProc = spawn(browserPath, [
-    "--headless=new",
-    `--remote-debugging-port=${debugPort}`,
-    "--disable-gpu",
-    "--no-sandbox",
-    "about:blank",
-  ]);
+  assertFreshBuild();
+  ({ url: serverUrl, server } = await startStaticServer());
+  const session = await openSession({ browserPath, totalTimeoutMs: 120_000 });
 
   try {
-    let wsUrl = null;
-    for (let i = 0; i < 30; i++) {
-      try {
-        const res = await fetch(`http://127.0.0.1:${debugPort}/json/list`);
-        const list = await res.json();
-        const page = list.find((item) => item.type === "page");
-        if (page && page.webSocketDebuggerUrl) {
-          wsUrl = page.webSocketDebuggerUrl;
-          break;
-        }
-      } catch {
-        await new Promise((r) => setTimeout(r, 200));
+    const page = await openPage(session);
+    try {
+      // 首帧渲染完成：插件列表来自 PluginCatalog.plugins，实例来自 list_instances。
+      await waitForValue({ send: page.send }, `!!document.querySelector('main[aria-label="Plugin workspace"]')`, { label: "app mounted" });
+
+      const measure = async () => page.evaluate(`(() => {
+        const plugins = document.querySelector('aside[aria-label="Installed plugins"]');
+        const instances = document.getElementById('instances-sidebar');
+        const workspace = document.querySelector('main[aria-label="Plugin workspace"]');
+        const toggle = document.getElementById('toggle-instances-button');
+        const visible = (element) => !!element && getComputedStyle(element).display !== 'none' && element.getBoundingClientRect().width > 0;
+        const rect = (element) => element ? element.getBoundingClientRect() : null;
+        const p = rect(plugins), i = rect(instances), w = rect(workspace);
+        return {
+          innerWidth: window.innerWidth,
+          pluginsWidth: p ? Math.round(p.width) : 0,
+          pluginsRight: p ? Math.round(p.right) : 0,
+          instancesVisible: visible(instances),
+          instancesWidth: i ? Math.round(i.width) : 0,
+          instancesLeft: i ? Math.round(i.left) : 0,
+          instancesRight: i ? Math.round(i.right) : 0,
+          workspaceWidth: w ? Math.round(w.width) : 0,
+          workspaceLeft: w ? Math.round(w.left) : 0,
+          scrollWidth: document.documentElement.scrollWidth,
+          clientWidth: document.documentElement.clientWidth,
+          ariaExpanded: toggle ? toggle.getAttribute('aria-expanded') : null,
+          ariaControls: toggle ? toggle.getAttribute('aria-controls') : null,
+          ariaLabel: toggle ? toggle.getAttribute('aria-label') : null,
+        };
+      })()`);
+
+      // --- 1280px：两栏都展开，工作区拿到剩余宽度 ---
+      await page.resize(1280, 800);
+      const wide = await measure();
+      assert.equal(wide.pluginsWidth, 72, "1280px: plugin rail is 72px");
+      assert.equal(wide.instancesWidth, 240, "1280px: instances panel is 240px");
+      assert.equal(wide.instancesVisible, true, "1280px: instances panel visible");
+      assert.equal(wide.workspaceWidth, 968, "1280px: workspace takes the remaining 968px");
+      assert.ok(wide.instancesLeft >= wide.pluginsRight, "1280px: no overlap between plugin rail and instances");
+      assert.ok(wide.workspaceLeft >= wide.instancesRight, "1280px: no overlap between instances and workspace");
+      assert.ok(wide.scrollWidth <= wide.clientWidth, `1280px: no horizontal overflow (${wide.scrollWidth} <= ${wide.clientWidth})`);
+
+      // --- 1024px：实例栏收窄到 200px ---
+      await page.resize(1024, 768);
+      const medium = await measure();
+      assert.equal(medium.pluginsWidth, 72, "1024px: plugin rail stays 72px");
+      assert.equal(medium.instancesWidth, 200, "1024px: instances panel narrows to 200px");
+      assert.equal(medium.workspaceWidth, 752, "1024px: workspace is 752px");
+      assert.ok(medium.scrollWidth <= medium.clientWidth, `1024px: no horizontal overflow (${medium.scrollWidth} <= ${medium.clientWidth})`);
+      assert.ok(medium.workspaceLeft >= medium.instancesRight, "1024px: workspace does not overlap instances");
+
+      // --- 768px：低于 900px 断点，实例栏默认收起，工作区优先 ---
+      await page.resize(768, 1024);
+      await waitForValue({ send: page.send }, `document.getElementById('toggle-instances-button').getAttribute('aria-expanded') === 'false'`, { label: "auto-collapse below 900px" });
+      const narrow = await measure();
+      assert.equal(narrow.instancesVisible, false, "768px: instances panel auto-collapsed");
+      assert.equal(narrow.workspaceWidth, 696, "768px: workspace gets 768 - 72 = 696px");
+      assert.equal(narrow.ariaExpanded, "false", "768px: toggle reports aria-expanded=false");
+      assert.equal(narrow.ariaControls, "instances-sidebar", "768px: toggle targets the instances panel");
+      assert.equal(narrow.ariaLabel, "Expand instances panel", "768px: toggle has an accessible name for the expand action");
+      assert.ok(narrow.scrollWidth <= narrow.clientWidth, `768px: no horizontal overflow (${narrow.scrollWidth} <= ${narrow.clientWidth})`);
+
+      // --- 768px 纯键盘展开与再折叠 ---
+      await page.evaluate("document.getElementById('toggle-instances-button').focus()");
+      assert.equal(await page.evaluate("document.activeElement.id"), "toggle-instances-button", "768px: toggle is focusable by keyboard");
+      for (const key of ["keyDown", "keyUp"]) {
+        await page.send("Input.dispatchKeyEvent", { type: key, key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 });
       }
+      await waitForValue({ send: page.send }, `document.getElementById('toggle-instances-button').getAttribute('aria-expanded') === 'true'`, { label: "keyboard expand" });
+      const expanded = await measure();
+      assert.equal(expanded.instancesVisible, true, "768px after Enter: instances panel expands");
+      assert.equal(expanded.instancesWidth, 200, "768px after Enter: expanded panel is 200px");
+      assert.equal(expanded.workspaceWidth, 496, "768px after Enter: workspace shrinks to 496px without overlap");
+      assert.ok(expanded.workspaceLeft >= expanded.instancesRight, "768px after Enter: workspace does not overlap instances");
+      assert.ok(expanded.scrollWidth <= expanded.clientWidth, `768px after Enter: no horizontal overflow (${expanded.scrollWidth} <= ${expanded.clientWidth})`);
+
+      await page.evaluate(`document.querySelector('#instances-sidebar button[aria-label="Collapse instances panel"]').click()`);
+      await waitForValue({ send: page.send }, `document.getElementById('toggle-instances-button').getAttribute('aria-expanded') === 'false'`, { label: "collapse again" });
+      const recollapsed = await measure();
+      assert.equal(recollapsed.instancesVisible, false, "768px: collapse is reversible");
+      assert.equal(recollapsed.workspaceWidth, 696, "768px: workspace returns to 696px");
+
+      // --- 逐包诊断与有效插件并存 ---
+      const diagnostics = await page.evaluate(`(() => {
+        const list = document.querySelector('ul[aria-label="Plugin package issues"]');
+        return {
+          present: !!list,
+          entries: list ? [...list.querySelectorAll('li')].map((item) => item.textContent) : [],
+          pluginButtons: [...document.querySelectorAll('aside[aria-label="Installed plugins"] nav button[aria-label^="Manage "]')].map((item) => item.getAttribute('aria-label')),
+          roles: list ? list.getAttribute('role') : null,
+        };
+      })()`);
+      assert.equal(diagnostics.present, true, "broken packages surface as a visible diagnostics list");
+      assert.equal(diagnostics.roles, "status", "diagnostics use a status role, not an alert");
+      assert.equal(diagnostics.entries.length, 2, "each broken package gets its own diagnostics entry");
+      assert.match(diagnostics.entries[0], /broken-plugin/, "entry identifies the failing directory when pluginId is null");
+      assert.match(diagnostics.entries[0], /not valid JSON/, "entry carries the user-facing message");
+      assert.match(diagnostics.entries[1], /legacy-plugin/, "second broken package is listed too");
+      assert.deepEqual(diagnostics.pluginButtons, ["Manage SSH"], "valid plugin stays listable alongside broken packages");
+
+      // --- Shadow DOM：token 继承与无变量时的 fallback ---
+      const shadow = await page.evaluate(`(() => {
+        const host = document.createElement('div');
+        document.body.append(host);
+        const root = host.attachShadow({ mode: 'open' });
+        const style = document.createElement('style');
+        style.textContent = \`
+          .inherits { color: var(--coterm-text-primary, #cccccc); background-color: var(--coterm-surface, #1e1e1e); border: 1px solid var(--coterm-border, #2b2b2b); }
+          .fallback { color: var(--coterm-missing-token, rgb(250, 204, 21)); }
+        \`;
+        root.append(style);
+        const inheriting = document.createElement('div');
+        inheriting.className = 'inherits';
+        const fallingBack = document.createElement('div');
+        fallingBack.className = 'fallback';
+        root.append(inheriting, fallingBack);
+        const inheritingStyle = getComputedStyle(inheriting);
+        const result = {
+          color: inheritingStyle.color,
+          background: inheritingStyle.backgroundColor,
+          fallback: getComputedStyle(fallingBack).color,
+        };
+        host.remove();
+        return result;
+      })()`);
+      assert.equal(shadow.color, "rgb(204, 204, 204)", "Shadow DOM inherits --coterm-text-primary");
+      assert.equal(shadow.background, "rgb(30, 30, 30)", "Shadow DOM inherits --coterm-surface");
+      assert.equal(shadow.fallback, "rgb(250, 204, 21)", "missing tokens fall back to the declared default");
+    } finally {
+      await page.close();
     }
-
-    assert.ok(wsUrl, "Headless browser CDP WebSocket URL must be available");
-
-    const ws = new WebSocket(wsUrl);
-
-    await new Promise((resolve, reject) => {
-      let reqId = 1;
-      const callbacks = new Map();
-
-      const send = (method, params = {}) => {
-        const id = reqId++;
-        ws.send(JSON.stringify({ id, method, params }));
-        return new Promise((res, rej) => callbacks.set(id, { res, rej }));
-      };
-
-      let pageLoadedResolve;
-      const pageLoadedPromise = new Promise((r) => {
-        pageLoadedResolve = r;
-      });
-
-      ws.onmessage = (evt) => {
-        const data = JSON.parse(evt.data);
-        if (data.method === "Page.loadEventFired") {
-          pageLoadedResolve?.();
-        }
-        if (data.id && callbacks.has(data.id)) {
-          const { res, rej } = callbacks.get(data.id);
-          callbacks.delete(data.id);
-          if (data.error) rej(data.error);
-          else res(data.result);
-        }
-      };
-
-      ws.onopen = async () => {
-        try {
-          await send("Page.enable");
-          await send("Runtime.enable");
-
-          // Inject mock Tauri host API
-          await send("Page.addScriptToEvaluateOnNewDocument", {
-            source: `
-              window.__TAURI_INTERNALS__ = {
-                invoke: async (cmd) => {
-                  if (cmd === 'list_plugins') return [{ id: 'ssh', name: 'SSH', version: '0.1.0', hasFrontend: true, running: true }];
-                  if (cmd === 'list_instances') return [{ pluginId: 'ssh', pluginInstanceId: 'inst-1', sessionId: 'sess-1', label: 'Prod-Server', status: 'ready' }];
-                  if (cmd === 'get_bypass') return false;
-                  if (cmd === 'list_operations') return [];
-                  if (cmd === 'recent_operations') return [];
-                  if (cmd === 'pending_interactions') return [];
-                  return null;
-                },
-                convertFileSrc: (s) => s,
-                metadata: { currentWindow: { label: 'main' } }
-              };
-            `,
-          });
-
-          await send("Page.navigate", { url: `http://127.0.0.1:${serverPort}` });
-          await pageLoadedPromise;
-          // Allow React to mount
-          await new Promise((r) => setTimeout(r, 800));
-
-          const measureLayout = async (w, h) => {
-            await send("Emulation.setDeviceMetricsOverride", {
-              width: w,
-              height: h,
-              deviceScaleFactor: 1,
-              mobile: false,
-            });
-            await send("Runtime.evaluate", {
-              expression: "window.dispatchEvent(new Event('resize'));",
-            });
-            await new Promise((r) => setTimeout(r, 250));
-
-            const res = await send("Runtime.evaluate", {
-              expression: `
-                (() => {
-                  const plugins = document.querySelector('aside[aria-label="Installed plugins"]');
-                  const instances = document.getElementById('instances-sidebar');
-                  const workspace = document.querySelector('main[aria-label="Plugin workspace"]');
-                  const toggleBtn = document.getElementById('toggle-instances-button');
-
-                  const pRect = plugins ? plugins.getBoundingClientRect() : null;
-                  const iRect = instances ? instances.getBoundingClientRect() : null;
-                  const wRect = workspace ? workspace.getBoundingClientRect() : null;
-
-                  const isInstancesVisible = instances && window.getComputedStyle(instances).display !== 'none' && !instances.classList.contains('hidden');
-
-                  return {
-                    windowInnerWidth: window.innerWidth,
-                    pluginsWidth: Math.round(pRect ? pRect.width : 0),
-                    pluginsRight: Math.round(pRect ? pRect.right : 0),
-                    instancesWidth: Math.round(isInstancesVisible && iRect ? iRect.width : 0),
-                    instancesLeft: Math.round(isInstancesVisible && iRect ? iRect.left : 0),
-                    instancesRight: Math.round(isInstancesVisible && iRect ? iRect.right : 0),
-                    instancesVisible: isInstancesVisible,
-                    workspaceWidth: Math.round(wRect ? wRect.width : 0),
-                    workspaceLeft: Math.round(wRect ? wRect.left : 0),
-                    scrollWidth: document.documentElement.scrollWidth,
-                    clientWidth: document.documentElement.clientWidth,
-                    ariaExpanded: toggleBtn ? toggleBtn.getAttribute('aria-expanded') : null,
-                    ariaControls: toggleBtn ? toggleBtn.getAttribute('aria-controls') : null,
-                    ariaLabel: toggleBtn ? toggleBtn.getAttribute('aria-label') : null
-                  };
-                })()
-              `,
-              returnByValue: true,
-            });
-            return res.result.value;
-          };
-
-          // --- 1. 1280px Wide Screen Verification ---
-          const m1280 = await measureLayout(1280, 800);
-          assert.strictEqual(m1280.pluginsWidth, 72, "1280px: plugin sidebar must be 72px");
-          assert.strictEqual(m1280.instancesWidth, 240, "1280px: instances sidebar must be 240px");
-          assert.strictEqual(m1280.instancesVisible, true, "1280px: instances sidebar must be visible");
-          assert.strictEqual(m1280.workspaceWidth, 968, "1280px: workspace width must be 968px");
-          assert.ok(m1280.instancesLeft >= m1280.pluginsRight, "1280px: instances sidebar must not overlap plugin sidebar");
-          assert.ok(m1280.workspaceLeft >= m1280.instancesRight, "1280px: workspace must not overlap instances sidebar");
-          assert.ok(m1280.scrollWidth <= 1280, "1280px: must have no horizontal page overflow");
-
-          // --- 2. 1024px Medium Screen Verification ---
-          const m1024 = await measureLayout(1024, 768);
-          assert.strictEqual(m1024.pluginsWidth, 72, "1024px: plugin sidebar must be 72px");
-          assert.strictEqual(m1024.instancesWidth, 200, "1024px: instances sidebar must adapt to 200px");
-          assert.strictEqual(m1024.instancesVisible, true, "1024px: instances sidebar must be visible");
-          assert.strictEqual(m1024.workspaceWidth, 752, "1024px: workspace width must be 752px");
-          assert.ok(m1024.instancesLeft >= m1024.pluginsRight, "1024px: no overlap between plugins and instances");
-          assert.ok(m1024.workspaceLeft >= m1024.instancesRight, "1024px: no overlap between instances and workspace");
-          assert.ok(m1024.scrollWidth <= 1024, "1024px: must have no horizontal page overflow");
-
-          // --- 3. 768px Compact Screen Verification (Auto-collapsed) ---
-          const m768 = await measureLayout(768, 1024);
-          assert.strictEqual(m768.pluginsWidth, 72, "768px: plugin sidebar must be 72px");
-          assert.strictEqual(m768.instancesVisible, false, "768px: instances sidebar must be auto-collapsed under 900px breakpoint");
-          assert.strictEqual(m768.instancesWidth, 0, "768px: collapsed instances sidebar width must be 0px");
-          assert.strictEqual(m768.workspaceWidth, 696, "768px: workspace must receive full remaining width 696px");
-          assert.strictEqual(m768.ariaExpanded, "false", "768px: toggle button aria-expanded must be false");
-          assert.strictEqual(m768.ariaControls, "instances-sidebar", "768px: toggle button aria-controls must match");
-          assert.ok(m768.scrollWidth <= 768, "768px: must have no horizontal page overflow");
-
-          // --- 4. 768px User Manual Expand & Reversible Collapse Verification ---
-          // Click toggle button to expand
-          await send("Runtime.evaluate", {
-            expression: "document.getElementById('toggle-instances-button').click();",
-          });
-          await new Promise((r) => setTimeout(r, 200));
-
-          const m768Expanded = await measureLayout(768, 1024);
-          assert.strictEqual(m768Expanded.instancesVisible, true, "768px expanded: instances sidebar must be visible");
-          assert.strictEqual(m768Expanded.instancesWidth, 200, "768px expanded: instances sidebar must be 200px");
-          assert.strictEqual(m768Expanded.workspaceWidth, 496, "768px expanded: workspace must adaptively compress to 496px");
-          assert.strictEqual(m768Expanded.ariaExpanded, "true", "768px expanded: toggle button aria-expanded must be true");
-          assert.ok(m768Expanded.instancesLeft >= m768Expanded.pluginsRight, "768px expanded: no overlap");
-          assert.ok(m768Expanded.workspaceLeft >= m768Expanded.instancesRight, "768px expanded: no overlap");
-          assert.ok(m768Expanded.scrollWidth <= 768, "768px expanded: no horizontal page overflow");
-
-          // Click collapse button inside instances panel header
-          await send("Runtime.evaluate", {
-            expression: "document.querySelector('#instances-sidebar button[aria-label=\"Collapse instances panel\"]').click();",
-          });
-          await new Promise((r) => setTimeout(r, 200));
-
-          const m768ReCollapsed = await measureLayout(768, 1024);
-          assert.strictEqual(m768ReCollapsed.instancesVisible, false, "768px re-collapsed: instances sidebar must be collapsed");
-          assert.strictEqual(m768ReCollapsed.workspaceWidth, 696, "768px re-collapsed: workspace must return to 696px");
-          assert.strictEqual(m768ReCollapsed.ariaExpanded, "false", "768px re-collapsed: aria-expanded must return to false");
-
-          // --- 5. Shadow DOM Token Inheritance & Fallback Browser Verification ---
-          const shadowVerification = await send("Runtime.evaluate", {
-            expression: `
-              (() => {
-                // Create a host element in document body (inherits :root custom properties)
-                const hostEl = document.createElement('div');
-                hostEl.id = 'test-shadow-host';
-                document.body.appendChild(hostEl);
-                const shadowRoot = hostEl.attachShadow({ mode: 'open' });
-                
-                const style = document.createElement('style');
-                style.textContent = \`
-                  .token-box {
-                    color: var(--coterm-text-primary, #cccccc);
-                    background-color: var(--coterm-surface, #1e1e1e);
-                    border-color: var(--coterm-border, #2b2b2b);
-                  }
-                  .fallback-box {
-                    color: var(--coterm-non-existent-token, rgb(250, 204, 21));
-                  }
-                \`;
-                shadowRoot.appendChild(style);
-
-                const tokenBox = document.createElement('div');
-                tokenBox.className = 'token-box';
-                tokenBox.textContent = 'Token Test';
-                shadowRoot.appendChild(tokenBox);
-
-                const fallbackBox = document.createElement('div');
-                fallbackBox.className = 'fallback-box';
-                fallbackBox.textContent = 'Fallback Test';
-                shadowRoot.appendChild(fallbackBox);
-
-                const tokenStyle = window.getComputedStyle(tokenBox);
-                const fallbackStyle = window.getComputedStyle(fallbackBox);
-
-                const result = {
-                  tokenColor: tokenStyle.color,
-                  tokenBg: tokenStyle.backgroundColor,
-                  fallbackColor: fallbackStyle.color
-                };
-
-                hostEl.remove();
-                return result;
-              })()
-            `,
-            returnByValue: true,
-          });
-
-          const shadowRes = shadowVerification.result.value;
-          // var(--coterm-text-primary) is #cccccc = rgb(204, 204, 204)
-          assert.strictEqual(shadowRes.tokenColor, "rgb(204, 204, 204)", "Shadow DOM must inherit --coterm-text-primary");
-          // var(--coterm-surface) is #1e1e1e = rgb(30, 30, 30)
-          assert.strictEqual(shadowRes.tokenBg, "rgb(30, 30, 30)", "Shadow DOM must inherit --coterm-surface");
-          // fallback rgb(250, 204, 21)
-          assert.strictEqual(shadowRes.fallbackColor, "rgb(250, 204, 21)", "Shadow DOM must use fallback when token is undefined");
-
-          ws.close();
-          resolve();
-        } catch (err) {
-          reject(err);
-        }
-      };
-      ws.onerror = reject;
-    });
   } finally {
-    browserProc.kill();
-    server.close();
+    await session.close();
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test("Snapshot failure keeps the last valid attention state on screen", async (t) => {
+  if (!browserPath) {
+    t.skip("No Chrome/Edge binary found; snapshot recovery was not exercised");
+    return;
+  }
+  assertFreshBuild();
+  const staticServer = await startStaticServer();
+  serverUrl = staticServer.url;
+  const scenario = {
+    ...defaultScenario,
+    attention: {
+      version: 4,
+      approvals: [{
+        operationId: "op-1",
+        proposalId: "proposal-1",
+        pluginId: "ssh",
+        pluginInstanceId: "inst-1",
+        operation: "terminal.write",
+        targetLabel: "Prod-Server",
+        createdAt: "2026-10-22T00:00:00Z",
+      }],
+      interactions: [],
+    },
+    history: [{
+      operationId: "op-1",
+      pluginId: "ssh",
+      pluginInstanceId: "inst-1",
+      operation: "terminal.write",
+      status: "awaiting_approval",
+      proposalId: "proposal-1",
+      input: { command: "ls -la" },
+      createdAt: "2026-10-22T00:00:00Z",
+    }],
+  };
+  const session = await openSession({ browserPath, totalTimeoutMs: 120_000 });
+  try {
+    const page = await openPage(session, scenario);
+
+    // 快照成功：审批卡片出现。
+    await waitForValue({ send: page.send }, `!!document.querySelector('form[aria-label="Agent operation approval"]')`, { label: "approval card rendered" });
+
+    // 让下一次快照失败并触发一次 changed 事件。
+    await page.evaluate(`(() => { window.__cotermTest.setFailure('host_attention', true, [1]); window.__cotermTest.emitAttention(5); })()`);
+
+    // 错误可见，但卡片保留（不清空待处理项）。
+    await waitForValue({ send: page.send }, `!!document.querySelector('main [role="alert"], aside [role="alert"]')`, { label: "recovery notice shown" });
+    const afterFailure = await page.evaluate(`(() => ({
+      cards: document.querySelectorAll('form[aria-label="Agent operation approval"]').length,
+      alerts: [...document.querySelectorAll('[role="alert"]')].map((item) => item.textContent).join(' | '),
+    }))()`);
+    assert.equal(afterFailure.cards, 1, "failed snapshot keeps the last valid approval list on screen");
+    assert.match(afterFailure.alerts, /Unable to follow Agent approvals/, "failure is reported as a recoverable notice");
+
+    // 恢复：下一次快照成功后错误提示消失，状态继续跟随。
+    await page.evaluate(`window.__cotermTest.emitAttention(6)`);
+    await waitForValue({ send: page.send }, `!document.querySelector('[role="alert"]')`, { label: "notice cleared after recovery" });
+    const recovered = await page.evaluate(`document.querySelectorAll('form[aria-label="Agent operation approval"]').length`);
+    assert.equal(recovered, 1, "attention subscription resumes after a transient failure");
+
+    // 宿主收敛（审批已处理）：卡片随快照消失。
+    await page.evaluate(`window.__cotermTest.setAttention({ version: 7, approvals: [], interactions: [] })`);
+    await waitForValue({ send: page.send }, `document.querySelectorAll('form[aria-label="Agent operation approval"]').length === 0`, { label: "card removed on convergence" });
+  } finally {
+    await session.close();
+    await new Promise((resolve) => staticServer.server.close(resolve));
   }
 });
