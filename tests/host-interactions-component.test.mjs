@@ -87,6 +87,30 @@ async function sample(page, expression) {
   }
 }
 
+/**
+ * 让一个已放行的闸门真正走完：先排空 Promise 微任务，再等两跳宏任务。
+ * 微任务链在同一个任务里跑完（弹窗是同步插入 DOM 的），
+ * 宏任务跳转则是给 React 的 Scheduler 落地外部 setState 用。不用固定 sleep 赌先后。
+ */
+async function flushPage(page) {
+  await page.evaluate(`(async () => {
+    for (let i = 0; i < 20; i++) await Promise.resolve();
+    for (let i = 0; i < 2; i++) {
+      await new Promise((resolve) => {
+        const channel = new MessageChannel();
+        channel.port1.onmessage = () => resolve(true);
+        channel.port2.postMessage(null);
+      });
+    }
+    return true;
+  })()`);
+}
+
+/** 弹窗标题，用于确认归结到零以后没有旧请求被翻出来。 */
+async function dialogTitles(page) {
+  return page.evaluate(`window.__cotermTest.dialogs().map((d) => d.title)`);
+}
+
 test("HostInteractions: a departed request's late finally cannot reopen it or clear the new one", async (t) => {
   if (!browserPath) {
     t.skip("No Chrome/Edge binary found; real-component interaction verification did not run");
@@ -324,6 +348,244 @@ test("HostInteractions: duplicate and out-of-order versions do not double-prompt
       await delay(200);
       await waitForDialogs(page, 0, "a resolved request is not reopened by a repeated version");
       assert.equal(await page.evaluate(`window.__cotermTest.pendingSecrets.length`), 1, "exactly one delivery for one interaction");
+    } finally {
+      await page.close();
+    }
+  } finally {
+    await session.close();
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+/**
+ * 下面五个用例回归同一个缺陷：finally 里的补取 `hostAttention()` 只看 `disposed` / `active`，
+ * 不看自己相对共享订阅的先后。较新的空快照先把 A 从 settled 里清掉，早先补取随后带着
+ * 旧版本 `[A]` 回来时 active 恰好为空，A 就被重新打开了。
+ *
+ * 顺序全部由可控闸门决定。闸门按调用顺序排队，所以「先发」的补取是 index 0，
+ * 之后共享订阅为较新快照发出的请求排在其后。释放时显式给 index，不靠时间猜测。
+ */
+async function armAttentionGate(page) {
+  await page.evaluate(`window.__attentionGate = window.__cotermTest.gate("host_attention")`);
+}
+
+/** 打开 A、等它真的弹出来，再武装闸门并取消——此时唯一的在途请求就是 finally 补取。 */
+async function openCancelWithGatedReload(session, initialAttention) {
+  const page = await openInteractionsPage(session, scenarioBase(initialAttention));
+  await waitForDialogs(page, 1, "A opened");
+  await flushPage(page);
+  // 闸门必须在取消之前铺好，否则 finally 里的补取会直接走真实 handler。
+  await armAttentionGate(page);
+  await page.evaluate(`window.__cotermTest.clickCancel()`);
+  await waitForValue({ send: page.send }, `window.__attentionGate.size() === 1`, { label: "post-cancel reload is in flight" });
+  return page;
+}
+
+/** 让共享订阅先收敛到 next：它排在补取之后入队，所以按 index 1 放行。 */
+async function deliverSnapshotAheadOfPrefetch(page, next) {
+  await waitForValue({ send: page.send }, `window.__attentionGate.size() === 2`, { label: "shared subscription reload queued behind the prefetch" });
+  await page.evaluate(`window.__attentionGate.release(${JSON.stringify(next)}, 1)`);
+  await flushPage(page);
+}
+
+/** 再放行早先那次补取（index 0）。 */
+async function releaseStalePrefetch(page, stale) {
+  await page.evaluate(`window.__attentionGate.release(${JSON.stringify(stale)}, 0)`);
+  await flushPage(page);
+}
+
+test("HostInteractions: a stale prefetch cannot reopen the request a newer snapshot removed", async (t) => {
+  if (!browserPath) {
+    t.skip("No Chrome/Edge binary found; stale-prefetch verification did not run");
+    return;
+  }
+  assertFreshTestArtifacts();
+  const { url, server } = await startStaticServer();
+  serverUrl = url;
+  const session = await openSession({ browserPath, totalTimeoutMs: 120_000 });
+
+  try {
+    const page = await openCancelWithGatedReload(session, attention(1, [secretInteraction("int-a", "inst-a")]));
+    try {
+      await waitForDialogs(page, 0, "user cancel closes A");
+
+      // 较新的空快照先到：共享订阅收敛到 v2，A 也从 settled 里清掉了。
+      await page.evaluate(`window.__cotermTest.setAttention(${JSON.stringify(attention(2, []))})`);
+      await deliverSnapshotAheadOfPrefetch(page, attention(2, []));
+      await waitForDialogs(page, 0, "the newer empty snapshot leaves zero dialogs");
+
+      // 再放行早先发出的补取：它带回来的是旧版本 [A]。
+      await releaseStalePrefetch(page, attention(1, [secretInteraction("int-a", "inst-a")]));
+      assert.deepEqual(await dialogTitles(page), [], "a prefetch older than the delivered snapshot must not reopen A");
+      assert.equal(
+        await page.evaluate(`window.__cotermTest.pendingSecrets.length`),
+        1,
+        "only the cancel notification was delivered, nothing reopened and re-asked",
+      );
+
+      // 再推一跳，确认不是「还没轮到」而是真的不会被翻出来。
+      await delay(200);
+      assert.deepEqual(await dialogTitles(page), [], "A stays closed after the stale prefetch settles");
+    } finally {
+      await page.close();
+    }
+  } finally {
+    await session.close();
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test("HostInteractions: a stale prefetch cannot displace the newer prompt, nor resurrect A after B drains", async (t) => {
+  if (!browserPath) {
+    t.skip("No Chrome/Edge binary found; stale-prefetch vs newer prompt verification did not run");
+    return;
+  }
+  assertFreshTestArtifacts();
+  const { url, server } = await startStaticServer();
+  serverUrl = url;
+  const session = await openSession({ browserPath, totalTimeoutMs: 180_000 });
+
+  try {
+    const page = await openCancelWithGatedReload(session, attention(1, [secretInteraction("int-a", "inst-a")]));
+    try {
+      await waitForDialogs(page, 0, "user cancel closes A");
+
+      // 较新快照含 B：B 到达，A 已不在其中。
+      await page.evaluate(`window.__cotermTest.setAttention(${JSON.stringify(attention(2, [secretInteraction("int-b", "inst-b")]))})`);
+      await deliverSnapshotAheadOfPrefetch(page, attention(2, [secretInteraction("int-b", "inst-b")]));
+      await waitForDialogs(page, 1, "B opened from the newer snapshot");
+      assert.match((await dialogTitles(page))[0], /inst-b/, "the newer prompt owns the dialog");
+
+      // 旧补取回来（仍是 [A]）：既不能挤掉 B，也不能让 A 再出现。
+      await releaseStalePrefetch(page, attention(1, [secretInteraction("int-a", "inst-a")]));
+      let titles = await dialogTitles(page);
+      assert.equal(titles.length, 1, "the stale prefetch must not add a second dialog");
+      assert.match(titles[0], /inst-b/, "B is still the one prompting");
+
+      // B 正常提交后归零（第 1 条是取消 A，第 2 条是 B 提交）。
+      await page.evaluate(`window.__cotermTest.submitSecret("pw-for-b")`);
+      await waitForValue({ send: page.send }, `window.__cotermTest.pendingSecrets.length === 2`, { label: "B submitted" });
+      assert.equal((await page.evaluate(`window.__cotermTest.pendingSecrets[1]`)).interactionId, "int-b", "B's secret went to B");
+      await waitForDialogs(page, 0, "queue drained to zero after B");
+
+      // 归零之后旧 A 仍然不能回来：它比已收敛的版本旧。
+      await delay(300);
+      assert.deepEqual(await dialogTitles(page), [], "A must not reappear once the queue has drained");
+    } finally {
+      await page.close();
+    }
+  } finally {
+    await session.close();
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test("HostInteractions: cancel, newer B, B cancelled — a stale A prefetch still reopens nothing", async (t) => {
+  if (!browserPath) {
+    t.skip("No Chrome/Edge binary found; B cancel then stale-A verification did not run");
+    return;
+  }
+  assertFreshTestArtifacts();
+  const { url, server } = await startStaticServer();
+  serverUrl = url;
+  const session = await openSession({ browserPath, totalTimeoutMs: 180_000 });
+
+  try {
+    const page = await openCancelWithGatedReload(session, attention(1, [secretInteraction("int-a", "inst-a")]));
+    try {
+      await waitForDialogs(page, 0, "user cancel closes A");
+
+      await page.evaluate(`window.__cotermTest.setAttention(${JSON.stringify(attention(2, [secretInteraction("int-b", "inst-b")]))})`);
+      await deliverSnapshotAheadOfPrefetch(page, attention(2, [secretInteraction("int-b", "inst-b")]));
+      await waitForDialogs(page, 1, "B opened");
+
+      // B 也被用户取消：队列再次归零，B 的 finally 再发一次补取（队里排在旧补取之后）。
+      await page.evaluate(`window.__cotermTest.clickCancel()`);
+      await waitForValue({ send: page.send }, `window.__cotermTest.pendingSecrets.length === 2`, { label: "B cancel notified" });
+      await waitForValue({ send: page.send }, `window.__attentionGate.size() === 2`, { label: "B's own reload queued" });
+      await page.evaluate(`window.__attentionGate.release(${JSON.stringify(attention(2, []))}, 1)`);
+      await flushPage(page);
+      await waitForDialogs(page, 0, "cancelling B empties the queue");
+
+      // 放行最早的补取：[A] 比已收敛的版本旧，仍然不能重开。
+      await releaseStalePrefetch(page, attention(1, [secretInteraction("int-a", "inst-a")]));
+      assert.deepEqual(await dialogTitles(page), [], "stale A prefetch reopens nothing after B was cancelled");
+      await delay(200);
+      assert.deepEqual(await dialogTitles(page), [], "still nothing after the queue settles");
+      assert.equal(await page.evaluate(`window.__cotermTest.pendingSecrets.length`), 2, "no extra respond_secret beyond the two cancels");
+    } finally {
+      await page.close();
+    }
+  } finally {
+    await session.close();
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test("HostInteractions: a prefetch or a failure landing after unmount is ignored", async (t) => {
+  if (!browserPath) {
+    t.skip("No Chrome/Edge binary found; unmount-vs-late-reload verification did not run");
+    return;
+  }
+  assertFreshTestArtifacts();
+  const { url, server } = await startStaticServer();
+  serverUrl = url;
+  const session = await openSession({ browserPath, totalTimeoutMs: 120_000 });
+
+  try {
+    const page = await openCancelWithGatedReload(session, attention(1, [secretInteraction("int-a", "inst-a")]));
+    try {
+      await waitForDialogs(page, 0, "user cancel closes A");
+
+      // 卸载必须在补取还在途时发生。
+      await page.evaluate("window.__cotermHostInteractions.unmount()");
+      assert.equal(await page.evaluate(`window.__cotermTest.listenerCount()`), 0, "unmount removes the attention listener");
+
+      await page.evaluate(`window.__attentionGate.release(${JSON.stringify(attention(1, [secretInteraction("int-a", "inst-a")]))})`);
+      await flushPage(page);
+      assert.deepEqual(await dialogTitles(page), [], "a prefetch resolving after unmount opens nothing");
+
+      // 旧的失败回调也不得在卸载后再写状态（错误提示本身也不该挂回去）。
+      await delay(200);
+      assert.equal(await page.evaluate(`document.querySelectorAll("[role=alert]").length`), 0, "no error rendered after unmount");
+      assert.deepEqual(await dialogTitles(page), [], "no dialog after the late prefetch");
+    } finally {
+      await page.close();
+    }
+  } finally {
+    await session.close();
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test("HostInteractions: an older prefetch failure does not overwrite a newer state error", async (t) => {
+  if (!browserPath) {
+    t.skip("No Chrome/Edge binary found; stale-error verification did not run");
+    return;
+  }
+  assertFreshTestArtifacts();
+  const { url, server } = await startStaticServer();
+  serverUrl = url;
+  const session = await openSession({ browserPath, totalTimeoutMs: 120_000 });
+
+  try {
+    const page = await openCancelWithGatedReload(session, attention(1, [secretInteraction("int-a", "inst-a")]));
+    try {
+      await waitForDialogs(page, 0, "user cancel closes A");
+
+      // 较新的快照先到（带 B），把补取彻底甩在身后。
+      await page.evaluate(`window.__cotermTest.setAttention(${JSON.stringify(attention(2, [secretInteraction("int-b", "inst-b")]))})`);
+      await deliverSnapshotAheadOfPrefetch(page, attention(2, [secretInteraction("int-b", "inst-b")]));
+      await waitForDialogs(page, 1, "B opened");
+
+      // 早先的补取以失败收场：它属于已经过去的时刻，不能改写当前状态。
+      await page.evaluate(`window.__attentionGate.fail("stale reload failed", 0)`);
+      await flushPage(page);
+      const alerts = await page.evaluate(`[...document.querySelectorAll("[role=alert]")]
+        .filter((node) => !node.closest("dialog.host-secret-dialog"))
+        .map((node) => node.textContent)`);
+      assert.deepEqual(alerts, [], `a stale reload failure must not surface over the newer state (saw ${JSON.stringify(alerts)})`);
+      assert.match((await dialogTitles(page))[0], /inst-b/, "B is untouched by the stale failure");
     } finally {
       await page.close();
     }

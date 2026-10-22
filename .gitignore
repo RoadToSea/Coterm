@@ -29,3 +29,6 @@ Thumbs.db
 !.env.example
 *.pem
 *.key
+
+# Multica 运行时注入（评论抓取、任务上下文），不入库
+.multica/

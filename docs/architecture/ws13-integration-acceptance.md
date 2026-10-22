@@ -37,9 +37,24 @@
   4. 补取的 `hostAttention()` 返回后同样核对 `disposed` 与 `active`，卸载后不弹窗；
   5. 取消/过期后队列继续推进下一条，没有改回轮询，也没有丢弃新请求。
 
+### 2.1b P1：补取快照仍能重开已取消的请求（本轮新修）
+
+上一轮只给「已分配的弹窗」加了 `ticket`，`finally` 里的补取 `hostAttention()` 本身没有身份。补取出发后，共享订阅可能先交付一份更旧的快照，把 A 从 `settled` 里清掉，并且把 `active` 置空；补取随后带着旧版本 `[A]` 回来时两个判断（`!disposed`、`!active`）都成立，A 就被重新打开了。
+
+- **复现**（`tests/host-interactions-component.test.mjs`，全部用可控闸门排定顺序，不靠 sleep）：
+  1. `v1=[A]` 打开 A；用户取消 A，闸门挂住 `finally` 发出的补取；
+  2. 较新的空快照 `v2=[]` 到达，共享订阅收敛，`settled` 里的 A 被清掉；
+  3. 放行那次早先的补取（返回旧 `v1=[A]`）——修复前实际重新出现 `inst-a` 的密码对话框。
+- **修复**（接口与依赖均未变）：
+  1. `observe` 维护单调递增的 `observedVersion`，更旧或重复的快照直接丢弃，不倒退状态；
+  2. 每次分配弹窗递增 `epoch`；补取出发时记录 `epoch` 与 `observedVersion`，回来时两者任一已变即为过期，直接丢弃；
+  3. 补取的 `catch` 用同一组判断，旧失败不再覆盖更新的状态或错误提示；
+  4. 仍有 `disposed` 保护，卸载后补取与失败回调都不动界面。
+- **证明边界**：这是请求顺序缺陷，已证明的是「旧补取不再重开已取消的请求」；不声称曾发生过秘密泄露或跨实例提交。
+
 ### 2.2 P1：用真实组件和可控 IPC 补足交互测试
 
-新增 `tests/host-interactions-component.test.mjs`（4 个用例，真实浏览器）：
+新增 `tests/host-interactions-component.test.mjs`（9 个用例，真实浏览器）：
 
 | 用例 | 覆盖 |
 | :--- | :--- |
@@ -47,11 +62,18 @@
 | late IPC completion… | `respond_secret` 用可控闸门挂起；旧投递完成后不得清空新 active、不得重开旧项 |
 | cancel, expiry, instance destroy, plugin stop and unmount | 用户取消、宿主过期、实例销毁、插件停止、组件卸载；卸载后监听器归零、不再弹窗 |
 | duplicate and out-of-order… | 重复版本、更旧版本、内容不变的更新版本都不得二次弹窗；已结算请求不被重复版本翻出 |
+| a stale prefetch cannot reopen… | 取消 A 后较新空快照先收敛，旧补取返回 `[A]`：零对话框、只有取消那一条 `respond_secret` |
+| a stale prefetch cannot displace… | 较新快照含 B 时旧补取不影响 B；B 提交归零后 A 仍不回来 |
+| cancel, newer B, B cancelled… | B 也取消、队列再归零后，旧 A 补取仍不重开 |
+| a prefetch or a failure landing after unmount… | 补取在卸载后才返回：不弹窗、不写错误 |
+| an older prefetch failure… | 旧补取失败不覆盖较新状态，B 的弹窗不受影响 |
 
 实现要点：
 - 页面只挂 `HostInteractions`（`tests/support/host-interactions-entry.tsx` → Vite 打成 `apps/desktop/dist/host-interactions/entry.js`），其余全部走真实路径（`host-api`、`secret-input`、React、`@tauri-apps/api`）。不挂真实 `App` 是因为它同时挂 `HostApprovals`，两份订阅记录会互相干扰，反而看不出是谁开的弹窗。
 - 宿主替身新增 `gate()` / `release()` / `clearGates()` 与 `invocations` 记录，用可控 Promise 推进时序；不用固定 sleep 模拟竞态。
+- 补取回归用例按**闸门队列下标**放行（index 0 是 `finally` 补取、index 1 是共享订阅为较新快照发的请求），不靠时间猜测先后；放行后先排空微任务再断言。
 - `respond_secret` 的 `interactionId` 与 `value` 逐条核对，取消后迟到 submit 不提交秘密，也不串到其他实例。
+- 对照证据：把三处保护（版本判断、`epoch` 判断、补取的 `catch` 判断）逐一移除后，分别有 1 个用例转红（第 5、7、9 个），说明这些断言确实盯着本缺陷而不是巧合通过。
 
 ### 2.3 P2：移除测试替身冒充真实 SDK 的覆盖声明
 
@@ -94,9 +116,10 @@
 - **Rust 协议核心与基座安全边界**：`cargo test --workspace`（44 个）。覆盖插件进程生命周期、Stdio JSON-RPC 帧、SSH 会话状态机、未批准 Proposal 不下发、Secret 与 `pluginInstanceId` 绑定。
 - **host-api 订阅状态机**（`tests/host-attention-state.test.mjs`，8 个，无 DOM）：并发注册只建一个监听、两种注销顺序、listen 失败回滚、迟到快照不污染新代次、在途事件补取、失败恢复与版本不锁死、审批路由命令。
 - **`secret-input` 自身行为**（同文件 1 个）：单次投递、结算后不再投递、`cancellationKey` 生效。
-- **真实组件交互生命周期**（`tests/host-interactions-component.test.mjs`，4 个，真实浏览器 + 真实构建产物 + 可控 IPC）：见 2.2。
+- **真实组件交互生命周期**（`tests/host-interactions-component.test.mjs`，9 个，真实浏览器 + 真实构建产物 + 可控 IPC）：见 2.2。其中 5 个是补取顺序的回归用例。
 - **真实构建产物的布局与组件**（`tests/browser-layout.test.mjs`，3 个，真实浏览器）：布局断点、逐包诊断、键盘折叠、真实 SSH Shadow DOM、真实 SDK `mountBlockList`、真实 fallback、多卡片审批。
 - **不覆盖**：真实 SSH 连接、真实 Tauri 运行时、硬件/串口。IPC 层是契约替身，命令名与参数按 `apps/desktop/src-tauri/src/main.rs` 对齐，不等于 Rust 端到端验证。
+- **宿主过期/销毁/插件停止的证明边界**：这些用例通过 `setAttention` 推送「宿主已不再列出该交互」的快照来模拟收敛，验证的是前端收到收敛后关闭弹窗；不是真的执行 Rust 端的销毁命令或 `stop_plugin`。
 
 ### 3.2 响应式布局实测数据
 
@@ -131,16 +154,15 @@
 | `pnpm install --no-frozen-lockfile` | 通过（锁文件未入库，见 `pnpm-lock.yaml` 在 `.gitignore`） |
 | `pnpm build` | 通过，0 errors |
 | `pnpm --filter coterm-plugin-ssh-ui build` | 通过，0 errors |
-| `pnpm test` | **21 tests / 21 pass / 0 fail / 0 skipped** |
-| `cargo check --workspace` | 通过，0 errors |
-| `cargo test --workspace` | **44 tests / 44 pass / 0 fail** |
-| `cargo clippy --workspace --all-targets -- -D warnings` | 通过，0 warnings |
+| `pnpm test` | **26 tests / 26 pass / 0 fail / 0 skipped** |
+| `cargo check --workspace` / `cargo test --workspace` / `cargo clippy` | **本轮未复跑**；Rust 无改动，引用上一轮 44/44 结果 |
 
-- **Node 用例细目（21 pass）**：
+- **Node 用例细目（26 pass）**：
   - `tests/browser-layout.test.mjs` (3)：布局/诊断/键盘折叠、快照失败保留、多卡片审批与身份断言。
   - `tests/host-attention-state.test.mjs` (8)：订阅状态机 6 个 + 审批路由 1 个 + `secret-input` 1 个。
-  - `tests/host-interactions-component.test.mjs` (4)：真实组件交互生命周期。
+  - `tests/host-interactions-component.test.mjs` (9)：真实组件交互生命周期 4 个 + 补取顺序回归 5 个。
   - `tests/visual-tokens-layout.test.mjs` (6)：CSS token 定义、Tailwind 映射、SSH/SDK 样式源检查、响应式结构、宽度模拟。
+- **本轮对照实验**：逐一移除三处保护后重跑同一文件，失败集合分别是 `{5}`、`{5,7}`、`{5,7,9}`；恢复后 9/9 通过。补取回归用例在修复前确实转红。
 - **浏览器可用性**：本机存在 `C:\Program Files\Google\Chrome\Application\chrome.exe`，浏览器用例真实执行，未 skip。
 - **测试产物构建**：`pnpm test` 会先跑 `pnpm test:build`，生成 SDK 浏览器模块与交互挂载入口；`assertFreshTestArtifacts()` 会在产物缺失或比源码旧时直接失败，不允许静默测旧实现。
 
@@ -148,11 +170,12 @@
 
 ## 5. 结论
 
-本轮两个 P1 与一个 P2 均已闭环，且都有可复现的对照证据：
+本轮针对第四次审阅的 P1 完成返工，改动的产品代码只有 `HostInteractions.tsx`：
 
-- 交互队列缺陷：修复前 4 个真实组件用例全部失败（其中首个用例表现为渲染进程被重开风暴拖死），修复后全部通过；
-- 真实组件与可控 IPC：取消、过期、实例销毁、插件停止、卸载、迟到 finally、迟到 IPC、重复/乱序版本均已沿真实订阅与响应路径覆盖；
-- SDK 覆盖声明：手写替身已删除，改为加载同一份源文件的构建产物，token 继承、选择状态、销毁与 fallback 都有实测断言；
-- 文档不再声称「所有返工已完成」，测试计数为本轮真实运行结果。
+- 补取快照重开已取消请求：修复前用真实组件与可控闸门稳定复现（`inst-a` 对话框重新出现），修复后零对话框；5 个回归用例覆盖空快照、较新 B、B 取消后归零、卸载、旧失败五种情形；
+- 旧实现只保护「已分配的弹窗」，本轮把保护扩展到补取请求本身（观察版本 + 分配代次），没有改接口、没有引入依赖、没有改回轮询、没有无限保存 `settled`；
+- 既有 21 项用例全部保留并继续通过，总数 26 项、0 skip；
+- 交付中移除了意外入库的 `.multica/thread2.json`，并加局部 `.gitignore` 规则防止再次入库；
+- 仍未覆盖：真实 SSH 连接、真实 Tauri 运行时、硬件/串口；PR 标题与平台 PR 关联见交付评论。
 
 仍未覆盖的部分（真实 SSH 连接、真实 Tauri 运行时、平台 PR 关联）见 3.1 与交付评论。

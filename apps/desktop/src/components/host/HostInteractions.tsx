@@ -16,6 +16,10 @@ export function HostInteractions() {
     let active: { id: string; instance: string; ticket: number } | null = null;
     /** 本组件已经自行收敛的请求；宿主状态还没跟上时不要立刻重开同一项。 */
     const settled = new Set<string>();
+    /** 已交付的最新快照版本：比它旧的补取结果不能拿来决定界面。 */
+    let observedVersion = Number.NEGATIVE_INFINITY;
+    /** 每分配一次弹窗就递增：在途的补取只能影响它出发时的那个生命周期。 */
+    let epoch = 0;
 
     const owns = (mine: number) => !disposed && active?.ticket === mine;
 
@@ -26,6 +30,7 @@ export function HostInteractions() {
       );
       if (!request) return;
       const mine = ++ticket;
+      epoch++;
       active = { id: request.interactionId, instance: request.pluginInstanceId, ticket: mine };
       void promptForSecret<void>(request.pluginInstanceId, {
         title: request.title,
@@ -50,14 +55,32 @@ export function HostInteractions() {
           if (!owns(mine)) return;
           active = null;
           // 下一条交互不会产生新的 changed 事件（宿主状态没变），主动补取一次。
+          // 补取一定要绑定出发时的观察版本：它之前排出的更旧快照可能晚到，
+          // 那时 settled 已被较新的收敛清掉，照着旧快照弹窗就会重开已取消的请求。
+          const sentAt = epoch;
+          const sentVersion = observedVersion;
           void hostAPI.hostAttention()
-            .then((attention) => { if (!disposed && !active) prompt(attention); })
-            .catch((reason) => { if (!disposed) setError(`Unable to reload user interactions: ${String(reason)}`); });
+            .then((attention) => {
+              // 拿到与出发时同一版本才继续：期间若已交付更新的快照，这次补取就是旧的，
+              // 按它弹窗会把较新收敛里已经删掉的请求重新打开。
+              if (disposed || epoch !== sentAt || observedVersion !== sentVersion) return;
+              if (attention.version < sentVersion) return;
+              observedVersion = attention.version;
+              if (!active) prompt(attention);
+            })
+            .catch((reason) => {
+              // 旧补取的失败同样只属于过去的时刻，不能覆盖更新的状态或错误。
+              if (disposed || epoch !== sentAt) return;
+              setError(`Unable to reload user interactions: ${String(reason)}`);
+            });
         });
     };
 
     const observe = (attention: HostAttention) => {
       if (disposed) return;
+      // 更旧或重复的快照不能倒退状态；补取的作废判断依赖这个版本单调前进。
+      if (attention.version < observedVersion) return;
+      observedVersion = attention.version;
       setError(null);
       // 宿主已不再列出的请求不必继续占位，避免收敛后残留状态挡住同 id 的新请求。
       for (const id of settled) {
