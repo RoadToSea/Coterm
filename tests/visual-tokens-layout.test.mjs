@@ -148,8 +148,8 @@ test("Layout width simulation at 1280px, 1024px, and 768px", () => {
   // 1280px: Wide screen. Plugins = 72px (sm:w-[72px]), Instances = 240px, Workspace = 1280 - (72 + 240) = 968px.
   // 1024px: Medium screen. Plugins = 64px/72px, Instances = 200px (max-[1024px]:w-[200px]), Workspace = 1024 - (72 + 200) = 752px.
   // 768px: Compact screen. Breakpoint (<900px) collapses instances panel by default.
-  //   - Collapsed: Plugins = 64px, Instances = 0px, Workspace = 768 - 64 = 704px (prioritizing workspace).
-  //   - Expanded (user toggled): Plugins = 64px, Instances = 200px, Workspace = 768 - (64 + 200) = 504px.
+  //   - Collapsed: Plugins = 72px (sm:w-[72px] applies as 768 >= 640), Instances = 0px, Workspace = 768 - 72 = 696px (prioritizing workspace).
+  //   - Expanded (user toggled): Plugins = 72px, Instances = 200px (max-[1024px]:w-[200px]), Workspace = 768 - (72 + 200) = 496px.
 
   const calculateLayout = (windowWidth, instancesOpen) => {
     const pluginWidth = windowWidth >= 640 ? 72 : 64;

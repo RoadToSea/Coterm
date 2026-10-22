@@ -25,9 +25,7 @@ export default function App() {
     if (typeof window === "undefined" || typeof window.matchMedia !== "function") return;
     const mediaQuery = window.matchMedia("(max-width: 899px)");
     const handleMediaChange = (event: MediaQueryListEvent | MediaQueryList) => {
-      if (event.matches) {
-        setInstancesCollapsed(true);
-      }
+      setInstancesCollapsed(event.matches);
     };
     if (typeof mediaQuery.addEventListener === "function") {
       mediaQuery.addEventListener("change", handleMediaChange);
