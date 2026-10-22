@@ -1,13 +1,15 @@
 /**
- * 宿主待处理状态与前端契约核心状态测试。
- * 验证 subscribeHostAttention 可控并发/生命周期、多审批卡片独立处理、交互收敛与凭据隔离。
+ * host-api 订阅层的状态与契约测试（无 DOM、无浏览器）。
  *
- * 证明范围说明：
- * - Rust 核心测试（`plugins/plugin-ssh/tests/ssh.rs` 等）：
- *   验证协议核心层级的安全边界：未批准 Proposal 绝不下发底层协议、Secret 凭据严格与 pluginInstanceId 绑定、跨实例隔离。
- * - 前端契约与 UI 测试（本文件 + `tests/browser-layout.test.mjs`）：
- *   验证前端状态管理与交互层级：并发订阅去重与生命周期代次注销、在途事件补取与失败恢复、
- *   多卡片独立决定与状态收敛、对话框取消/销毁收敛与迟到在途输入隔离。
+ * 证明范围：
+ * - 本文件：`subscribeHostAttention` 的并发注册、注销顺序、失败回滚、代次隔离与版本补取。
+ *   这些是 host-api 的纯状态机行为，用手写 IPC 支架就能完整覆盖。
+ * - `tests/host-interactions-component.test.mjs`：真实 HostInteractions 组件 + 真实 secret-input + 真实 IPC
+ *   契约下的弹窗队列与凭据归属，在浏览器里跑。
+ * - `tests/browser-layout.test.mjs`：真实构建产物的布局、真实 SDK 组件与真实 SSH 前端。
+ * - Rust 测试（`plugins/plugin-ssh/tests/*`、`crates/*`）：协议核心与基座安全边界。
+ *
+ * 本文件不声称覆盖任何 UI 渲染或组件生命周期。
  */
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -183,10 +185,12 @@ test("subscribeHostAttention: listen failure rolls back subscription and allows 
 test("subscribeHostAttention: late in-flight snapshot does not pollute new generation or resurrect cache", async () => {
   const snapshotDeferred = createDeferred();
   let invokeCalls = 0;
+  const gen2Requested = createDeferred();
   mockInvoke = async (cmd) => {
     if (cmd === "host_attention") {
       invokeCalls++;
       if (invokeCalls === 1) return snapshotDeferred.promise;
+      gen2Requested.resolve();
       return { version: 200, approvals: [], interactions: [] };
     }
     return null;
@@ -195,19 +199,17 @@ test("subscribeHostAttention: late in-flight snapshot does not pollute new gener
   const stop1 = await subscribeHostAttention({ snapshot: () => {}, error: () => {} });
   assert.equal(invokeCalls, 1);
 
-  // Stop gen 1 before its snapshot completes
+  // 在第一次快照还在途时注销，然后让旧快照迟到返回。
   stop1();
-
-  // Late snapshot from gen 1 resolves
   snapshotDeferred.resolve({ version: 999, approvals: [], interactions: [] });
-  await new Promise((r) => setTimeout(r, 20));
 
-  // Gen 2 subscribes
+  // 新代次订阅：它的请求必须立刻发出，且不能拿到旧代次的 999。
   const gen2Snapshots = [];
   const stop2 = await subscribeHostAttention({
     snapshot: (att) => gen2Snapshots.push(att),
     error: () => {},
   });
+  await gen2Requested.promise;
   await waitFor(() => gen2Snapshots.length === 1);
 
   assert.equal(invokeCalls, 2);
@@ -289,276 +291,148 @@ test("subscribeHostAttention: snapshot failure keeps last valid state and recove
   stop();
 });
 
-// --- 3. 审批 UI 行为：多卡片独立工作与状态收敛 (Line 154) ---
 
-test("Approvals UI behavior: multiple cards displayed simultaneously, independent approve/reject, and convergence", async () => {
-  const approvedProposals = [];
-  const rejectedProposals = [];
-  const approvedPluginProposals = [];
-  const rejectedPluginProposals = [];
+// --- 3. 审批请求的宿主级路由（不用手写 map/filter 冒充 UI） ---
+// 真实卡片的渲染、命令名/参数与未决身份断言在 `browser-layout.test.mjs` 里跑。
+// 这里只验证 hostAPI 这一层：实例级与插件级分别路由到正确的命令和参数。
 
+test("hostAPI routes instance-level and plugin-level approvals to distinct commands", async () => {
+  const approved = [];
+  const rejected = [];
   mockInvoke = async (cmd, args) => {
-    if (cmd === "get_operation") {
-      if (args.operationId === "op-inst-1") {
-        return { operationId: "op-inst-1", status: "awaiting_approval", input: { command: "systemctl restart nginx" } };
-      }
-      if (args.operationId === "op-inst-2") {
-        return { operationId: "op-inst-2", status: "awaiting_approval", input: { command: "journalctl -u nginx" } };
-      }
-    }
-    if (cmd === "recent_plugin_operations") {
-      return [{ operationId: "op-plugin-1", status: "awaiting_approval", input: { action: "scan" } }];
-    }
-    if (cmd === "approve_proposal") {
-      approvedProposals.push(args);
-      return { operationId: args.proposalId, status: "completed" };
-    }
-    if (cmd === "reject_proposal") {
-      rejectedProposals.push(args);
-      return null;
-    }
-    if (cmd === "approve_plugin_proposal") {
-      approvedPluginProposals.push(args);
-      return { operationId: args.proposalId, status: "completed" };
-    }
-    if (cmd === "reject_plugin_proposal") {
-      rejectedPluginProposals.push(args);
-      return null;
+    if (cmd === "approve_proposal" || cmd === "reject_proposal"
+      || cmd === "approve_plugin_proposal" || cmd === "reject_plugin_proposal") {
+      (cmd.startsWith("approve") ? approved : rejected).push({ cmd, args });
+      return cmd.startsWith("approve") ? { operationId: args.proposalId, status: "completed" } : null;
     }
     return null;
   };
 
-  // 1. 模拟宿主推送的 3 条待审批项（2 条实例级 + 1 条插件级无实例）
-  const initialApprovals = [
-    {
-      operationId: "op-inst-1",
-      proposalId: "prop-inst-1",
-      pluginId: "ssh",
-      pluginInstanceId: "inst-1",
-      operation: "terminal.write",
-      targetLabel: "Web-Server",
-      createdAt: "2026-10-22T00:00:00Z",
-    },
-    {
-      operationId: "op-inst-2",
-      proposalId: "prop-inst-2",
-      pluginId: "ssh",
-      pluginInstanceId: "inst-2",
-      operation: "terminal.write",
-      targetLabel: "DB-Server",
-      createdAt: "2026-10-22T00:01:00Z",
-    },
-    {
-      operationId: "op-plugin-1",
-      proposalId: "prop-plugin-1",
-      pluginId: "ssh",
-      pluginInstanceId: null,
-      operation: "ssh.scan",
-      targetLabel: "SSH Plugin",
-      createdAt: "2026-10-22T00:02:00Z",
-    },
-  ];
+  await hostAPI.approveProposal("inst-1", "prop-inst-1", { command: "systemctl restart nginx" });
+  await hostAPI.rejectProposal("inst-1", "prop-inst-2");
+  await hostAPI.approvePluginProposal("ssh", "prop-plugin-1", { action: "scan" });
+  await hostAPI.rejectPluginProposal("ssh", "prop-plugin-2");
 
-  // 2. 加载全部条目的详细操作记录（对应 HostApprovals.tsx loadRecord 行为）
-  const loadedCards = await Promise.all(initialApprovals.map(async (item) => {
-    const record = item.pluginInstanceId
-      ? await hostAPI.getOperation(item.pluginInstanceId, item.operationId)
-      : (await hostAPI.recentPluginOperations(item.pluginId, 100)).find((o) => o.operationId === item.operationId) ?? null;
-    return { ...item, record };
-  }));
-
-  // 验证 3 张卡片均正确包含操作记录且同时处于待审批列表
-  assert.equal(loadedCards.length, 3, "all 3 approval cards presented simultaneously");
-  assert.equal(loadedCards[0].record?.input.command, "systemctl restart nginx");
-  assert.equal(loadedCards[1].record?.input.command, "journalctl -u nginx");
-  assert.equal(loadedCards[2].record?.input.action, "scan");
-
-  // 3. 用户决定卡片 1（实例级 inst-1）：批准
-  let activeCards = [...loadedCards];
-  const card1 = activeCards.find((c) => c.operationId === "op-inst-1");
-  await hostAPI.approveProposal(card1.pluginInstanceId, card1.proposalId, card1.record.input);
-  activeCards = activeCards.filter((c) => c.operationId !== "op-inst-1");
-
-  assert.deepEqual(approvedProposals, [{
+  assert.deepEqual(approved.map((item) => item.cmd), ["approve_proposal", "approve_plugin_proposal"]);
+  assert.deepEqual(approved[0].args, {
     pluginInstanceId: "inst-1",
     proposalId: "prop-inst-1",
     args: { command: "systemctl restart nginx" },
-  }]);
-  // 验证卡片 2 和卡片 3 依然完整保留在 UI 列表中
-  assert.equal(activeCards.length, 2, "other cards remain active after approving card 1");
-  assert.ok(activeCards.some((c) => c.operationId === "op-inst-2"));
-  assert.ok(activeCards.some((c) => c.operationId === "op-plugin-1"));
-
-  // 4. 用户决定卡片 3（插件级无实例 ssh）：拒绝
-  const card3 = activeCards.find((c) => c.operationId === "op-plugin-1");
-  await hostAPI.rejectPluginProposal(card3.pluginId, card3.proposalId);
-  activeCards = activeCards.filter((c) => c.operationId !== "op-plugin-1");
-
-  assert.deepEqual(rejectedPluginProposals, [{
+  }, "instance-level approval binds its own instance, proposal and draft args");
+  assert.deepEqual(approved[1].args, {
     pluginId: "ssh",
     proposalId: "prop-plugin-1",
-  }]);
-  // 验证卡片 2 依然完整保留
-  assert.equal(activeCards.length, 1, "card 2 still retained after rejecting card 3");
-  assert.equal(activeCards[0].operationId, "op-inst-2");
-
-  // 5. 用户决定卡片 2（实例级 inst-2）：批准
-  const card2 = activeCards[0];
-  await hostAPI.approveProposal(card2.pluginInstanceId, card2.proposalId, card2.record.input);
-  activeCards = activeCards.filter((c) => c.operationId !== "op-inst-2");
-
-  assert.equal(approvedProposals.length, 2);
-  assert.equal(approvedProposals[1].pluginInstanceId, "inst-2");
-
-  // 6. 最终收敛：全部卡片处理完成，列表归零
-  assert.equal(activeCards.length, 0, "approval list converges to 0 pending cards");
+    args: { action: "scan" },
+  }, "plugin-level approval binds the plugin id instead of an instance");
+  assert.deepEqual(rejected.map((item) => item.cmd), ["reject_proposal", "reject_plugin_proposal"]);
+  assert.deepEqual(rejected[0].args, { pluginInstanceId: "inst-1", proposalId: "prop-inst-2" });
+  assert.deepEqual(rejected[1].args, { pluginId: "ssh", proposalId: "prop-plugin-2" });
 });
 
-// --- 4. 交互 UI 行为与凭据隔离测试 (Line 190) ---
+// --- 4. secret-input 自身行为（不经过组件，也不声称覆盖组件生命周期） ---
+// 组件级的弹窗队列、取消/过期/销毁/卸载与迟到 IPC 在
+// `tests/host-interactions-component.test.mjs` 里用真实浏览器和真实组件验证。
 
-class MockDOMElement {
-  constructor(tagName) {
-    this.tagName = tagName.toUpperCase();
-    this.children = [];
-    this.attributes = new Map();
-    this.eventListeners = new Map();
-    this.className = "";
-    this.textContent = "";
-    this.value = "";
-    this.open = false;
-    this.disabled = false;
-    this.hidden = false;
-  }
-  setAttribute(name, value) { this.attributes.set(name, String(value)); }
-  getAttribute(name) { return this.attributes.get(name) ?? null; }
-  append(...nodes) { this.children.push(...nodes); }
-  addEventListener(event, handler) {
-    if (!this.eventListeners.has(event)) this.eventListeners.set(event, []);
-    this.eventListeners.get(event).push(handler);
-  }
-  removeEventListener(event, handler) {
-    if (this.eventListeners.has(event)) {
-      this.eventListeners.set(event, this.eventListeners.get(event).filter((h) => h !== handler));
-    }
-  }
-  dispatchEvent(event) {
-    const handlers = this.eventListeners.get(event.type) ?? [];
-    for (const h of handlers) h(event);
-  }
-  showModal() { this.open = true; }
-  close() { this.open = false; }
-  remove() {
-    if (globalThis.document?.body) {
-      globalThis.document.body.children = globalThis.document.body.children.filter((c) => c !== this);
-    }
-  }
-  querySelector(selector) {
-    if (selector === "form") return this.children.find((c) => c.tagName === "FORM") ?? null;
-    if (selector === "input") return this.findDescendant((c) => c.tagName === "INPUT");
-    if (selector === "button[type='submit']") return this.findDescendant((c) => c.tagName === "BUTTON" && c.getAttribute("type") === "submit");
-    return null;
-  }
-  findDescendant(predicate) {
-    for (const c of this.children) {
-      if (predicate(c)) return c;
-      const found = c.findDescendant?.(predicate);
-      if (found) return found;
-    }
-    return null;
-  }
-}
-
-test("Interactions UI behavior: secret dialog lifecycle, cancellation, expiry, and instance isolation", async () => {
-  globalThis.document = {
-    body: new MockDOMElement("BODY"),
-    createElement: (tag) => new MockDOMElement(tag),
+test("promptForSecret: resolves submitted once, ignores later submits, and binds the cancellation key", async () => {
+  // 最小 DOM：secret-input 只用到 createElement/append/showModal/close/remove 和窗口计时器。
+  const elements = [];
+  const createElement = (tagName) => {
+    const element = {
+      tagName: tagName.toUpperCase(),
+      children: [],
+      attributes: new Map(),
+      listeners: new Map(),
+      className: "",
+      textContent: "",
+      value: "",
+      open: false,
+      disabled: false,
+      hidden: false,
+      append(...nodes) { this.children.push(...nodes); },
+      setAttribute(name, value) { this.attributes.set(name, String(value)); },
+      addEventListener(event, handler) {
+        if (!this.listeners.has(event)) this.listeners.set(event, []);
+        this.listeners.get(event).push(handler);
+      },
+      dispatch(event) { for (const handler of this.listeners.get(event.type) ?? []) handler(event); },
+      showModal() { this.open = true; },
+      close() { this.open = false; },
+      remove() { elements.splice(elements.indexOf(this), 1); },
+      find(predicate) {
+        for (const child of this.children) {
+          if (predicate(child)) return child;
+          const found = child.find?.(predicate);
+          if (found) return found;
+        }
+        return null;
+      },
+    };
+    elements.push(element);
+    return element;
   };
+  globalThis.document = { body: { append: () => {} }, createElement };
 
   const { promptForSecret, cancelSecretInput } = await import("../apps/desktop/src/secret-input.ts");
 
-  // 1. 对话框取消测试与在途输入防提交
-  let delivered = null;
-  const p1 = promptForSecret("inst-1", {
+  /** 取最近一次 promptForSecret 创建的那个 dialog（第一个新建节点）。 */
+  const takeDialog = (startIndex) => elements[startIndex];
+
+  const deliveries = [];
+  const startIndex = elements.length;
+  const pending = promptForSecret("inst-1", {
     title: "Web-Server SSH Password",
     prompt: "Enter password for root@web",
     timeoutMs: 60_000,
     allowCancel: true,
-  }, async (inst, purpose, val) => {
-    delivered = { inst, purpose, val };
+    purpose: "ssh.password",
+  }, async (instance, purpose, value) => {
+    deliveries.push({ instance, purpose, value });
     return { handle: "secret-1" };
   }, "backend:req-1");
 
-  assert.equal(globalThis.document.body.children.length, 1);
-  const dialog1 = globalThis.document.body.children[0];
-  assert.equal(dialog1.open, true);
+  const dialog = takeDialog(startIndex);
+  assert.equal(dialog.open, true, "dialog is shown modally");
+  const input = dialog.find((node) => node.tagName === "INPUT");
+  const form = dialog.find((node) => node.tagName === "FORM");
+  input.value = "pw-for-web";
 
-  // 取消交互（如用户点击取消、宿主通知取消或实例销毁）
-  cancelSecretInput("backend:req-1");
-  const result1 = await p1;
+  form.dispatch({ type: "submit", preventDefault() {} });
+  const outcome = await pending;
 
-  assert.equal(result1.outcome, "cancelled");
-  assert.equal(dialog1.open, false);
-  assert.equal(globalThis.document.body.children.length, 0, "dialog removed from body on cancellation");
+  assert.equal(outcome.outcome, "submitted");
+  assert.deepEqual(deliveries, [{ instance: "inst-1", purpose: "ssh.password", value: "pw-for-web" }],
+    "deliver receives the instance, the declared purpose and the typed value");
+  assert.equal(dialog.open, false, "dialog closes on submit");
 
-  // 验证迟到输入防提交：在取消后即使用户输入在途事件触发 submit，deliver 绝不执行
-  const form = dialog1.querySelector("form");
-  form?.dispatchEvent({ type: "submit", preventDefault() {} });
-  assert.equal(delivered, null, "late submit on cancelled dialog never calls deliver");
+  // 已结算之后再提交：deliver 绝不第二次执行。
+  form.dispatch({ type: "submit", preventDefault() {} });
+  assert.equal(deliveries.length, 1, "a settled dialog never delivers twice");
+  assert.equal(input.value, "", "the typed secret is cleared on settlement");
 
-  // 2. 超时过期测试
-  const pTimeout = promptForSecret("inst-1", {
-    title: "Expiring prompt",
-    prompt: "Fast expiry",
-    timeoutMs: 10,
+  // 取消通过 cancellationKey 生效，而不是 instanceId。
+  const cancelIndex = elements.length;
+  const cancelDeliveries = [];
+  const cancelTarget = promptForSecret("inst-2", {
+    title: "Second",
+    prompt: "Password",
+    timeoutMs: 60_000,
     allowCancel: true,
-  }, async () => ({ handle: "h" }), "backend:req-timeout");
+    purpose: "ssh.password",
+  }, async (_instance, _purpose, value) => {
+    cancelDeliveries.push(value);
+    return { handle: "unused" };
+  }, "backend:req-2");
+  const cancelledDialog = takeDialog(cancelIndex);
+  const cancelledInput = cancelledDialog.find((node) => node.tagName === "INPUT");
+  const cancelledForm = cancelledDialog.find((node) => node.tagName === "FORM");
+  cancelSecretInput("backend:req-2");
+  assert.equal((await cancelTarget).outcome, "cancelled", "cancel uses the per-request cancellation key");
 
-  const resultTimeout = await pTimeout;
-  assert.equal(resultTimeout.outcome, "timed_out", "times out cleanly when timeoutMs reached");
-  assert.equal(globalThis.document.body.children.length, 0);
-
-  // 3. 跨实例隔离与交互队列呈现
-  const deliveredSecrets = [];
-  const startInteraction = (instanceId, interactionId) => {
-    return promptForSecret(instanceId, {
-      title: `${instanceId} Auth`,
-      prompt: "Password",
-      timeoutMs: 60_000,
-      allowCancel: true,
-    }, async (inst, purpose, val) => {
-      deliveredSecrets.push({ inst, val });
-      return { handle: `${inst}-secret` };
-    }, `backend:${interactionId}`);
-  };
-
-  // 启动 inst-1 的交互
-  const prompt1 = startInteraction("inst-1", "int-1");
-  assert.equal(globalThis.document.body.children.length, 1);
-
-  // 模拟用户在对话框中输入密码并提交
-  const activeDialog = globalThis.document.body.children[0];
-  const inputElem = activeDialog.querySelector("input");
-  inputElem.value = "secret-for-inst-1";
-  const formElem = activeDialog.querySelector("form");
-  formElem.dispatchEvent({ type: "submit", preventDefault() {} });
-
-  const outcome1 = await prompt1;
-  assert.equal(outcome1.outcome, "submitted");
-  assert.deepEqual(deliveredSecrets, [{ inst: "inst-1", val: "secret-for-inst-1" }]);
-
-  // 验证 inst-1 的凭据绝对不会发给 inst-2
-  assert.ok(!deliveredSecrets.some((s) => s.inst === "inst-2"));
-
-  // 队列下一项：inst-1 完成后，启动 inst-2 的交互
-  const prompt2 = startInteraction("inst-2", "int-2");
-  assert.equal(globalThis.document.body.children.length, 1);
-  const dialog2 = globalThis.document.body.children[0];
-
-  // 模拟 inst-2 实例在等待输入期间被销毁（宿主 attention 移除 int-2）
-  cancelSecretInput("backend:int-2");
-  const outcome2 = await prompt2;
-  assert.equal(outcome2.outcome, "cancelled");
-  assert.equal(dialog2.open, false);
-  assert.equal(globalThis.document.body.children.length, 0);
-  assert.equal(deliveredSecrets.length, 1, "destroyed instance never receives delayed input");
+  // 取消之后迟到的 submit 不得提交任何秘密。
+  // 取消路径上 busy 始终是 false，只有 settled 能挡住这次提交，
+  // 所以这条断言测的确实是「结算后不再投递」，而不是顺带被 busy 拦住。
+  cancelledInput.value = "late-secret";
+  cancelledForm.dispatch({ type: "submit", preventDefault() {} });
+  await Promise.resolve();
+  assert.deepEqual(cancelDeliveries, [], "a late submit on a cancelled dialog never delivers the secret");
 });

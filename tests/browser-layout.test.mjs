@@ -11,6 +11,7 @@ import fs from "node:fs";
 import path from "node:path";
 import {
   assertFreshBuild,
+  assertFreshTestArtifacts,
   delay,
   distDir,
   evaluate,
@@ -73,6 +74,7 @@ test("Browser layout, catalog diagnostics, and keyboard collapse on the current 
     return;
   }
   assertFreshBuild();
+  assertFreshTestArtifacts();
   ({ url: serverUrl, server } = await startStaticServer());
   const session = await openSession({ browserPath, totalTimeoutMs: 120_000 });
 
@@ -274,40 +276,170 @@ test("Browser layout, catalog diagnostics, and keyboard collapse on the current 
       assert.equal(sshStyles.strongColor, "rgb(204, 204, 204)", "SSH .bar strong color inherits --coterm-text-primary");
       assert.equal(sshStyles.hasTerminal, true, "SSH terminal container exists in real frontend");
 
-      // --- SDK mountBlockList：实际组件计算样式与 fallback ---
+      // --- 真实 SSH 前端自己的 fallback ---
+      // 同一个 Document 里的任何容器都会从 :root 继承 token，所以这里另开一个
+      // 同源空白 iframe：里面没有任何 --coterm-*，组件只能用自己的 fallback。
+      const sshFallbacks = await page.evaluate(`(async () => {
+        const frame = document.createElement('iframe');
+        frame.style.cssText = 'width:480px;height:240px;border:0';
+        document.body.append(frame);
+        const doc = frame.contentDocument;
+        const win = frame.contentWindow;
+        const source = window.__cotermTest.sshFrontendSource();
+        const url = URL.createObjectURL(new Blob([source], { type: "text/javascript" }));
+        try {
+          const module = await import(url);
+          const container = win.document.createElement('div');
+          container.style.cssText = 'height:100%;width:100%';
+          win.document.body.append(container);
+          const api = {
+            invoke: async () => ({
+              status: 'completed',
+              output: { connected: false, connectionId: null, config: { username: 'fallback', host: '127.0.0.1', port: 22 } },
+            }),
+            subscribeEvents: async () => () => {},
+            subscribe: () => () => {},
+            components: {},
+          };
+          const view = module.mount(container, api);
+          const host = container.querySelector('div');
+          const root = host && host.shadowRoot;
+          const result = {
+            // 先证明这个文档里确实没有主题变量。
+            docPrimary: win.getComputedStyle(win.document.documentElement).getPropertyValue('--coterm-text-primary').trim(),
+            hostColor: host ? win.getComputedStyle(host).color : null,
+            layoutBg: root ? win.getComputedStyle(root.querySelector('.layout')).backgroundColor : null,
+            barBg: root ? win.getComputedStyle(root.querySelector('.bar')).backgroundColor : null,
+            strongColor: root ? win.getComputedStyle(root.querySelector('.bar strong')).color : null,
+          };
+          view.unmount();
+          frame.remove();
+          return result;
+        } finally {
+          URL.revokeObjectURL(url);
+        }
+      })()`);
+      assert.equal(sshFallbacks.docPrimary, "", "the isolated document really has no --coterm-text-primary");
+      assert.equal(sshFallbacks.hostColor, "rgb(204, 204, 204)", "SSH :host falls back to its own #cccccc");
+      assert.equal(sshFallbacks.layoutBg, "rgb(30, 30, 30)", "SSH .layout falls back to its own #1e1e1e");
+      assert.equal(sshFallbacks.barBg, "rgb(37, 37, 38)", "SSH .bar falls back to its own #252526");
+      assert.equal(sshFallbacks.strongColor, "rgb(204, 204, 204)", "SSH .bar strong falls back to its own #cccccc");
+
+      // --- 真实 SDK mountBlockList：token 继承、选择状态与销毁 ---
+      // 组件来自 packages/plugin-sdk/src/components/block-list.ts 的构建产物，
+      // 页面以动态 import 加载，脚本里没有任何手写 DOM 或样式替身。
+      await page.evaluate(`(async () => { window.__sdkModule = await window.__cotermTest.loadSdk(); })()`);
       const blockStyles = await page.evaluate(`(() => {
+        const { mountBlockList } = window.__sdkModule;
         const container = document.createElement('div');
         document.body.append(container);
-        window.__cotermTestMountBlockList(container, {
+        const selections = [];
+        const view = mountBlockList(container, {
           blocks: [
             { id: "b1", index: 1, command: "whoami", actor: "robot", exitCode: 0 },
-            { id: "b2", index: 2, command: "cat /etc/passwd", actor: "human", exitCode: 1 }
-          ]
+            { id: "b2", index: 2, command: "cat /etc/passwd", actor: "human", exitCode: null },
+            { id: "b3", index: 3, command: "rm -rf /", actor: "robot", exitCode: 1 },
+          ],
+          onSelectionChange: (ids) => selections.push(ids),
         });
         const root = container.querySelector('.coterm-blocks');
-        const robotActor = container.querySelector('.coterm-block-actor[data-actor="robot"]');
-        const status = container.querySelectorAll('.coterm-block-status')[1];
-
-        // Also test an undeclared token fallback
-        const fallbackEl = document.createElement('span');
-        fallbackEl.style.cssText = 'color: var(--coterm-undefined-token, rgb(250, 204, 21));';
-        container.append(fallbackEl);
-
+        const rows = [...container.querySelectorAll('.coterm-block')];
         const result = {
+          rowTagNames: rows.map((row) => row.tagName),
+          rootRole: root.getAttribute('role'),
+          rootLabel: root.getAttribute('aria-label'),
           rootColor: getComputedStyle(root).color,
           rootBg: getComputedStyle(root).backgroundColor,
-          robotColor: getComputedStyle(robotActor).color,
-          statusColor: getComputedStyle(status).color,
-          fallbackColor: getComputedStyle(fallbackEl).color,
+          robotColor: getComputedStyle(container.querySelector('.coterm-block-actor[data-actor="robot"]')).color,
+          humanText: container.querySelector('.coterm-block-actor[data-actor="human"]').textContent,
+          robotText: container.querySelector('.coterm-block-actor[data-actor="robot"]').textContent,
+          failureMark: rows[2].querySelector('.coterm-block-status').textContent,
+          failureTitle: rows[2].querySelector('.coterm-block-status').title,
+          successMark: rows[0].querySelector('.coterm-block-status').textContent,
         };
+
+        // 选择状态：点击第 2 行后 aria-pressed 与回调都要跟上。
+        rows[1].click();
+        result.afterClick = {
+          pressed: [...container.querySelectorAll('.coterm-block')].map((row) => row.getAttribute('aria-pressed')),
+          selections: [...selections],
+        };
+
+        // update 后选择集重置为传入的 selected，而不是沿用旧集合。
+        view.update({ blocks: [
+          { id: "b1", index: 1, command: "whoami", actor: "robot", exitCode: 0 },
+          { id: "b2", index: 2, command: "cat /etc/passwd", actor: "human", exitCode: null, selected: true },
+        ] });
+        result.afterUpdate = [...container.querySelectorAll('.coterm-block')]
+          .map((row) => row.getAttribute('aria-pressed'));
+
+        // 销毁：容器清空，且 disposed 之后 update 不再渲染。
+        view.unmount();
+        result.afterUnmount = container.childElementCount;
+        view.update({ blocks: [{ id: "b9", index: 9, command: "late", actor: "human" }] });
+        result.afterLateUpdate = container.childElementCount;
         container.remove();
         return result;
       })()`);
+      assert.deepEqual(blockStyles.rowTagNames, ["BUTTON", "BUTTON", "BUTTON"], "real SDK rows are buttons, not divs");
+      assert.equal(blockStyles.rootRole, "list", "real SDK root carries role=list");
+      assert.equal(blockStyles.rootLabel, "Command blocks", "real SDK root is labelled");
       assert.equal(blockStyles.rootColor, "rgb(204, 204, 204)", "SDK block-list inherits --coterm-text-primary");
       assert.equal(blockStyles.rootBg, "rgb(30, 30, 30)", "SDK block-list inherits --coterm-surface");
       assert.equal(blockStyles.robotColor, "rgb(117, 190, 255)", "SDK robot actor inherits --coterm-accent-glow");
-      assert.equal(blockStyles.statusColor, "rgb(244, 135, 113)", "SDK failure status inherits --coterm-danger");
-      assert.equal(blockStyles.fallbackColor, "rgb(250, 204, 21)", "missing tokens calculate declared fallback");
+      assert.equal(blockStyles.robotText, "Robot", "SDK renders the actor label, not the raw enum");
+      assert.equal(blockStyles.humanText, "Human", "SDK renders the human actor label");
+      assert.equal(blockStyles.failureMark, "!", "SDK marks a non-zero exit");
+      assert.equal(blockStyles.failureTitle, "Exit code 1", "SDK exposes the exit code as a title");
+      assert.equal(blockStyles.successMark, "", "SDK leaves a zero exit unmarked");
+      assert.deepEqual(blockStyles.afterClick.pressed, ["false", "true", "false"], "clicking a row selects only that row");
+      assert.deepEqual(blockStyles.afterClick.selections, [["b2"]], "selection change reports the selected block id");
+      assert.deepEqual(blockStyles.afterUpdate, ["false", "true"], "update() rebuilds rows and adopts the declared selection");
+      assert.equal(blockStyles.afterUnmount, 0, "unmount clears the container it was given");
+      assert.equal(blockStyles.afterLateUpdate, 0, "a disposed view ignores further updates");
+
+      // --- token fallback：让真实 SDK 组件在无主题的文档里自己回退 ---
+      // 同文档里连 Shadow DOM 的内联 style 都会从 :root 继承，所以再开一个同源空白 iframe。
+      // 源码先放到 window 上，避免把它拼进求值字符串（源里本身就有模板字符）。
+      await page.evaluate(`(async () => { window.__sdkSource = await (await fetch("/__sdk/block-list.js")).text(); })()`);
+      const fallbacks = await page.evaluate(`(async () => {
+        const frame = document.createElement('iframe');
+        frame.style.cssText = 'width:480px;height:240px;border:0';
+        document.body.append(frame);
+        const win = frame.contentWindow;
+        const url = URL.createObjectURL(new Blob([window.__sdkSource], { type: "text/javascript" }));
+        try {
+          const { mountBlockList } = await import(url);
+          const container = win.document.createElement('div');
+          win.document.body.append(container);
+          const view = mountBlockList(container, {
+            blocks: [
+              { id: "b1", index: 1, command: "whoami", actor: "robot", exitCode: 0 },
+              { id: "b2", index: 2, command: "false", actor: "human", exitCode: 1 },
+            ],
+          });
+          const root = container.querySelector('.coterm-blocks');
+          const result = {
+            docPrimary: win.getComputedStyle(win.document.documentElement).getPropertyValue('--coterm-text-primary').trim(),
+            rootColor: win.getComputedStyle(root).color,
+            rootBg: win.getComputedStyle(root).backgroundColor,
+            robotColor: win.getComputedStyle(container.querySelector('.coterm-block-actor[data-actor="robot"]')).color,
+            gutterColor: win.getComputedStyle(container.querySelector('.coterm-block-gutter')).color,
+            failureColor: win.getComputedStyle(container.querySelector('.coterm-block-status')).color,
+          };
+          view.unmount();
+          frame.remove();
+          return result;
+        } finally {
+          URL.revokeObjectURL(url);
+        }
+      })()`);
+      assert.equal(fallbacks.docPrimary, "", "the isolated document really has no --coterm-text-primary");
+      assert.equal(fallbacks.rootColor, "rgb(204, 204, 204)", "real SDK block-list falls back to its own #cccccc");
+      assert.equal(fallbacks.rootBg, "rgb(30, 30, 30)", "real SDK block-list falls back to its own #1e1e1e surface");
+      assert.equal(fallbacks.robotColor, "rgb(117, 190, 255)", "real SDK robot actor falls back to its own #75beff");
+      assert.equal(fallbacks.gutterColor, "rgb(133, 133, 133)", "real SDK gutter falls back to its own #858585");
+      assert.equal(fallbacks.failureColor, "rgb(244, 135, 113)", "real SDK failure status falls back to its own #f48771");
     } finally {
       await page.close();
     }
@@ -323,6 +455,7 @@ test("Snapshot failure keeps the last valid attention state on screen", async (t
     return;
   }
   assertFreshBuild();
+  assertFreshTestArtifacts();
   const staticServer = await startStaticServer();
   serverUrl = staticServer.url;
   const scenario = {
@@ -396,6 +529,7 @@ test("Multi-card independent approvals and UI convergence in the browser", async
     return;
   }
   assertFreshBuild();
+  assertFreshTestArtifacts();
   const staticServer = await startStaticServer();
   serverUrl = staticServer.url;
   const multiScenario = {
@@ -474,47 +608,79 @@ test("Multi-card independent approvals and UI convergence in the browser", async
         { label: "all 3 approval cards rendered" },
       );
 
-      // 用户批准第一张卡片（inst-1）
+      // 用户批准第一张卡片（inst-1）——按卡片自身的 targetLabel 定位，避免依赖 DOM 顺序。
+      const cardTargets = async () => page.evaluate(`[...document.querySelectorAll('form[aria-label="Agent operation approval"]')]
+        .map((card) => card.querySelector('[id^="approval-target"]').textContent)`);
+      const initialTargets = await cardTargets();
+      assert.equal(initialTargets.length, 3, "all 3 cards rendered before any decision");
+      assert.ok(initialTargets[0].includes("Web-Server"), "card 1 identifies Web-Server");
+
       await page.evaluate(`(() => {
-        const cards = document.querySelectorAll('form[aria-label="Agent operation approval"]');
-        const submit = cards[0].querySelector('button[type="submit"]');
-        submit.click();
+        const cards = [...document.querySelectorAll('form[aria-label="Agent operation approval"]')];
+        const card = cards.find((item) => item.querySelector('[id^="approval-target"]').textContent.includes("Web-Server"));
+        card.querySelector('button[type="submit"]').click();
       })()`);
 
-      // 剩余 2 张卡片保留在屏幕上
+      // 剩余 2 张卡片保留在屏幕上，且身份是未决的那两张。
       await waitForValue(
         { send: page.send },
         `document.querySelectorAll('form[aria-label="Agent operation approval"]').length === 2`,
         { label: "2 approval cards remaining after card 1 approved" },
       );
+      const afterApprove = await cardTargets();
+      assert.ok(afterApprove.some((t) => t.includes("DB-Server")), "DB-Server card survives the first approval");
+      assert.ok(afterApprove.some((t) => t.includes("SSH Plugin")), "plugin-level card survives the first approval");
+      assert.ok(!afterApprove.some((t) => t.includes("Web-Server")), "the decided card is gone");
 
-      // 用户拒绝插件级卡片（op-plugin-1，当前第 2 张）
+      // 批准必须打到真实的 command + 参数 + 提案身份，并被未决卡片保留验证。
+      const approveCalls = await page.evaluate(`window.__cotermTest.approveCalls`);
+      assert.equal(approveCalls.length, 1, "exactly one approve command issued");
+      assert.equal(approveCalls[0].command, "approve_proposal", "instance-level card uses approve_proposal");
+      assert.equal(approveCalls[0].pluginInstanceId, "inst-1", "approve targets the card's own instance");
+      assert.equal(approveCalls[0].proposalId, "prop-1", "approve carries the card's proposal id");
+      assert.deepEqual(approveCalls[0].args, { command: "systemctl restart nginx" }, "approve carries the edited draft args");
+
+      // 用户拒绝插件级卡片（SSH Plugin）——按身份定位，不按索引。
       await page.evaluate(`(() => {
-        const cards = document.querySelectorAll('form[aria-label="Agent operation approval"]');
-        const reject = cards[1].querySelector('button[type="button"]');
-        reject.click();
+        const cards = [...document.querySelectorAll('form[aria-label="Agent operation approval"]')];
+        const card = cards.find((item) => item.querySelector('[id^="approval-target"]').textContent.includes("SSH Plugin"));
+        card.querySelector('button[type="button"]').click();
       })()`);
 
-      // 剩余 1 张卡片
+      // 剩余 1 张卡片，且必须是 DB-Server。
       await waitForValue(
         { send: page.send },
         `document.querySelectorAll('form[aria-label="Agent operation approval"]').length === 1`,
-        { label: "1 approval card remaining after card 3 rejected" },
+        { label: "1 approval card remaining after the plugin card is rejected" },
       );
+      const afterReject = await cardTargets();
+      assert.equal(afterReject.length, 1, "exactly one card remains");
+      assert.ok(afterReject[0].includes("DB-Server"), "the surviving card is the still-pending DB-Server card");
 
-      // 用户批准剩余卡片
+      const rejectCalls = await page.evaluate(`window.__cotermTest.rejectCalls`);
+      assert.equal(rejectCalls.length, 1, "exactly one reject command issued");
+      assert.equal(rejectCalls[0].command, "reject_plugin_proposal", "plugin-level card uses reject_plugin_proposal");
+      assert.equal(rejectCalls[0].pluginId, "ssh", "plugin-level reject targets the plugin id");
+      assert.equal(rejectCalls[0].proposalId, "prop-3", "plugin-level reject carries its proposal id");
+
+      // 用户批准剩余卡片。
       await page.evaluate(`(() => {
-        const cards = document.querySelectorAll('form[aria-label="Agent operation approval"]');
-        const submit = cards[0].querySelector('button[type="submit"]');
-        submit.click();
+        const cards = [...document.querySelectorAll('form[aria-label="Agent operation approval"]')];
+        cards[0].querySelector('button[type="submit"]').click();
       })()`);
 
-      // 验证收敛：全部卡片消失
+      // 验证收敛：全部卡片消失，且最后一次批准打的是 DB-Server。
       await waitForValue(
         { send: page.send },
         `document.querySelectorAll('form[aria-label="Agent operation approval"]').length === 0`,
         { label: "all cards cleared on convergence" },
       );
+      const finalApproves = await page.evaluate(`window.__cotermTest.approveCalls`);
+      assert.equal(finalApproves.length, 2, "two approvals in total, one per approved card");
+      assert.equal(finalApproves[1].command, "approve_proposal");
+      assert.equal(finalApproves[1].pluginInstanceId, "inst-2", "the last approval targets the DB-Server instance");
+      assert.equal(finalApproves[1].proposalId, "prop-2", "the last approval carries the DB-Server proposal id");
+      assert.deepEqual(finalApproves[1].args, { command: "journalctl -u nginx" }, "the last approval carries the DB-Server draft args");
     } finally {
       await page.close();
     }

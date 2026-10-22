@@ -5,6 +5,9 @@
  * 只模拟契约：命令名、参数名、返回形状都与 `apps/desktop/src-tauri/src/main.rs` 对齐。
  * 事件的 transport 细节（callback 注册、emit → `__TAURI_EVENT_PLUGIN_INTERNALS__`）按
  * @tauri-apps/api 的实现走，所以用例验证的是真实前端代码路径。
+ *
+ * 不模拟产品组件：SDK 的 block-list 由构建产物注入 `window.__cotermTestSdk`，
+ * 这里只负责把真实的模块搬到页面上。
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -15,6 +18,21 @@ const sshFrontendBundlePath = path.join(rootDir, "plugins/plugin-ssh/dist/fronte
 const sshFrontendSource = fs.existsSync(sshFrontendBundlePath)
   ? fs.readFileSync(sshFrontendBundlePath, "utf8")
   : null;
+
+/**
+ * 真实 Plugin SDK 模块的 ES 源码，供页面以动态 import 加载。
+ * 由 scripts/build-sdk-browser.mjs 从 `packages/plugin-sdk/src/components/block-list.ts` 生成；
+ * 缺失时直接报错，绝不回退到手工替身。
+ */
+export function sdkModuleSource() {
+  const modulePath = path.join(rootDir, "packages/plugin-sdk/dist/browser/block-list.js");
+  if (!fs.existsSync(modulePath)) {
+    throw new Error(
+      `packages/plugin-sdk/dist/browser/block-list.js is missing; run "pnpm build:sdk"`,
+    );
+  }
+  return fs.readFileSync(modulePath, "utf8");
+}
 
 export function makeHostMockSource(initial) {
   return `(() => {
@@ -31,11 +49,16 @@ export function makeHostMockSource(initial) {
     const approveCalls = [];
     const rejectCalls = [];
 
+    // 可挂起的 IPC：命令名 → 队列。用例显式推进，不靠固定 sleep 赌时序。
+    const gates = new Map();
+    const invocations = [];
+
     window.__cotermTest = {
       calls,
       approveCalls,
       rejectCalls,
       pendingSecrets,
+      invocations,
       setAttention(next, { emit = true } = {}) {
         attention = next;
         attentionVersion = next.version;
@@ -54,83 +77,87 @@ export function makeHostMockSource(initial) {
         if (enabled) failures[command] = { sequence: sequence ?? [1] };
         else delete failures[command];
       },
+      /** 挂起同一命令的后续调用，返回一个可手动放行的闸门。 */
+      gate(command) {
+        const queue = [];
+        gates.set(command, queue);
+        return {
+          /** 当前被挂起的调用数，用于等待代码真的走到这一步。 */
+          size: () => queue.length,
+          pending: () => invocations.filter((item) => item.command === command && !item.done),
+          release(result, index = 0) {
+            const entry = queue[index];
+            if (!entry) throw new Error("no gated invocation for " + command);
+            queue.splice(index, 1);
+            if (queue.length === 0) gates.delete(command);
+            entry.done = true;
+            entry.resolve(result);
+          },
+          fail(reason, index = 0) {
+            const entry = queue[index];
+            if (!entry) throw new Error("no gated invocation for " + command);
+            queue.splice(index, 1);
+            if (queue.length === 0) gates.delete(command);
+            entry.done = true;
+            entry.reject(String(reason));
+          },
+        };
+      },
+      /** 解除全部闸门，后续调用直接走真实 handler。 */
+      clearGates() {
+        const entries = [...gates.values()].flat();
+        gates.clear();
+        for (const entry of entries) entry.reject("已取消挂起");
+      },
+      /** 所有已发出的该命令调用数（含已完成）。 */
+      countCalls(command) {
+        return invocations.filter((item) => item.command === command).length;
+      },
       listenerCount() {
         return [...listeners.values()].reduce((total, ids) => total + ids.size, 0);
       },
-      secretDialog() {
-        const dialog = document.querySelector("dialog.host-secret-dialog");
-        if (!dialog) return null;
-        return {
+      dialogs() {
+        return [...document.querySelectorAll("dialog.host-secret-dialog")].map((dialog) => ({
           title: dialog.querySelector("h2")?.textContent ?? "",
           prompt: dialog.querySelector("label span")?.textContent ?? "",
           open: dialog.open,
-        };
+        }));
       },
-    };
-
-    window.__cotermTestMountBlockList = (container, initialData) => {
-      const blockStyle = \`
-        .coterm-blocks {
-          height: 100%;
-          overflow: auto;
-          color: var(--coterm-text-primary, #cccccc);
-          background: var(--coterm-surface, #1e1e1e);
-          font: 12px var(--coterm-font-sans, "Segoe UI", -apple-system, BlinkMacSystemFont, sans-serif);
+      submitSecret(value) {
+        const dialog = document.querySelector("dialog.host-secret-dialog");
+        if (!dialog) throw new Error("no secret dialog open");
+        const input = dialog.querySelector("input");
+        input.value = value;
+        dialog.querySelector("form").dispatchEvent(new Event("submit", { cancelable: true, bubbles: true }));
+      },
+      clickCancel() {
+        const dialog = document.querySelector("dialog.host-secret-dialog");
+        if (!dialog) throw new Error("no secret dialog open");
+        const button = [...dialog.querySelectorAll("button")].find((item) => item.type === "button");
+        button.click();
+      },
+      /** 真实 SDK 组件的动态 import；不用页面里的任何手写替身。 */
+      async loadSdk() {
+        return import("/__sdk/block-list.js");
+      },
+      /** 真实 SSH 前端的构建产物源码，供隔离 iframe 自行 import。 */
+      sshFrontendSource() {
+        return scenario.sshFrontendSource;
+      },
+      /**
+       * 真实 SSH 前端构建产物：与产品同一条加载路径（Blob → 动态 import），
+       * 让用例可以把它挂进一个不含任何主题变量的隔离容器里读它自己的 fallback。
+       */
+      async loadSshFrontend() {
+        const source = scenario.sshFrontendSource;
+        if (typeof source !== "string") throw new Error("SSH frontend bundle is unavailable");
+        const url = URL.createObjectURL(new Blob([source], { type: "text/javascript" }));
+        try {
+          return await import(url);
+        } finally {
+          URL.revokeObjectURL(url);
         }
-        .coterm-block {
-          display: grid;
-          grid-template-columns: 34px minmax(0, 1fr) auto auto;
-          min-height: 28px;
-          align-items: center;
-          border: 0;
-          border-bottom: 1px solid var(--coterm-border-subtle, #2d2d2d);
-          padding: 0;
-          width: 100%;
-          color: inherit;
-          background: transparent;
-          text-align: left;
-          cursor: pointer;
-        }
-        .coterm-block:hover { background: var(--coterm-surface-hover, #2a2d2e); }
-        .coterm-block[aria-selected="true"] { background: var(--coterm-accent-active, #094771); }
-        .coterm-block-gutter {
-          position: relative;
-          display: flex;
-          height: 100%;
-          align-items: center;
-          justify-content: center;
-          color: var(--coterm-text-muted, #858585);
-          font: 11px var(--coterm-font-mono, Consolas, monospace);
-        }
-        .coterm-block-actor { margin-right: 8px; color: var(--coterm-text-muted, #9da0a3); font-size: 10px; }
-        .coterm-block-actor[data-actor="robot"] { color: var(--coterm-accent-glow, #75beff); }
-        .coterm-block-status { min-width: 20px; color: var(--coterm-danger, #f48771); text-align: center; }
-      \`;
-      const root = document.createElement("div");
-      root.className = "coterm-blocks";
-      const sheet = document.createElement("style");
-      sheet.textContent = blockStyle;
-      container.replaceChildren(sheet, root);
-
-      for (const block of initialData.blocks) {
-        const row = document.createElement("div");
-        row.className = "coterm-block";
-        const gutter = document.createElement("span");
-        gutter.className = "coterm-block-gutter";
-        gutter.textContent = String(block.index);
-        const command = document.createElement("span");
-        command.className = "coterm-block-command";
-        command.textContent = block.command;
-        const actor = document.createElement("span");
-        actor.className = "coterm-block-actor";
-        actor.dataset.actor = block.actor;
-        actor.textContent = block.actor;
-        const status = document.createElement("span");
-        status.className = "coterm-block-status";
-        status.textContent = block.exitCode ? "!" : "";
-        row.append(gutter, command, actor, status);
-        root.append(row);
-      }
+      },
     };
 
     const failNext = (command) => {
@@ -184,14 +211,12 @@ export function makeHostMockSource(initial) {
       unsubscribe_plugin_events: () => null,
       get_operation: ({ pluginInstanceId, operationId }) =>
         (scenario.history ?? []).find((record) => record.operationId === operationId) ?? null,
-      approve_proposal: (args) => { approveCalls.push(args); return { operationId: args.proposalId, status: "completed" }; },
-      reject_proposal: (args) => { rejectCalls.push(args); return null; },
-      approve_plugin_proposal: (args) => { approveCalls.push(args); return { operationId: args.proposalId, status: "completed" }; },
-      reject_plugin_proposal: (args) => { rejectCalls.push(args); return null; },
+      approve_proposal: (args) => { approveCalls.push({ command: "approve_proposal", ...args }); return { operationId: args.proposalId, status: "completed" }; },
+      reject_proposal: (args) => { rejectCalls.push({ command: "reject_proposal", ...args }); return null; },
+      approve_plugin_proposal: (args) => { approveCalls.push({ command: "approve_plugin_proposal", ...args }); return { operationId: args.proposalId, status: "completed" }; },
+      reject_plugin_proposal: (args) => { rejectCalls.push({ command: "reject_plugin_proposal", ...args }); return null; },
       respond_secret: (args) => {
-        const dialog = document.querySelector("dialog.host-secret-dialog");
         pendingSecrets.push(args);
-        if (dialog && dialog.open) dialog.close();
         return null;
       },
       "plugin:event|listen": ({ event, handler }) => {
@@ -219,6 +244,14 @@ export function makeHostMockSource(initial) {
         if (failNext(command)) return Promise.reject("simulated " + command + " failure");
         const handler = handlers[command];
         if (!handler) return Promise.reject("unknown command " + command);
+        const record = { command, args: args ?? {}, done: false };
+        invocations.push(record);
+        const queue = gates.get(command);
+        if (queue) {
+          return new Promise((resolve, reject) => {
+            queue.push({ record, resolve: (value) => { record.done = true; resolve(value); }, reject: (reason) => { record.done = true; reject(reason); } });
+          });
+        }
         try {
           return Promise.resolve(handler(args ?? {}));
         } catch (error) {
@@ -253,3 +286,18 @@ export const defaultScenario = {
   failures: {},
   sshFrontendSource,
 };
+
+/** 构造一条基座会路由的 secret 交互（kind=secret）。 */
+export function secretInteraction(id, instance, { title = `${instance} password`, remainingMs = 60_000 } = {}) {
+  return {
+    interactionId: id,
+    pluginInstanceId: instance,
+    operationId: null,
+    kind: { kind: "secret", purpose: "ssh.password" },
+    title,
+    prompt: `Enter password for ${instance}`,
+    allowCancel: true,
+    remainingMs,
+    deadline: "2026-10-22T00:00:00Z",
+  };
+}

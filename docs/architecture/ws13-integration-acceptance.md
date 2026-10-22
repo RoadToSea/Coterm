@@ -1,6 +1,6 @@
 # WS-13 集成与回归验收记录
 
-本文档记录 WS-13 对 WS-10（宿主契约与坏包隔离）与 WS-11（UI 视觉 token 与响应式窄窗布局）的集成收敛、缺口修复与全量回归验收结果。
+本文档记录 WS-13 对 WS-10（宿主契约与坏包隔离）与 WS-11（UI 视觉 token 与响应式窄窗布局）的集成收敛、缺口修复与回归验收结果。
 
 ---
 
@@ -16,63 +16,90 @@
 | **平台原起点** | - | - | `7b0a94b6b96c6da7d541ca853a2998ba27a36a0c` | 平台 WS-13 初始起点 |
 | **中间恢复点** | deepseek | `0ac643c2` | `0ac643c234afef0e99cbd65637fd2a20bc30b0ac` | WS-10/11 合并（3ec69c2）及测试 harness 变更 |
 | **恢复合并点** | deepseek | `b174bcd3` | `b174bcd3aa0b8ea0e28f57e22ed50915a5a74e4f` | 恢复点 merge 到分配分支 |
-| **WS-13 本轮 START** | RoadToSea | `agent/gemini/ws-13` | `9808d1266eb7b1a75ef2a5ee0569a2c06917582f` | 平台本次运行分配的起始 HEAD（必须保留为祖先） |
+| **第三轮审阅基线** | - | `30e717f` | `30e717fc44f9e9c7115049fd1207b97b0b748cd5` | 上一轮交付，本轮在此基础上返工 |
+| **WS-13 本轮 START** | - | `agent/deepseek/ws-13` | `9808d1266eb7b1a75ef2a5ee0569a2c06917582f` | 平台本次运行分配的起始 HEAD（必须保留为祖先） |
 
 > **SHA 更正说明**：WS-11 最终交付报告中笔误书写了一个不存在的 SHA，已核验远端真实追踪提交为 `6fbb17c1aac2e4d34dee946f148504e88406eaeb`，无需重派改写。
 
 ---
 
-## 2. 缺口定位与修复说明
+## 2. 本轮返工项
 
-### 2.1 Harness 键盘事件激活（CDP Input.dispatchKeyEvent）
-- **问题**：在无头浏览器中，以 `for (const key of ["keyDown", "keyUp"])` 发送事件无法触发普通 `<button>` 的原生 click/activate 逻辑，导致 768px 键盘展开断言超时；原有再折叠用例使用了 `.click()` 冒充键盘行为。
-- **修复**：按 CDP 规范补齐完整的 Enter 键事件三部曲（`rawKeyDown` + `char` + `keyUp`，并携带 `\r` 字符序列）。展开与再折叠均通过焦点定位与原生按键事件激活，彻底移除 `.click()` 冒充。
+### 2.1 P1：真实 HostInteractions 的旧 finally 干扰新交互
 
-### 2.2 Tauri mock IPC 事件注册契约
-- **问题**：
-  1. `@tauri-apps/api/event` 的 `listen` 首先调用 `transformCallback` 获取一个数字 ID，再调用 `plugin:event|listen` 传入该 ID。原 mock 在 `plugin:event|listen` 里再次分配自增 ID，导致 `listeners` 中存入数字而非回调函数，`emitAttention` 触发时抛出 `TypeError: callback is not a function`。
-  2. `setAttention` 内部直接调用未挂载的全局 `emitAttention`，导致 `ReferenceError: emitAttention is not defined`。
-- **修复**：
-  1. `plugin:event|listen` 直接将传入的 callback ID 存入对应事件集合并返回，与 `@tauri-apps/api` 契约严格对齐，支持正常取消注册与准确计数。
-  2. `setAttention` 修正为通过 `window.__cotermTest.emitAttention` 调用，且 `emitAttention` 保持与 `attention.version` 严格同步。
+- **缺陷**：`apps/desktop/src/components/host/HostInteractions.tsx` 里，`observe` 发现 A 已消失且 B 待处理时会 `cancelSecretInput(A)`、清空 `active`、再弹 B；随后 A 的 Promise `finally` 无条件把 `active` 置空并补取状态，于是又弹一次 B。而 `promptForSecret` 按同一个 key 取消同名弹窗，重复 B 会取消第一次 B，形成收敛重入。
+- **复现**：新用例 `tests/host-interactions-component.test.mjs` 挂载真实组件，依次观察 `[A]`、`[A消失,B]`。对旧实现，收敛这一步本身就会把渲染进程拖死（`Runtime.evaluate` 20s 超时），断言以 `page must stay responsive across A departing and B arriving` 报出。
+- **修复**（接口不变）：
+  1. 每次弹窗分配递增的 `ticket`，`active` 记录自己的 `ticket`；
+  2. `then` / `catch` / `finally` 一律先核对 `active?.ticket === mine`，旧完成回调只能清理自己；
+  3. 已结算的请求记入 `settled`，宿主状态还没跟上时不再重开同一项，宿主不再列出后自动清除；
+  4. 补取的 `hostAttention()` 返回后同样核对 `disposed` 与 `active`，卸载后不弹窗；
+  5. 取消/过期后队列继续推进下一条，没有改回轮询，也没有丢弃新请求。
 
-### 2.3 宿主状态订阅多路复用与并发健壮性（subscribeHostAttention）
-- **问题**：`HostApprovals` 与 `HostInteractions` 分别调用 `subscribeHostAttention`。原有逻辑在并发注册、提早注销、快照在途时存在竞态；此外，快照拉取异常时若未清空 `buffered`，会导致后续相同版本的重新通知被去重死锁，同时若在在途快照未完成前所有订阅者注销，迟到的旧快照会污染新生命周期。
-- **修复**：在 `apps/desktop/src/host-api.ts` 中以单例多路复用（Multiplexed Shared State）模式实现完整防护：
-  1. **共享 `listenPromise` 与提早中止回滚**：首个订阅者创建底层 Tauri 事件监听，若在 listen 完成前订阅者注销或抛出异常，立即触发 unlisten 回滚，避免孤立监听；
-  2. **生命周期代次计数器（Generation Counter）**：每次所有订阅者归零清空状态时递增 `generation`。所有在途快照返回、事件回调与错误广播必须核验 `gen === sharedAttention.generation`，彻底杜绝迟到响应污染新代次；
-  3. **订阅者归零时废弃在途快照**：当 `subscribers.size === 0` 时，在途 `host_attention` 快照返回直接丢弃，不更新全局缓存或唤醒已注销处理函数；
-  4. **失败恢复与去重死锁防范**：快照拉取失败时清空 `buffered` 版本缓存，使得外部下一次重新通知同一版本号时能正常触发拉取，同时完整保留 `lastSnapshot` 供 UI 界面维持当前展示，不闪烁、不假收敛。
+### 2.2 P1：用真实组件和可控 IPC 补足交互测试
 
-### 2.4 审批提示与逐包诊断
-- **审批错误前缀**：`HostApprovals.tsx` 补充规范的 `Unable to follow Agent approvals: ` 前缀。
-- **逐包诊断展示**：`App.tsx` 坏包条目显示优化为 `issue.pluginId ? `${issue.pluginId} (${issue.directory})` : issue.directory`，同时显示插件标识与文件目录，精准定位坏包。
+新增 `tests/host-interactions-component.test.mjs`（4 个用例，真实浏览器）：
 
-### 2.5 真实 SSH 前端 Shadow DOM 与 SDK Block-list 挂载
-- **挂载与样式穿透**：通过真实编译构建产物 `plugins/plugin-ssh/dist/frontend/index.js`，在工作区中直接挂载 ShadowRoot 并验证 `.layout`、`.bar`、`.terminal` 真实节点；使用 Plugin SDK `mountBlockList` 在真实页面中渲染并验证其在真实 token 主题下的继承与 fallback 计算样式。
+| 用例 | 覆盖 |
+| :--- | :--- |
+| a departed request's late finally… | A 消失、B 到达；A 的迟到 finally 不得重开 A 或清空 B；`host_attention` 不得被额外补取 |
+| late IPC completion… | `respond_secret` 用可控闸门挂起；旧投递完成后不得清空新 active、不得重开旧项 |
+| cancel, expiry, instance destroy, plugin stop and unmount | 用户取消、宿主过期、实例销毁、插件停止、组件卸载；卸载后监听器归零、不再弹窗 |
+| duplicate and out-of-order… | 重复版本、更旧版本、内容不变的更新版本都不得二次弹窗；已结算请求不被重复版本翻出 |
+
+实现要点：
+- 页面只挂 `HostInteractions`（`tests/support/host-interactions-entry.tsx` → Vite 打成 `apps/desktop/dist/host-interactions/entry.js`），其余全部走真实路径（`host-api`、`secret-input`、React、`@tauri-apps/api`）。不挂真实 `App` 是因为它同时挂 `HostApprovals`，两份订阅记录会互相干扰，反而看不出是谁开的弹窗。
+- 宿主替身新增 `gate()` / `release()` / `clearGates()` 与 `invocations` 记录，用可控 Promise 推进时序；不用固定 sleep 模拟竞态。
+- `respond_secret` 的 `interactionId` 与 `value` 逐条核对，取消后迟到 submit 不提交秘密，也不串到其他实例。
+
+### 2.3 P2：移除测试替身冒充真实 SDK 的覆盖声明
+
+- **删除**：`tests/support/host-mock.js` 里手写的 `__cotermTestMountBlockList`（自写 CSS + `div` 循环）已整体移除，`tests/` 下不再有任何引用。
+- **改为真实组件**：`scripts/build-sdk-browser.mjs` 用 Node 自带类型剥离，把 `packages/plugin-sdk/src/components/block-list.ts` 生成 `packages/plugin-sdk/dist/browser/block-list.js`，页面通过 `import("/__sdk/block-list.js")` 加载同一份源文件。没有复制实现，也没有打包替换。
+- **新增断言**（`tests/browser-layout.test.mjs`）：
+  - 行是 `BUTTON` 而非 `div`；根节点 `role="list"`、`aria-label="Command blocks"`；
+  - token 继承：文字 `rgb(204, 204, 204)`、背景 `rgb(30, 30, 30)`、robot 标签 `rgb(117, 190, 255)`；
+  - 真实渲染内容：actor 显示 `Robot`/`Human` 而非枚举值，非零退出显示 `!` 且 `title="Exit code 1"`，零退出无标记；
+  - 选择状态：点击后仅该行 `aria-pressed="true"`，回调收到 `["b2"]`；
+  - `update()` 重建行并按传入的 `selected` 重置选择；
+  - 销毁：`unmount()` 清空容器，之后 `update()` 不再渲染。
+- **fallback 改为真实回退**：不再给额外 span 设置不存在的变量。真实组件被挂进同源空白 iframe（文档内确实没有 `--coterm-text-primary`，先断言为空），读组件自身 CSS 的 fallback 计算值。SDK 与 SSH 前端各测一遍，分别断言：
+
+| 目标 | 断言值 | 来源 |
+| :--- | :--- | :--- |
+| SDK `.coterm-blocks` 文字 | `rgb(204, 204, 204)` | 组件自身 `#cccccc` |
+| SDK `.coterm-blocks` 背景 | `rgb(30, 30, 30)` | 组件自身 `#1e1e1e` |
+| SDK robot 标签 | `rgb(117, 190, 255)` | 组件自身 `#75beff` |
+| SDK 行号槽 | `rgb(133, 133, 133)` | 组件自身 `#858585` |
+| SDK 失败标记 | `rgb(244, 135, 113)` | 组件自身 `#f48771` |
+| SSH `:host` | `rgb(204, 204, 204)` | 前端自身 `#cccccc` |
+| SSH `.layout` | `rgb(30, 30, 30)` | 前端自身 `#1e1e1e` |
+| SSH `.bar` | `rgb(37, 37, 38)` | 前端自身 `#252526` |
+
+- **多审批断言补强**：不再只数卡片。按 `targetLabel` 定位卡片，断言批准/拒绝打到真实的 command 名与参数：`approve_proposal`（`inst-1` / `prop-1` / `{command:"systemctl restart nginx"}`）、`reject_plugin_proposal`（`ssh` / `prop-3`）、最后一次 `approve_proposal`（`inst-2` / `prop-2` / `{command:"journalctl -u nginx"}`）；每一步都核对保留下来的是未决的那两张/那一张。
+
+### 2.4 测试命名与证明范围更正
+
+- 原 `Approvals UI behavior: …` 实际是手写 `map`/`filter`，改名为 `hostAPI routes instance-level and plugin-level approvals to distinct commands`，只声明 hostAPI 路由；卡片渲染与身份断言移到浏览器用例。
+- 原 `Interactions UI behavior: …` 只调用 `promptForSecret`/`cancelSecretInput`，且用 `timeoutMs=10` 冒充过期（真实实现下限 1000ms）。现改名为 `promptForSecret: resolves submitted once, ignores later submits, and binds the cancellation key`，只测 `secret-input` 自身；过期场景改由浏览器用例走宿主收敛路径验证。**本轮没有任何用例声称用 10ms 超时验证过期。**
+- 订阅代次用例里原来的 `await new Promise((r) => setTimeout(r, 20))` 改为等待真实调用发生的可控 Promise。
 
 ---
 
 ## 3. 证明范围与实测证据
 
-### 3.1 证明范围明确划分（Proof Scope Statement）
-- **Rust 后端协议核心（Core Protocol & Security Boundaries）**：
-  由 `cargo test --workspace`（44 个单元与集成测试）提供不可替代的安全证明：
-  - 插件进程生命周期隔离（崩溃检测与重启）；
-  - Stdio JSON-RPC 帧编解码与传输契约；
-  - SSH 协议底层网络与会话状态机；
-  - 未批准 Proposal 绝不下发底层协议执行；
-  - Secret 凭据与 `pluginInstanceId` 严格隔离，严禁明文持久化或跨实例泄露。
-- **前端状态契约与 UI 交互（Frontend State Contracts & UI Convergence）**：
-  由 `tests/*.test.mjs`（17 个 Node/CDP 自动化测试）提供前端与用户界面证明：
-  - `subscribeHostAttention` 在单线程事件循环下的代次管理、并发初始化互斥、失败重试与版本防锁死；
-  - 多审批卡片在屏幕上同时呈现、实例级与插件级操作独立审批/拒绝、决定后剩余卡片保留直至最终收敛；
-  - 凭据对话框在生命周期内的正常提交、用户/宿主取消、超时过期清理以及实例销毁时收敛，杜绝迟到输入提交；
-  - 语义 CSS token 在 `:root`、Tailwind、插件 Shadow DOM 以及 SDK 外部容器中的层叠继承与 fallback 计算样式；
-  - 窄窗 768px 断点自适应折叠与真实 CDP 键盘 Enter/Escape 双向折叠展开。
+### 3.1 证明范围划分
 
-### 3.2 响应式布局实测数据（无重叠与横向溢出）
-通过 CDP 测量当前构建（`apps/desktop/dist`）的实际渲染指标：
+- **Rust 协议核心与基座安全边界**：`cargo test --workspace`（44 个）。覆盖插件进程生命周期、Stdio JSON-RPC 帧、SSH 会话状态机、未批准 Proposal 不下发、Secret 与 `pluginInstanceId` 绑定。
+- **host-api 订阅状态机**（`tests/host-attention-state.test.mjs`，8 个，无 DOM）：并发注册只建一个监听、两种注销顺序、listen 失败回滚、迟到快照不污染新代次、在途事件补取、失败恢复与版本不锁死、审批路由命令。
+- **`secret-input` 自身行为**（同文件 1 个）：单次投递、结算后不再投递、`cancellationKey` 生效。
+- **真实组件交互生命周期**（`tests/host-interactions-component.test.mjs`，4 个，真实浏览器 + 真实构建产物 + 可控 IPC）：见 2.2。
+- **真实构建产物的布局与组件**（`tests/browser-layout.test.mjs`，3 个，真实浏览器）：布局断点、逐包诊断、键盘折叠、真实 SSH Shadow DOM、真实 SDK `mountBlockList`、真实 fallback、多卡片审批。
+- **不覆盖**：真实 SSH 连接、真实 Tauri 运行时、硬件/串口。IPC 层是契约替身，命令名与参数按 `apps/desktop/src-tauri/src/main.rs` 对齐，不等于 Rust 端到端验证。
+
+### 3.2 响应式布局实测数据
+
+通过 CDP 测量当前构建（`apps/desktop/dist`）：
 
 | 视口宽度 | 插件侧栏 (w) | 实例侧栏 (w / left / right) | 工作区 (w / left) | scrollWidth / clientWidth | 状态与断言 |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -89,55 +116,42 @@
   - `attachments/layout-768px-expanded.png`
 
 ### 3.3 计算样式与 Shadow DOM 继承实测
-- **真实 SSH 前端 Shadow DOM 计算样式**：
-  - `:host` 颜色：`rgb(204, 204, 204)`（继承 `--coterm-text-primary`）
-  - `.layout` 背景：`rgb(30, 30, 30)`（继承 `--coterm-surface`）
-  - `.bar` 背景：`rgb(37, 37, 38)`（继承 `--coterm-surface-raised`）
-  - `.bar strong` 颜色：`rgb(204, 204, 204)`（继承 `--coterm-text-primary`）
-- **SDK Block-list 组件计算样式**：
-  - 容器文字颜色：`rgb(204, 204, 204)`（继承 `--coterm-text-primary`）
-  - 容器背景：`rgb(30, 30, 30)`（继承 `--coterm-surface`）
-  - Robot Actor 标签：`rgb(117, 190, 255)`（继承 `--coterm-accent-glow`）
-  - 错误状态标签：`rgb(244, 135, 113)`（继承 `--coterm-danger`）
-  - 缺失 token fallback 计算值：`rgb(250, 204, 21)`（准确回退至声明 fallback）
+
+- **真实 SSH 前端 Shadow DOM（继承主题）**：`:host` `rgb(204, 204, 204)`、`.layout` `rgb(30, 30, 30)`、`.bar` `rgb(37, 37, 38)`、`.bar strong` `rgb(204, 204, 204)`，`.terminal` 存在。
+- **真实 SDK block-list（继承主题）**：文字 `rgb(204, 204, 204)`、背景 `rgb(30, 30, 30)`、robot `rgb(117, 190, 255)`。
+- **无主题文档中的自身 fallback**：见 2.3 表格。
 
 ---
 
-## 4. 测试套件与构建运行计数
+## 4. 测试与构建运行结果（本轮实测）
 
-| 测试套件 / 命令 | 耗时 | 测试数 | 结果 | 状态 |
-| :--- | :--- | :--- | :--- | :--- |
-| `cargo check --workspace` | ~7s | 全部 crate | 0 errors | **Pass** |
-| `cargo test --workspace` | ~2.5s | 44 tests | 44 pass / 0 fail | **Pass** |
-| `cargo clippy --workspace -- -D warnings` | ~8s | 全部 crate | 0 warnings | **Pass** |
-| `pnpm build` (`coterm-desktop`) | ~3.2s | 前端生产构建 | 0 errors | **Pass** |
-| `pnpm --filter coterm-plugin-ssh-ui build` | ~1.2s | SSH 插件前端 | 0 errors | **Pass** |
-| `pnpm test` (`node --test tests/*.test.mjs`) | ~3.5s | 17 tests | 17 pass / 0 fail | **Pass** |
+| 命令 | 结果 |
+| :--- | :--- |
+| `pnpm install --no-frozen-lockfile` | 通过（锁文件未入库，见 `pnpm-lock.yaml` 在 `.gitignore`） |
+| `pnpm build` | 通过，0 errors |
+| `pnpm --filter coterm-plugin-ssh-ui build` | 通过，0 errors |
+| `pnpm test` | **21 tests / 21 pass / 0 fail / 0 skipped** |
+| `cargo check --workspace` | 通过，0 errors |
+| `cargo test --workspace` | **44 tests / 44 pass / 0 fail** |
+| `cargo clippy --workspace --all-targets -- -D warnings` | 通过，0 warnings |
 
-- **Node 测试用例细目（17 pass）**：
-  - `tests/browser-layout.test.mjs` (3 tests):
-    1. Browser layout, catalog diagnostics, and keyboard collapse on the current build
-    2. Snapshot failure keeps the last valid attention state on screen
-    3. Multi-card independent approvals and UI convergence in the browser
-  - `tests/host-attention-state.test.mjs` (8 tests):
-    4. subscribeHostAttention: concurrent registration creates only one listen and unlistens cleanly (order 1)
-    5. subscribeHostAttention: different unlisten order (order 2: stop2 then stop1)
-    6. subscribeHostAttention: listen failure rolls back subscription and allows retry
-    7. subscribeHostAttention: late in-flight snapshot does not pollute new generation or resurrect cache
-    8. subscribeHostAttention: in-flight snapshot catches up on events arrived during request
-    9. subscribeHostAttention: snapshot failure keeps last valid state and recovers on re-notification
-    10. Approvals UI behavior: multiple cards displayed simultaneously, independent approve/reject, and convergence
-    11. Interactions UI behavior: secret dialog lifecycle, cancellation, expiry, and instance isolation
-  - `tests/visual-tokens-layout.test.mjs` (6 tests):
-    12. Desktop CSS defines required semantic tokens in :root
-    13. Tailwind configuration maps coterm semantic tokens to CSS custom properties
-    14. SSH Plugin Shadow DOM styles use semantic tokens with readable fallbacks
-    15. Plugin SDK block-list component styles use semantic tokens with fallbacks
-    16. App.tsx implements responsive navigation collapse and accessible controls
-    17. Layout width simulation at 1280px, 1024px, and 768px
+- **Node 用例细目（21 pass）**：
+  - `tests/browser-layout.test.mjs` (3)：布局/诊断/键盘折叠、快照失败保留、多卡片审批与身份断言。
+  - `tests/host-attention-state.test.mjs` (8)：订阅状态机 6 个 + 审批路由 1 个 + `secret-input` 1 个。
+  - `tests/host-interactions-component.test.mjs` (4)：真实组件交互生命周期。
+  - `tests/visual-tokens-layout.test.mjs` (6)：CSS token 定义、Tailwind 映射、SSH/SDK 样式源检查、响应式结构、宽度模拟。
+- **浏览器可用性**：本机存在 `C:\Program Files\Google\Chrome\Application\chrome.exe`，浏览器用例真实执行，未 skip。
+- **测试产物构建**：`pnpm test` 会先跑 `pnpm test:build`，生成 SDK 浏览器模块与交互挂载入口；`assertFreshTestArtifacts()` 会在产物缺失或比源码旧时直接失败，不允许静默测旧实现。
 
 ---
 
 ## 5. 结论
 
-WS-10 与 WS-11 的功能点、契约与 UI 全面收敛并通过全量自动化测试。所有返工评审要求（多路复用代次管理、未决快照隔离、清空 `buffered` 防死锁、多卡片独立审批收敛、凭据隔离、真实 SSH Shadow DOM 挂载、纯键盘无 `.click()` 折叠以及精准 SHA 说明）均已严格闭环，随时可供合并交付。
+本轮两个 P1 与一个 P2 均已闭环，且都有可复现的对照证据：
+
+- 交互队列缺陷：修复前 4 个真实组件用例全部失败（其中首个用例表现为渲染进程被重开风暴拖死），修复后全部通过；
+- 真实组件与可控 IPC：取消、过期、实例销毁、插件停止、卸载、迟到 finally、迟到 IPC、重复/乱序版本均已沿真实订阅与响应路径覆盖；
+- SDK 覆盖声明：手写替身已删除，改为加载同一份源文件的构建产物，token 继承、选择状态、销毁与 fallback 都有实测断言；
+- 文档不再声称「所有返工已完成」，测试计数为本轮真实运行结果。
+
+仍未覆盖的部分（真实 SSH 连接、真实 Tauri 运行时、平台 PR 关联）见 3.1 与交付评论。

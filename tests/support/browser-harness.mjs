@@ -59,7 +59,31 @@ export function assertFreshBuild() {
   if (!fs.existsSync(sshDist)) {
     throw new Error(`plugins/plugin-ssh/dist/frontend/index.js is missing; run "pnpm --filter coterm-plugin-ssh-ui build"`);
   }
-  const builtAt = fs.statSync(entry).mtimeMs;
+  assertNotStale(entry, [path.join(rootDir, "apps/desktop/src"), path.join(rootDir, "packages/plugin-sdk/src")]);
+}
+
+const HOST_INTERACTIONS_ENTRY = path.join(distDir, "host-interactions/entry.js");
+const SDK_BROWSER_MODULE = path.join(rootDir, "packages/plugin-sdk/dist/browser/block-list.js");
+
+/** 交互与 SDK 组件的测试产物：缺失或比源码旧都必须失败，不许静默测旧实现。 */
+export function assertFreshTestArtifacts() {
+  for (const [artifact, sources] of [
+    [HOST_INTERACTIONS_ENTRY, [
+      path.join(rootDir, "apps/desktop/src/components/host/HostInteractions.tsx"),
+      path.join(rootDir, "apps/desktop/src/secret-input.ts"),
+      path.join(rootDir, "apps/desktop/src/host-api.ts"),
+    ]],
+    [SDK_BROWSER_MODULE, [path.join(rootDir, "packages/plugin-sdk/src/components/block-list.ts")]],
+  ]) {
+    if (!fs.existsSync(artifact)) {
+      throw new Error(`${path.relative(rootDir, artifact)} is missing; run "pnpm test:build"`);
+    }
+    assertNotStale(artifact, sources);
+  }
+}
+
+function assertNotStale(artifact, sources) {
+  const builtAt = fs.statSync(artifact).mtimeMs;
   const stale = [];
   const walk = (dir) => {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -72,16 +96,48 @@ export function assertFreshBuild() {
       }
     }
   };
-  walk(path.join(rootDir, "apps/desktop/src"));
-  walk(path.join(rootDir, "packages/plugin-sdk/src"));
+  for (const source of sources) {
+    if (fs.statSync(source).isDirectory()) walk(source);
+    else if (fs.statSync(source).mtimeMs > builtAt) stale.push(path.relative(rootDir, source));
+  }
   if (stale.length > 0) {
-    throw new Error(`dist is older than these sources; rebuild before testing: ${stale.slice(0, 5).join(", ")}`);
+    throw new Error(
+      `${path.relative(rootDir, artifact)} is older than these sources; run "pnpm test:build": ${stale.slice(0, 5).join(", ")}`,
+    );
   }
 }
+
+/**
+ * 只挂 HostInteractions 的页面。产品 index.html 会一起挂 HostApprovals，
+ * 两份订阅记录混在一起就分不清是谁开的弹窗。
+ */
+const HOST_INTERACTIONS_HTML = `<!doctype html>
+<html lang="en">
+  <head><meta charset="UTF-8" /><title>HostInteractions</title></head>
+  <body><div id="root"></div><script type="module" src="/host-interactions/entry.js"></script></body>
+</html>`;
 
 export async function startStaticServer() {
   const server = http.createServer((request, response) => {
     const requestPath = decodeURIComponent((request.url ?? "/").split("?")[0]) || "/";
+    if (requestPath === "/__host-interactions.html") {
+      response.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+      response.end(HOST_INTERACTIONS_HTML);
+      return;
+    }
+    // 真实 SDK 模块：直接给源文件的构建产物，测试里不存在替身。
+    const sdkMatch = requestPath.match(/^\/__sdk\/(.+)$/);
+    if (sdkMatch) {
+      const sdkPath = path.join(rootDir, "packages/plugin-sdk/dist/browser", sdkMatch[1]);
+      if (!sdkPath.startsWith(path.join(rootDir, "packages/plugin-sdk/dist/browser")) || !fs.existsSync(sdkPath)) {
+        response.writeHead(404, { "Content-Type": "text/plain" });
+        response.end("Not Found");
+        return;
+      }
+      response.writeHead(200, { "Content-Type": MIME[path.extname(sdkPath)] ?? "application/octet-stream" });
+      fs.createReadStream(sdkPath).pipe(response);
+      return;
+    }
     const relative = requestPath === "/" ? "index.html" : requestPath.replace(/^\/+/, "");
     const filePath = path.join(distDir, relative);
     if (!filePath.startsWith(distDir) || !fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {

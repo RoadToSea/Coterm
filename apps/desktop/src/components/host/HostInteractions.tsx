@@ -10,13 +10,23 @@ export function HostInteractions() {
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
     let disposed = false;
-    let active: { id: string; instance: string } | null = null;
     let unsubscribe: (() => void) | undefined;
+    /** 每次弹窗的身份：旧完成回调只允许清理自己，不能动更新的那一项。 */
+    let ticket = 0;
+    let active: { id: string; instance: string; ticket: number } | null = null;
+    /** 本组件已经自行收敛的请求；宿主状态还没跟上时不要立刻重开同一项。 */
+    const settled = new Set<string>();
 
-    const prompt = (attention: HostAttention) => {      if (disposed || active) return;
-      const request = attention.interactions.find((item) => item.remainingMs > MIN_REMAINING_MS);
+    const owns = (mine: number) => !disposed && active?.ticket === mine;
+
+    const prompt = (attention: HostAttention) => {
+      if (disposed || active) return;
+      const request = attention.interactions.find(
+        (item) => item.remainingMs > MIN_REMAINING_MS && !settled.has(item.interactionId),
+      );
       if (!request) return;
-      active = { id: request.interactionId, instance: request.pluginInstanceId };
+      const mine = ++ticket;
+      active = { id: request.interactionId, instance: request.pluginInstanceId, ticket: mine };
       void promptForSecret<void>(request.pluginInstanceId, {
         title: request.title,
         prompt: request.prompt,
@@ -27,17 +37,21 @@ export function HostInteractions() {
         async (_instance, _purpose, value) => hostAPI.respondSecret(request.interactionId, value),
         `backend:${request.interactionId}`,
       ).then(async (result) => {
-        if (!disposed && result.outcome !== "submitted") {
-          // Expiry/cancellation may already have been handled by the host.
+        // 迟到的结果可能属于已被新交互取代的弹窗：既不能清空新的 active，
+        // 也不能把秘密提交给别的实例或重新打开同一项。
+        if (!owns(mine)) return;
+        settled.add(request.interactionId);
+        if (result.outcome !== "submitted") {
+          // 过期/取消由宿主收尾；这里只通知，不改队列。
           await hostAPI.respondSecret(request.interactionId, null).catch(() => {});
         }
-      }).catch((reason) => { if (!disposed) setError(String(reason)); })
+      }).catch((reason) => { if (owns(mine)) setError(String(reason)); })
         .finally(() => {
+          if (!owns(mine)) return;
           active = null;
-          if (disposed) return;
           // 下一条交互不会产生新的 changed 事件（宿主状态没变），主动补取一次。
           void hostAPI.hostAttention()
-            .then((attention) => prompt(attention))
+            .then((attention) => { if (!disposed && !active) prompt(attention); })
             .catch((reason) => { if (!disposed) setError(`Unable to reload user interactions: ${String(reason)}`); });
         });
     };
@@ -45,6 +59,10 @@ export function HostInteractions() {
     const observe = (attention: HostAttention) => {
       if (disposed) return;
       setError(null);
+      // 宿主已不再列出的请求不必继续占位，避免收敛后残留状态挡住同 id 的新请求。
+      for (const id of settled) {
+        if (!attention.interactions.some((request) => request.interactionId === id)) settled.delete(id);
+      }
       if (active && !attention.interactions.some((request) => request.interactionId === active?.id)) {
         // 过期、取消、插件停止或实例销毁：宿主已收敛，弹窗必须跟着关闭。
         cancelSecretInput(`backend:${active.id}`);

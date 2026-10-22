@@ -12,6 +12,8 @@ pnpm-lock.yaml
 apps/desktop/src-tauri/target/
 apps/desktop/dist/
 plugins/*/dist/
+# 测试用的 SDK 浏览器模块与交互挂载入口，由 pnpm test:build 生成
+packages/plugin-sdk/dist/
 
 # IDE / Editor
 .vscode/
