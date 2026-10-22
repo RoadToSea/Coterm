@@ -28,7 +28,8 @@ use tokio::{
 const EVENT_QUEUE_CAPACITY: usize = 64;
 const MAX_CONTROL_LINE_BYTES: usize = 1024 * 1024;
 const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
-const MAX_MANIFEST_BYTES: u64 = 1024 * 1024;
+pub(crate) const MAX_MANIFEST_BYTES: u64 = 1024 * 1024;
+
 const SUPPORTED_HOST_FEATURES: &[&str] = &[
     "instances",
     "backend-calls",
@@ -87,7 +88,7 @@ pub async fn load_plugin_package(
     })
 }
 
-fn validate_manifest(manifest: &PluginManifest) -> Result<(), RuntimeError> {
+pub(crate) fn validate_manifest(manifest: &PluginManifest) -> Result<(), RuntimeError> {
     if manifest.manifest_version != 1 {
         return Err(protocol_error("plugin_manifest_version_unsupported"));
     }
@@ -122,7 +123,7 @@ fn is_valid_plugin_id(id: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
 }
 
-fn resolve_package_file(
+pub(crate) fn resolve_package_file(
     root: &Path,
     relative: &str,
     invalid_code: &str,

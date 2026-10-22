@@ -1,17 +1,56 @@
 import type { BlockListProps, BlockListView, CommandBlock } from "../plugin-api";
 
 const style = `
-  .coterm-blocks { height:100%; overflow:auto; color:#cccccc; background:#1e1e1e; font:12px "Segoe UI",sans-serif; }
-  .coterm-block { display:grid; grid-template-columns:34px minmax(0,1fr) auto auto; min-height:28px; align-items:center; border:0; border-bottom:1px solid #2d2d2d; padding:0; width:100%; color:inherit; background:transparent; text-align:left; cursor:pointer; }
-  .coterm-block:hover { background:#2a2d2e; }
-  .coterm-block[aria-selected="true"] { background:#094771; }
-  .coterm-block-gutter { position:relative; display:flex; height:100%; align-items:center; justify-content:center; color:#858585; font:11px Consolas,monospace; }
-  .coterm-block[aria-selected="true"] .coterm-block-gutter { color:#ffffff; }
-  .coterm-block[aria-selected="true"] .coterm-block-gutter::before { position:absolute; inset:0 auto 0 0; width:3px; background:#3794ff; content:""; }
-  .coterm-block-command { overflow:hidden; padding:5px 8px; text-overflow:ellipsis; white-space:nowrap; font:12px Consolas,monospace; }
-  .coterm-block-actor { margin-right:8px; color:#9da0a3; font-size:10px; }
-  .coterm-block-actor[data-actor="robot"] { color:#75beff; }
-  .coterm-block-status { min-width:20px; color:#f48771; text-align:center; }
+  .coterm-blocks {
+    height: 100%;
+    overflow: auto;
+    color: var(--coterm-text-primary, #cccccc);
+    background: var(--coterm-surface, #1e1e1e);
+    font: 12px var(--coterm-font-sans, "Segoe UI", -apple-system, BlinkMacSystemFont, sans-serif);
+  }
+  .coterm-block {
+    display: grid;
+    grid-template-columns: 34px minmax(0, 1fr) auto auto;
+    min-height: 28px;
+    align-items: center;
+    border: 0;
+    border-bottom: 1px solid var(--coterm-border-subtle, #2d2d2d);
+    padding: 0;
+    width: 100%;
+    color: inherit;
+    background: transparent;
+    text-align: left;
+    cursor: pointer;
+  }
+  .coterm-block:hover { background: var(--coterm-surface-hover, #2a2d2e); }
+  .coterm-block[aria-selected="true"] { background: var(--coterm-accent-active, #094771); }
+  .coterm-block-gutter {
+    position: relative;
+    display: flex;
+    height: 100%;
+    align-items: center;
+    justify-content: center;
+    color: var(--coterm-text-muted, #858585);
+    font: 11px var(--coterm-font-mono, Consolas, monospace);
+  }
+  .coterm-block[aria-selected="true"] .coterm-block-gutter { color: var(--coterm-text-bright, #ffffff); }
+  .coterm-block[aria-selected="true"] .coterm-block-gutter::before {
+    position: absolute;
+    inset: 0 auto 0 0;
+    width: 3px;
+    background: var(--coterm-accent-glow, #3794ff);
+    content: "";
+  }
+  .coterm-block-command {
+    overflow: hidden;
+    padding: 5px 8px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font: 12px var(--coterm-font-mono, Consolas, monospace);
+  }
+  .coterm-block-actor { margin-right: 8px; color: var(--coterm-text-muted, #9da0a3); font-size: 10px; }
+  .coterm-block-actor[data-actor="robot"] { color: var(--coterm-accent-glow, #75beff); }
+  .coterm-block-status { min-width: 20px; color: var(--coterm-danger, #f48771); text-align: center; }
 `;
 
 function createRow(block: CommandBlock, selected: boolean, toggle: () => void): HTMLButtonElement {

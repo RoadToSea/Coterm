@@ -37,6 +37,9 @@ pub struct InteractionRequest {
     /// 交互有效期，与操作调用的 waitTimeoutMs 分开。
     pub timeout_ms: Option<u64>,
     pub allow_cancel: bool,
+    /// 基座受理交互时写入的绝对期限。插件发出的请求不带此字段，也不依赖它。
+    #[serde(default)]
+    pub deadline: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
