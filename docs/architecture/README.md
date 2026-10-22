@@ -15,3 +15,4 @@
 - [接口文件与评审入口](interface-review.md)
 - [当前已实现架构图](current-architecture.md)
 - [SSH 插件 MVP 与运行方式](ssh-plugin.md)
+- [WS-13 集成与回归验收记录](ws13-integration-acceptance.md)

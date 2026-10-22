@@ -2,8 +2,10 @@
   "name": "coterm-monorepo",
   "version": "0.1.0",
   "private": true,
+  "type": "module",
   "description": "The Collaborative Terminal for Humans and AI Agents",
   "scripts": {
+    "test": "node --import ./scripts/test-ts-loader.mjs --test tests/*.test.mjs",
     "plugin:ssh:build": "node scripts/build-ssh.mjs",
     "dev": "pnpm --filter coterm-desktop dev",
     "build": "pnpm --filter coterm-desktop build",

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Box, ChevronDown, CircleStop, MoreHorizontal, Plus, PlugZap, ShieldAlert, ShieldCheck, SlidersHorizontal, Trash2 } from "lucide-react";
+import { Box, ChevronDown, CircleStop, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Plus, PlugZap, ShieldAlert, ShieldCheck, SlidersHorizontal, Trash2 } from "lucide-react";
 import { HostInteractions } from "./components/host/HostInteractions";
 import { HostApprovals } from "./components/host/HostApprovals";
 import { McpConfiguration } from "./components/mcp/McpConfiguration";
@@ -9,13 +9,37 @@ import { PluginConfiguration } from "./components/plugins/PluginConfiguration";
 import {
   hostAPI,
   type InstanceInfo,
+  type PluginLoadIssue,
   type PluginSummary,
 } from "./host-api";
 import type { OperationDescriptor, OperationRecord, OperationReceipt } from "@coterm/plugin-sdk";
 
 export default function App() {
+  const [instancesCollapsed, setInstancesCollapsed] = useState(() => {
+    if (typeof window !== "undefined" && typeof window.innerWidth === "number") {
+      return window.innerWidth < 900;
+    }
+    return false;
+  });
+
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof window.matchMedia !== "function") return;
+    const mediaQuery = window.matchMedia("(max-width: 899px)");
+    const handleMediaChange = (event: MediaQueryListEvent | MediaQueryList) => {
+      setInstancesCollapsed(event.matches);
+    };
+    if (typeof mediaQuery.addEventListener === "function") {
+      mediaQuery.addEventListener("change", handleMediaChange);
+      return () => mediaQuery.removeEventListener("change", handleMediaChange);
+    } else if (typeof (mediaQuery as { addListener?: (cb: (e: MediaQueryListEvent) => void) => void }).addListener === "function") {
+      (mediaQuery as unknown as { addListener: (cb: (e: MediaQueryListEvent) => void) => void }).addListener(handleMediaChange);
+      return () => (mediaQuery as unknown as { removeListener: (cb: (e: MediaQueryListEvent) => void) => void }).removeListener(handleMediaChange);
+    }
+  }, []);
+
   const [mcpOpen, setMcpOpen] = useState(false);
   const [plugins, setPlugins] = useState<PluginSummary[]>([]);
+  const [pluginIssues, setPluginIssues] = useState<PluginLoadIssue[]>([]);
   const [instances, setInstances] = useState<InstanceInfo[]>([]);
   const [activeInstanceId, setActiveInstanceId] = useState<string | null>(null);
   const [selectedPluginId, setSelectedPluginId] = useState<string | null>(null);
@@ -66,12 +90,14 @@ export default function App() {
     setLoading(true);
     setError(null);
     try {
-      const [nextPlugins, nextInstances, nextBypass] = await Promise.all([
+      const [catalog, nextInstances, nextBypass] = await Promise.all([
         hostAPI.listPlugins(),
         hostAPI.listInstances(),
         hostAPI.getBypass(),
       ]);
-      setPlugins(nextPlugins);
+      // 坏包只进诊断列表，有效插件照常列出。
+      setPlugins(catalog.plugins);
+      setPluginIssues(catalog.issues);
       setInstances(nextInstances);
       setBypass(nextBypass);
       setActiveInstanceId((current) =>
@@ -230,20 +256,55 @@ export default function App() {
     </div>
   );
 
+  const pluginIssueNotice = pluginIssues.length > 0 && (
+    <ul role="status" aria-label="Plugin package issues" className="max-h-32 overflow-y-auto break-words border-l-2 border-[#d7ba7d] bg-[#3a3224] px-3 py-2 text-xs leading-relaxed text-[#e8d5a9]">
+      {pluginIssues.map((issue) => (
+        <li key={`${issue.directory}:${issue.code}`} title={issue.code}>
+          <span className="font-medium">{issue.pluginId ? `${issue.pluginId} (${issue.directory})` : issue.directory}</span>
+          {" — "}
+          {issue.message}
+        </li>
+      ))}
+    </ul>
+  );
+
   return (
     <div className="flex h-dvh flex-col overflow-hidden bg-[#1e1e1e] text-[#cccccc]">
       <div
         role="toolbar"
         aria-label="Workspace tools"
-        className="flex h-8 shrink-0 items-center gap-2 border-b border-[#2b2b2b] bg-[#323233] px-3"
+        className="flex h-8 shrink-0 items-center justify-between border-b border-coterm-border bg-coterm-surface-toolbar px-3"
       >
-        <button type="button" aria-haspopup="dialog" onClick={() => setMcpOpen(true)} className="px-2 text-[11px] hover:bg-[#454545]">MCP</button>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            id="toggle-instances-button"
+            aria-controls="instances-sidebar"
+            aria-expanded={!instancesCollapsed}
+            aria-label={instancesCollapsed ? "Expand instances panel" : "Collapse instances panel"}
+            title={instancesCollapsed ? "Expand instances panel" : "Collapse instances panel"}
+            onClick={() => setInstancesCollapsed((prev) => !prev)}
+            className="icon-button text-coterm-text-muted hover:text-coterm-text-bright"
+          >
+            {instancesCollapsed ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}
+          </button>
+          <div className="h-3.5 w-px bg-coterm-border-subtle" />
+          <button
+            type="button"
+            aria-haspopup="dialog"
+            onClick={() => setMcpOpen(true)}
+            className="rounded-sm px-2 text-[11px] text-coterm-text hover:bg-white/10"
+          >
+            MCP
+          </button>
+        </div>
       </div>
       <HostInteractions />
+      {pluginIssueNotice}
       {mcpOpen && <McpConfiguration onClose={() => setMcpOpen(false)} />}
 
       <div className="flex min-h-0 flex-1">
-        <aside aria-label="Installed plugins" className="flex w-[72px] shrink-0 flex-col border-r border-[#2b2b2b] bg-[#333333]">
+        <aside aria-label="Installed plugins" className="flex w-[64px] shrink-0 flex-col border-r border-coterm-border bg-coterm-surface-sidebar sm:w-[72px]">
           <h1 className="px-1 pb-3 pt-4 text-center text-[9px] font-medium leading-[14px] tracking-[0.04em] text-[#b7b7b7]">
             INSTALLED<br />PLUGINS
           </h1>
@@ -286,11 +347,24 @@ export default function App() {
           </div>
         </aside>
 
-        <aside aria-label="Instances" className="flex w-[240px] min-w-0 shrink-0 flex-col border-r border-[#2b2b2b] bg-[#252526] max-[900px]:w-[200px]">
-          <div className="flex h-10 shrink-0 items-center px-5">
+        <aside
+          id="instances-sidebar"
+          aria-label="Instances"
+          className={`flex w-[240px] min-w-0 shrink-0 flex-col border-r border-coterm-border bg-coterm-surface-raised max-[1024px]:w-[200px] transition-[width] duration-200 ${instancesCollapsed ? "hidden" : ""}`}
+        >
+          <div className="flex h-10 shrink-0 items-center justify-between px-4">
             <h2 className="text-[11px] font-medium tracking-[0.06em]">INSTANCES</h2>
+            <button
+              type="button"
+              aria-label="Collapse instances panel"
+              title="Collapse instances panel"
+              onClick={() => setInstancesCollapsed(true)}
+              className="icon-button text-coterm-text-muted hover:text-coterm-text-bright"
+            >
+              <PanelLeftClose size={15} />
+            </button>
           </div>
-          <div className="flex h-7 shrink-0 items-center gap-1 border-y border-[#2b2b2b] bg-[#2d2d2d] px-2 text-[11px] font-semibold">
+          <div className="flex h-7 shrink-0 items-center gap-1 border-y border-coterm-border bg-coterm-surface-panel px-2 text-[11px] font-semibold">
             <ChevronDown size={14} className="text-[#b7b7b7]" />
             <span>WORKSPACE</span>
             <span className="ml-auto pr-1 font-mono text-[10px] font-normal text-[#969696]">{instances.length}</span>
@@ -301,7 +375,7 @@ export default function App() {
                 {["w-3/4", "w-1/2"].map((width) => <div key={width} className={`h-3 bg-[#333333] ${width}`} />)}
               </div>
             ) : instances.map((instance) => (
-              <div key={instance.pluginInstanceId} className={`group flex h-8 items-center ${activeInstanceId === instance.pluginInstanceId ? "bg-[#37373d]" : "hover:bg-[#2a2d2e]"}`}>
+              <div key={instance.pluginInstanceId} className={`group flex h-8 items-center ${activeInstanceId === instance.pluginInstanceId ? "bg-coterm-surface-active" : "hover:bg-coterm-surface-hover"}`}>
                 <button
                   type="button"
                   title={`${instance.pluginId} · ${instance.status}`}
@@ -337,13 +411,13 @@ export default function App() {
           {errorNotice}
         </aside>
 
-        <main aria-label="Plugin workspace" className="relative isolate min-w-0 flex-1 overflow-hidden bg-[#1e1e1e]">
+        <main aria-label="Plugin workspace" className="relative isolate min-w-0 flex-1 overflow-hidden bg-coterm-surface">
           {activeInstance && <PluginWorkspace key={activeInstance.pluginInstanceId} instance={activeInstance} />}
           <HostApprovals />
         </main>
       </div>
 
-      <footer className="flex h-[22px] shrink-0 items-center justify-between border-t border-[#2b2b2b] bg-[#252526] px-3 text-[11px] text-[#a8a8a8]">
+      <footer className="flex h-[22px] shrink-0 items-center justify-between border-t border-coterm-border bg-coterm-surface-raised px-3 text-[11px] text-coterm-text-muted">
         <div className="flex items-center gap-4">
           <span>{plugins.length} plugins</span>
           <span>{instances.length} instances</span>

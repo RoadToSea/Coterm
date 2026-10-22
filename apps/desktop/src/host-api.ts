@@ -16,8 +16,43 @@ import type {
   PluginInstanceEvent,
 } from "@coterm/plugin-sdk";
 import { Channel, invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { promptForSecret } from "./secret-input";
 import { mountBlockList } from "@coterm/plugin-sdk/components/block-list";
+
+/** 宿主待处理状态变化的全局事件；payload 只有版本号。 */
+export const ATTENTION_CHANGED_EVENT = "host://attention-changed";
+
+export interface AttentionApproval {
+  operationId: string;
+  proposalId: string;
+  pluginId: string;
+  /** null 表示插件级操作。 */
+  pluginInstanceId: string | null;
+  operation: string;
+  targetLabel: string;
+  createdAt: string;
+}
+
+export interface AttentionInteraction {
+  interactionId: string;
+  pluginInstanceId: string;
+  operationId: string | null;
+  /** 基座只路由 secret 交互；普通文本/确认由插件前端自行处理。 */
+  kind: { kind: "secret"; purpose: string } | { kind: "text" | "confirmation" } | { kind: "selection"; options: SelectionOption[] };
+  title: string;
+  prompt: string;
+  allowCancel: boolean;
+  /** 由基座按绝对期限计算。 */
+  remainingMs: number;
+  deadline: string;
+}
+
+export interface HostAttention {
+  version: number;
+  approvals: AttentionApproval[];
+  interactions: AttentionInteraction[];
+}
 
 export interface PluginSummary {
   id: string;
@@ -25,6 +60,20 @@ export interface PluginSummary {
   version: string;
   hasFrontend: boolean;
   running: boolean;
+}
+
+/** 单个插件包的可定位诊断；不含绝对路径、秘密或内部错误明文。 */
+export interface PluginLoadIssue {
+  directory: string;
+  pluginId: string | null;
+  code: string;
+  message: string;
+}
+
+/** 有效插件与逐包诊断分开返回：单个坏包不影响其余插件列出。 */
+export interface PluginCatalog {
+  plugins: PluginSummary[];
+  issues: PluginLoadIssue[];
 }
 
 export interface InstanceInfo {
@@ -50,7 +99,7 @@ export interface HostAPI {
   pendingInteractions(): Promise<BackendSecretRequest[]>;
   respondSecret(interactionId: string, value: string | null): Promise<void>;
   mcpConfiguration(): Promise<McpClientConfiguration>;
-  listPlugins(): Promise<PluginSummary[]>;
+  listPlugins(): Promise<PluginCatalog>;
   startPlugin(pluginId: string): Promise<void>;
   stopPlugin(pluginId: string): Promise<void>;
   listInstances(pluginId?: string): Promise<InstanceInfo[]>;
@@ -80,6 +129,123 @@ export interface HostAPI {
   getBypass(): Promise<boolean>;
   frontendSource(pluginId: string): Promise<string | null>;
   provideSecret(pluginInstanceId: string, purpose: string, value: string): Promise<SecretHandle>;
+  /** 一次取回全部实例级与插件级待处理项，替代逐实例扫描历史。 */
+  hostAttention(): Promise<HostAttention>;
+}
+
+export interface AttentionSubscriptionHandlers {
+  snapshot(attention: HostAttention): void;
+  /** 快照失败时给出可恢复提示；调用方应保留上一次有效快照。 */
+  error(message: string): void;
+}
+
+interface SharedAttentionState {
+  subscribers: Set<AttentionSubscriptionHandlers>;
+  unlisten: (() => void) | null;
+  current: number;
+  lastSnapshot: HostAttention | null;
+  lastError: string | null;
+  loading: boolean;
+  reload: boolean;
+  request: number;
+  buffered: number[];
+}
+
+const sharedAttention: SharedAttentionState = {
+  subscribers: new Set(),
+  unlisten: null,
+  current: -1,
+  lastSnapshot: null,
+  lastError: null,
+  loading: false,
+  reload: false,
+  request: 0,
+  buffered: [],
+};
+
+async function refreshSharedAttention() {
+  if (sharedAttention.subscribers.size === 0) return;
+  if (sharedAttention.loading) {
+    sharedAttention.reload = true;
+    return;
+  }
+  sharedAttention.loading = true;
+  const token = ++sharedAttention.request;
+  try {
+    const snapshot = await hostAPI.hostAttention();
+    if (token !== sharedAttention.request) return;
+    sharedAttention.current = snapshot.version;
+    sharedAttention.lastSnapshot = snapshot;
+    sharedAttention.lastError = null;
+    for (const handler of [...sharedAttention.subscribers]) {
+      try { handler.snapshot(snapshot); } catch (e) { console.error(e); }
+    }
+    if (sharedAttention.buffered.some((version) => version > sharedAttention.current)) {
+      sharedAttention.buffered.length = 0;
+      sharedAttention.reload = true;
+    }
+  } catch (reason) {
+    if (token === sharedAttention.request) {
+      const message = String(reason);
+      sharedAttention.lastError = message;
+      for (const handler of [...sharedAttention.subscribers]) {
+        try { handler.error(message); } catch (e) { console.error(e); }
+      }
+    }
+  } finally {
+    sharedAttention.loading = false;
+    if (sharedAttention.reload && sharedAttention.subscribers.size > 0) {
+      sharedAttention.reload = false;
+      void refreshSharedAttention();
+    }
+  }
+}
+
+/**
+ * 先订阅、再取快照，丢弃不新于快照的缓冲版本。
+ * 多订阅者共享底层事件监听与快照请求，避免并发重复拉取与状态分歧。
+ */
+export async function subscribeHostAttention(handlers: AttentionSubscriptionHandlers): Promise<() => void> {
+  sharedAttention.subscribers.add(handlers);
+
+  if (!sharedAttention.unlisten) {
+    const unlistenFn = await listen<{ version: number }>(ATTENTION_CHANGED_EVENT, (event) => {
+      const version = event.payload?.version;
+      if (typeof version !== "number") return;
+      if (version <= sharedAttention.current) return;
+      if (sharedAttention.buffered.includes(version)) return;
+      sharedAttention.buffered.push(version);
+      if (sharedAttention.buffered.length > 32) sharedAttention.buffered.shift();
+      void refreshSharedAttention();
+    });
+    if (sharedAttention.subscribers.size === 0) {
+      unlistenFn();
+      return () => {};
+    }
+    sharedAttention.unlisten = unlistenFn;
+  }
+
+  if (sharedAttention.lastSnapshot && !sharedAttention.loading) {
+    handlers.snapshot(sharedAttention.lastSnapshot);
+  } else {
+    void refreshSharedAttention();
+  }
+
+  return () => {
+    sharedAttention.subscribers.delete(handlers);
+    if (sharedAttention.subscribers.size === 0) {
+      if (sharedAttention.unlisten) {
+        sharedAttention.unlisten();
+        sharedAttention.unlisten = null;
+      }
+      sharedAttention.current = -1;
+      sharedAttention.lastSnapshot = null;
+      sharedAttention.lastError = null;
+      sharedAttention.buffered.length = 0;
+      sharedAttention.reload = false;
+      sharedAttention.loading = false;
+    }
+  };
 }
 
 /** 仅管理挂载容器；unmount 不隐式销毁后端实例。模块查找不暴露任意路径。 */
@@ -90,12 +256,13 @@ export interface PluginFrontendLoader {
 
 /** Tauri-backed desktop API. Package paths stay inside the app data plugins directory. */
 export const hostAPI: HostAPI = {
+  hostAttention: () => invoke<HostAttention>("host_attention"),
   pendingInteractions: () => invoke<BackendSecretRequest[]>("pending_interactions"),
   respondSecret: (interactionId, value) => invoke<void>("respond_secret", { interactionId, value }),
   mcpConfiguration: () => invoke<McpClientConfiguration>("mcp_connection_info"),
   frontendSource: (pluginId) => invoke<string | null>("plugin_frontend_source", { pluginId }),
   provideSecret: (pluginInstanceId, purpose, value) => invoke<SecretHandle>("provide_secret", { pluginInstanceId, purpose, value }),
-  listPlugins: () => invoke<PluginSummary[]>("list_plugins"),
+  listPlugins: () => invoke<PluginCatalog>("list_plugins"),
   startPlugin: (pluginId) => invoke<void>("start_plugin", { pluginId }),
   stopPlugin: (pluginId) => invoke<void>("stop_plugin", { pluginId }),
   listInstances: (pluginId) => invoke<InstanceInfo[]>("list_instances", { pluginId }),
