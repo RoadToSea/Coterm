@@ -4,28 +4,71 @@ import terminalCSS from "@xterm/xterm/css/xterm.css?inline";
 import type { PluginAPI, PluginConfigurationAPI, PluginFrontend, OperationReceipt } from "@coterm/plugin-sdk";
 
 const css = `
-  :host { display:block; height:100%; min-height:0; color:#ccc; font:13px "Segoe UI",sans-serif; }
-  * { box-sizing:border-box; }
-  button,input,textarea { font:inherit; color:inherit; }
-  button { border:1px solid #454545; padding:5px 12px; background:#333; cursor:pointer; }
-  button:hover { background:#414141; } button:disabled { opacity:.5; cursor:default; }
-  button:focus-visible,input:focus-visible,textarea:focus-visible { outline:1px solid #007fd4; }
-  .primary { background:#0e639c; color:#fff; } .primary:hover { background:#1177bb; }
-  form { display:grid; gap:14px; margin-bottom:20px; }
-  label { display:grid; gap:6px; color:#aaa; }
-  input,textarea { width:100%; min-width:0; border:1px solid #454545; background:#1e1e1e; padding:7px 9px; }
-  .pair { display:grid; grid-template-columns:minmax(0,1fr) 90px; gap:12px; }
-  .error { color:#f48771; overflow-wrap:anywhere; margin:0; }
-  .layout { display:flex; flex-direction:column; height:100%; min-height:0; background:#1e1e1e; }
-  .bar { display:flex; flex-wrap:wrap; align-items:center; gap:12px; min-height:42px; border-bottom:1px solid #333; padding:6px 14px; }
-  .bar strong { font-weight:500; } .bar span { font-size:11px; color:#969696; }
-  .bar button { margin-left:auto; font-size:11px; }
-  .terminal { flex:1; min-height:0; overflow:hidden; padding:10px 4px 0 10px; }
-  .notice { padding:7px 14px; font-size:12px; color:#aaa; overflow-wrap:anywhere; }
-  .notice:empty,.approvals:empty { display:none; }
-  .approvals { flex:none; max-height:180px; overflow:auto; border-bottom:1px solid #454545; padding:10px 14px; }
-  .proposal { display:grid; gap:6px; margin-bottom:8px; } .proposal:last-child { margin-bottom:0; }
-  .proposal div { display:flex; gap:8px; } .proposal textarea { resize:vertical; font-family:monospace; min-height:36px; }
+  :host {
+    display: block;
+    height: 100%;
+    min-height: 0;
+    color: var(--coterm-text-primary, #cccccc);
+    font: 13px var(--coterm-font-sans, "Segoe UI", -apple-system, BlinkMacSystemFont, sans-serif);
+  }
+  * { box-sizing: border-box; }
+  button, input, textarea { font: inherit; color: inherit; }
+  button {
+    border: 1px solid var(--coterm-border-input, #454545);
+    padding: 5px 12px;
+    background: var(--coterm-surface-sidebar, #333333);
+    cursor: pointer;
+  }
+  button:hover { background: var(--coterm-surface-hover, #414141); }
+  button:disabled { opacity: .5; cursor: default; }
+  button:focus-visible, input:focus-visible, textarea:focus-visible {
+    outline: 1px solid var(--coterm-focus, #007fd4);
+  }
+  .primary {
+    background: var(--coterm-accent, #0e639c);
+    color: var(--coterm-text-bright, #ffffff);
+  }
+  .primary:hover { background: var(--coterm-accent-hover, #1177bb); }
+  form { display: grid; gap: 14px; margin-bottom: 20px; }
+  label { display: grid; gap: 6px; color: var(--coterm-text-subtle, #aaaaaa); }
+  input, textarea {
+    width: 100%;
+    min-width: 0;
+    border: 1px solid var(--coterm-border-input, #454545);
+    background: var(--coterm-surface, #1e1e1e);
+    color: var(--coterm-text-primary, #cccccc);
+    padding: 7px 9px;
+  }
+  .pair { display: grid; grid-template-columns: minmax(0, 1fr) 90px; gap: 12px; }
+  .error { color: var(--coterm-danger, #f48771); overflow-wrap: anywhere; margin: 0; }
+  .layout { display: flex; flex-direction: column; height: 100%; min-height: 0; background: var(--coterm-surface, #1e1e1e); }
+  .bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 12px;
+    min-height: 42px;
+    border-bottom: 1px solid var(--coterm-border, #333333);
+    padding: 6px 14px;
+    background: var(--coterm-surface-raised, #252526);
+  }
+  .bar strong { font-weight: 500; color: var(--coterm-text-primary, #cccccc); }
+  .bar span { font-size: 11px; color: var(--coterm-text-muted, #969696); }
+  .bar button { margin-left: auto; font-size: 11px; }
+  .terminal { flex: 1; min-height: 0; overflow: hidden; padding: 10px 4px 0 10px; }
+  .notice { padding: 7px 14px; font-size: 12px; color: var(--coterm-text-subtle, #aaaaaa); overflow-wrap: anywhere; }
+  .notice:empty, .approvals:empty { display: none; }
+  .approvals {
+    flex: none;
+    max-height: 180px;
+    overflow: auto;
+    border-bottom: 1px solid var(--coterm-border-subtle, #454545);
+    padding: 10px 14px;
+  }
+  .proposal { display: grid; gap: 6px; margin-bottom: 8px; }
+  .proposal:last-child { margin-bottom: 0; }
+  .proposal div { display: flex; gap: 8px; }
+  .proposal textarea { resize: vertical; font-family: var(--coterm-font-mono, Consolas, monospace); min-height: 36px; }
 `;
 
 function surface(container: HTMLElement): ShadowRoot {

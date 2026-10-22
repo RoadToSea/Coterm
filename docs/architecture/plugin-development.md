@@ -522,6 +522,61 @@ KeyValueView
 
 第一版前端加载使用同一 Tauri WebView 的受控模块方式，适合受信任和本地开发插件。它不是安全沙箱；插件市场的签名、权限、iframe 或独立 WebView 隔离属于后续改进。
 
+### 7.3 共享视觉 Token 与 Shadow DOM 样式契约
+
+为了保持桌面与独立插件界面的统一感知，基座在根样式（`apps/desktop/src/index.css` 的 `:root`）与 Tailwind 体系中定义了一组轻量视觉 token，并支持通过 CSS Custom Properties 穿透 Shadow DOM 边界进行继承。
+
+#### 7.3.1 Token 命名体系
+
+- **Surface 背景**：
+  - `--coterm-surface`：主工作区与终端背景（默认 `#1e1e1e`）
+  - `--coterm-surface-raised`：面板、对话框、弹窗卡片背景（默认 `#252526`）
+  - `--coterm-surface-panel`：二级分区与表头背景（默认 `#2d2d2d`）
+  - `--coterm-surface-sidebar`：插件图标导航栏（默认 `#333333`）
+  - `--coterm-surface-toolbar`：顶部工具栏（默认 `#323233`）
+  - `--coterm-surface-hover`：列表与按钮悬浮态（默认 `#2a2d2e`）
+  - `--coterm-surface-active`：当前选中项/激活态（默认 `#37373d`）
+- **Border 边框**：
+  - `--coterm-border`：主结构分割线（默认 `#2b2b2b`）
+  - `--coterm-border-subtle`：内部次级线条（默认 `#383838`）
+  - `--coterm-border-input`：输入框与通用按钮边框（默认 `#454545`）
+- **Text 文本**：
+  - `--coterm-text-primary`：正文主要文本（默认 `#cccccc`）
+  - `--coterm-text-muted`：次要说明与辅助提示文本（默认 `#969696`）
+  - `--coterm-text-subtle`：表单标签与弱强调文本（默认 `#aaaaaa`）
+  - `--coterm-text-bright`：标题、按钮高亮文字（默认 `#ffffff`）
+- **Accent 强调色**：
+  - `--coterm-accent`：主要操作背景（默认 `#0e639c`）
+  - `--coterm-accent-hover`：主要操作悬浮态（默认 `#1177bb`）
+  - `--coterm-accent-active`：选中条目底色（默认 `#094771`）
+  - `--coterm-accent-glow`：活跃状态指示圆点与高亮图标（默认 `#75beff`）
+- **Danger 危险/错误**：
+  - `--coterm-danger`：错误文本与失败退出码（默认 `#f48771`）
+  - `--coterm-danger-surface`：错误警报背景（默认 `#332626`）
+  - `--coterm-danger-border`：错误警报边框（默认 `#65433d`）
+- **Focus 焦点与排版**：
+  - `--coterm-focus`：统一焦点环边框色（默认 `#007fd4`）
+  - `--coterm-font-sans`：系统无衬线字体序列（默认 `"Segoe UI", -apple-system, BlinkMacSystemFont, sans-serif`）
+  - `--coterm-font-mono`：等宽控制台与代码字体（默认 `Consolas, "Liberation Mono", Menlo, Courier, monospace`）
+
+#### 7.3.2 Shadow DOM 注入与 Fallback 契约
+
+Web Components Shadow DOM 拥有天然的样式封装壁垒，外部普通的类选择器无法渗透。但 CSS Custom Properties（变量）依照规范可自动穿透 Shadow Root 继承。
+
+插件编写前端样式及使用 `@coterm/plugin-sdk` 通用组件时，必须遵守以下约定：
+
+1. **必须携带 Fallback**：所有引用均采用 `var(--coterm-*, <default>)` 形式，如 `color: var(--coterm-text-primary, #cccccc)`。当插件在独立测试环境、脱离宿主或在早期加载未注入变量时，回退至可读、高对比度的深色默认值。
+2. **拒绝硬编码覆写**：插件 Shadow DOM 内部不要无故覆盖根变量名，以免阻断上层宿主的主题下发。
+3. **主题现状说明**：当前 Coterm 视觉基线为 VS Code 风格深色主题（Dark Theme）。浅色主题（Light Theme）与动态换肤尚不在当前阶段交付范围内，但所有样式已全部解耦至语义 token，未来基座切换全局主题时无需修改插件代码。
+
+#### 7.3.3 窄窗口与响应式两栏布局行为
+
+基座支持灵活的响应式折叠与展开：
+- **宽屏（1280px）**：插件图标栏 72px（`sm:w-[72px]`）、实例列表栏 240px，主工作区占据 968px 充足自适应空间，无重叠或溢出。
+- **中屏（1024px）**：插件图标栏 72px、实例列表栏按规则收敛为 200px（`max-[1024px]:w-[200px]`），主工作区 752px。
+- **窄屏（<900px 断点，如 768px）**：实例列表栏默认自动折叠隐藏（0px），主工作区优先独占 696px（768px - 72px 插件栏）；用户主动展开后实例栏占 200px、工作区占 496px。
+- **展开与恢复交互**：顶部工作区工具栏常驻恢复/展开控制按钮（包含 `aria-controls="instances-sidebar"`、`aria-expanded`、`aria-label` 无障碍属性），支持纯键盘（Tab/Enter/Space）无障碍操作；实例栏头部同时提供折叠按钮，杜绝不可逆收起。
+
 ## 8. 原生 MCP
 
 当前固定 URL 接入方式见 [固定 MCP 连接](mcp-http.md)，操作等待和秘密交互见 [MCP Tools 与后端秘密输入](mcp-stdio.md)。插件通过握手 `mcpTools` 显式提交原生工具及内部操作映射，完成时返回原生 MCP CallToolResult；不自动公开整个操作目录。实例级工具 schema 要求显式 `pluginInstanceId`；插件级工具不应声明实例目标，宿主从已注册工具命名空间构造 `pluginId` 授权上下文。后端秘密交互使用协商后的 `_cotermInteraction` 控制应答。Resources、Prompts、订阅等 MCP 能力仍按下述目标架构设计。

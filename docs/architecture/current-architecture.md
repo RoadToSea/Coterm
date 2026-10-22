@@ -73,3 +73,13 @@ sequenceDiagram
 | `plugin` | 插件本身，不绑定实例 | 宿主从 Tauri 命令或注册 Tool 名称构造 `pluginId` 授权上下文 | 插件版本、设备发现 |
 
 调用者不能在参数中自报来源或 effect。MCP 调用总是 Agent 来源；桌面命令总是 Human 来源。操作输出需符合可选 output schema，否则状态为 `unknown`。
+
+
+## 界面布局与视觉规范
+
+桌面采用三区域流式布局：左侧插件图标栏（64px/72px）、实例列表栏（200px/240px，支持折叠恢复）以及主工作区（自适应铺满）。
+
+- **响应式断点**：在窄窗口（< 900px，如 768px）下实例栏自动收起折叠以最大化工作区可用宽度；顶部工具栏提供可键盘操作、带无障碍名称（`aria-controls`、`aria-expanded`、`aria-label`）的恢复与折叠开关，并在面板内设有关闭触发器，避免不可恢复折叠。
+- **视觉 Token**：基座在根样式 `:root` 定义一套统一语义 token（`--coterm-surface*`、`--coterm-border*`、`--coterm-text*`、`--coterm-accent*`、`--coterm-danger*`、`--coterm-focus*`、`--coterm-font-*`），Tailwind 配置将语义类直接映射到这些 CSS 变量。
+- **Shadow DOM 共享与 Fallback**：插件前端（如 SSH）和通用组件（如 BlockList）通过 CSS Custom Properties 穿透 Shadow DOM 继承全局主题；所有变量均携带合理默认 fallback，确保无变量注入时仍可读。
+- **现状记录**：当前默认基准为深色模式，浅色模式扩展与动态主题切换留待后续阶段，当前不在交付承诺范围内。
