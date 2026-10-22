@@ -4,6 +4,7 @@
   "private": true,
   "description": "The Collaborative Terminal for Humans and AI Agents",
   "scripts": {
+    "test": "node --test tests/*.test.mjs",
     "plugin:ssh:build": "node scripts/build-ssh.mjs",
     "dev": "pnpm --filter coterm-desktop dev",
     "build": "pnpm --filter coterm-desktop build",
