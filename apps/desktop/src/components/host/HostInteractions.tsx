@@ -67,7 +67,6 @@ export function HostInteractions() {
 
     return () => {
       disposed = true;
-      latest = null;
       unsubscribe?.();
       if (active) cancelSecretInput(`backend:${active.id}`);
     };
