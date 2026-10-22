@@ -16,8 +16,43 @@ import type {
   PluginInstanceEvent,
 } from "@coterm/plugin-sdk";
 import { Channel, invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { promptForSecret } from "./secret-input";
 import { mountBlockList } from "@coterm/plugin-sdk/components/block-list";
+
+/** 宿主待处理状态变化的全局事件；payload 只有版本号。 */
+export const ATTENTION_CHANGED_EVENT = "host://attention-changed";
+
+export interface AttentionApproval {
+  operationId: string;
+  proposalId: string;
+  pluginId: string;
+  /** null 表示插件级操作。 */
+  pluginInstanceId: string | null;
+  operation: string;
+  targetLabel: string;
+  createdAt: string;
+}
+
+export interface AttentionInteraction {
+  interactionId: string;
+  pluginInstanceId: string;
+  operationId: string | null;
+  /** 基座只路由 secret 交互；普通文本/确认由插件前端自行处理。 */
+  kind: { kind: "secret"; purpose: string } | { kind: "text" | "confirmation" } | { kind: "selection"; options: SelectionOption[] };
+  title: string;
+  prompt: string;
+  allowCancel: boolean;
+  /** 由基座按绝对期限计算。 */
+  remainingMs: number;
+  deadline: string;
+}
+
+export interface HostAttention {
+  version: number;
+  approvals: AttentionApproval[];
+  interactions: AttentionInteraction[];
+}
 
 export interface PluginSummary {
   id: string;
@@ -80,6 +115,69 @@ export interface HostAPI {
   getBypass(): Promise<boolean>;
   frontendSource(pluginId: string): Promise<string | null>;
   provideSecret(pluginInstanceId: string, purpose: string, value: string): Promise<SecretHandle>;
+  /** 一次取回全部实例级与插件级待处理项，替代逐实例扫描历史。 */
+  hostAttention(): Promise<HostAttention>;
+}
+
+export interface AttentionSubscriptionHandlers {
+  snapshot(attention: HostAttention): void;
+  /** 快照失败时给出可恢复提示；调用方应保留上一次有效快照。 */
+  error(message: string): void;
+}
+
+/**
+ * 先订阅、再取快照，丢弃不新于快照的缓冲版本。
+ * 返回的函数注销监听，并让所有在途回调失效。
+ */
+export async function subscribeHostAttention(handlers: AttentionSubscriptionHandlers): Promise<() => void> {
+  let disposed = false;
+  let current = -1;
+  let loading = false;
+  let reload = false;
+  let request = 0;
+  const buffered: number[] = [];
+
+  const refresh = async () => {
+    if (disposed) return;
+    if (loading) { reload = true; return; }
+    loading = true;
+    const token = ++request;
+    try {
+      const snapshot = await hostAPI.hostAttention();
+      if (disposed || token !== request) return;
+      current = snapshot.version;
+      handlers.snapshot(snapshot);
+      if (buffered.some((version) => version > current)) {
+        buffered.length = 0;
+        reload = true;
+      }
+    } catch (reason) {
+      if (!disposed && token === request) handlers.error(String(reason));
+    } finally {
+      loading = false;
+      if (reload && !disposed) { reload = false; void refresh(); }
+    }
+  };
+
+  const unlisten = await listen<{ version: number }>(ATTENTION_CHANGED_EVENT, (event) => {
+    if (disposed) return;
+    const version = event.payload?.version;
+    if (typeof version !== "number") return;
+    // 重复或乱序的旧版本直接忽略；只在状态确实前进时重取。
+    if (version <= current) return;
+    if (buffered.includes(version)) return;
+    buffered.push(version);
+    if (buffered.length > 32) buffered.shift();
+    void refresh();
+  });
+  if (disposed) { unlisten(); return () => {}; }
+
+  await refresh();
+  return () => {
+    disposed = true;
+    buffered.length = 0;
+    unlisten();
+  };
 }
 
 /** 仅管理挂载容器；unmount 不隐式销毁后端实例。模块查找不暴露任意路径。 */
@@ -90,6 +188,7 @@ export interface PluginFrontendLoader {
 
 /** Tauri-backed desktop API. Package paths stay inside the app data plugins directory. */
 export const hostAPI: HostAPI = {
+  hostAttention: () => invoke<HostAttention>("host_attention"),
   pendingInteractions: () => invoke<BackendSecretRequest[]>("pending_interactions"),
   respondSecret: (interactionId, value) => invoke<void>("respond_secret", { interactionId, value }),
   mcpConfiguration: () => invoke<McpClientConfiguration>("mcp_connection_info"),

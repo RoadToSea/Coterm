@@ -16,7 +16,15 @@ use coterm_proto::runtime::{
 };
 use serde::Serialize;
 use serde_json::Value;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
+
+/// 宿主待处理状态变化的全局事件名；payload 只有版本号。
+const ATTENTION_CHANGED_EVENT: &str = "host://attention-changed";
+
+#[derive(Clone, Serialize)]
+struct AttentionChanged {
+    version: u64,
+}
 
 type EventSubscriptions =
     Arc<tokio::sync::Mutex<std::collections::HashMap<String, EventSubscription>>>;
@@ -284,6 +292,14 @@ async fn pending_interactions(
     state: tauri::State<'_, AppState>,
 ) -> Result<Vec<coterm_proto::runtime::interaction::InteractionRequest>, String> {
     Ok(state.plugin_runtime.pending_interactions().await)
+}
+
+/// 宿主级待处理快照；事件只携带版本号，前端据此重取。
+#[tauri::command]
+async fn host_attention(
+    state: tauri::State<'_, AppState>,
+) -> Result<coterm_core::plugin_manager::AttentionSnapshot, String> {
+    Ok(state.plugin_runtime.attention_snapshot().await)
 }
 
 #[tauri::command]
@@ -653,11 +669,22 @@ fn main() {
                 coterm_mcp::http::HttpBridgeServer::bind(plugin_runtime.clone()),
             ).map_err(|error| format!("MCP unavailable at http://127.0.0.1:{}/mcp: {error}. Close the application using this port and restart Coterm.", coterm_mcp::http::DEFAULT_PORT));
             let expiry_runtime = plugin_runtime.clone();
+            let app_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
-                let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
+                let mut expiry = tokio::time::interval(std::time::Duration::from_secs(1));
+                let mut watcher = tokio::time::interval(std::time::Duration::from_millis(100));
+                let mut published = expiry_runtime.attention_version();
                 loop {
-                    interval.tick().await;
-                    expiry_runtime.expire_interactions().await;
+                    tokio::select! {
+                        _ = expiry.tick() => expiry_runtime.expire_interactions().await,
+                        // 统一观察宿主待处理状态：任何进入/离开变化都只发送版本号。
+                        _ = watcher.tick() => {}
+                    }
+                    let version = expiry_runtime.attention_version();
+                    if version != published {
+                        published = version;
+                        let _ = app_handle.emit(ATTENTION_CHANGED_EVENT, AttentionChanged { version });
+                    }
                 }
             });
             app.manage(AppState {
@@ -684,6 +711,7 @@ fn main() {
             plugin_frontend_source,
             provide_secret,
             pending_interactions,
+            host_attention,
             respond_secret,
             mcp_connection_info,
             create_instance,

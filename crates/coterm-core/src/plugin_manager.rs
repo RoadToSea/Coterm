@@ -25,6 +25,7 @@ use coterm_proto::runtime::{
     },
     ErrorCategory, RuntimeError, RuntimeFuture,
 };
+use serde::Serialize;
 use serde_json::Value;
 use tokio::sync::Mutex;
 
@@ -43,7 +44,47 @@ struct State {
     processes: HashMap<String, Arc<JsonRpcPluginProcess>>,
     instances: HashMap<String, InstanceInfo>,
     operation_catalog: HashMap<String, HashMap<String, OperationDescriptor>>,
-    pending_approvals: HashMap<String, (String, Option<String>, String)>,
+    /// (plugin_id, plugin_instance_id, proposal_id, operation)
+    pending_approvals: HashMap<String, (String, Option<String>, String, String)>,
+}
+
+/// 宿主级待处理操作；只含 UI 渲染所需字段，不含操作参数或秘密值。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingApproval {
+    pub operation_id: String,
+    pub proposal_id: String,
+    pub plugin_id: String,
+    /// None 表示插件级操作。
+    pub plugin_instance_id: Option<String>,
+    pub operation: String,
+    pub target_label: String,
+    pub created_at: String,
+}
+
+/// 宿主级待交互请求；秘密值永不在此出现。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingInteraction {
+    pub interaction_id: String,
+    pub plugin_instance_id: String,
+    pub operation_id: Option<String>,
+    pub kind: InteractionKind,
+    pub title: String,
+    pub prompt: String,
+    pub allow_cancel: bool,
+    /// 由基座按绝对期限计算，前端不自行计时。
+    pub remaining_ms: u64,
+    pub deadline: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AttentionSnapshot {
+    /// 单调递增；每次宿主待处理状态变化 +1。
+    pub version: u64,
+    pub approvals: Vec<PendingApproval>,
+    pub interactions: Vec<PendingInteraction>,
 }
 
 /// Process-backed lifecycle support for the synchronous control MVP.
@@ -54,6 +95,8 @@ pub struct ProcessPluginRuntime {
     state: Arc<Mutex<State>>,
     history: Arc<OperationHistory>,
     bypass: Arc<tokio::sync::RwLock<bool>>,
+    /// 仅承载版本号；快照内容以 `state` 为准，二者在同一把锁内推进。
+    attention: Arc<std::sync::Mutex<u64>>,
 }
 
 impl ProcessPluginRuntime {
@@ -64,6 +107,79 @@ impl ProcessPluginRuntime {
             state: Arc::new(Mutex::new(State::default())),
             history: Arc::new(OperationHistory::new(100, 16 * 1024)),
             bypass: Arc::new(tokio::sync::RwLock::new(false)),
+            attention: Arc::new(std::sync::Mutex::new(0)),
+        }
+    }
+
+    /// 必须在持有 `state` 锁时调用，保证版本与快照内容一致。
+    fn bump_attention(&self) {
+        let mut version = self.attention.lock().unwrap_or_else(|error| error.into_inner());
+        *version += 1;
+    }
+
+    pub fn attention_version(&self) -> u64 {
+        *self.attention.lock().unwrap_or_else(|error| error.into_inner())
+    }
+
+    /// 一次调用覆盖全部实例级与插件级待处理项。
+    pub async fn attention_snapshot(&self) -> AttentionSnapshot {
+        // 先取版本再读状态：并发变化只会让前端拿到较旧的手快照，
+        // 而对应 changed 事件已经包含更高版本，前端会据此重取。
+        let version = self.attention_version();
+        let state = self.state.lock().await;
+        let now = tokio::time::Instant::now();
+        let mut approvals = state
+            .pending_approvals
+            .iter()
+            .map(|(operation_id, (plugin_id, instance, proposal_id, operation))| {
+                let target_label = instance
+                    .as_ref()
+                    .and_then(|id| state.instances.get(id))
+                    .map(|instance| instance.label.clone())
+                    .unwrap_or_else(|| plugin_id.clone());
+                PendingApproval {
+                    operation_id: operation_id.clone(),
+                    proposal_id: proposal_id.clone(),
+                    plugin_id: plugin_id.clone(),
+                    plugin_instance_id: instance.clone(),
+                    operation: operation.clone(),
+                    target_label,
+                    created_at: String::new(),
+                }
+            })
+            .collect::<Vec<_>>();
+        approvals.sort_by(|left, right| left.operation_id.cmp(&right.operation_id));
+        let mut interactions = state
+            .interactions
+            .values()
+            .map(|(request, deadline)| (request, deadline))
+            .filter(|(_, deadline)| **deadline > now)
+            .map(|(request, deadline)| PendingInteraction {
+                interaction_id: request.interaction_id.clone(),
+                plugin_instance_id: request.plugin_instance_id.clone(),
+                operation_id: request.operation_id.clone(),
+                kind: request.kind.clone(),
+                title: request.title.clone(),
+                prompt: request.prompt.clone(),
+                allow_cancel: request.allow_cancel,
+                remaining_ms: deadline.duration_since(now).as_millis() as u64,
+                deadline: request.deadline.map(|value| value.to_rfc3339()).unwrap_or_default(),
+            })
+            .collect::<Vec<_>>();
+        drop(state);
+        for approval in &mut approvals {
+            approval.created_at = self
+                .history
+                .get(&approval.operation_id)
+                .await
+                .map(|record| record.created_at.to_rfc3339())
+                .unwrap_or_default();
+        }
+        interactions.sort_by(|left, right| left.interaction_id.cmp(&right.interaction_id));
+        AttentionSnapshot {
+            version,
+            approvals,
+            interactions,
         }
     }
 
@@ -335,10 +451,17 @@ impl ProcessPluginRuntime {
                             let duration = std::time::Duration::from_millis(
                                 request.timeout_ms.unwrap_or(60_000).clamp(1, 300_000),
                             );
+                            let mut request = request;
+                            request.deadline = Some(
+                                Utc::now()
+                                    + chrono::Duration::from_std(duration)
+                                        .unwrap_or_else(|_| chrono::Duration::seconds(60)),
+                            );
                             state.interactions.insert(
                                 request.interaction_id.clone(),
                                 (request, tokio::time::Instant::now() + duration),
                             );
+                            self.bump_attention();
                             return self
                                 .history
                                 .transition(operation_id, OperationStatus::Running, None, None)
@@ -428,6 +551,7 @@ impl ProcessPluginRuntime {
             // Drop state while using the ordinary private delivery path. The response
             // is claimed first, so competing/late submissions cannot resume twice.
             state.interactions.remove(interaction_id);
+            self.bump_attention();
             drop(state);
             let delivery = self
                 .provide_secret(&request.plugin_instance_id, purpose, value)
@@ -449,7 +573,9 @@ impl ProcessPluginRuntime {
         } else {
             InteractionOutcome::Cancelled
         };
-        state.interactions.remove(interaction_id);
+        if state.interactions.remove(interaction_id).is_some() {
+            self.bump_attention();
+        }
         self.resume_interaction(&mut state, request, outcome).await
     }
 
@@ -512,6 +638,7 @@ impl ProcessPluginRuntime {
             .collect();
         for id in ids {
             if let Some((request, _)) = state.interactions.remove(&id) {
+                self.bump_attention();
                 let _ = self
                     .resume_interaction(&mut state, request, InteractionOutcome::TimedOut)
                     .await;
@@ -520,7 +647,9 @@ impl ProcessPluginRuntime {
     }
 
     async fn cancel_instance_interactions(&self, state: &mut State, instances: &[String]) {
-        state.pending_approvals.retain(|_, (_, instance, _)| {
+        // 无论是否命中，实例销毁/插件停止都会改变宿主待处理视图，统一推高版本。
+        self.bump_attention();
+        state.pending_approvals.retain(|_, (_, instance, _, _)| {
             !instance.as_ref().is_some_and(|id| instances.contains(id))
         });
         for instance_id in instances {
@@ -562,6 +691,7 @@ impl ProcessPluginRuntime {
                 }
             }
         }
+        // 交互清理与实例移除在同一把锁内完成，快照不会观察到半更新状态。
     }
 }
 
@@ -875,6 +1005,7 @@ impl PluginRuntime for ProcessPluginRuntime {
                     .transition(&operation_id, OperationStatus::Cancelled, None, None)
                     .await;
             }
+            self.bump_attention();
             self.cancel_instance_interactions(&mut state, &instance_ids)
                 .await;
             let mut first_error = None;
@@ -1125,10 +1256,13 @@ impl Operations for ProcessPluginRuntime {
                         .transition(&operation_id, OperationStatus::Dispatched, None, None)
                         .await;
                 }
+                let mut plugin_id = request.plugin_id;
+                let mut plugin_instance_id = request.plugin_instance_id;
+                let operation_name = request.operation.clone();
                 let result = process
                     .request(HostCommand::Invoke(InvokeRequest {
                         operation_id: operation_id.clone(),
-                        plugin_instance_id: request.plugin_instance_id.clone(),
+                        plugin_instance_id: plugin_instance_id.clone(),
                         source: caller.source,
                         effect: descriptor.effect,
                         operation: request.operation,
@@ -1141,8 +1275,14 @@ impl Operations for ProcessPluginRuntime {
                         Ok(draft) => {
                             state.pending_approvals.insert(
                                 operation_id.clone(),
-                                (request.plugin_id, request.plugin_instance_id, proposal_id),
+                                (
+                                    std::mem::take(&mut plugin_id),
+                                    plugin_instance_id.take(),
+                                    proposal_id,
+                                    operation_name,
+                                ),
                             );
+                            runtime.bump_attention();
                             let _ = runtime
                                 .history
                                 .transition(
@@ -1307,7 +1447,9 @@ impl Operations for ProcessPluginRuntime {
                 .await
                 .map_err(map_history_error)?;
             let result = process.request(HostCommand::Approve(request.clone())).await;
-            state.pending_approvals.remove(&request.operation_id);
+            if state.pending_approvals.remove(&request.operation_id).is_some() {
+                self.bump_attention();
+            }
             let record = self
                 .finish_reply(&mut state, &request.operation_id, result)
                 .await?;
@@ -1360,6 +1502,7 @@ impl Operations for ProcessPluginRuntime {
                 })
                 .await?;
             state.pending_approvals.remove(operation_id);
+            self.bump_attention();
             self.history
                 .transition(operation_id, OperationStatus::Rejected, None, None)
                 .await
@@ -1393,10 +1536,11 @@ impl Operations for ProcessPluginRuntime {
                 .map(|(id, _)| id.clone())
             {
                 if let Some((request, _)) = state.interactions.remove(&id) {
+                    self.bump_attention();
                     self.resume_interaction(&mut state, request, InteractionOutcome::Cancelled)
                         .await?;
                 }
-            } else if let Some((plugin_id, _, proposal_id)) =
+            } else if let Some((plugin_id, _, proposal_id, _)) =
                 state.pending_approvals.get(operation_id).cloned()
             {
                 let process = state
@@ -1411,6 +1555,7 @@ impl Operations for ProcessPluginRuntime {
                     })
                     .await;
                 state.pending_approvals.remove(operation_id);
+                self.bump_attention();
                 let (status, error) = match result {
                     Ok(_) => (OperationStatus::Cancelled, None),
                     Err(error) => (failure_status(&error), Some(error)),
@@ -1613,9 +1758,227 @@ mod tests {
 
     use super::{
         failure_status, requires_proposal, schema_is_valid, validate_plugin_authority,
-        validate_scope_target,
+        validate_scope_target, ProcessPluginRuntime,
     };
+    use coterm_proto::runtime::interaction::{InteractionKind, InteractionRequest};
+    use coterm_proto::runtime::lifecycle::{InstanceInfo, InstanceStatus, RuntimeLimits};
     use serde_json::json;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    fn runtime() -> ProcessPluginRuntime {
+        ProcessPluginRuntime::new(
+            "test-platform",
+            RuntimeLimits {
+                max_control_bytes: 1024 * 1024,
+                max_data_chunk_bytes: 64 * 1024,
+                initial_window: coterm_proto::runtime::stream::FlowWindow {
+                    chunks: 16,
+                    bytes: 1024 * 1024,
+                },
+            },
+        )
+    }
+
+    fn instance(plugin_id: &str, instance_id: &str) -> InstanceInfo {
+        InstanceInfo {
+            plugin_id: plugin_id.to_owned(),
+            plugin_instance_id: instance_id.to_owned(),
+            session_id: format!("session-{instance_id}"),
+            label: format!("{plugin_id} {instance_id}"),
+            status: InstanceStatus::Ready,
+        }
+    }
+
+    fn secret_request(id: &str, instance_id: &str, timeout_ms: Option<u64>) -> InteractionRequest {
+        InteractionRequest {
+            interaction_id: id.to_owned(),
+            plugin_instance_id: instance_id.to_owned(),
+            operation_id: Some(format!("operation-{id}")),
+            kind: InteractionKind::Secret {
+                purpose: "ssh.password".to_owned(),
+            },
+            title: "SSH password".to_owned(),
+            prompt: "Password".to_owned(),
+            timeout_ms,
+            allow_cancel: true,
+            deadline: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn snapshot_lists_every_pending_approval_and_interaction() {
+        let runtime = runtime();
+        let state = Arc::clone(&runtime.state);
+        {
+            let mut state = state.lock().await;
+            state
+                .instances
+                .insert("instance-a".to_owned(), instance("com.example.alpha", "instance-a"));
+            state
+                .instances
+                .insert("instance-b".to_owned(), instance("com.example.alpha", "instance-b"));
+            for (operation_id, instance_id) in [("op-1", "instance-a"), ("op-2", "instance-b")] {
+                state.pending_approvals.insert(
+                    operation_id.to_owned(),
+                    (
+                        "com.example.alpha".to_owned(),
+                        Some(instance_id.to_owned()),
+                        format!("proposal-{operation_id}"),
+                        "session.write".to_owned(),
+                    ),
+                );
+            }
+            // 插件级审批：没有实例目标，目标标签回落到插件 ID。
+            state.pending_approvals.insert(
+                "op-3".to_owned(),
+                (
+                    "com.example.beta".to_owned(),
+                    None,
+                    "proposal-op-3".to_owned(),
+                    "plugin.configure".to_owned(),
+                ),
+            );
+            state.interactions.insert(
+                "interaction-1".to_owned(),
+                (
+                    secret_request("interaction-1", "instance-a", Some(60_000)),
+                    tokio::time::Instant::now() + Duration::from_secs(60),
+                ),
+            );
+            runtime.bump_attention();
+        }
+
+        let snapshot = runtime.attention_snapshot().await;
+        assert_eq!(snapshot.approvals.len(), 3);
+        assert_eq!(snapshot.interactions.len(), 1);
+        // 稳定排序：前端以 operationId / interactionId 作为渲染 key。
+        let ids = snapshot
+            .approvals
+            .iter()
+            .map(|approval| approval.operation_id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(ids, ["op-1", "op-2", "op-3"]);
+        assert_eq!(snapshot.approvals[0].target_label, "com.example.alpha instance-a");
+        assert_eq!(snapshot.approvals[2].plugin_instance_id, None);
+        assert_eq!(snapshot.approvals[2].target_label, "com.example.beta");
+        assert_eq!(snapshot.approvals[0].operation, "session.write");
+        assert_eq!(snapshot.interactions[0].interaction_id, "interaction-1");
+        assert!(snapshot.interactions[0].remaining_ms > 0);
+        assert!(snapshot.interactions[0].remaining_ms <= 60_000);
+        assert_eq!(snapshot.version, 1);
+    }
+
+    #[tokio::test]
+    async fn snapshot_omits_expired_interactions_and_never_exposes_secret_values() {
+        let runtime = runtime();
+        let state = Arc::clone(&runtime.state);
+        {
+            let mut state = state.lock().await;
+            state.interactions.insert(
+                "expired".to_owned(),
+                (
+                    secret_request("expired", "instance-a", Some(1)),
+                    tokio::time::Instant::now() - Duration::from_secs(1),
+                ),
+            );
+            state.interactions.insert(
+                "live".to_owned(),
+                (
+                    secret_request("live", "instance-a", Some(60_000)),
+                    tokio::time::Instant::now() + Duration::from_secs(60),
+                ),
+            );
+        }
+        let snapshot = runtime.attention_snapshot().await;
+        assert_eq!(snapshot.interactions.len(), 1);
+        assert_eq!(snapshot.interactions[0].interaction_id, "live");
+    }
+
+    #[tokio::test]
+    async fn version_advances_on_every_attention_change_and_only_on_change() {
+        let runtime = runtime();
+        let state = Arc::clone(&runtime.state);
+        assert_eq!(runtime.attention_version(), 0);
+        {
+            let mut state = state.lock().await;
+            state.interactions.insert(
+                "interaction-1".to_owned(),
+                (
+                    secret_request("interaction-1", "instance-a", Some(60_000)),
+                    tokio::time::Instant::now() + Duration::from_secs(60),
+                ),
+            );
+            runtime.bump_attention();
+        }
+        assert_eq!(runtime.attention_version(), 1);
+        // 快照是只读的，读取不改变版本。
+        let first = runtime.attention_snapshot().await;
+        let second = runtime.attention_snapshot().await;
+        assert_eq!(first.version, second.version);
+        assert_eq!(second.version, 1);
+
+        // 拆除实例时，即使没有命中任何待处理项也会推进版本，
+        // 这样实例标签变化不会让前端停留在旧快照。
+        let mut state = state.lock().await;
+        runtime
+            .cancel_instance_interactions(&mut state, &["instance-unused".to_owned()])
+            .await;
+        drop(state);
+        assert_eq!(runtime.attention_version(), 2);
+        assert_eq!(runtime.attention_snapshot().await.version, 2);
+    }
+
+    #[test]
+    fn approval_entries_carry_display_fields_without_operation_args() {
+        // 快照结构本身不含 args/input/draft；这里显式固定字段清单，
+        // 防止后续有人把操作参数塞进 changed 路径。
+        let approval = super::PendingApproval {
+            operation_id: "op-1".to_owned(),
+            proposal_id: "proposal-1".to_owned(),
+            plugin_id: "com.example.alpha".to_owned(),
+            plugin_instance_id: Some("instance-a".to_owned()),
+            operation: "session.write".to_owned(),
+            target_label: "Alpha".to_owned(),
+            created_at: "2026-01-01T00:00:00Z".to_owned(),
+        };
+        let value = serde_json::to_value(&approval).expect("approval serializes");
+        let keys = value
+            .as_object()
+            .expect("object")
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        assert_eq!(
+            keys,
+            [
+                "createdAt",
+                "operation",
+                "operationId",
+                "pluginId",
+                "pluginInstanceId",
+                "proposalId",
+                "targetLabel",
+            ]
+        );
+    }
+
+    #[test]
+    fn interaction_deadline_is_optional_on_the_wire() {
+        // 插件发来的请求不含 deadline；基座在受理时补齐。
+        let request: InteractionRequest = serde_json::from_value(json!({
+            "interactionId": "interaction-1",
+            "pluginInstanceId": "instance-a",
+            "operationId": "op-1",
+            "kind": {"kind": "secret", "purpose": "ssh.password"},
+            "title": "SSH password",
+            "prompt": "Password",
+            "timeoutMs": 60000,
+            "allowCancel": true
+        }))
+        .expect("legacy request parses");
+        assert!(request.deadline.is_none());
+    }
 
     #[test]
     fn agent_commit_requires_approval_unless_bypass_is_enabled() {
