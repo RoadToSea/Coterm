@@ -1,0 +1,81 @@
+[
+  {
+    "attachments": [
+      {
+        "chat_message_id": null,
+        "chat_session_id": null,
+        "comment_id": "01a163a0-bdba-72ee-8b61-81cee19b5594",
+        "content_type": "image/png",
+        "created_at": "2026-10-22T12:40:39Z",
+        "download_url": "/api/attachments/01a163a0-b58d-7cfd-a722-6c0bdcd6c275/download",
+        "filename": "layout-1280px.png",
+        "id": "01a163a0-b58d-7cfd-a722-6c0bdcd6c275",
+        "issue_id": "01a162c6-1a48-7c02-9017-a6f4be881504",
+        "markdown_url": "https://multica.ai/api/attachments/01a163a0-b58d-7cfd-a722-6c0bdcd6c275/download",
+        "size_bytes": 27228,
+        "uploader_id": "ce9558a1-4056-4fc7-b6ac-1ffddc118897",
+        "uploader_type": "agent",
+        "url": "https://static.multica.ai/workspaces/0661a05a-994a-439e-801e-2325683a9f6c/01a163a0-b58d-7cfd-a722-6c0bdcd6c275.png",
+        "workspace_id": "0661a05a-994a-439e-801e-2325683a9f6c"
+      },
+      {
+        "chat_message_id": null,
+        "chat_session_id": null,
+        "comment_id": "01a163a0-bdba-72ee-8b61-81cee19b5594",
+        "content_type": "image/png",
+        "created_at": "2026-10-22T12:40:39Z",
+        "download_url": "/api/attachments/01a163a0-b82f-7536-9f21-63f0d191c659/download",
+        "filename": "layout-1024px.png",
+        "id": "01a163a0-b82f-7536-9f21-63f0d191c659",
+        "issue_id": "01a162c6-1a48-7c02-9017-a6f4be881504",
+        "markdown_url": "https://multica.ai/api/attachments/01a163a0-b82f-7536-9f21-63f0d191c659/download",
+        "size_bytes": 26220,
+        "uploader_id": "ce9558a1-4056-4fc7-b6ac-1ffddc118897",
+        "uploader_type": "agent",
+        "url": "https://static.multica.ai/workspaces/0661a05a-994a-439e-801e-2325683a9f6c/01a163a0-b82f-7536-9f21-63f0d191c659.png",
+        "workspace_id": "0661a05a-994a-439e-801e-2325683a9f6c"
+      },
+      {
+        "chat_message_id": null,
+        "chat_session_id": null,
+        "comment_id": "01a163a0-bdba-72ee-8b61-81cee19b5594",
+        "content_type": "image/png",
+        "created_at": "2026-10-22T12:40:40Z",
+        "download_url": "/api/attachments/01a163a0-b967-7538-84f0-ca5c6b8d757e/download",
+        "filename": "layout-768px-collapsed.png",
+        "id": "01a163a0-b967-7538-84f0-ca5c6b8d757e",
+        "issue_id": "01a162c6-1a48-7c02-9017-a6f4be881504",
+        "markdown_url": "https://multica.ai/api/attachments/01a163a0-b967-7538-84f0-ca5c6b8d757e/download",
+        "size_bytes": 22760,
+        "uploader_id": "ce9558a1-4056-4fc7-b6ac-1ffddc118897",
+        "uploader_type": "agent",
+        "url": "https://static.multica.ai/workspaces/0661a05a-994a-439e-801e-2325683a9f6c/01a163a0-b967-7538-84f0-ca5c6b8d757e.png",
+        "workspace_id": "0661a05a-994a-439e-801e-2325683a9f6c"
+      },
+      {
+        "chat_message_id": null,
+        "chat_session_id": null,
+        "comment_id": "01a163a0-bdba-72ee-8b61-81cee19b5594",
+        "content_type": "image/png",
+        "created_at": "2026-10-22T12:40:40Z",
+        "download_url": "/api/attachments/01a163a0-bbaa-7add-91f4-a737abc84532/download",
+        "filename": "layout-768px-expanded.png",
+        "id": "01a163a0-bbaa-7add-91f4-a737abc84532",
+        "issue_id": "01a162c6-1a48-7c02-9017-a6f4be881504",
+        "markdown_url": "https://multica.ai/api/attachments/01a163a0-bbaa-7add-91f4-a737abc84532/download",
+        "size_bytes": 26679,
+        "uploader_id": "ce9558a1-4056-4fc7-b6ac-1ffddc118897",
+        "uploader_type": "agent",
+        "url": "https://static.multica.ai/workspaces/0661a05a-994a-439e-801e-2325683a9f6c/01a163a0-bbaa-7add-91f4-a737abc84532.png",
+        "workspace_id": "0661a05a-994a-439e-801e-2325683a9f6c"
+      }
+    ],
+    "author_id": "ce9558a1-4056-4fc7-b6ac-1ffddc118897",
+    "author_type": "agent",
+    "content": "## WS-13 集成与回归验收交付报告（第 2 轮评审返工闭环）\n\n本任务针对第 2 轮评审要求已完成全部返工项、修复并发竞态与自动化测试缺口、更新验收文档并完成云端推送验证。\n\n---\n\n### 1. 交付分支与云端对齐证据\n\n- **交付分支**：`agent/gemini/ws-13`\n- **起点基线 (START)**：`9808d1266eb7b1a75ef2a5ee0569a2c06917582f`（严格保留为直接祖先）\n- **前序提交**：`51b1ca294676a6e0d50ba5c618449102cc692372`\n- **最终提交 (HEAD)**：`30e717fc44f9e9c7115049fd1207b97b0b748cd5`\n- **远端 SHA 验证**：`git ls-remote origin agent/gemini/ws-13` 返回 `30e717fc44f9e9c7115049fd1207b97b0b748cd5`，本地与云端完全一致。\n- **WS-11 真实 SHA 溯源澄清**：远端追踪验证为 `6fbb17c1aac2e4d34dee946f148504e88406eaeb`，已在 `docs/architecture/ws13-integration-acceptance.md` 中完整勘误修正。\n\n---\n\n### 2. 返工要求逐项闭环说明\n\n#### 2.1 `apps/desktop/src/host-api.ts` 宿主状态订阅并发与健壮性\n- **共享 `listenPromise` 与回滚**：首个订阅者创建底层 Tauri 事件监听，初始化期间若发生异常或所有订阅者提前中止注销，立即触发 unlisten 回滚，杜绝孤立监听；\n- **生命周期代次计数器（Generation Counter）**：每次订阅者归零注销时递增 `generation`。所有在途快照返回、事件回调与错误广播强制比对代次，杜绝跨生命周期脏快照污染新代次或复活旧状态；\n- **订阅者归零在途快照丢弃**：当 `subscribers.size === 0` 时，已发出的 `host_attention` 快照返回直接丢弃，不唤醒已注销处理函数；\n- **失败恢复与去重死锁防范**：快照拉取失败时清空 `buffered` 缓存版本，避免由于去重阻断同一版本号的重新通知，同时保留 `lastSnapshot` 供 UI 维持当前视图；提供 `retryHostAttention()` 主动重试接口。\n\n#### 2.2 自动化验收测试补全\n- **`tests/host-attention-state.test.mjs`**：\n  - **多审批卡片独立工作与收敛**：模拟 3 张待审批卡片同时呈现（2 条实例级 `inst-1`, `inst-2` + 1 条插件级无实例 `ssh`），独立响应批准与拒绝，操作一条后剩余卡片完整保留在视图，全部操作后状态收敛归零；\n  - **交互对话框生命周期与凭据隔离**：完整测试凭据输入框正常提交、主动取消（`cancelSecretInput`）、10ms 超时过期自动清理、以及等待输入期间实例被销毁时的即时收敛，杜绝迟到输入提交，且各实例凭据严格隔离；\n  - **证明范围明确划分（Proof Scope Statement）**：在测试头部与验收文档中明确区分 Rust 协议核心层（`cargo test` 44 个测试保障协议层安全边界与凭据隔离）与前端 UI/状态契约层（`tests/*.test.mjs` 17 个测试保障单线程事件循环代次管理与 UI 收敛）。\n- **`tests/browser-layout.test.mjs`**：\n  - **纯键盘折叠展开**：768px 响应式折叠完全基于 CDP `Input.dispatchKeyEvent`（`rawKeyDown` + `char` + `keyUp` 发送 `\\r`）原生触发按钮激活，彻底移除 `.click()` 冒充；\n  - **真实 SSH 前端 Shadow DOM 计算样式**：工作区挂载真实构建的 SSH 前端产物（`plugins/plugin-ssh/dist/frontend/index.js`），实测 `:host`、`.layout`、`.bar`、`.bar strong` 等节点真实继承 `--coterm-text-primary` 与 `--coterm-surface`；\n  - **SDK `mountBlockList` 计算样式与回退**：实测组件容器、robot 标签、error 状态及未声明 token fallback 计算值（`rgb(250, 204, 21)`）；\n  - **真实非空工作区截图**：4 张包含真实 SSH 终端布局的截图重新捕获并随本报告提交。\n\n---\n\n### 3. 全套构建与自动化测试验证\n\n| 测试套件 / 命令 | 耗时 | 测试数 | 结果 | 状态 |\n| :--- | :--- | :--- | :--- | :--- |\n| `cargo check --workspace` | ~1.5s | 全部 crate | 0 errors | **Pass** |\n| `cargo test --workspace` | ~2.5s | 44 tests | 44 pass / 0 fail | **Pass** |\n| `cargo clippy --workspace -- -D warnings` | ~0.9s | 全部 crate | 0 warnings | **Pass** |\n| `pnpm build` (`coterm-desktop`) | ~3.1s | 前端生产构建 | 0 errors | **Pass** |\n| `pnpm --filter coterm-plugin-ssh-ui build` | ~0.9s | SSH 插件前端 | 0 errors | **Pass** |\n| `pnpm test` (`node --test tests/*.test.mjs`) | ~3.5s | 17 tests | 17 pass / 0 fail | **Pass** |\n\n- **全量测试用例细目（17 pass）**：\n  - `tests/browser-layout.test.mjs` (3 pass):\n    1. Browser layout, catalog diagnostics, and keyboard collapse on the current build\n    2. Snapshot failure keeps the last valid attention state on screen\n    3. Multi-card independent approvals and UI convergence in the browser\n  - `tests/host-attention-state.test.mjs` (8 pass):\n    4. subscribeHostAttention: concurrent registration creates only one listen and unlistens cleanly (order 1)\n    5. subscribeHostAttention: different unlisten order (order 2: stop2 then stop1)\n    6. subscribeHostAttention: listen failure rolls back subscription and allows retry\n    7. subscribeHostAttention: late in-flight snapshot does not pollute new generation or resurrect cache\n    8. subscribeHostAttention: in-flight snapshot catches up on events arrived during request\n    9. subscribeHostAttention: snapshot failure keeps last valid state and recovers on re-notification\n    10. Approvals UI behavior: multiple cards displayed simultaneously, independent approve/reject, and convergence\n    11. Interactions UI behavior: secret dialog lifecycle, cancellation, expiry, and instance isolation\n  - `tests/visual-tokens-layout.test.mjs` (6 pass):\n    12. Desktop CSS defines required semantic tokens in :root\n    13. Tailwind configuration maps coterm semantic tokens to CSS custom properties\n    14. SSH Plugin Shadow DOM styles use semantic tokens with readable fallbacks\n    15. Plugin SDK block-list component styles use semantic tokens with fallbacks\n    16. App.tsx implements responsive navigation collapse and accessible controls\n    17. Layout width simulation at 1280px, 1024px, and 768px\n\n---\n\n### 4. 交付附件\n\n- `attachments/layout-1280px.png`\n- `attachments/layout-1024px.png`\n- `attachments/layout-768px-collapsed.png`\n- `attachments/layout-768px-expanded.png`",
+    "created_at": "2026-10-22T12:40:41Z",
+    "id": "01a163a0-bdba-72ee-8b61-81cee19b5594",
+    "revision": 1,
+    "type": "comment"
+  }
+]
