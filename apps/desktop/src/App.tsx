@@ -9,6 +9,7 @@ import { PluginConfiguration } from "./components/plugins/PluginConfiguration";
 import {
   hostAPI,
   type InstanceInfo,
+  type PluginLoadIssue,
   type PluginSummary,
 } from "./host-api";
 import type { OperationDescriptor, OperationRecord, OperationReceipt } from "@coterm/plugin-sdk";
@@ -16,6 +17,7 @@ import type { OperationDescriptor, OperationRecord, OperationReceipt } from "@co
 export default function App() {
   const [mcpOpen, setMcpOpen] = useState(false);
   const [plugins, setPlugins] = useState<PluginSummary[]>([]);
+  const [pluginIssues, setPluginIssues] = useState<PluginLoadIssue[]>([]);
   const [instances, setInstances] = useState<InstanceInfo[]>([]);
   const [activeInstanceId, setActiveInstanceId] = useState<string | null>(null);
   const [selectedPluginId, setSelectedPluginId] = useState<string | null>(null);
@@ -66,12 +68,14 @@ export default function App() {
     setLoading(true);
     setError(null);
     try {
-      const [nextPlugins, nextInstances, nextBypass] = await Promise.all([
+      const [catalog, nextInstances, nextBypass] = await Promise.all([
         hostAPI.listPlugins(),
         hostAPI.listInstances(),
         hostAPI.getBypass(),
       ]);
-      setPlugins(nextPlugins);
+      // 坏包只进诊断列表，有效插件照常列出。
+      setPlugins(catalog.plugins);
+      setPluginIssues(catalog.issues);
       setInstances(nextInstances);
       setBypass(nextBypass);
       setActiveInstanceId((current) =>
@@ -230,6 +234,18 @@ export default function App() {
     </div>
   );
 
+  const pluginIssueNotice = pluginIssues.length > 0 && (
+    <ul role="status" aria-label="Plugin package issues" className="max-h-32 overflow-y-auto break-words border-l-2 border-[#d7ba7d] bg-[#3a3224] px-3 py-2 text-xs leading-relaxed text-[#e8d5a9]">
+      {pluginIssues.map((issue) => (
+        <li key={`${issue.directory}:${issue.code}`} title={issue.code}>
+          <span className="font-medium">{issue.pluginId ?? issue.directory}</span>
+          {" — "}
+          {issue.message}
+        </li>
+      ))}
+    </ul>
+  );
+
   return (
     <div className="flex h-dvh flex-col overflow-hidden bg-[#1e1e1e] text-[#cccccc]">
       <div
@@ -240,6 +256,7 @@ export default function App() {
         <button type="button" aria-haspopup="dialog" onClick={() => setMcpOpen(true)} className="px-2 text-[11px] hover:bg-[#454545]">MCP</button>
       </div>
       <HostInteractions />
+      {pluginIssueNotice}
       {mcpOpen && <McpConfiguration onClose={() => setMcpOpen(false)} />}
 
       <div className="flex min-h-0 flex-1">

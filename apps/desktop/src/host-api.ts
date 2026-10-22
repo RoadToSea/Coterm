@@ -62,6 +62,20 @@ export interface PluginSummary {
   running: boolean;
 }
 
+/** 单个插件包的可定位诊断；不含绝对路径、秘密或内部错误明文。 */
+export interface PluginLoadIssue {
+  directory: string;
+  pluginId: string | null;
+  code: string;
+  message: string;
+}
+
+/** 有效插件与逐包诊断分开返回：单个坏包不影响其余插件列出。 */
+export interface PluginCatalog {
+  plugins: PluginSummary[];
+  issues: PluginLoadIssue[];
+}
+
 export interface InstanceInfo {
   pluginId: string;
   pluginInstanceId: string;
@@ -85,7 +99,7 @@ export interface HostAPI {
   pendingInteractions(): Promise<BackendSecretRequest[]>;
   respondSecret(interactionId: string, value: string | null): Promise<void>;
   mcpConfiguration(): Promise<McpClientConfiguration>;
-  listPlugins(): Promise<PluginSummary[]>;
+  listPlugins(): Promise<PluginCatalog>;
   startPlugin(pluginId: string): Promise<void>;
   stopPlugin(pluginId: string): Promise<void>;
   listInstances(pluginId?: string): Promise<InstanceInfo[]>;
@@ -194,7 +208,7 @@ export const hostAPI: HostAPI = {
   mcpConfiguration: () => invoke<McpClientConfiguration>("mcp_connection_info"),
   frontendSource: (pluginId) => invoke<string | null>("plugin_frontend_source", { pluginId }),
   provideSecret: (pluginInstanceId, purpose, value) => invoke<SecretHandle>("provide_secret", { pluginInstanceId, purpose, value }),
-  listPlugins: () => invoke<PluginSummary[]>("list_plugins"),
+  listPlugins: () => invoke<PluginCatalog>("list_plugins"),
   startPlugin: (pluginId) => invoke<void>("start_plugin", { pluginId }),
   stopPlugin: (pluginId) => invoke<void>("stop_plugin", { pluginId }),
   listInstances: (pluginId) => invoke<InstanceInfo[]>("list_instances", { pluginId }),

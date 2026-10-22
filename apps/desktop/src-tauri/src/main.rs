@@ -1,10 +1,10 @@
 // Prevents additional console window on Windows in release
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use std::{path::PathBuf, sync::Arc};
+use std::{path::{Path, PathBuf}, sync::Arc};
 
 use coterm_core::{
-    plugin_manager::ProcessPluginRuntime,
+    plugin_manager::{DiscoveredPackage, PackageOrigin, PluginLoadIssue, ProcessPluginRuntime},
     plugin_runtime::{CallerContext, Operations, PluginRuntime, SubmitOperation},
     SessionManager,
 };
@@ -56,6 +56,65 @@ struct PluginSummary {
     version: String,
     has_frontend: bool,
     running: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PluginCatalog {
+    plugins: Vec<PluginSummary>,
+    /// 逐包诊断：多个坏包不会让整次发现失败，也不会隐藏其余有效插件。
+    issues: Vec<PluginLoadIssue>,
+}
+
+/// 列出扫描根下的子目录，只保留标准目录名；不跟随符号链接、不暴露绝对路径。
+async fn scan_packages(
+    root: &Path,
+    origin: PackageOrigin,
+    priority: u8,
+    scanned: &mut Vec<DiscoveredPackage>,
+    issues: &mut Vec<PluginLoadIssue>,
+) {
+    let mut entries = match tokio::fs::read_dir(root).await {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+        Err(_) => {
+            issues.push(PluginLoadIssue {
+                directory: String::new(),
+                plugin_id: None,
+                code: "plugin_search_unavailable".to_owned(),
+                message: match origin {
+                    PackageOrigin::Development => "Development plugin directory is unavailable",
+                    PackageOrigin::Installed => "Installed plugin directory is unavailable",
+                }
+                .to_owned(),
+            });
+            return;
+        }
+    };
+    let mut names = Vec::new();
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        let Ok(file_type) = entry.file_type().await else {
+            continue;
+        };
+        // symlink 跳过：避免从插件目录外加载入口。
+        if !file_type.is_dir() || file_type.is_symlink() {
+            continue;
+        }
+        let Ok(name) = entry.file_name().into_string() else {
+            continue;
+        };
+        names.push(name);
+    }
+    // 排序保证扫描顺序与文件系统返回顺序无关。
+    names.sort();
+    for name in names {
+        scanned.push(DiscoveredPackage {
+            root: root.join(&name),
+            directory: name,
+            priority,
+            origin,
+        });
+    }
 }
 
 /// JSON-event MVP: one unacknowledged delivery per subscriber, bounded replay in plugin.
@@ -173,53 +232,61 @@ fn get_version() -> String {
 }
 
 #[tauri::command]
-async fn list_plugins(state: tauri::State<'_, AppState>) -> Result<Vec<PluginSummary>, String> {
-    // Development packages remain inside the workspace; installed packages win by ID.
+async fn list_plugins(state: tauri::State<'_, AppState>) -> Result<PluginCatalog, String> {
+    // 已安装包优先；开发包随后扫描并记诊断，绝不覆盖已安装的同 ID 包。
+    let mut scanned = Vec::new();
+    let mut issues = Vec::new();
+    scan_packages(
+        &state.plugins_dir,
+        PackageOrigin::Installed,
+        0,
+        &mut scanned,
+        &mut issues,
+    )
+    .await;
+    // 开发包只在 Windows/macOS/Linux 的开发构建中出现：
+    // 路径来自编译期 CARGO_MANIFEST_DIR（apps/desktop/src-tauri），向上三级到仓库根的 plugins/。
+    // 该路径只在本进程内用于读取，不写入任何 IPC 负载。
     #[cfg(debug_assertions)]
     {
-        let development = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../plugins");
-        if let Ok(mut entries) = tokio::fs::read_dir(development).await {
-            while let Ok(Some(entry)) = entries.next_entry().await {
-                let package = entry.path().join("dist");
-                if package.join("manifest.json").is_file() {
-                    state
-                        .plugin_runtime
-                        .load(&package)
-                        .await
-                        .map_err(|error| format!("{}: {}", error.code, error.message))?;
-                }
-            }
+        let development = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../plugins");
+        scan_packages(
+            &development,
+            PackageOrigin::Development,
+            1,
+            &mut scanned,
+            &mut issues,
+        )
+        .await;
+        // 开发包位于 <repo>/plugins/<dir>/dist；已安装包直接是 <dir>。
+        for package in scanned.iter_mut().filter(|p| p.origin == PackageOrigin::Development) {
+            package.root = package.root.join("dist");
         }
     }
-    let mut entries = tokio::fs::read_dir(&state.plugins_dir)
-        .await
-        .map_err(|error| format!("plugin directory unavailable: {error}"))?;
-    while let Some(entry) = entries
-        .next_entry()
-        .await
-        .map_err(|error| format!("plugin directory read failed: {error}"))?
-    {
-        let file_type = entry
-            .file_type()
-            .await
-            .map_err(|error| format!("plugin entry read failed: {error}"))?;
-        if !file_type.is_dir() {
-            continue;
-        }
-        let package_path = entry.path();
-        state
-            .plugin_runtime
-            .load(&package_path)
-            .await
-            .map_err(|error| format!("{}: {}", error.code, error.message))?;
-    }
-    let manifests = state.plugin_runtime.loaded_manifests().await;
-    let mut plugins = Vec::with_capacity(manifests.len());
-    for manifest in manifests {
+    scanned.sort_by(|left, right| {
+        left.priority
+            .cmp(&right.priority)
+            .then_with(|| left.directory.cmp(&right.directory))
+    });
+    let catalog = state.plugin_runtime.discover(scanned).await;
+    issues.extend(catalog.issues);
+    // 只暴露目录名与稳定错误码，不暴露绝对路径。
+    let mut plugins = Vec::with_capacity(catalog.plugins.len());
+    for manifest in catalog.plugins {
         plugins.push(summary(&state, manifest).await);
     }
-    plugins.sort_by(|left, right| left.name.cmp(&right.name));
-    Ok(plugins)
+    plugins.sort_by(|left, right| {
+        left.name
+            .cmp(&right.name)
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    issues.sort_by(|left, right| {
+        left.directory
+            .cmp(&right.directory)
+            .then_with(|| left.code.cmp(&right.code))
+    });
+    Ok(PluginCatalog { plugins, issues })
 }
 
 #[tauri::command]

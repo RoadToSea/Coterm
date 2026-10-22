@@ -160,6 +160,44 @@ manifest 的示例结构：
 
 包内入口使用相对路径，不允许通过 `..` 跳出插件包；平台名、入口字段和版本字段的最终 JSON Schema 待冻结。插件应打包所需运行时或明确声明外部依赖，不假定目标机器安装了 Python、Node.js 或编译工具。
 
+### 3.1 发现、搜索路径与诊断
+
+基座按以下顺序扫描插件包，扫描顺序与文件系统返回顺序无关（每层目录名排序后处理）：
+
+1. 应用数据目录下的已安装包：`<app data>/plugins/<package>/manifest.json`；
+2. 仅开发构建：仓库内开发包 `<repo>/plugins/<package>/dist/manifest.json`。该路径由编译期 `CARGO_MANIFEST_DIR` 向上三级得到，只用于本进程读取，不写入任何界面或 IPC 负载。
+
+两个来源中的同 ID 包只加载一个：已安装包优先，其次按目录名排序靠前者优先。被忽略的包会得到 `plugin_id_conflict` 诊断，而不是静默消失。目录级的符号链接不会被扫描，避免从插件目录外加载入口。
+
+`list_plugins` 返回 `plugins` 与 `issues` 两部分，单个包失败不影响整次调用，也不会隐藏其余有效插件：
+
+| 字段 | 含义 |
+| --- | --- |
+| `directory` | 出问题的插件目录名 |
+| `pluginId` | manifest 能解析出合法 ID 时给出，否则为 `null` |
+| `code` | 稳定错误码，见下表 |
+| `message` | 一句简短用户提示 |
+
+诊断不包含绝对机器路径、manifest 原文、秘密或内部错误明文。
+
+| code | 含义 |
+| --- | --- |
+| `plugin_manifest_unavailable` | 缺 `manifest.json`；开发包通常意味着尚未构建出 `dist/manifest.json` |
+| `plugin_manifest_read_failed` | manifest 存在但读不出来 |
+| `plugin_manifest_invalid` | 不是合法 JSON，或不符合当前 manifest schema |
+| `plugin_manifest_legacy` | 旧格式包（缺少 `manifestVersion`），需要按当前 schema 重新打包 |
+| `plugin_manifest_version_unsupported` | `manifestVersion` 超出本基座支持范围 |
+| `plugin_manifest_identity_invalid` | `id` / `name` / `version` 为空或不合法 |
+| `plugin_runtime_version_unsupported` | `runtime.interfaceMajor` 与本基座不兼容 |
+| `plugin_required_feature_unsupported` | `runtime.requires` 声明了基座没有的运行时特性 |
+| `plugin_instance_declaration_invalid` | 未声明合法的多实例契约 |
+| `plugin_platform_unsupported` | 缺少当前平台的 `backend` 入口 |
+| `plugin_entry_invalid` | backend 或 frontend 入口不存在、越出插件包，或不是普通文件 |
+| `plugin_id_conflict` | 同 ID 的另一份包已先被加载 |
+| `plugin_search_unavailable` | 搜索目录本身不可读 |
+
+开发包在构建前没有 `dist/manifest.json`，属于正常的构建中状态：它会出现在诊断里，而不是被当作有效插件。空插件目录返回空列表且没有诊断。
+
 ## 4. 实例模型
 
 插件必须把每个连接或工作单元作为独立实例管理。基座为实例提供三个标识：
