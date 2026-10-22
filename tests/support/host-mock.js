@@ -30,13 +30,13 @@ export function makeHostMockSource(initial) {
       setAttention(next, { emit = true } = {}) {
         attention = next;
         attentionVersion = next.version;
-        if (emit) emitAttention(next.version);
+        if (emit) window.__cotermTest.emitAttention(next.version);
       },
       emitAttention(version = ++attentionVersion) {
         const handlerIds = [...(listeners.get("host://attention-changed") ?? [])];
         for (const id of handlerIds) {
           const callback = callbacks.get(id);
-          if (callback) callback({ event: "host://attention-changed", id, payload: { version } });
+          if (typeof callback === "function") callback({ event: "host://attention-changed", id, payload: { version } });
         }
       },
       setFailure(command, enabled, sequence) {
@@ -91,11 +91,9 @@ export function makeHostMockSource(initial) {
         return null;
       },
       "plugin:event|listen": ({ event, handler }) => {
-        const id = callbackId++;
-        callbacks.set(id, handler);
         if (!listeners.has(event)) listeners.set(event, new Set());
-        listeners.get(event).add(id);
-        return id;
+        listeners.get(event).add(handler);
+        return handler;
       },
       "plugin:event|unlisten": ({ event, eventId }) => {
         callbacks.delete(eventId);

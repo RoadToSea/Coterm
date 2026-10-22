@@ -260,7 +260,7 @@ export default function App() {
     <ul role="status" aria-label="Plugin package issues" className="max-h-32 overflow-y-auto break-words border-l-2 border-[#d7ba7d] bg-[#3a3224] px-3 py-2 text-xs leading-relaxed text-[#e8d5a9]">
       {pluginIssues.map((issue) => (
         <li key={`${issue.directory}:${issue.code}`} title={issue.code}>
-          <span className="font-medium">{issue.pluginId ?? issue.directory}</span>
+          <span className="font-medium">{issue.pluginId ? `${issue.pluginId} (${issue.directory})` : issue.directory}</span>
           {" — "}
           {issue.message}
         </li>

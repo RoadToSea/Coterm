@@ -136,9 +136,31 @@ test("Browser layout, catalog diagnostics, and keyboard collapse on the current 
       // --- 768px 纯键盘展开与再折叠 ---
       await page.evaluate("document.getElementById('toggle-instances-button').focus()");
       assert.equal(await page.evaluate("document.activeElement.id"), "toggle-instances-button", "768px: toggle is focusable by keyboard");
-      for (const key of ["keyDown", "keyUp"]) {
-        await page.send("Input.dispatchKeyEvent", { type: key, key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 });
-      }
+      await page.send("Input.dispatchKeyEvent", {
+        type: "rawKeyDown",
+        key: "Enter",
+        code: "Enter",
+        windowsVirtualKeyCode: 13,
+        nativeVirtualKeyCode: 13,
+        text: "\r",
+        unmodifiedText: "\r",
+      });
+      await page.send("Input.dispatchKeyEvent", {
+        type: "char",
+        key: "Enter",
+        code: "Enter",
+        windowsVirtualKeyCode: 13,
+        nativeVirtualKeyCode: 13,
+        text: "\r",
+        unmodifiedText: "\r",
+      });
+      await page.send("Input.dispatchKeyEvent", {
+        type: "keyUp",
+        key: "Enter",
+        code: "Enter",
+        windowsVirtualKeyCode: 13,
+        nativeVirtualKeyCode: 13,
+      });
       await waitForValue({ send: page.send }, `document.getElementById('toggle-instances-button').getAttribute('aria-expanded') === 'true'`, { label: "keyboard expand" });
       const expanded = await measure();
       assert.equal(expanded.instancesVisible, true, "768px after Enter: instances panel expands");

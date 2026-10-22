@@ -67,7 +67,7 @@ export function HostApprovals() {
       },
       error: (message) => {
         // 保留上一次有效列表，只提示；清空会让用户误以为待审批已消失。
-        if (!disposed.current) setNotice(message);
+        if (!disposed.current) setNotice(`Unable to follow Agent approvals: ${message}`);
       },
     }).then((stop) => {
       if (disposed.current) stop(); else unsubscribe = stop;
