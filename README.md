@@ -1,69 +1,47 @@
-# Coterm (Co-Terminal)
+# Coterm
 
-> **The Collaborative Terminal for Humans and AI Agents.**  
-> 人类与 AI Agent 共生的模块化通信工具。
+人类与 Agent 共享连接实例的插件式通信工具。Tauri 基座负责运行时和公共交互，协议与领域界面由独立插件实现。
 
----
+当前处于基础闭环收尾阶段，已接通 SSH 与 MCP，串口为初版。完成情况和已知缺口统一维护在 [项目进度](docs/PROGRESS.md)。
 
-## 当前进度
+## 开发
 
-Coterm 当前处于基础闭环收尾、插件运行时完善阶段。完整评估、优先缺口与验证范围见 [项目进度](docs/PROGRESS.md)，架构边界见 [SPEC](docs/SPEC.md)。
+使用兼容 Tauri v2 的 Rust 工具链；已验证 Node.js 22.22.2、pnpm 11.0.8。测试脚本需要 Node 的类型剥离与 `registerHooks` 支持。
 
-- **插件基座**：插件发现与坏包诊断、独立进程、多实例、可选插件前端和有界事件转发。
-- **人机协作**：桌面和 Agent 关联同一实例；Agent 提交默认需要人工审批，密码通过受控交互交给插件。
-- **SSH 与串口**：SSH 已接通共享 PTY、命令结果和 MCP；串口已有字节读写及界面初版，跨平台与关闭回收仍需完善。
-- **MCP 接入**：固定本机 Streamable HTTP 入口与插件原生 Tools；Resources、Prompts、订阅尚未实现。
-- **内部 SDK**：提供运行时类型、共享后端行协议和可选命令块列表组件；接口仍未冻结。本地 PTY、命令块上下文闭环和工业协议仍是后续工作。
-
----
-
-## 目录结构
-
-```text
-Coterm/
-├── apps/
-│   └── desktop/                # Tauri 桌面端 GUI (Rust + React + xterm.js)
-├── crates/
-│   ├── coterm-proto/           # 统一 JSON-RPC 2.0 协议契约与数据模型
-│   ├── coterm-core/            # 插件生命周期、实例路由、审批与操作账本
-│   └── coterm-mcp/             # MCP HTTP Bridge 与开发用 stdio 适配器
-├── packages/plugin-sdk/        # 插件前端契约与可选通用 UI
-├── docs/                       # 架构、进度与阶段验收
-└── plugins/                    # 独立进程插件
-    ├── plugin-local/           # 当前运行时骨架，尚无 PTY
-    ├── plugin-ssh/             # SSH MVP
-    └── plugin-serial/          # 串口初版
-```
-
----
-
-## 快速开发与编译
-
-### 环境要求
-- **Rust / Cargo**：使用与当前 Tauri 依赖兼容的工具链；尚未建立 MSRV 验证矩阵。
-- **Node.js**：本次使用 22.22.2；测试脚本要求内置 TypeScript 类型剥离和 `registerHooks` 支持。
-- **pnpm**：使用 workspace 支持；当前验证版本见进度报告。
-
-### 安装依赖
 ```bash
 pnpm install
-```
-
-### 检查 Rust 工作区编译
-```bash
-cargo check --workspace
-```
-
-### 构建插件、桌面与回归测试
-
-```bash
 pnpm plugin:ssh:build
 pnpm plugin:serial:build
-pnpm build
-pnpm test
-cargo test --workspace
-cargo clippy --workspace -- -D warnings
 pnpm tauri:dev
 ```
 
-浏览器用例需要本机 Chrome/Edge/Chromium，可用 `CHROME_BIN` 或 `EDGE_BIN` 指定。串口实机测试需显式配置设备；未配置不代表硬件验收通过。插件包只构建当前平台，发布与跨平台验收尚未完成。
+插件构建仅生成当前平台的开发包。安装包构建使用 `pnpm tauri:build`，跨平台发布尚待验收。
+
+## 检查
+
+```bash
+cargo check --workspace
+cargo test --workspace
+cargo clippy --workspace -- -D warnings
+pnpm build
+pnpm test
+```
+
+浏览器测试前需构建桌面与 SSH 前端，并安装 Chrome/Edge/Chromium；可用 `CHROME_BIN` 或 `EDGE_BIN` 指定。串口硬件测试默认 ignored，启用方式见串口说明。
+
+## 目录与文档
+
+- `apps/desktop`：Tauri + React 桌面基座。
+- `crates`：共享协议、插件运行时和 MCP Bridge。
+- `packages/plugin-sdk`：插件前端契约与通用组件。
+- `plugins`：SSH、串口和本地终端骨架。
+
+| 文档 | 用途 |
+|---|---|
+| [SPEC](docs/SPEC.md) | 架构原则与模块边界 |
+| [项目进度](docs/PROGRESS.md) | 已完成、待办与最近验证 |
+| [插件开发](docs/architecture/plugin-development.md) | 插件接入与开发流程 |
+| [运行时通信](docs/architecture/runtime-communication.md) | 操作、审批、交互与事件契约 |
+| [MCP](docs/architecture/mcp-integration.md) | 客户端连接、工具和调用语义 |
+| [SSH](docs/architecture/ssh-plugin.md) | SSH 使用与协议限制 |
+| [串口](docs/architecture/serial-plugin.md) | 串口使用、限制与硬件验证 |

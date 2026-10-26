@@ -1,89 +1,62 @@
-# 插件原生 MCP 集成
+# MCP 接入
 
-> 插件作者的实例定位、工具入口和用户交互流程见 [插件开发者指南](plugin-development.md#8-原生-mcp)。具体传输和命名规范仍需接口冻结，本文件记录架构职责。
+## 连接
 
-当前已实现固定本机地址的 MCP Streamable HTTP、实例级及插件级 Tools 和后端秘密交互。用户只填写 URL，无需 Token；应用重启后地址不变。传输由基座提供，插件无需各自实现 HTTP 服务。入口与访问边界见 [固定 MCP 连接](mcp-http.md)，工具和交互细节见 [MCP Tools 与秘密输入](mcp-stdio.md)。Resources、Prompts、订阅及完整双向路由仍是目标架构。
-
-## 1. 目标
-
-每个通信插件原生实现自己的 MCP 能力。Coterm 不为插件重新包装一层通用通信 MCP，也不要求 SSH、UART、MQTT 使用相同的工具模型。
-
-## 2. MCP 归属
-
-插件后端是领域 MCP Server 的实现者：
+保持 Coterm 桌面运行，在支持 Streamable HTTP 的客户端添加：
 
 ```text
-SSH Plugin:
-  ssh.connect
-  ssh.exec_command
-  ssh.send_input
-
-MQTT Plugin:
-  mqtt.connect
-  mqtt.subscribe
-  mqtt.publish
-  mqtt.read_messages
-
-Custom Plugin:
-  custom_device.read_status
-  custom_device.configure
+http://127.0.0.1:23517/mcp
 ```
 
-工具的名称、参数、返回值、订阅语义和错误模型由插件维护。插件可以自行支持 MCP Tools、Resources、Prompts 或通知，不需要基座替它们翻译成统一领域模型。
+无需 Token 或转接程序；桌面 MCP 面板可复制地址。重启后地址不变，客户端重新初始化。端口被占用时显示错误，不自动换端口或终止其他进程。
 
-## 3. Coterm MCP Bridge
+只监听 IPv4 回环，校验 Host/Origin，不开放任意 CORS。该模式不区分本机进程或系统用户，不用于远程访问或多用户隔离。
 
-Coterm 对外提供一个 MCP 入口。这个入口由一个很薄的 MCP Bridge 实现，避免用户为每个插件单独配置 MCP 进程。Bridge 的职责只有：
+## 工具与路由
 
-- 发现已启动的插件 MCP Server；
-- 为工具和资源增加插件命名空间；
-- 转发请求和响应；
-- 关联插件实例和 Coterm 会话；
-- 处理插件启动、断开和取消。
+| 工具 | 用途 |
+|---|---|
+| `coterm.list_instances` | 获取桌面已创建的实例及 ID |
+| `coterm.get_operation` | 查询审批、交互和执行结果 |
+| `coterm.cancel_operation` | 请求取消，结果依赖插件确认 |
+| `<pluginId>__<toolName>` | 插件显式注册的原生 Tool，例如 `coterm-plugin-ssh__ssh.command` |
 
-Bridge 不修改插件工具的领域参数和返回值，也不把所有工具包装成 `execute`、`read_output` 等统一接口。原样转发指保留领域语义；工具名、资源 URI 和请求 ID 等路由信息仍可能需要映射。
+Bridge 保留插件参数和原生 `CallToolResult`，仅处理命名空间、目标路由及操作元信息。不会自动把整个内部操作目录公开为 MCP。
 
-实例级工具必须由工具 schema 声明 `pluginInstanceId`，并提供实例发现入口；插件级工具不带实例目标，由宿主根据注册工具所属插件构造授权上下文。不能用当前标签页隐式选择 MCP 操作目标，也不能另建一条与用户界面无关的连接。
+- 实例级工具的 schema 必须要求字符串 `pluginInstanceId`，与桌面共享同一连接。
+- 插件级工具不绑定实例；插件授权域由已注册工具名称确定。
+- 查询/取消公共工具使用 `pluginInstanceId` 或 `pluginId` 定位记录授权域。
+- 所有外部调用固定为 Agent 来源；Agent 不能自行批准、伪造来源或开启 Bypass。
+- Agent commit 默认经过人工审批。Bypass 只跳过提交审批，仍需协议认证及秘密输入。
 
-```text
-Agent
-  -> Coterm MCP Bridge
-  -> ssh.exec_command
-  -> SSH Plugin MCP Server
+SSH 认证步骤和工具边界见 [SSH](ssh-plugin.md)，串口可用工具见 [串口](serial-plugin.md)。
+
+## 等待、结果与取消
+
+默认最多等待 60 秒，覆盖审批、秘密交互及执行。调用完成直接返回插件结果，`_meta["coterm/operation"]` 附操作收据。立即返回或等待到期时返回 pending，最终结果可通过查询记录的 `output` 获取。
+
+通过调用元信息设置等待上限，不把它混入领域参数：
+
+```json
+{
+  "name": "coterm-plugin-ssh__ssh.command",
+  "arguments": {"pluginInstanceId": "instance-id", "text": "pwd"},
+  "_meta": {"coterm/waitTimeoutMs": 0}
+}
 ```
 
-无 UI 插件也必须能够通过这个单一 MCP 入口运行。插件可以在开发和调试时独立启动自己的 MCP Server，但这不是 Coterm 图形模式下的集成方式；图形模式下，插件由基座启动并与插件实例绑定到同一 Bridge。
+`0` 表示立即返回，`1..300000` 指定毫秒上限。等待超时、客户端断开或删除 HTTP 会话均不代表底层操作取消，也不触发重放。取消仅在插件确认未提交或已停止时成功，否则可能为 unknown。
 
-## 4. 用户交互
+## HTTP 契约
 
-MCP 调用不意味着插件可以绕过用户。插件在需要密码、确认、文件选择或人工接管时，通过插件运行时向基座发起交互请求：
+- `POST /mcp` 接收单条 JSON-RPC；Accept 包含 JSON 与 SSE。请求返回 JSON，通知/客户端响应返回空 202，不支持 batch。
+- `initialize` 不带旧会话 ID；从响应取得 `Mcp-Session-Id`，之后携带会话 ID 与协商的 `MCP-Protocol-Version`。
+- 当前支持 `2025-06-18`、`2025-03-26`；初始化完成通知后才能调用工具。
+- `GET /mcp` 提供可选 SSE 目录变化通知，每会话最多一条流；无事件回放或断点续传，不传终端输出。
+- `DELETE /mcp` 只关闭客户端会话；过期或重启前的会话返回 404，应重新初始化。
+- 最多 8 会话、每会话 16 个在途请求、全局 128 个 HTTP 请求；空闲 30 分钟过期。
+- 请求与 JSON 结果各不超过 1 MiB，读取请求体限时 10 秒；超限明确失败，不无限排队。
 
-```text
-MCP call
-  -> plugin decides interaction is needed
-  -> host displays a request
-  -> user responds
-  -> plugin resumes the MCP operation
-```
+实现与测试位于 [coterm-mcp](../../crates/coterm-mcp)。Resources、Prompts、订阅、进度和 MCP cancellation notification 尚未实现；`coterm.cancel_operation` 是操作工具。
 
-基座负责显示和传递结果，插件负责决定交互发生的时机和业务含义。原始秘密只在受控的凭据通道中流转。
-
-插件没有自定义前端时仍可请求基座公共交互；整个运行环境没有交互入口时，返回交互不可用错误。等待用户期间仍处理取消，实例销毁后不接收迟到的交互结果。
-
-## 5. 流式和订阅型能力
-
-订阅型协议不应被伪装成一个无限阻塞的命令工具。插件可以使用资源、通知或游标式读取：
-
-```text
-mqtt.subscribe(...) -> subscription_id
-mqtt.read_messages(subscription_id, cursor) -> messages
-mqtt.unsubscribe(subscription_id)
-```
-
-订阅状态、消息缓存、游标、QoS 和重连行为由 MQTT 插件负责。Bridge 只转发 MCP 调用，不理解 Topic 或消息语义。
-
-## 6. 安全与生命周期
-
-Bridge 必须具备插件实例关联、调用超时、取消、断开错误和权限错误的公共处理。高风险工具的确认策略可以由插件声明风险信息，由基座负责统一呈现确认，但基座不需要解析工具的领域参数。
-
-插件崩溃或连接断开时，Bridge 返回明确的插件不可用或状态未知错误，不能伪造协议操作已经成功。
+旧 `coterm-mcp-stdio` 仅保留作开发回归，通过 `COTERM_MCP_ADDR`/`COTERM_MCP_TOKEN` 连接测试私有服务，不自动转接当前桌面 HTTP 入口。内部交互和事件见 [运行时通信](runtime-communication.md)。
