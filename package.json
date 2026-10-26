@@ -8,6 +8,7 @@
     "test": "pnpm test:build && node --import ./scripts/test-ts-loader.mjs --test tests/*.test.mjs",
     "test:build": "node scripts/build-sdk-browser.mjs && node scripts/build-host-interactions-entry.mjs",
     "plugin:ssh:build": "node scripts/build-ssh.mjs",
+    "plugin:serial:build": "node scripts/build-serial.mjs",
     "dev": "pnpm --filter coterm-desktop dev",
     "build": "pnpm --filter coterm-desktop build",
     "tauri": "pnpm --filter coterm-desktop tauri",

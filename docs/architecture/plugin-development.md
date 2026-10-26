@@ -294,6 +294,44 @@ interactionId   用户交互关联，可选
 
 这些名称描述逻辑消息，不是最终线缆协议。例如后续可将 `invoke` 编码为 JSON-RPC 请求，但不能直接把本文的 `type` 示例当成 JSON-RPC 2.0 报文。公共 SDK 应封装编码和传输，插件作者只依赖上面的调用语义。
 
+### 5.0 已实现的传输骨架
+
+上面的逻辑消息目前由 `coterm_proto::runtime::transport` 统一编码：一行一个 JSON-RPC 2.0 消息，基座按命令种类发送不同方法名（`initialize`、`create_instance`、`destroy_instance`、`invoke`、`approve`、`reject`、`cancel`、`interaction_result`、`provide_secret`、`shutdown`），插件回 `JsonRpcResponse`，插件主动推送统一走 `coterm.notification`。
+
+插件作者不再手写信封、读循环和输出串行化，只实现 `PluginBackend`：
+
+```rust
+use anyhow::Result;
+use coterm_proto::runtime::{
+    message::{HostCommand, PluginNotification},
+    transport::{serve, PluginBackend},
+};
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    serve(Backend::default()).await?;
+    Ok(())
+}
+
+impl PluginBackend for Backend {
+    async fn request(&mut self, command: HostCommand) -> Result<serde_json::Value, RuntimeError> {
+        // 只写领域分派：initialize / create_instance / invoke / approve / …
+    }
+    fn tick(&mut self) {}
+    fn take_notifications(&mut self) -> Option<tokio::sync::mpsc::Receiver<PluginNotification>> {
+        self.notifications.take()
+    }
+}
+```
+
+三条约定：
+
+- `stdout` 只走协议，日志写字到 `stderr`。
+- 推送通知的信封必须**不含 `id` 键**（不是 `"id": null`），基座靠键缺失区分通知和响应；直接复用 `transport` 即可，不要自己序列化 `JsonRpcRequest { id: None, .. }`。
+- 不要在 `select!` 里把读行和定时器并列竞争：读行被取消会丢掉内核已缓冲的字节。用 `serve_with_tick` 或 `read_line_with_tick`，它们把 tick 放进读循环内部。
+
+`plugin-ssh` 和 `plugin-serial` 都基于这一层，`src/main.rs` 各自只有几行。
+
 ### 5.1 请求
 
 请求承载插件自己的领域操作。基座只负责传递、超时、取消和关联；它会在握手时校验 schema，并在提交和批准时验证参数类型、必填字段及其他声明约束。业务语义仍由插件负责：
