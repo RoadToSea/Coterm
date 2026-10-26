@@ -652,7 +652,7 @@ impl ProcessPluginRuntime {
                         .history
                         .transition(
                             operation_id,
-                            OperationStatus::Failed,
+                            OperationStatus::Unknown,
                             None,
                             Some(runtime_error(
                                 ErrorCategory::Transport,
@@ -978,25 +978,20 @@ impl PluginRuntime for ProcessPluginRuntime {
                 .ok_or_else(|| runtime_error(ErrorCategory::NotFound, "plugin_not_loaded"))?;
             let process = Arc::new(JsonRpcPluginProcess::spawn(&package.backend_entry, &[]).await?);
             let handshake = RuntimeHello {
-                interface_major: 1,
-                interface_minor: 0,
-                required_features: vec![
-                    "instances".to_owned(),
-                    "backend-calls".to_owned(),
-                    "operation-catalog".to_owned(),
-                ],
-                optional_features: vec![
-                    "secret-delivery".to_owned(),
-                    "native-mcp-tools".to_owned(),
-                    "deferred-interactions".to_owned(),
-                    "async-operations".to_owned(),
-                    "plugin-events".to_owned(),
-                ],
+                interface_major: coterm_proto::runtime::lifecycle::INTERFACE_MAJOR,
+                interface_minor: coterm_proto::runtime::lifecycle::INTERFACE_MINOR,
+                required_features: coterm_proto::runtime::lifecycle::REQUIRED_FEATURES
+                    .iter()
+                    .map(|f| (*f).to_owned())
+                    .collect(),
+                optional_features: coterm_proto::runtime::lifecycle::OPTIONAL_FEATURES
+                    .iter()
+                    .map(|f| (*f).to_owned())
+                    .collect(),
                 limits: self.limits.clone(),
             };
-            let host_minor = handshake.interface_minor;
             let result = process
-                .request(HostCommand::Hello(handshake))
+                .request(HostCommand::Hello(handshake.clone()))
                 .await
                 .and_then(|value| {
                     serde_json::from_value::<coterm_proto::runtime::lifecycle::HelloResult>(value)
@@ -1016,25 +1011,14 @@ impl PluginRuntime for ProcessPluginRuntime {
                 }
             };
             if result.plugin_id != package.manifest.id
+                || result.plugin_version != package.manifest.version
                 || !package
                     .manifest
                     .runtime
                     .requires
                     .iter()
-                    .all(|feature| result.enabled_features.contains(feature))
-                || result.interface_minor > host_minor
-                || !result
-                    .enabled_features
-                    .iter()
-                    .any(|feature| feature == "instances")
-                || !result
-                    .enabled_features
-                    .iter()
-                    .any(|feature| feature == "backend-calls")
-                || !result
-                    .enabled_features
-                    .iter()
-                    .any(|feature| feature == "operation-catalog")
+                    .all(|f| result.enabled_features.contains(f))
+                || handshake.validate_result(&result).is_err()
             {
                 let _ = process.close().await;
                 return Err(runtime_error(
@@ -1042,6 +1026,7 @@ impl PluginRuntime for ProcessPluginRuntime {
                     "plugin_handshake_incompatible",
                 ));
             }
+            process.set_control_limit(result.limits.max_control_bytes);
             let mut catalog = HashMap::new();
             let mut names = HashSet::new();
             for descriptor in result.operations {
@@ -2021,6 +2006,57 @@ mod tests {
                 },
             },
         )
+    }
+
+    #[tokio::test]
+    async fn invalid_deferred_acceptance_is_unknown_after_dispatch() {
+        use coterm_proto::runtime::operation::{OperationRecord, OperationStatus};
+        for (reply, negotiated) in [
+            (json!({"_cotermDeferred":"wrong-operation"}), true),
+            (json!({"_cotermDeferred":42}), true),
+            (json!({"_cotermDeferred":"op"}), false),
+        ] {
+            let runtime = runtime();
+            let now = chrono::Utc::now();
+            runtime
+                .history
+                .begin(OperationRecord {
+                    operation_id: "op".to_owned(),
+                    plugin_id: "plugin".to_owned(),
+                    plugin_instance_id: Some("instance".to_owned()),
+                    source: OperationSource::Human,
+                    effect: OperationEffect::Commit,
+                    operation: "write".to_owned(),
+                    status: OperationStatus::Accepted,
+                    input: json!({}),
+                    output: None,
+                    error: None,
+                    created_at: now,
+                    updated_at: now,
+                    proposal_id: None,
+                    wait_expired: false,
+                    transient: false,
+                })
+                .await
+                .unwrap();
+            runtime
+                .history
+                .transition("op", OperationStatus::Dispatched, None, None)
+                .await
+                .unwrap();
+            let mut state = runtime.state.lock().await;
+            if negotiated {
+                state
+                    .features
+                    .insert("plugin".to_owned(), vec!["async-operations".to_owned()]);
+            }
+            let record = runtime
+                .finish_reply(&mut state, "op", Ok(reply))
+                .await
+                .unwrap();
+            assert_eq!(record.status, OperationStatus::Unknown);
+            assert_eq!(record.error.unwrap().code, "invalid_deferred_operation");
+        }
     }
 
     fn instance(plugin_id: &str, instance_id: &str) -> InstanceInfo {

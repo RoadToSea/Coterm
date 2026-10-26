@@ -1,21 +1,23 @@
-//! MVP JSON-RPC-over-stdio adapter for plugin control requests.
-//! Streaming payloads and the final length-prefixed frame protocol are separate work.
+//! v1.0 JSON-RPC-over-stdio adapter for plugin control requests.
+//! Binary streams remain a separately negotiated future extension.
 
 use std::{
     io,
     path::{Path, PathBuf},
     process::Stdio,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
     time::Duration,
 };
 
 use crate::plugin_runtime::PluginConnection;
-use coterm_proto::{
-    runtime::{
-        manifest::PluginManifest,
-        message::{HostCommand, HostMessage, PluginEvent, PluginNotification},
-        ErrorCategory, RuntimeError, RuntimeFuture,
-    },
-    JsonRpcError, JsonRpcRequest,
+use coterm_proto::runtime::{
+    manifest::PluginManifest,
+    message::{HostCommand, HostMessage, PluginEvent, PluginNotification},
+    wire::{decode_response, encode_request, MAX_CONTROL_BYTES},
+    ErrorCategory, RuntimeError, RuntimeFuture,
 };
 use serde_json::{json, Value};
 use tokio::{
@@ -26,20 +28,9 @@ use tokio::{
 };
 
 const EVENT_QUEUE_CAPACITY: usize = 64;
-const MAX_CONTROL_LINE_BYTES: usize = 1024 * 1024;
+const MAX_CONTROL_LINE_BYTES: usize = MAX_CONTROL_BYTES;
 const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 pub(crate) const MAX_MANIFEST_BYTES: u64 = 1024 * 1024;
-
-const SUPPORTED_HOST_FEATURES: &[&str] = &[
-    "instances",
-    "backend-calls",
-    "operation-catalog",
-    "secret-delivery",
-    "native-mcp-tools",
-    "deferred-interactions",
-    "async-operations",
-    "plugin-events",
-];
 
 #[derive(Debug, Clone)]
 pub struct PluginPackage {
@@ -98,15 +89,13 @@ pub(crate) fn validate_manifest(manifest: &PluginManifest) -> Result<(), Runtime
     {
         return Err(protocol_error("plugin_manifest_identity_invalid"));
     }
-    if manifest.runtime.interface_major != 1 {
+    if manifest.runtime.interface_major != coterm_proto::runtime::lifecycle::INTERFACE_MAJOR {
         return Err(protocol_error("plugin_runtime_version_unsupported"));
     }
-    if manifest
-        .runtime
-        .requires
-        .iter()
-        .any(|feature| !SUPPORTED_HOST_FEATURES.contains(&feature.as_str()))
-    {
+    if manifest.runtime.requires.iter().any(|feature| {
+        !coterm_proto::runtime::lifecycle::REQUIRED_FEATURES.contains(&feature.as_str())
+            && !coterm_proto::runtime::lifecycle::OPTIONAL_FEATURES.contains(&feature.as_str())
+    }) {
         return Err(protocol_error("plugin_required_feature_unsupported"));
     }
     if manifest.instances.instance_type.trim().is_empty() || !manifest.instances.multiple {
@@ -159,6 +148,7 @@ pub struct JsonRpcPluginProcess {
     request_gate: Mutex<()>,
     completions: Mutex<Option<mpsc::Receiver<PluginNotification>>>,
     pub events: broadcast::Sender<PluginNotification>,
+    control_limit: Arc<AtomicUsize>,
 }
 
 impl JsonRpcPluginProcess {
@@ -185,7 +175,14 @@ impl JsonRpcPluginProcess {
         let (sender, receiver) = mpsc::channel(EVENT_QUEUE_CAPACITY);
         let (completed, completions) = mpsc::channel(EVENT_QUEUE_CAPACITY);
         let (events, _) = broadcast::channel(EVENT_QUEUE_CAPACITY);
-        tokio::spawn(read_responses(stdout, sender, completed, events.clone()));
+        let control_limit = Arc::new(AtomicUsize::new(MAX_CONTROL_BYTES));
+        tokio::spawn(read_responses(
+            stdout,
+            sender,
+            completed,
+            events.clone(),
+            control_limit.clone(),
+        ));
 
         Ok(Self {
             stdin: Mutex::new(stdin),
@@ -194,7 +191,13 @@ impl JsonRpcPluginProcess {
             request_gate: Mutex::new(()),
             completions: Mutex::new(Some(completions)),
             events,
+            control_limit,
         })
+    }
+
+    /// 只在 initialize 成功且结果已校验后调用。
+    pub fn set_control_limit(&self, bytes: u32) {
+        self.control_limit.store(bytes as usize, Ordering::Release);
     }
 
     pub async fn take_completions(&self) -> Option<mpsc::Receiver<PluginNotification>> {
@@ -214,27 +217,30 @@ impl JsonRpcPluginProcess {
         .await?;
 
         let response = match timeout(DEFAULT_REQUEST_TIMEOUT, self.receive()).await {
-            Ok(response) => response?,
+            Ok(Ok(response)) => response,
+            Ok(Err(error)) => {
+                let _ = self.close().await;
+                return Err(error);
+            }
             Err(_) => {
                 let _ = self.close().await;
                 return Err(protocol_error("plugin_request_timed_out"));
             }
         };
-        let result = match response {
+        match response {
             Some(PluginEvent::Reply {
                 request_id: response_id,
                 result,
             }) if response_id == request_id => result,
-            Some(PluginEvent::Reply { .. }) => Err(protocol_error("plugin_response_id_mismatch")),
-            Some(_) => Err(protocol_error("plugin_unsolicited_event_unsupported")),
-            None => Err(protocol_error("plugin_exited_before_response")),
-        };
-        if result.as_ref().is_err_and(|error| {
-            error.category == ErrorCategory::Transport && error.code != "plugin_rpc_response_error"
-        }) {
-            let _ = self.close().await;
+            other => {
+                let _ = self.close().await;
+                Err(protocol_error(match other {
+                    Some(PluginEvent::Reply { .. }) => "plugin_response_id_mismatch",
+                    Some(_) => "plugin_unsolicited_event_unsupported",
+                    None => "plugin_exited_before_response",
+                }))
+            }
         }
-        result
     }
 
     pub async fn process_id(&self) -> Option<u32> {
@@ -245,16 +251,10 @@ impl JsonRpcPluginProcess {
 impl super::plugin_runtime::PluginConnection for JsonRpcPluginProcess {
     fn send<'a>(&'a self, message: HostMessage) -> RuntimeFuture<'a, ()> {
         Box::pin(async move {
-            let request = to_json_rpc(message)?;
-            let encoded = serde_json::to_vec(&request)
-                .map_err(|error| protocol_error_with("request_encode_failed", error))?;
+            let encoded = encode_request(message, self.control_limit.load(Ordering::Acquire))?;
             let mut stdin = self.stdin.lock().await;
             stdin
                 .write_all(&encoded)
-                .await
-                .map_err(|error| transport_error("plugin_stdin_write_failed", error))?;
-            stdin
-                .write_all(b"\n")
                 .await
                 .map_err(|error| transport_error("plugin_stdin_write_failed", error))?;
             stdin
@@ -310,72 +310,12 @@ pub fn resolve_backend_entry(
     resolve_package_file(&root, relative, "plugin_entry_invalid")
 }
 
-fn to_json_rpc(message: HostMessage) -> Result<JsonRpcRequest, RuntimeError> {
-    let (method, params) = match message.command {
-        HostCommand::Hello(hello) => ("initialize", serde_json::to_value(hello)),
-        HostCommand::CreateInstance(instance) => {
-            ("create_instance", serde_json::to_value(instance))
-        }
-        HostCommand::DestroyInstance { plugin_instance_id } => (
-            "destroy_instance",
-            serde_json::to_value(json!({ "pluginInstanceId": plugin_instance_id })),
-        ),
-        HostCommand::Invoke(request) => ("invoke", serde_json::to_value(request)),
-        HostCommand::Approve(request) => ("approve", serde_json::to_value(request)),
-        HostCommand::Reject {
-            operation_id,
-            proposal_id,
-            reason,
-        } => (
-            "reject",
-            serde_json::to_value(json!({
-                "operationId": operation_id,
-                "proposalId": proposal_id,
-                "reason": reason,
-            })),
-        ),
-        HostCommand::Cancel(target) => ("cancel", serde_json::to_value(target)),
-        HostCommand::InteractionResult(result) => {
-            ("interaction_result", serde_json::to_value(result))
-        }
-        HostCommand::ProvideSecret(secret) => ("provide_secret", serde_json::to_value(secret)),
-        HostCommand::StreamSubscribe(request) => {
-            ("stream_subscribe", serde_json::to_value(request))
-        }
-        HostCommand::StreamUnsubscribe { subscription_id } => (
-            "stream_unsubscribe",
-            serde_json::to_value(json!({ "subscriptionId": subscription_id })),
-        ),
-        HostCommand::StreamCredit {
-            subscription_id,
-            credit,
-        } => (
-            "stream_credit",
-            serde_json::to_value(json!({ "subscriptionId": subscription_id, "credit": credit })),
-        ),
-        HostCommand::Shutdown => ("shutdown", Ok(Value::Null)),
-    };
-    let params = params.map_err(|error| protocol_error_with("request_encode_failed", error))?;
-    let request = JsonRpcRequest {
-        jsonrpc: "2.0".to_owned(),
-        id: Some(Value::String(message.request_id)),
-        method: method.to_owned(),
-        params,
-    };
-    let encoded_len = serde_json::to_vec(&request)
-        .map_err(|error| protocol_error_with("request_encode_failed", error))?
-        .len();
-    if encoded_len > MAX_CONTROL_LINE_BYTES {
-        return Err(protocol_error("plugin_request_too_large"));
-    }
-    Ok(request)
-}
-
 async fn read_responses(
     stdout: ChildStdout,
     sender: mpsc::Sender<Result<PluginEvent, RuntimeError>>,
     completed: mpsc::Sender<PluginNotification>,
     events: broadcast::Sender<PluginNotification>,
+    control_limit: Arc<AtomicUsize>,
 ) {
     let mut reader = BufReader::new(stdout);
     loop {
@@ -389,8 +329,11 @@ async fn read_responses(
                 break;
             }
         };
-        if line.is_empty() {
-            continue;
+        if line.len() > control_limit.load(Ordering::Acquire) {
+            let _ = sender
+                .send(Err(protocol_error("plugin_control_too_large")))
+                .await;
+            break;
         }
         if let Ok(value) = serde_json::from_str::<Value>(&line) {
             if value["jsonrpc"] == "2.0"
@@ -449,7 +392,10 @@ where
             if line.is_empty() {
                 return Ok(None);
             }
-            break;
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "unterminated plugin control line",
+            ));
         }
 
         let newline = available.iter().position(|byte| *byte == b'\n');
@@ -467,46 +413,10 @@ where
         }
     }
 
-    if line.last() == Some(&b'\n') {
-        line.pop();
-    }
-    if line.last() == Some(&b'\r') {
-        line.pop();
-    }
+    // Keep the terminator so the negotiated byte limit includes LF / CRLF.
     String::from_utf8(line)
         .map(Some)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
-}
-
-fn decode_response(line: &str) -> Result<PluginEvent, RuntimeError> {
-    let response: Value = serde_json::from_str(line)
-        .map_err(|error| protocol_error_with("plugin_response_invalid", error))?;
-    if response.get("jsonrpc").and_then(Value::as_str) != Some("2.0") {
-        return Err(protocol_error("plugin_jsonrpc_version_invalid"));
-    }
-    let request_id = match response.get("id") {
-        Some(Value::String(id)) => id.clone(),
-        _ => return Err(protocol_error("plugin_response_id_invalid")),
-    };
-    let result = match (response.get("result"), response.get("error")) {
-        (Some(result), None) => Ok(result.clone()),
-        (None, Some(error)) => {
-            let error: JsonRpcError = serde_json::from_value(error.clone())
-                .map_err(|cause| protocol_error_with("plugin_rpc_error_invalid", cause))?;
-            Err(map_rpc_error(error))
-        }
-        _ => return Err(protocol_error("plugin_response_shape_invalid")),
-    };
-    Ok(PluginEvent::Reply { request_id, result })
-}
-
-fn map_rpc_error(error: JsonRpcError) -> RuntimeError {
-    RuntimeError {
-        category: ErrorCategory::Domain,
-        code: format!("plugin_rpc_{}", error.code),
-        message: error.message,
-        details: error.data,
-    }
 }
 
 fn protocol_error(code: &str) -> RuntimeError {
@@ -538,17 +448,22 @@ mod tests {
     use super::{decode_response, read_bounded_line, resolve_backend_entry, validate_manifest};
 
     #[tokio::test]
-    async fn bounds_control_line_size_and_accepts_eof_terminated_line() {
+    async fn bounds_control_lines_and_rejects_truncated_eof() {
         let mut reader = BufReader::new(&b"12345\n"[..]);
         let error = read_bounded_line(&mut reader, 4).await.unwrap_err();
         assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
 
         let mut reader = BufReader::new(&b"{}"[..]);
         assert_eq!(
-            read_bounded_line(&mut reader, 2).await.unwrap(),
-            Some("{}".to_owned())
+            read_bounded_line(&mut reader, 2).await.unwrap_err().kind(),
+            std::io::ErrorKind::InvalidData
         );
         assert_eq!(read_bounded_line(&mut reader, 2).await.unwrap(), None);
+        let mut reader = BufReader::new(&b"{}\r\n"[..]);
+        assert_eq!(
+            read_bounded_line(&mut reader, 4).await.unwrap(),
+            Some("{}\r\n".to_owned())
+        );
     }
 
     #[test]

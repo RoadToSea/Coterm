@@ -1,4 +1,4 @@
-//! 双向逻辑消息；不指定帧头、字节序、JSON-RPC 或 MCP 物理复用方式。
+//! 控制消息与宿主内部事件；实际 JSON-RPC 编码统一由 wire 提供。
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -61,7 +61,12 @@ pub struct HostMessage {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type", content = "params", rename_all = "snake_case")]
+#[serde(
+    tag = "type",
+    content = "params",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
 pub enum HostCommand {
     Hello(RuntimeHello),
     CreateInstance(CreateInstance),
@@ -91,7 +96,7 @@ pub enum HostCommand {
     Shutdown,
 }
 
-/// 操作事件按基座生成的 operation_id 关联；请求应答用于生命周期/控制确认。
+/// 宿主内部逻辑事件，不能直接序列化为线缆通知。v1.0 通知使用 PluginNotification。
 #[derive(Debug, Clone)]
 pub enum PluginEvent {
     HelloResult {

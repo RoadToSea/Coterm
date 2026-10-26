@@ -103,7 +103,7 @@ pub struct DeferredInteraction {
     pub request: InteractionRequest,
 }
 
-/// 不实现 Debug/Serialize/Clone；仅后端 SDK 兑换路径可以访问原始字节。
+/// 预留秘密兑换类型；v1.0 使用 SecretDelivery，尚无通用 SDK 兑换服务。
 pub trait SecretMaterial: Send {
     fn expose(&self) -> &[u8];
 }

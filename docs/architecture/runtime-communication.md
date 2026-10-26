@@ -1,25 +1,51 @@
 # 运行时通信
 
-当前采用 stdio JSON-RPC 行适配器；正式二进制帧和通用流接口尚未接通，公开契约未冻结。类型见 [runtime](../../crates/coterm-proto/src/runtime)，实际编码见 [transport.rs](../../crates/coterm-proto/src/runtime/transport.rs) 与 [plugin_process.rs](../../crates/coterm-core/src/plugin_process.rs)。
+**基线：控制协议 v1.0（2026-10-26）**。固定现有 stdio JSON-RPC、实例调用、审批、单轮秘密交互和 JSON 通知；二进制流、通用交互与前端 SDK 不在本次冻结范围。类型见 [runtime](../../crates/coterm-proto/src/runtime)，唯一编解码入口为 [wire.rs](../../crates/coterm-proto/src/runtime/wire.rs)，可执行契约见 [control_contract.rs](../../crates/coterm-proto/tests/control_contract.rs)。
+
+## 评审结论与兼容规则
+
+现有分工适合 SSH、串口等不同协议：基座只管理实例、可信来源和公共交互，插件保留领域 schema、结果与存储；MCP 与界面复用同一实例。控制与领域数据分离的方向保留。
+
+本轮修正：两套同名后端入口合为一个；消除多处方法编码副本；保留结构化错误；落实握手顺序、能力交集、双向字节限制及输出失败后的退出；无法确认的异步受理记为 unknown。单一 JSON 管道仍可能被大事件占用，不能作为高吞吐数据通道或安全沙箱。
+
+- `interfaceMajor=1`、`interfaceMinor=0`；主版本不符拒绝。协商 minor 不超过双方支持值。
+- 同一 major 只增加可忽略的可选字段或需协商的特性；改变字段、枚举语义、审批规则或物理编码必须升级 major。新枚举/方法不能未协商就发送。
+- `enabledFeatures` 必须是双方能力交集，包含全部 required，不能重复或自行增项；未知 optional 忽略，未知 required 拒绝。
+- manifest 的 `id/version` 必须与握手一致；`runtime.requires` 必须全部启用。插件包版本与运行时接口版本独立。
+- `maxControlBytes` 协商为正数且不超过宿主报价和 1 MiB；首轮握手使用 1 MiB，成功后双向应用。`maxDataChunkBytes/initialWindow` 原样回显，当前无流控语义。
+- `backend::PluginBackend` 是唯一 Rust 入口，旧 `transport::PluginBackend` 路径保留别名。`PluginEvent` 为内部类型，不能当作线缆通知；`stream_*` 明确返回不支持。
 
 ## 传输与生命周期
 
-- 每行一个 JSON-RPC 2.0 消息，请求 ID 为字符串，回复按 ID 关联；stdout 不混入日志。
-- 控制行上限 1 MiB，单次控制应答限时 10 秒；持续数据不能塞进无限大的控制消息。
-- 先 `initialize` 协商身份、接口版本、能力、限制和操作目录，再接受领域调用。
+- 每行一个 UTF-8 JSON-RPC 2.0 对象，长度包含 LF（输入接受 CRLF）；不支持 batch，截断行关闭连接。请求 ID 为字符串，回复按 ID 关联；stdout 不混入日志。
+- 宿主每进程最多一个控制请求在途，应答限时 10 秒；回复和通知共用串行输出，事件不能无限堆积。stdout 失败停止收件，shutdown 不等待遗留通知发送端。
+- 先 `initialize`，成功前只允许握手和 `shutdown`；重复成功握手返回 conflict。失败握手可修正后重试，不允许在原进程重新协商已启用能力。
 - 插件只声明真正实现的能力；类型中存在某条消息不代表所有插件支持它。
 - Rust 插件实现 `PluginBackend`，共享传输层负责读取、tick 和串行输出。
 
-| 方法/通知 | 用途 |
-|---|---|
-| `initialize` | 握手与目录注册 |
-| `create_instance/destroy_instance/shutdown` | 实例与进程生命周期 |
-| `invoke/approve/reject` | 调用、提案批准/拒绝 |
-| `cancel` | 取消操作或交互 |
-| `provide_secret/interaction_result` | 私有秘密投递与交互恢复 |
-| `coterm.notification` | 操作完成/失败及实例事件 |
+| 方法/通知 | 参数 → 成功结果 | 特性 |
+|---|---|---|
+| `initialize` | `RuntimeHello` → `HelloResult`（操作与 MCP 目录） | 首条 |
+| `create_instance` | `CreateInstance` → 成功 JSON，可带 `label` | instances |
+| `destroy_instance/shutdown` | `{pluginInstanceId}` / `null` → 成功 JSON | instances / 基础 |
+| `invoke` | `InvokeRequest` → 领域结果、提案或保留信封 | backend-calls + operation-catalog |
+| `approve/reject` | `ApproveProposal` / `{operationId,proposalId,reason?}` → 执行结果 / 成功 JSON | 同上 |
+| `cancel` | `{type:"operation"\|"interaction",id}` → `{outcome:"not_submitted"\|"stopped"\|"unsupported"\|"unknown"}` | 基础 |
+| `provide_secret` | `SecretDelivery` → 成功 JSON | secret-delivery |
+| `interaction_result` | `InteractionResult` → 原操作结果 | deferred-interactions，依赖 secret-delivery |
+| `coterm.notification` | `PluginNotification`，无回复 | async-operations / plugin-events |
+
+结构字段使用 camelCase，枚举标签使用 snake_case；领域 `args/result/payload` 由插件 schema 定义。普通结果不得占用顶层 `_coterm*` 字段。成功回复恰有 `result`（可为 null），失败回复恰有 `error`。
 
 长操作立即返回 `{"_cotermDeferred":"operation-id"}`，之后用 `operation_completed` 或 `operation_failed` 通知完成。通知不带 JSON-RPC `id`；领域事件使用 `type="event"`、`pluginInstanceId`、`name` 和 `payload`。
+
+## 错误约定
+
+解析/信封/方法/参数错误分别为 JSON-RPC `-32700/-32600/-32601/-32602`；无法关联请求时 `id:null`。有效请求的错误不会结束进程，超限、截断、I/O 失败则关闭连接。
+
+业务与运行时错误使用 `error.code=-32000`、`error.data={category,code,message,details}`，不从展示文字推断错误码。`category` 固定为 invalid_request / not_found / unsupported / conflict / interaction / transport / domain / internal；`code` 为稳定机器标识，`details` 只能放非秘密上下文。旧插件无结构化 data 时降级为 `plugin_rpc_<数值>`。
+
+公共控制错误包括 `runtime_not_initialized`、`runtime_already_initialized`、`runtime_feature_not_negotiated`、`plugin_handshake_incompatible`、`plugin_control_too_large`。插件领域码由插件独立维护；`transport` 表示执行结果可能未知，不表示操作可重试，也不单凭分类终止健康进程。
 
 ## 操作与审批
 

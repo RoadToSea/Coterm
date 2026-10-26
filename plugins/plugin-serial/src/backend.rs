@@ -170,58 +170,20 @@ fn mcp_result(value: Value) -> Value {
     json!({"content":[{"type":"text","text":value.to_string()}],"isError":false})
 }
 
-impl coterm_proto::runtime::transport::PluginBackend for Backend {
+impl coterm_proto::runtime::backend::PluginBackend for Backend {
     async fn request(&mut self, command: HostCommand) -> Result<Value, RuntimeError> {
         // 传输层负责 JSON-RPC 方法名，领域分派保持基座契约的形状。
-        let (method, params) = match command {
-            HostCommand::Hello(hello) => ("initialize", serde_json::to_value(hello)),
-            HostCommand::CreateInstance(create) => ("create_instance", serde_json::to_value(create)),
-            HostCommand::DestroyInstance { plugin_instance_id } => (
-                "destroy_instance",
-                Ok(json!({ "pluginInstanceId": plugin_instance_id })),
-            ),
-            HostCommand::Invoke(request) => ("invoke", serde_json::to_value(request)),
-            HostCommand::Approve(request) => ("approve", serde_json::to_value(request)),
-            HostCommand::Reject {
-                operation_id,
-                proposal_id,
-                reason,
-            } => (
-                "reject",
-                Ok(json!({
-                    "operationId": operation_id,
-                    "proposalId": proposal_id,
-                    "reason": reason,
-                })),
-            ),
-            HostCommand::Cancel(target) => ("cancel", serde_json::to_value(target)),
-            HostCommand::InteractionResult(result) => {
-                ("interaction_result", serde_json::to_value(result))
-            }
-            HostCommand::ProvideSecret(secret) => {
-                ("provide_secret", serde_json::to_value(secret))
-            }
-            HostCommand::Shutdown => ("shutdown", Ok(Value::Null)),
-            // 串口没有秘密输入、延迟交互或流式订阅；基座按握手能力决定是否调用。
-            HostCommand::StreamSubscribe(_)
-            | HostCommand::StreamUnsubscribe { .. }
-            | HostCommand::StreamCredit { .. } => {
-                return Err(unsupported("serial_stream_unsupported", "Serial plugin does not support stream subscriptions"))
-            }
-        };
-        let params = params.map_err(|error| RuntimeError {
-            category: ErrorCategory::InvalidRequest,
-            code: "serial_request_encode_failed".to_owned(),
-            message: error.to_string(),
-            details: None,
-        })?;
+        let (method, params) = coterm_proto::runtime::wire::command_params(command)?;
         self.request(method, params).await.map_err(|error| {
-            RuntimeError {
-                category: ErrorCategory::Domain,
-                code: "serial_domain_error".to_owned(),
-                message: error.to_string(),
-                details: None,
-            }
+            error
+                .downcast_ref::<RuntimeError>()
+                .cloned()
+                .unwrap_or_else(|| RuntimeError {
+                    category: ErrorCategory::Domain,
+                    code: "serial_domain_error".to_owned(),
+                    message: error.to_string(),
+                    details: None,
+                })
         })
     }
 
@@ -230,23 +192,11 @@ impl coterm_proto::runtime::transport::PluginBackend for Backend {
     }
 }
 
-fn unsupported(code: &str, message: &str) -> RuntimeError {
-    RuntimeError {
-        category: ErrorCategory::Unsupported,
-        code: code.to_owned(),
-        message: message.to_owned(),
-        details: None,
-    }
-}
-
 impl Backend {
     pub async fn request(&mut self, method: &str, params: Value) -> Result<Value> {
         match method {
             "initialize" => {
                 let hello: RuntimeHello = decode(params)?;
-                if hello.interface_major != 1 {
-                    bail!("Unsupported runtime interface");
-                }
                 let enabled = [
                     "instances",
                     "backend-calls",
@@ -255,21 +205,20 @@ impl Backend {
                     "async-operations",
                     "plugin-events",
                 ];
-                if hello
-                    .required_features
-                    .iter()
-                    .any(|feature| !enabled.contains(&feature.as_str()))
-                {
-                    bail!("Unsupported required runtime feature");
-                }
+                let enabled_features = hello.negotiate_features(&enabled)?;
+                let mcp_tools = if enabled_features.iter().any(|f| f == "native-mcp-tools") {
+                    mcp_tools()
+                } else {
+                    Vec::new()
+                };
                 Ok(serde_json::to_value(HelloResult {
                     plugin_id: PLUGIN_ID.to_owned(),
                     plugin_version: env!("CARGO_PKG_VERSION").to_owned(),
                     interface_minor: 0,
-                    enabled_features: enabled.iter().map(|feature| (*feature).to_owned()).collect(),
-                    limits: hello.limits,
+                    enabled_features,
+                    limits: hello.control_limits(),
                     operations: catalog(),
-                    mcp_tools: mcp_tools(),
+                    mcp_tools,
                 })?)
             }
             "create_instance" => {

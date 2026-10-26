@@ -1,4 +1,5 @@
-//! 基座内部的插件管理入口。只有声明，不实现进程、路由或持久化。
+//! 基座内部接口；进程与路由实现在 plugin_process / plugin_manager。
+//! StreamRouter 等预留接口不属于对外 v1.0 JSON 控制契约。
 
 use coterm_proto::runtime::{
     interaction::{InteractionRequest, InteractionResult},

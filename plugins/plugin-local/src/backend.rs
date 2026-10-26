@@ -120,66 +120,20 @@ pub fn mcp_tools() -> Vec<coterm_proto::runtime::lifecycle::McpToolRegistration>
     Vec::new()
 }
 
-fn unsupported(code: &str, message: &str) -> RuntimeError {
-    RuntimeError {
-        category: ErrorCategory::Unsupported,
-        code: code.to_owned(),
-        message: message.to_owned(),
-        details: None,
-    }
-}
 
-impl coterm_proto::runtime::transport::PluginBackend for Backend {
+impl coterm_proto::runtime::backend::PluginBackend for Backend {
     async fn request(&mut self, command: HostCommand) -> Result<Value, RuntimeError> {
-        let (method, params) = match command {
-            HostCommand::Hello(hello) => ("initialize", serde_json::to_value(hello)),
-            HostCommand::CreateInstance(create) => ("create_instance", serde_json::to_value(create)),
-            HostCommand::DestroyInstance { plugin_instance_id } => (
-                "destroy_instance",
-                Ok(json!({ "pluginInstanceId": plugin_instance_id })),
-            ),
-            HostCommand::Invoke(request) => ("invoke", serde_json::to_value(request)),
-            HostCommand::Approve(request) => ("approve", serde_json::to_value(request)),
-            HostCommand::Reject {
-                operation_id,
-                proposal_id,
-                reason,
-            } => (
-                "reject",
-                Ok(json!({
-                    "operationId": operation_id,
-                    "proposalId": proposal_id,
-                    "reason": reason,
-                })),
-            ),
-            HostCommand::Cancel(target) => ("cancel", serde_json::to_value(target)),
-            HostCommand::InteractionResult(result) => {
-                ("interaction_result", serde_json::to_value(result))
-            }
-            HostCommand::ProvideSecret(secret) => {
-                ("provide_secret", serde_json::to_value(secret))
-            }
-            HostCommand::Shutdown => ("shutdown", Ok(Value::Null)),
-            HostCommand::StreamSubscribe(_)
-            | HostCommand::StreamUnsubscribe { .. }
-            | HostCommand::StreamCredit { .. } => {
-                return Err(unsupported(
-                    "local_stream_unsupported",
-                    "Local terminal plugin does not support stream subscriptions",
-                ))
-            }
-        };
-        let params = params.map_err(|error| RuntimeError {
-            category: ErrorCategory::InvalidRequest,
-            code: "local_request_encode_failed".to_owned(),
-            message: error.to_string(),
-            details: None,
-        })?;
-        self.domain(method, params).await.map_err(|error| RuntimeError {
-            category: ErrorCategory::Domain,
-            code: "local_domain_error".to_owned(),
-            message: error.to_string(),
-            details: None,
+        let (method, params) = coterm_proto::runtime::wire::command_params(command)?;
+        self.domain(method, params).await.map_err(|error| {
+            error
+                .downcast_ref::<RuntimeError>()
+                .cloned()
+                .unwrap_or_else(|| RuntimeError {
+                    category: ErrorCategory::Domain,
+                    code: "local_domain_error".to_owned(),
+                    message: error.to_string(),
+                    details: None,
+                })
         })
     }
 
@@ -193,27 +147,20 @@ impl Backend {
         match method {
             "initialize" => {
                 let hello: RuntimeHello = decode(params)?;
-                if hello.interface_major != 1 {
-                    bail!("Unsupported runtime interface");
-                }
-                if hello
-                    .required_features
-                    .iter()
-                    .any(|feature| !ENABLED_FEATURES.contains(&feature.as_str()))
-                {
-                    bail!("Unsupported required runtime feature");
-                }
+                let enabled_features = hello.negotiate_features(ENABLED_FEATURES)?;
+                let mcp_tools = if enabled_features.iter().any(|f| f == "native-mcp-tools") {
+                    mcp_tools()
+                } else {
+                    Vec::new()
+                };
                 Ok(serde_json::to_value(HelloResult {
                     plugin_id: PLUGIN_ID.to_owned(),
                     plugin_version: env!("CARGO_PKG_VERSION").to_owned(),
                     interface_minor: 0,
-                    enabled_features: ENABLED_FEATURES
-                        .iter()
-                        .map(|feature| (*feature).to_owned())
-                        .collect(),
-                    limits: hello.limits,
+                    enabled_features,
+                    limits: hello.control_limits(),
                     operations: catalog(),
-                    mcp_tools: mcp_tools(),
+                    mcp_tools,
                 })?)
             }
             "create_instance" => {

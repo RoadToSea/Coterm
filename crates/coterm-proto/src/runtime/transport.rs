@@ -5,40 +5,19 @@
 //! `coterm.notification`。信封、读行、大小上限和输出串行化在这一层统一，插件只实现
 //! [`PluginBackend`] 的领域逻辑。
 
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
+use super::lifecycle::{HelloResult, RuntimeHello, INTERFACE_MAJOR};
 use super::message::{HostCommand, PluginNotification};
-use super::operation::InvokeRequest;
-use super::lifecycle::CreateInstance;
-use super::interaction::SecretDelivery;
-use super::RuntimeError;
-use crate::{JsonRpcError, JsonRpcRequest, JsonRpcResponse};
+use super::wire::{decode_request, encode_line, reply};
+use super::{ErrorCategory, RuntimeError};
 
-/// 插件发往基座的通知方法名。
-pub const NOTIFICATION_METHOD: &str = "coterm.notification";
-/// 与基座控制行上限对齐；超出一行的请求按协议错误处理。
-pub const MAX_CONTROL_BYTES: usize = 1024 * 1024;
-/// 默认 tick：只驱动过期清理，不影响操作处理延迟。
+pub use super::backend::PluginBackend;
+pub use super::wire::{MAX_CONTROL_BYTES, NOTIFICATION_METHOD};
 pub const DEFAULT_TICK: Duration = Duration::from_secs(1);
-
-/// 框架级失败（回复未能产生）使用的错误码。
-const FRAMEWORK_ERROR: i32 = -32000;
-
-/// 插件实现的领域逻辑。
-#[allow(async_fn_in_trait)]
-pub trait PluginBackend: Send {
-    /// 处理带 `request_id` 的控制命令。
-    async fn request(&mut self, command: HostCommand) -> Result<serde_json::Value, RuntimeError>;
-
-    /// 周期钩子；默认不做事。用于清理过期交互与凭据。
-    fn tick(&mut self) {}
-
-    /// 通知接收端，由基座在 [`serve`] 开始时取出。
-    fn take_notifications(&mut self) -> Option<tokio::sync::mpsc::Receiver<PluginNotification>>;
-}
 
 /// 传输失败：协议不合法，或 stdout 已不可用。
 #[derive(Debug)]
@@ -64,113 +43,14 @@ impl From<std::io::Error> for TransportError {
     }
 }
 
-/// 把一行控制请求解析为 `(request_id, command, is_shutdown)`。
-///
-/// 方法名与 `coterm-core::plugin_process::to_json_rpc` 一一对应；两者是同一契约的两端。
-fn parse_command(line: &[u8]) -> Result<(String, HostCommand, bool), TransportError> {
-    let request: JsonRpcRequest = serde_json::from_slice(line)
-        .map_err(|_| TransportError::Protocol("invalid plugin runtime JSON-RPC".to_owned()))?;
-    if request.jsonrpc != "2.0" {
-        return Err(TransportError::Protocol(
-            "invalid JSON-RPC version".to_owned(),
-        ));
-    }
-    let id = request
-        .id
-        .and_then(|id| id.as_str().map(str::to_owned))
-        .ok_or_else(|| {
-            TransportError::Protocol("plugin runtime request id must be a string".to_owned())
-        })?;
-    let params = request.params;
-    let decode = |error: serde_json::Error| TransportError::Protocol(error.to_string());
-    let command = match request.method.as_str() {
-        "initialize" => HostCommand::Hello(serde_json::from_value(params).map_err(decode)?),
-        "create_instance" => {
-            HostCommand::CreateInstance(serde_json::from_value::<CreateInstance>(params).map_err(decode)?)
-        }
-        "destroy_instance" => HostCommand::DestroyInstance {
-            plugin_instance_id: string_param(&params, "pluginInstanceId")?,
-        },
-        "invoke" => HostCommand::Invoke(serde_json::from_value::<InvokeRequest>(params).map_err(decode)?),
-        "approve" => {
-            HostCommand::Approve(serde_json::from_value(params).map_err(decode)?)
-        }
-        "reject" => HostCommand::Reject {
-            operation_id: string_param(&params, "operationId")?,
-            proposal_id: string_param(&params, "proposalId")?,
-            reason: params
-                .get("reason")
-                .and_then(Value::as_str)
-                .map(str::to_owned),
-        },
-        "cancel" => HostCommand::Cancel(serde_json::from_value(params).map_err(decode)?),
-        "interaction_result" => {
-            HostCommand::InteractionResult(serde_json::from_value(params).map_err(decode)?)
-        }
-        "provide_secret" => {
-            HostCommand::ProvideSecret(serde_json::from_value::<SecretDelivery>(params).map_err(decode)?)
-        }
-        "stream_subscribe" => {
-            HostCommand::StreamSubscribe(serde_json::from_value(params).map_err(decode)?)
-        }
-        "stream_unsubscribe" => HostCommand::StreamUnsubscribe {
-            subscription_id: string_param(&params, "subscriptionId")?,
-        },
-        "stream_credit" => HostCommand::StreamCredit {
-            subscription_id: string_param(&params, "subscriptionId")?,
-            credit: serde_json::from_value(
-                params.get("credit").cloned().unwrap_or(Value::Null),
-            )
-            .map_err(decode)?,
-        },
-        "shutdown" => HostCommand::Shutdown,
-        other => {
-            return Err(TransportError::Protocol(format!(
-                "unsupported plugin runtime method: {other}"
-            )))
-        }
-    };
-    let shutdown = matches!(command, HostCommand::Shutdown);
-    Ok((id, command, shutdown))
-}
-
-fn string_param(params: &Value, field: &str) -> Result<String, TransportError> {
-    params
-        .get(field)
-        .and_then(Value::as_str)
-        .map(str::to_owned)
-        .ok_or_else(|| TransportError::Protocol(format!("missing or invalid {field}")))
-}
-
-fn reply(id: String, result: Result<serde_json::Value, RuntimeError>) -> JsonRpcResponse {
-    match result {
-        Ok(result) => JsonRpcResponse {
-            jsonrpc: "2.0".to_owned(),
-            id: serde_json::Value::String(id),
-            result: Some(result),
-            error: None,
-        },
-        Err(error) => JsonRpcResponse {
-            jsonrpc: "2.0".to_owned(),
-            id: serde_json::Value::String(id),
-            result: None,
-            error: Some(JsonRpcError {
-                code: FRAMEWORK_ERROR,
-                message: error.to_string(),
-                data: None,
-            }),
-        },
-    }
-}
-
 /// 读取一条控制行，并在等待期间按 `tick` 驱动插件钩子；返回 `None` 表示 stdin 已关闭。
 ///
-/// tick 与读取共用一个循环，而不是在 `select!` 里竞争：`fill_buf` 被取消会丢掉已经
-/// 从内核取出但尚未消费的字节，因此读取本身不能被取消，只能在其内部让出等待。
+/// 每次 consume 后保留已读字节；tick 只取消尚未消费的 fill_buf 等待。
 async fn read_line_with_tick<B: PluginBackend, R: tokio::io::AsyncBufRead + Unpin>(
     backend: &mut B,
     reader: &mut R,
     tick: Duration,
+    limit: usize,
 ) -> Result<Option<Vec<u8>>, TransportError> {
     let mut line = Vec::new();
     loop {
@@ -191,7 +71,7 @@ async fn read_line_with_tick<B: PluginBackend, R: tokio::io::AsyncBufRead + Unpi
         }
         let end = available.iter().position(|byte| *byte == b'\n');
         let count = end.map_or(available.len(), |index| index + 1);
-        if line.len() + count > MAX_CONTROL_BYTES {
+        if line.len() + count > limit {
             return Err(TransportError::Protocol(
                 "plugin runtime control line exceeds limit".to_owned(),
             ));
@@ -211,220 +91,181 @@ pub async fn serve<B: PluginBackend>(backend: B) -> Result<(), TransportError> {
     serve_with_tick(backend, DEFAULT_TICK).await
 }
 
-/// 与 [`serve`] 相同，但可指定 tick 间隔；测试用以加速过期路径。
+/// 与 [`serve`] 相同，但可指定 tick 间隔。
 pub async fn serve_with_tick<B: PluginBackend>(
-    mut backend: B,
+    backend: B,
     tick: Duration,
 ) -> Result<(), TransportError> {
+    serve_with_io(backend, tokio::io::stdin(), tokio::io::stdout(), tick).await
+}
+
+/// 与 stdio 入口相同的协议循环；允许契约测试使用双向内存管道。
+pub async fn serve_with_io<B, R, W>(
+    mut backend: B,
+    input: R,
+    mut output: W,
+    tick: Duration,
+) -> Result<(), TransportError>
+where
+    B: PluginBackend,
+    R: tokio::io::AsyncRead + Unpin,
+    W: tokio::io::AsyncWrite + Unpin,
+{
     let mut notifications = backend
         .take_notifications()
         .ok_or_else(|| TransportError::Protocol("notification receiver unavailable".to_owned()))?;
-    let (replies, mut responses) = tokio::sync::mpsc::channel::<JsonRpcResponse>(16);
-    let writer = tokio::spawn(async move {
-        let mut stdout = tokio::io::stdout();
-        let mut responses_open = true;
+    let (replies, mut responses) = tokio::sync::mpsc::channel::<Vec<u8>>(16);
+    let (negotiated, current) = tokio::sync::watch::channel::<Option<Arc<HelloResult>>>(None);
+    let read = async move {
+        let result = read_loop(
+            &mut backend,
+            BufReader::new(input),
+            &replies,
+            &negotiated,
+            tick,
+        )
+        .await;
+        // 关闭回复队列即结束输出，不等待领域任务遗留的通知发送端。
+        drop(replies);
+        result
+    };
+    let write = async move {
         let mut notifications_open = true;
-        while responses_open || notifications_open {
-            let value = tokio::select! {
+        loop {
+            let line = tokio::select! {
                 biased;
-                response = responses.recv(), if responses_open => match response {
-                    Some(response) => serde_json::to_value(response)?,
-                    None => { responses_open = false; continue; }
+                response = responses.recv() => match response {
+                    Some(line) => line,
+                    None => return Ok(()),
                 },
-                notification = notifications.recv(), if notifications_open => match notification {
-                    // `id` 必须缺省而非 null：基座用 `get("id").is_none()` 区分通知与回复。
-                    Some(notification) => serde_json::json!({
-                        "jsonrpc": "2.0",
-                        "method": NOTIFICATION_METHOD,
-                        "params": serde_json::to_value(notification)?,
-                    }),
-                    None => { notifications_open = false; continue; }
+                notification = notifications.recv(), if notifications_open => {
+                    let Some(notification) = notification else { notifications_open = false; continue; };
+                    let negotiated = current.borrow().clone()
+                        .ok_or_else(|| TransportError::Protocol("notification before initialize".to_owned()))?;
+                    let feature = match notification {
+                        PluginNotification::Event { .. } => "plugin-events",
+                        _ => "async-operations",
+                    };
+                    if !negotiated.enabled_features.iter().any(|f| f == feature) {
+                        return Err(TransportError::Protocol("notification feature was not negotiated".to_owned()));
+                    }
+                    encode_line(&serde_json::json!({
+                        "jsonrpc":"2.0", "method":NOTIFICATION_METHOD, "params":notification,
+                    }), negotiated.limits.max_control_bytes as usize)
+                        .map_err(|e| TransportError::Protocol(e.code))?
                 }
             };
-            stdout.write_all(&serde_json::to_vec(&value)?).await?;
-            stdout.write_all(b"\n").await?;
-            stdout.flush().await?;
+            output.write_all(&line).await?;
+            output.flush().await?;
         }
-        Ok::<(), anyhow::Error>(())
-    });
-
-    let outcome = read_loop(&mut backend, &replies, tick).await;
-    drop(backend);
-    drop(replies);
-    match writer.await {
-        Ok(written) => written.map_err(|error| TransportError::Protocol(error.to_string()))?,
-        Err(error) => {
-            return Err(TransportError::Protocol(format!(
-                "stdout writer failed: {error}"
-            )))
-        }
-    }
-    outcome
+    };
+    // 任一端失败都会取消另一端；输出失败时不继续接收有副作用的请求。
+    tokio::try_join!(read, write)?;
+    Ok(())
 }
 
-async fn read_loop<B: PluginBackend>(
+fn rejected(category: ErrorCategory, code: &str) -> RuntimeError {
+    RuntimeError {
+        category,
+        code: code.to_owned(),
+        message: code.replace('_', " "),
+        details: None,
+    }
+}
+
+async fn dispatch<B: PluginBackend>(
     backend: &mut B,
-    replies: &tokio::sync::mpsc::Sender<JsonRpcResponse>,
+    command: HostCommand,
+    state: Option<&HelloResult>,
+) -> Result<Value, RuntimeError> {
+    if let HostCommand::Hello(ref hello) = command {
+        if state.is_some() {
+            return Err(rejected(
+                ErrorCategory::Conflict,
+                "runtime_already_initialized",
+            ));
+        }
+        if hello.interface_major != INTERFACE_MAJOR || hello.limits.max_control_bytes == 0 {
+            return Err(rejected(
+                ErrorCategory::Unsupported,
+                "plugin_handshake_incompatible",
+            ));
+        }
+    } else if !matches!(command, HostCommand::Shutdown) {
+        let state =
+            state.ok_or_else(|| rejected(ErrorCategory::Conflict, "runtime_not_initialized"))?;
+        let required = match command {
+            HostCommand::ProvideSecret(_) => Some("secret-delivery"),
+            HostCommand::InteractionResult(_) => Some("deferred-interactions"),
+            _ => None,
+        };
+        if required.is_some_and(|feature| !state.enabled_features.iter().any(|f| f == feature)) {
+            return Err(rejected(
+                ErrorCategory::Unsupported,
+                "runtime_feature_not_negotiated",
+            ));
+        }
+    }
+    backend.request(command).await
+}
+
+async fn read_loop<B: PluginBackend, R: tokio::io::AsyncBufRead + Unpin>(
+    backend: &mut B,
+    mut reader: R,
+    replies: &tokio::sync::mpsc::Sender<Vec<u8>>,
+    negotiated: &tokio::sync::watch::Sender<Option<Arc<HelloResult>>>,
     tick: Duration,
 ) -> Result<(), TransportError> {
-    let mut reader = BufReader::new(tokio::io::stdin());
+    let mut state: Option<Arc<HelloResult>> = None;
     loop {
-        let Some(mut line) = read_line_with_tick(backend, &mut reader, tick).await? else {
+        let limit = state
+            .as_ref()
+            .map_or(MAX_CONTROL_BYTES, |s| s.limits.max_control_bytes as usize);
+        let Some(line) = read_line_with_tick(backend, &mut reader, tick, limit).await? else {
             return Ok(());
         };
-        let parsed = parse_command(&line);
-        // 原始行可能包含私密凭据投递。
-        zeroize::Zeroize::zeroize(&mut line);
-        let (id, command, shutdown) = parsed?;
-        let result = backend.request(command).await;
+        let line = zeroize::Zeroizing::new(line);
+        let parsed = decode_request(&line);
+        let mut next_state = None;
+        let mut shutdown = false;
+        let response = match parsed {
+            Err(error) => error.into_response(),
+            Ok(message) => {
+                shutdown = matches!(message.command, HostCommand::Shutdown);
+                let hello: Option<RuntimeHello> = match &message.command {
+                    HostCommand::Hello(h) => Some(h.clone()),
+                    _ => None,
+                };
+                let mut result = dispatch(backend, message.command, state.as_deref()).await;
+                if let (Some(hello), Ok(value)) = (hello, &result) {
+                    let validated = serde_json::from_value::<HelloResult>(value.clone())
+                        .map_err(|_| {
+                            rejected(ErrorCategory::InvalidRequest, "plugin_handshake_invalid")
+                        })
+                        .and_then(|negotiated| {
+                            hello.validate_result(&negotiated)?;
+                            Ok(negotiated)
+                        });
+                    match validated {
+                        Ok(value) => next_state = Some(value),
+                        Err(error) => result = Err(error),
+                    }
+                }
+                reply(message.request_id, result)
+            }
+        };
+        let encoded =
+            encode_line(&response, limit).map_err(|e| TransportError::Protocol(e.code))?;
         replies
-            .send(reply(id, result))
+            .send(encoded)
             .await
-            .map_err(|_| TransportError::Protocol("plugin stdout writer closed".to_owned()))?;
+            .map_err(|_| TransportError::Protocol("output closed".to_owned()))?;
+        if let Some(next_state) = next_state {
+            state = Some(Arc::new(next_state));
+            negotiated.send_replace(state.clone());
+        }
         if shutdown {
             return Ok(());
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{parse_command, HostCommand, MAX_CONTROL_BYTES};
-    use crate::runtime::lifecycle::RuntimeHello;
-    use crate::runtime::operation::{DispatchMode, InvokeRequest, OperationEffect, OperationSource};
-    use serde_json::json;
-
-    fn line(method: &str, params: serde_json::Value) -> Vec<u8> {
-        serde_json::to_vec(&json!({
-            "jsonrpc": "2.0",
-            "id": "req-1",
-            "method": method,
-            "params": params,
-        }))
-        .unwrap()
-    }
-
-    fn hello() -> serde_json::Value {
-        serde_json::to_value(RuntimeHello {
-            interface_major: 1,
-            interface_minor: 0,
-            required_features: vec!["instances".to_owned()],
-            optional_features: vec![],
-            limits: crate::runtime::lifecycle::RuntimeLimits {
-                max_control_bytes: 1024,
-                max_data_chunk_bytes: 1024,
-                initial_window: crate::runtime::stream::FlowWindow {
-                    chunks: 1,
-                    bytes: 1024,
-                },
-            },
-        })
-        .unwrap()
-    }
-
-    // 方法名与参数形状必须与 coterm-core::plugin_process::to_json_rpc 保持一致。
-    #[test]
-    fn decodes_every_host_command_method() {
-        let (id, command, shutdown) = parse_command(&line("initialize", hello())).unwrap();
-        assert_eq!(id, "req-1");
-        assert!(matches!(command, HostCommand::Hello(_)));
-        assert!(!shutdown);
-
-        let (_, command, _) = parse_command(&line(
-            "create_instance",
-            json!({
-                "instance": {
-                    "pluginId": "p",
-                    "pluginInstanceId": "i",
-                    "sessionId": "s",
-                    "label": "l",
-                    "status": "starting",
-                },
-                "config": {},
-            }),
-        ))
-        .unwrap();
-        assert!(matches!(command, HostCommand::CreateInstance(_)));
-
-        let (_, command, _) =
-            parse_command(&line("destroy_instance", json!({"pluginInstanceId": "i"}))).unwrap();
-        assert!(matches!(
-            command,
-            HostCommand::DestroyInstance { plugin_instance_id } if plugin_instance_id == "i"
-        ));
-
-        let (_, command, _) = parse_command(&line(
-            "invoke",
-            serde_json::to_value(InvokeRequest {
-                operation_id: "op".to_owned(),
-                plugin_instance_id: Some("i".to_owned()),
-                source: OperationSource::Agent,
-                effect: OperationEffect::Commit,
-                operation: "serial.write".to_owned(),
-                args: json!({}),
-                dispatch: DispatchMode::Execute,
-            })
-            .unwrap(),
-        ))
-        .unwrap();
-        assert!(matches!(command, HostCommand::Invoke(_)));
-
-        let (_, command, _) = parse_command(&line(
-            "reject",
-            json!({"operationId": "op", "proposalId": "pr", "reason": "no"}),
-        ))
-        .unwrap();
-        assert!(matches!(
-            command,
-            HostCommand::Reject { proposal_id, .. } if proposal_id == "pr"
-        ));
-
-        let (_, command, _) = parse_command(&line(
-            "stream_unsubscribe",
-            json!({"subscriptionId": "sub"}),
-        ))
-        .unwrap();
-        assert!(matches!(
-            command,
-            HostCommand::StreamUnsubscribe { subscription_id } if subscription_id == "sub"
-        ));
-
-        let (_, command, shutdown) = parse_command(&line("shutdown", json!(null))).unwrap();
-        assert!(matches!(command, HostCommand::Shutdown));
-        assert!(shutdown);
-    }
-
-    #[test]
-    fn rejects_malformed_control_lines() {
-        assert!(parse_command(b"not json").is_err());
-        assert!(parse_command(&serde_json::to_vec(&json!({"method": "x"})).unwrap()).is_err());
-        assert!(parse_command(&line("not_a_method", json!({}))).is_err());
-        // id 必须是字符串，数字会让基座无法关联回复。
-        assert!(parse_command(
-            &serde_json::to_vec(&json!({"jsonrpc":"2.0","id":7,"method":"shutdown","params":null}))
-                .unwrap()
-        )
-        .is_err());
-        // params 与声明的方法不匹配时按协议错误处理，不静默降级。
-        assert!(parse_command(&line("invoke", json!({"nonsense": true}))).is_err());
-        assert!(parse_command(&line("destroy_instance", json!({}))).is_err());
-    }
-
-    // 基座用 `get("id").is_none()` 区分通知与回复；出现 "id":null 会被判为非法回复。
-    #[test]
-    fn notification_envelope_omits_id() {
-        let value = serde_json::json!({
-            "jsonrpc": "2.0",
-            "method": super::NOTIFICATION_METHOD,
-            "params": {"type": "event"},
-        });
-        assert_eq!(value["jsonrpc"], "2.0");
-        assert_eq!(value["method"], "coterm.notification");
-        assert!(value.get("id").is_none());
-    }
-
-    #[test]
-    fn control_line_limit_matches_host() {
-        assert_eq!(MAX_CONTROL_BYTES, 1024 * 1024);
     }
 }

@@ -1,5 +1,6 @@
-//! 基座与插件的公开契约草案。只有类型和 trait，未冻结线缆编码。
-//! 旧版根模块中的终端类型仍供原型使用，不属于本组新接口。
+//! 基座与插件的 v1.0 JSON 控制契约。wire 是唯一线缆编解码入口。
+//! stream 与 PluginEvent 的扩展事件为预留类型，不属于 v1.0 线缆契约。
+//! 旧版根模块中的终端类型仍供原型使用，不属于本组接口。
 
 pub mod backend;
 pub mod interaction;
@@ -9,6 +10,7 @@ pub mod message;
 pub mod operation;
 pub mod stream;
 pub mod transport;
+pub mod wire;
 
 use std::{future::Future, pin::Pin};
 

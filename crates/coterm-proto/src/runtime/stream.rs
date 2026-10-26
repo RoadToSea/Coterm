@@ -1,4 +1,4 @@
-//! 流承载格式与协议业务模型无关。二进制数据不序列化成 JSON 数组。
+//! 预留流类型，未纳入 v1.0 JSON 控制契约，不可发送到当前适配器。
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

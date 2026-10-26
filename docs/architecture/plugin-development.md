@@ -1,6 +1,6 @@
 # 插件开发
 
-接口尚未冻结为 v1。以下说明当前接入方式；完整字段以 [Rust 运行时类型](../../crates/coterm-proto/src/runtime) 和 [前端 SDK](../../packages/plugin-sdk/src/plugin-api.ts) 为准，尚未实现的能力见 [项目进度](../PROGRESS.md)。
+后端 JSON 控制协议采用 [v1.0 基线](runtime-communication.md)，前端 SDK 与二进制流仍在演进。字段以 [Rust 运行时类型](../../crates/coterm-proto/src/runtime) 和 [前端 SDK](../../packages/plugin-sdk/src/plugin-api.ts) 为准，未实现能力见 [项目进度](../PROGRESS.md)。
 
 ## 插件边界
 
@@ -29,9 +29,11 @@ plugin/
 
 ## 后端
 
-Rust 插件实现 `coterm_proto::runtime::transport::PluginBackend`，通过 `serve(Backend::default())` 运行。共享传输层负责行协议、请求关联与通知输出；其他语言实现同一适配协议。
+Rust 插件实现 `coterm_proto::runtime::backend::PluginBackend`，通过 `transport::serve(Backend::default())` 运行。共享传输层负责行协议、握手顺序、请求关联、限额与通知输出；其他语言实现同一控制协议。
 
-1. 握手返回身份、启用能力、限制、操作目录和显式注册的 MCP Tools。
+原有 `transport::PluginBackend` 导入仍可用；曾按未实现的 `handle/BackendHost` 草案接入的代码需迁移到 `request`。
+
+1. 握手使用 `RuntimeHello::negotiate_features/control_limits`，返回与 manifest 一致的身份版本、能力交集、限制及目录；未协商 native-mcp-tools 时不返回工具。
 2. 创建实例时校验配置，按 `pluginInstanceId` 独立保存连接和领域状态。
 3. 销毁实例或停止插件时清理连接、待交互、提案、订阅与任务；拒绝迟到输入。
 4. 长操作立即受理，再发送完成通知；等待用户或协议结果时不占住控制消息循环。
@@ -82,6 +84,6 @@ MCP Tools 需单独注册 descriptor 与内部 operation 的映射；不会自�
 - 至少验证双实例隔离、配置错误、审批修改/拒绝、取消/超时、秘密隔离、慢消费者与输出缺口。
 - 验证无 UI 插件仍可请求宿主交互；没有交互入口时明确失败，不能自动批准。
 - 验证前端卸载后 MCP 仍可使用实例；插件崩溃或结果不明时不得自动重放写操作。
-- 基座通用契约需同时覆盖命令型和持续订阅型插件，再冻结版本与发布 SDK。
+- 先运行 `cargo test -p coterm-proto --test control_contract`；新增插件另补真实进程、多实例与领域契约测试。流接口需用持续订阅型插件验证后独立冻结。
 
 构建与检查命令见 [仓库 README](../../README.md)。数据归插件保存，宿主操作账本不能作为永久业务存储。
