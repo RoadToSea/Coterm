@@ -118,6 +118,8 @@ test("HostInteractions: a departed request's late finally cannot reopen it or cl
   }
   assertFreshTestArtifacts();
   const { url, server } = await startStaticServer();
+
+  t.after(() => new Promise((resolve) => server.close(resolve)));
   serverUrl = url;
   const session = await openSession({ browserPath, totalTimeoutMs: 120_000 });
 
@@ -181,7 +183,6 @@ test("HostInteractions: a departed request's late finally cannot reopen it or cl
     }
   } finally {
     await session.close();
-    await new Promise((resolve) => server.close(resolve));
   }
 });
 
@@ -192,6 +193,8 @@ test("HostInteractions: late IPC completion from an old prompt does not clear or
   }
   assertFreshTestArtifacts();
   const { url, server } = await startStaticServer();
+
+  t.after(() => new Promise((resolve) => server.close(resolve)));
   serverUrl = url;
   const session = await openSession({ browserPath, totalTimeoutMs: 120_000 });
 
@@ -244,7 +247,6 @@ test("HostInteractions: late IPC completion from an old prompt does not clear or
     }
   } finally {
     await session.close();
-    await new Promise((resolve) => server.close(resolve));
   }
 });
 
@@ -255,6 +257,8 @@ test("HostInteractions: cancel, expiry, instance destroy, plugin stop and unmoun
   }
   assertFreshTestArtifacts();
   const { url, server } = await startStaticServer();
+
+  t.after(() => new Promise((resolve) => server.close(resolve)));
   serverUrl = url;
   const session = await openSession({ browserPath, totalTimeoutMs: 180_000 });
 
@@ -310,7 +314,6 @@ test("HostInteractions: cancel, expiry, instance destroy, plugin stop and unmoun
     }
   } finally {
     await session.close();
-    await new Promise((resolve) => server.close(resolve));
   }
 });
 
@@ -321,6 +324,8 @@ test("HostInteractions: duplicate and out-of-order versions do not double-prompt
   }
   assertFreshTestArtifacts();
   const { url, server } = await startStaticServer();
+
+  t.after(() => new Promise((resolve) => server.close(resolve)));
   serverUrl = url;
   const session = await openSession({ browserPath, totalTimeoutMs: 120_000 });
 
@@ -353,12 +358,11 @@ test("HostInteractions: duplicate and out-of-order versions do not double-prompt
     }
   } finally {
     await session.close();
-    await new Promise((resolve) => server.close(resolve));
   }
 });
 
 /**
- * 下面五个用例回归同一个缺陷：finally 里的补取 `hostAttention()` 只看 `disposed` / `active`，
+ * 下面的补取用例回归同一个缺陷：finally 里的补取 `hostAttention()` 只看 `disposed` / `active`，
  * 不看自己相对共享订阅的先后。较新的空快照先把 A 从 settled 里清掉，早先补取随后带着
  * 旧版本 `[A]` 回来时 active 恰好为空，A 就被重新打开了。
  *
@@ -401,6 +405,8 @@ test("HostInteractions: a stale prefetch cannot reopen the request a newer snaps
   }
   assertFreshTestArtifacts();
   const { url, server } = await startStaticServer();
+
+  t.after(() => new Promise((resolve) => server.close(resolve)));
   serverUrl = url;
   const session = await openSession({ browserPath, totalTimeoutMs: 120_000 });
 
@@ -431,7 +437,6 @@ test("HostInteractions: a stale prefetch cannot reopen the request a newer snaps
     }
   } finally {
     await session.close();
-    await new Promise((resolve) => server.close(resolve));
   }
 });
 
@@ -442,6 +447,8 @@ test("HostInteractions: a stale prefetch cannot displace the newer prompt, nor r
   }
   assertFreshTestArtifacts();
   const { url, server } = await startStaticServer();
+
+  t.after(() => new Promise((resolve) => server.close(resolve)));
   serverUrl = url;
   const session = await openSession({ browserPath, totalTimeoutMs: 180_000 });
 
@@ -476,7 +483,6 @@ test("HostInteractions: a stale prefetch cannot displace the newer prompt, nor r
     }
   } finally {
     await session.close();
-    await new Promise((resolve) => server.close(resolve));
   }
 });
 
@@ -487,6 +493,8 @@ test("HostInteractions: cancel, newer B, B cancelled — a stale A prefetch stil
   }
   assertFreshTestArtifacts();
   const { url, server } = await startStaticServer();
+
+  t.after(() => new Promise((resolve) => server.close(resolve)));
   serverUrl = url;
   const session = await openSession({ browserPath, totalTimeoutMs: 180_000 });
 
@@ -518,7 +526,47 @@ test("HostInteractions: cancel, newer B, B cancelled — a stale A prefetch stil
     }
   } finally {
     await session.close();
-    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test("HostInteractions: B can submit and drain before a stale A prefetch resolves", async (t) => {
+  if (!browserPath) {
+    t.skip("No Chrome/Edge binary found; B submit then stale-A verification did not run");
+    return;
+  }
+  assertFreshTestArtifacts();
+  const { url, server } = await startStaticServer();
+
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  serverUrl = url;
+  const session = await openSession({ browserPath, totalTimeoutMs: 120_000 });
+  try {
+    const initial = attention(1, [secretInteraction("int-a", "inst-a")]);
+    const page = await openCancelWithGatedReload(session, initial);
+    try {
+      const next = attention(2, [secretInteraction("int-b", "inst-b")]);
+      await page.evaluate(`window.__cotermTest.setAttention(${JSON.stringify(next)})`);
+      await deliverSnapshotAheadOfPrefetch(page, next);
+      assert.match((await dialogTitles(page))[0], /inst-b/, "B prompts while A's prefetch is still in flight");
+
+      await page.evaluate(`window.__cotermTest.submitSecret("pw-for-b")`);
+      await waitForValue({ send: page.send }, `window.__attentionGate.size() === 2`, { label: "B's own reload is in flight" });
+      await page.evaluate(`window.__attentionGate.release(${JSON.stringify(attention(3, []))}, 1)`);
+      await flushPage(page);
+      assert.deepEqual(await dialogTitles(page), [], "B submits and the queue drains before A's reload returns");
+
+      await releaseStalePrefetch(page, initial);
+      assert.deepEqual(await dialogTitles(page), [], "late A stays closed after B submitted and drained");
+      assert.deepEqual(
+        await page.evaluate(`window.__cotermTest.pendingSecrets`),
+        [{ interactionId: "int-a", value: null }, { interactionId: "int-b", value: "pw-for-b" }],
+        "A's cancel and B's value stay bound to their own interactions",
+      );
+    } finally {
+      await page.close();
+    }
+  } finally {
+    await session.close();
   }
 });
 
@@ -529,42 +577,47 @@ test("HostInteractions: a prefetch or a failure landing after unmount is ignored
   }
   assertFreshTestArtifacts();
   const { url, server } = await startStaticServer();
+
+  t.after(() => new Promise((resolve) => server.close(resolve)));
   serverUrl = url;
   const session = await openSession({ browserPath, totalTimeoutMs: 120_000 });
 
   try {
-    const page = await openCancelWithGatedReload(session, attention(1, [secretInteraction("int-a", "inst-a")]));
-    try {
-      await waitForDialogs(page, 0, "user cancel closes A");
+    for (const completion of ["resolve", "reject"]) {
+      const page = await openCancelWithGatedReload(session, attention(1, [secretInteraction("int-a", "inst-a")]));
+      try {
+        await waitForDialogs(page, 0, "user cancel closes A");
 
-      // 卸载必须在补取还在途时发生。
-      await page.evaluate("window.__cotermHostInteractions.unmount()");
-      assert.equal(await page.evaluate(`window.__cotermTest.listenerCount()`), 0, "unmount removes the attention listener");
+        // 卸载必须在补取还在途时发生，分别验证成功与失败回调。
+        await page.evaluate("window.__cotermHostInteractions.unmount()");
+        assert.equal(await page.evaluate(`window.__cotermTest.listenerCount()`), 0, "unmount removes the attention listener");
 
-      await page.evaluate(`window.__attentionGate.release(${JSON.stringify(attention(1, [secretInteraction("int-a", "inst-a")]))})`);
-      await flushPage(page);
-      assert.deepEqual(await dialogTitles(page), [], "a prefetch resolving after unmount opens nothing");
-
-      // 旧的失败回调也不得在卸载后再写状态（错误提示本身也不该挂回去）。
-      await delay(200);
-      assert.equal(await page.evaluate(`document.querySelectorAll("[role=alert]").length`), 0, "no error rendered after unmount");
-      assert.deepEqual(await dialogTitles(page), [], "no dialog after the late prefetch");
-    } finally {
-      await page.close();
+        if (completion === "resolve") {
+          await page.evaluate(`window.__attentionGate.release(${JSON.stringify(attention(1, [secretInteraction("int-a", "inst-a")]))})`);
+        } else {
+          await page.evaluate(`window.__attentionGate.fail("reload failed after unmount")`);
+        }
+        await flushPage(page);
+        assert.deepEqual(await dialogTitles(page), [], `a prefetch ${completion} after unmount opens nothing`);
+        assert.equal(await page.evaluate(`document.querySelectorAll("[role=alert]").length`), 0, "no error rendered after unmount");
+      } finally {
+        await page.close();
+      }
     }
   } finally {
     await session.close();
-    await new Promise((resolve) => server.close(resolve));
   }
 });
 
-test("HostInteractions: an older prefetch failure does not overwrite a newer state error", async (t) => {
+test("HostInteractions: an older prefetch failure does not disturb the newer B prompt", async (t) => {
   if (!browserPath) {
     t.skip("No Chrome/Edge binary found; stale-error verification did not run");
     return;
   }
   assertFreshTestArtifacts();
   const { url, server } = await startStaticServer();
+
+  t.after(() => new Promise((resolve) => server.close(resolve)));
   serverUrl = url;
   const session = await openSession({ browserPath, totalTimeoutMs: 120_000 });
 
@@ -591,15 +644,135 @@ test("HostInteractions: an older prefetch failure does not overwrite a newer sta
     }
   } finally {
     await session.close();
-    await new Promise((resolve) => server.close(resolve));
   }
 });
 
+test("HostInteractions: an older prefetch failure cannot replace a newer empty snapshot", async (t) => {
+  if (!browserPath) {
+    t.skip("No Chrome/Edge binary found; empty-snapshot vs stale-error verification did not run");
+    return;
+  }
+  assertFreshTestArtifacts();
+  const { url, server } = await startStaticServer();
+
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  serverUrl = url;
+  const session = await openSession({ browserPath, totalTimeoutMs: 120_000 });
+
+  try {
+    const page = await openCancelWithGatedReload(session, attention(1, [secretInteraction("int-a", "inst-a")]));
+    try {
+      await page.evaluate(`window.__cotermTest.setAttention(${JSON.stringify(attention(2, []))})`);
+      await deliverSnapshotAheadOfPrefetch(page, attention(2, []));
+      assert.deepEqual(await dialogTitles(page), [], "newer empty snapshot closes the queue without opening B");
+
+      await page.evaluate(`window.__attentionGate.fail("stale reload failed", 0)`);
+      await flushPage(page);
+      assert.deepEqual(
+        await page.evaluate(`[...document.querySelectorAll("[role=alert]")].map((node) => node.textContent)`),
+        [],
+        "an older rejection must not add an error after the newer empty snapshot",
+      );
+      assert.deepEqual(await dialogTitles(page), [], "the stale rejection opens no dialog");
+    } finally {
+      await page.close();
+    }
+  } finally {
+    await session.close();
+  }
+});
+
+
+for (const completion of ["reject", "resolve"]) {
+  test(`HostInteractions: an older prefetch ${completion} cannot overwrite a newer subscription error`, async (t) => {
+    if (!browserPath) {
+      t.skip("No Chrome/Edge binary found; subscription-error vs stale-error verification did not run");
+      return;
+    }
+    assertFreshTestArtifacts();
+    const { url, server } = await startStaticServer();
+
+    t.after(() => new Promise((resolve) => server.close(resolve)));
+    serverUrl = url;
+    const session = await openSession({ browserPath, totalTimeoutMs: 120_000 });
+
+    try {
+      const initial = attention(1, [secretInteraction("int-a", "inst-a"), secretInteraction("int-queued", "inst-queued")]);
+      const page = await openCancelWithGatedReload(session, initial);
+      try {
+        // No newer prompt or snapshot is delivered, so only the subscription error can invalidate the reload.
+        await page.evaluate(`window.__cotermTest.setAttention(${JSON.stringify(attention(2, []))})`);
+        await waitForValue({ send: page.send }, `window.__attentionGate.size() === 2`, { label: "new subscription request is in flight" });
+        await page.evaluate(`window.__attentionGate.fail("new subscription failed", 1)`);
+        await flushPage(page);
+        const alerts = () => page.evaluate(`[...document.querySelectorAll("[role=alert]")].map((node) => node.textContent)`);
+        const expected = ["Unable to follow user interactions: new subscription failed"];
+        assert.deepEqual(await alerts(), expected, "the newer subscription error is shown first");
+
+        if (completion === "reject") {
+          await page.evaluate(`window.__attentionGate.fail("stale reload failed", 0)`);
+        } else {
+          await page.evaluate(`window.__attentionGate.release(${JSON.stringify(initial)}, 0)`);
+        }
+        await flushPage(page);
+        assert.deepEqual(await alerts(), expected, "the older completion must preserve the newer subscription error");
+        assert.deepEqual(await dialogTitles(page), [], "the stale completion opens no dialog");
+
+        await page.evaluate(`window.__cotermHostInteractions.retryHostAttention()`);
+        await flushPage(page);
+        assert.deepEqual(await alerts(), [], "a successful subscription retry clears the recoverable error");
+        assert.deepEqual(await dialogTitles(page), [], "the recovered empty snapshot leaves the queue empty");
+      } finally {
+        await page.close();
+      }
+    } finally {
+      await session.close();
+    }
+  });
+}
+
+test("HostInteractions: a current prefetch failure is visible and a newer snapshot recovers", async (t) => {
+  if (!browserPath) {
+    t.skip("No Chrome/Edge binary found; current-error recovery verification did not run");
+    return;
+  }
+  assertFreshTestArtifacts();
+  const { url, server } = await startStaticServer();
+
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  serverUrl = url;
+  const session = await openSession({ browserPath, totalTimeoutMs: 120_000 });
+  try {
+    const page = await openCancelWithGatedReload(session, attention(1, [secretInteraction("int-a", "inst-a")]));
+    try {
+      await page.evaluate(`window.__attentionGate.fail("current reload failed")`);
+      await flushPage(page);
+      assert.deepEqual(
+        await page.evaluate(`[...document.querySelectorAll("[role=alert]")].map((node) => node.textContent)`),
+        ["Unable to reload user interactions: current reload failed"],
+        "a current reload failure must remain visible",
+      );
+
+      await page.evaluate(`window.__cotermTest.setAttention(${JSON.stringify(attention(2, [secretInteraction("int-b", "inst-b")]))})`);
+      await flushPage(page);
+      assert.equal(await page.evaluate(`[...document.querySelectorAll("[role=alert]")].filter((node) => !node.closest("dialog.host-secret-dialog")).length`), 0, "a newer snapshot clears the error");
+      const titles = await dialogTitles(page);
+      assert.equal(titles.length, 1, "recovery opens exactly one prompt");
+      assert.match(titles[0], /inst-b/, "recovery prompts B, not A");
+    } finally {
+      await page.close();
+    }
+  } finally {
+    await session.close();
+  }
+});
 
 test("Frontend SDK v1: typed host dialogs, rejection, timeout, scope replacement and disposal", async (t) => {
   if (!browserPath) { t.skip("No browser available for SDK dialog acceptance"); return; }
   assertFreshTestArtifacts();
   const { url, server } = await startStaticServer();
+
+  t.after(() => new Promise((resolve) => server.close(resolve)));
   serverUrl = url;
   const session = await openSession({ browserPath, totalTimeoutMs: 60_000 });
   const page = await openInteractionsPage(session, scenarioBase(attention(1, [])));

@@ -18,7 +18,7 @@ export function HostInteractions() {
     const settled = new Set<string>();
     /** 已交付的最新快照版本：比它旧的补取结果不能拿来决定界面。 */
     let observedVersion = Number.NEGATIVE_INFINITY;
-    /** 每分配一次弹窗就递增：在途的补取只能影响它出发时的那个生命周期。 */
+    /** 新弹窗或订阅错误会使旧补取失效；补取只能影响它出发时的生命周期。 */
     let epoch = 0;
 
     const owns = (mine: number) => !disposed && active?.ticket === mine;
@@ -70,7 +70,7 @@ export function HostInteractions() {
             })
             .catch((reason) => {
               // 旧补取的失败同样只属于过去的时刻，不能覆盖更新的状态或错误。
-              if (disposed || epoch !== sentAt) return;
+              if (disposed || epoch !== sentAt || observedVersion !== sentVersion) return;
               setError(`Unable to reload user interactions: ${String(reason)}`);
             });
         });
@@ -98,12 +98,18 @@ export function HostInteractions() {
       snapshot: observe,
       error: (message) => {
         // 保留当前弹窗与上一次有效状态，只显示可恢复提示。
-        if (!disposed) setError(`Unable to follow user interactions: ${message}`);
+        if (!disposed) {
+          epoch++;
+          setError(`Unable to follow user interactions: ${message}`);
+        }
       },
     }).then((stop) => {
       if (disposed) stop(); else unsubscribe = stop;
     }).catch((reason) => {
-      if (!disposed) setError(`Unable to follow user interactions: ${String(reason)}`);
+      if (!disposed) {
+        epoch++;
+        setError(`Unable to follow user interactions: ${String(reason)}`);
+      }
     });
 
     return () => {

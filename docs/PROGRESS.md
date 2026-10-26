@@ -62,3 +62,31 @@
 | Windows NSIS | 隔离标识安装、启动与卸载；产品安装包构建及安装/卸载通过 |
 
 浏览器测试使用 IPC 替身；真实 Tauri 验收使用独立 `com.coterm.smoke` 工作区和无硬件测试插件。CI 流程已加入，云端结果以 Actions 为准。未覆盖远程 SSH、物理串口、macOS/Linux 安装包；普通回归不打开或写入物理串口。
+
+## WS-13 宿主交互补取回归
+
+2026-10-26，本轮在平台分配的 `ws-13-1aae5c259c24/worktree` 和 `agent/mika/ws-13` 执行。START 为 `8322708c07dc5c022310cc2b33298e875052e3dc`，包含集成基线 `cf53b3e1edcb14b2e1f47e04a1b24398c47a5476`。`08e4645` 的既有版本保护和 `6bb0ea9` 的来源历史继续保留，没有重做 SDK、布局或共享订阅。
+
+`HostInteractions` 的补取失败分支原来只检查卸载和弹窗代次。较新空快照不分配新弹窗，订阅错误也不推进代次，因此旧补取的 reject 可以添加过期错误或覆盖新错误。失败分支现与成功分支一起检查观察版本；订阅错误同时使在途补取失效。当前补取失败仍正常显示错误，后续有效快照可恢复。
+
+### 本轮执行证据
+
+| 检查 | 结果 |
+|---|---|
+| START 组件源码配新增两条回归 | 0 pass、2 fail、0 skip，退出码 1；分别复现空快照被旧错误覆盖、订阅错误被旧错误替换 |
+| `pnpm build` | 退出码 0 |
+| `pnpm --filter coterm-plugin-ssh-ui build` | 退出码 0 |
+| `node --test tests/host-interactions-component.test.mjs` | 15 pass、0 fail、0 skip，退出码 0 |
+| `pnpm test` | 33 pass、0 fail、0 skip，退出码 0；包含原有用例、既有补取回归和新增五项 |
+| 来源祖先 | START、`cf53b3e`、`08e4645`、`6bb0ea9`、`9808d12`、`30e717f`、`fe019e8`、WS-10 `75b3fcd`、WS-11 `6fbb17c` 均通过 `merge-base --is-ancestor` |
+| 运行时内容 | `.multica/thread2.json` 未跟踪，`.multica/` 已被忽略；本轮另忽略安装生成的 `.pnpm-store/`；未改动或提交运行时注入的 AGENTS |
+
+新增用例覆盖较新空快照之后的旧 reject、较新订阅错误之后的旧 reject/resolve、当前补取错误的显示与恢复，以及 B 提交并归零后才到达的旧 A 快照。卸载用例也实际执行 resolve 和 reject 两条路径。新增竞态用例用 IPC Promise gate 和任务队列刷新确定顺序，没有添加固定 sleep 或扩大 settled 的保留范围。
+
+首次完整测试中，一次浏览器未建立 CDP 连接；该失败发生在清理块之前，测试服务器没有关闭，运行被终止，不能计为通过。组件测试现用 `t.after` 注册服务器清理，覆盖浏览器启动失败。之后完整测试重新执行并通过。沙箱内还遇到 esbuild 父目录访问被拒及 CDP 连接关闭；表中的构建和浏览器结果来自获准的沙箱外执行。
+
+### 证明边界与交付
+
+本轮测试挂载真实 React 组件，使用真实 `host-api`、`secret-input` 和 Tauri 前端 API；IPC 与宿主状态由测试支架控制。过期、实例销毁和插件停止通过 `setAttention` 模拟宿主收敛，没有执行 Rust 销毁或停止命令。本轮没有修改 Rust，也未复跑 Cargo；旧 WS-13 的 44 项以及前文的 76 项属于各自历史记录，不能计为本轮结果。没有新增真实 Tauri、远程 SSH、串口或硬件验证，也不声明云端 CI 或审批通过。
+
+GitHub PR #1 已只读核验为 closed、未合并，标题原本包含 WS-13，head 仍为 `6bb0ea97b592b6444adddc8a2e57494ef21961ab`。本轮使用新运行分支交付，不改写旧 PR。最终提交完整 SHA、远端核对、新 PR 与 Multica 关联状态在同一 WS-13 交付评论记录。
