@@ -5,12 +5,15 @@
 
 ---
 
-## 核心特性
+## 当前进度
 
-- **万物皆插件 (Everything is a Plugin)**：极简轻量基座，所有通信协议（SSH、串口、本地 PTY、工业总线）均作为独立进程插件按需装配。
-- **人机共生终端 (Human-in-the-Loop)**：人与 Agent 共享同一个终端视窗，具备人类抢占优先仲裁与拟真行内纠偏能力。
-- **块级命令架构 (Command Blocks)**：基于 OSC 133 Shell Integration，终端输出自动切块，支持 VS Code 风格的 Gutter 勾选，精准拉取上下文，Token 消耗降低 90% 以上。
-- **MCP 原生接入**：基座统一充当 MCP 网关与安全拦截器，赋能任意外部大模型。
+Coterm 当前处于基础闭环收尾、插件运行时完善阶段。完整评估、优先缺口与验证范围见 [项目进度](docs/PROGRESS.md)，架构边界见 [SPEC](docs/SPEC.md)。
+
+- **插件基座**：插件发现与坏包诊断、独立进程、多实例、可选插件前端和有界事件转发。
+- **人机协作**：桌面和 Agent 关联同一实例；Agent 提交默认需要人工审批，密码通过受控交互交给插件。
+- **SSH 与串口**：SSH 已接通共享 PTY、命令结果和 MCP；串口已有字节读写及界面初版，跨平台与关闭回收仍需完善。
+- **MCP 接入**：固定本机 Streamable HTTP 入口与插件原生 Tools；Resources、Prompts、订阅尚未实现。
+- **内部 SDK**：提供运行时类型、共享后端行协议和可选命令块列表组件；接口仍未冻结。本地 PTY、命令块上下文闭环和工业协议仍是后续工作。
 
 ---
 
@@ -22,12 +25,14 @@ Coterm/
 │   └── desktop/                # Tauri 桌面端 GUI (Rust + React + xterm.js)
 ├── crates/
 │   ├── coterm-proto/           # 统一 JSON-RPC 2.0 协议契约与数据模型
-│   ├── coterm-core/            # 终端核心引擎 (输入仲裁、OSC 133 分块、会话管理、高危熔断)
-│   └── coterm-mcp/             # MCP 聚合网关定义
-└── plugins/                    # 官方首批独立进程插件
-    ├── plugin-local/           # 本地 PTY 终端插件
-    ├── plugin-ssh/             # SSH 远程连接插件 (待完善)
-    └── plugin-serial/          # 串口通信插件 (待完善)
+│   ├── coterm-core/            # 插件生命周期、实例路由、审批与操作账本
+│   └── coterm-mcp/             # MCP HTTP Bridge 与开发用 stdio 适配器
+├── packages/plugin-sdk/        # 插件前端契约与可选通用 UI
+├── docs/                       # 架构、进度与阶段验收
+└── plugins/                    # 独立进程插件
+    ├── plugin-local/           # 当前运行时骨架，尚无 PTY
+    ├── plugin-ssh/             # SSH MVP
+    └── plugin-serial/          # 串口初版
 ```
 
 ---
@@ -35,9 +40,9 @@ Coterm/
 ## 快速开发与编译
 
 ### 环境要求
-- **Rust / Cargo**: 1.80+
-- **Node.js**: v20+
-- **pnpm**: v9+
+- **Rust / Cargo**：使用与当前 Tauri 依赖兼容的工具链；尚未建立 MSRV 验证矩阵。
+- **Node.js**：本次使用 22.22.2；测试脚本要求内置 TypeScript 类型剥离和 `registerHooks` 支持。
+- **pnpm**：使用 workspace 支持；当前验证版本见进度报告。
 
 ### 安装依赖
 ```bash
@@ -48,3 +53,17 @@ pnpm install
 ```bash
 cargo check --workspace
 ```
+
+### 构建插件、桌面与回归测试
+
+```bash
+pnpm plugin:ssh:build
+pnpm plugin:serial:build
+pnpm build
+pnpm test
+cargo test --workspace
+cargo clippy --workspace -- -D warnings
+pnpm tauri:dev
+```
+
+浏览器用例需要本机 Chrome/Edge/Chromium，可用 `CHROME_BIN` 或 `EDGE_BIN` 指定。串口实机测试需显式配置设备；未配置不代表硬件验收通过。插件包只构建当前平台，发布与跨平台验收尚未完成。

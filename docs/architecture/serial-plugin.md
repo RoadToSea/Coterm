@@ -2,6 +2,8 @@
 
 实现位于 `plugins/plugin-serial`。串口的打开、参数、原始字节读写、回放缓冲和界面均归插件；基座只提供加载、实例路由、操作审批、MCP 工具目录和事件转发。
 
+**2026-10-26 核对边界**：当前是初版。端口校验尚不接受 Unix `/dev/...` 路径，读取线程缺少显式停止/回收，原始输入账本脱敏也需补齐；详见[项目进度评估](../PROGRESS.md)。以下 CH340 实测为历史分支记录，本次集成未重新操作硬件。
+
 串口与 SSH 的差别在于语义：SSH 有协议层，可以测量握手、认证和命令边界；UART 只有字节。因此本插件不推断提示符、不识别命令结束、不解析设备输出，`serial.read` 返回的就是设备在这段时间发出的原始字节。
 
 ## 使用
@@ -89,9 +91,9 @@ cargo test -p coterm-plugin-serial
 ```powershell
 $env:COTERM_SERIAL_LIVE = "COM6"
 $env:COTERM_SERIAL_LIVE_BAUD = "115200"
-cargo test -p coterm-plugin-serial --test live -- --nocapture
+cargo test -p coterm-plugin-serial --test live -- --ignored --nocapture
 ```
 
-不设环境变量时该测试直接跳过，不会在没有板子的机器上失败。手工往返可用 `cargo run -p coterm-plugin-serial --example live -- COM6 115200`。
+普通 `cargo test` 将该测试明确标为 ignored，不访问物理串口。显式使用 `--ignored` 时必须设置设备环境变量，缺失会报错，不以提前返回冒充硬件通过。普通基座集成测试只做枚举、实例/MCP 契约和未连接写入失败，不再尝试打开固定 COM6。手工往返可用 `cargo run -p coterm-plugin-serial --example live -- COM6 115200`。
 
 本轮在 `USB-SERIAL CH340 (COM6)` 上以 115200 8-N-1 实测：`serial.probe` 枚举到 `COM6`、`COM4`；`serial.connect` 后发送 `\r` 收到 shell 提示符，`uname -a` 返回 `Linux PingDiChan 5.4.61 #4 PREEMPT riscv64 GNU/Linux`，回放游标随真实字节推进，`serial.disconnect` 后状态归零。板子的内置 shell 已直接处于 `#` 提示符，不需要登录，所以发送 `root` 会被当作命令并回显 `-sh: root: not found`——这是设备的实际行为，不是插件错误。

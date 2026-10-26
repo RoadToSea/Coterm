@@ -56,7 +56,7 @@ Coterm 因此不试图重新实现所有通信协议，也不把不同协议强�
 
 基座对外提供一个 MCP Bridge，作为 Agent 的单一入口；Bridge 只负责插件发现、命名空间、路由和生命周期关联，不重新定义或包装插件的领域工具。插件仍然是 MCP Server 的实现者。
 
-当前 MVP 的实际组件关系与操作审批流程见[当前已实现架构图](architecture/current-architecture.md)；已完成能力和未实现边界见[架构与实现状态](architecture/interface-review.md)。
+当前 MVP 的实际组件关系与操作审批流程见[当前已实现架构图](architecture/current-architecture.md)；已完成能力和未实现边界见[架构与实现状态](architecture/interface-review.md)。2026-10-26 的阶段判断、优先缺口和验证结果见[项目进度评估](PROGRESS.md)。
 
 ## 4. 模块职责
 

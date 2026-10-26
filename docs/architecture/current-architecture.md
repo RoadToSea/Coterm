@@ -17,7 +17,7 @@ flowchart LR
     Ledger[(内存操作账本<br/>有界、脱敏)]
     PluginUI[插件前端模块<br/>自有界面]
     Plugin[插件后端进程<br/>JSON-RPC 行协议]
-    Protocol[协议连接与数据<br/>SSH / 其他插件协议]
+    Protocol[协议连接与数据<br/>SSH / UART / 其他插件协议]
 
     Agent <--> MCP
     MCP <--> Core

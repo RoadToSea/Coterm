@@ -4,7 +4,7 @@
 >
 > 本文定义基座与插件后端之间的公共承载契约。它不定义 SSH、UART、MQTT、CAN 或其他协议的领域语义；插件作者只需要依赖本文描述的运行时 SDK，不需要了解基座内部实现。
 
-供评审的 Rust/TypeScript 类型与待定项见[接口评审入口](interface-review.md)。本轮仅声明逻辑消息，未实现或冻结帧格式。
+供评审的 Rust/TypeScript 类型与待定项见[接口评审入口](interface-review.md)。当前实现使用 `coterm_proto::runtime::transport` 的 JSON-RPC 行适配器和有界 JSON 事件；本文的正式二进制帧设计仍未实现或冻结。
 
 ## 1. 设计目标
 
@@ -297,7 +297,7 @@ HostAttention
 
 ## 12. v1 冻结前的验证
 
-当前运行时使用 JSON-RPC 行适配器。后端秘密交互采用协商后的 `_cotermInteraction` 控制应答，避免等待用户时阻塞控制请求；具体字段、期限和恢复方式见 [MCP 与后端秘密输入 MVP](mcp-stdio.md#插件作者的延迟交互契约)。主动事件和正式二进制帧仍未实现。
+当前运行时使用 JSON-RPC 行适配器。后端秘密交互采用协商后的 `_cotermInteraction` 控制应答，避免等待用户时阻塞控制请求；具体字段、期限和恢复方式见 [MCP 与后端秘密输入 MVP](mcp-stdio.md#插件作者的延迟交互契约)。主动 JSON 事件已有有界队列、前端确认与缺口处理；正式二进制帧和通用 StreamRouter 尚未接通。
 
 正式冻结前，至少需要用一个命令/请求型插件和一个持续订阅型插件验证：
 
