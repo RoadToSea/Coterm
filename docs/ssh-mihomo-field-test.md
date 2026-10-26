@@ -1,0 +1,100 @@
+# SSH / MCP 实际使用记录
+
+日期：2026-10-26。入口：Coterm 桌面本机 Streamable HTTP MCP。
+
+## 任务与边界
+
+通过 Coterm SSH，在用户指定的服务器创建 `liu`，加入 `root` 组，并通过 Docker 部署 Clash Verge 使用的 Mihomo 内核。记录真实操作中的问题，不把源码中的已知限制当作已经复现的问题。
+
+加入 `root` 组不等于 UID 0 或 sudo 权限。部署前检查服务器、现有用户、容器、端口和 Docker 状态；不覆盖现有配置。无订阅或节点信息时，只能验证内核运行和直连代理，不能声称已验证节点代理。
+
+记录不得包含密码、订阅地址、Token、服务器公网地址或主机密钥指纹。
+
+## 实测问题
+
+### MCP 会话满时，新客户端无法开始任务
+
+- 操作：向 `/mcp` 发送标准 `initialize`，声明协议版本 `2025-03-26`，Accept 同时包含 JSON 与 SSE。
+- 结果：HTTP 429，JSON-RPC 错误 `-32000`，消息为 `Too many MCP sessions; close an existing session`。尚未取得 session ID，无法调用实例发现或 SSH。
+- 使用影响：错误要求关闭已有会话，但新客户端不知道已有会话 ID，也没有可用的会话管理工具；需要人工清理客户端、重启桌面或等待会话过期。
+- 源码核对：`crates/coterm-mcp/src/http.rs` 设置最多 8 个会话，空闲 30 分钟过期；初始化时清理过期会话。此处只能确认名额已满，不能仅凭 429 判断是会话泄漏。
+- 建议：桌面提供会话数量、最近活动时间、客户端名称和关闭入口；429 返回可操作的恢复提示与重试信息；客户端在任务结束时发送 DELETE 释放自身会话。
+
+### 只读 Shell 检查也必须审批
+
+- 操作：执行 `id`、系统版本、用户和 Docker 状态检查。
+- 结果：`ssh.command` 返回 `awaiting_approval`，需要桌面审批后才能取得检查结果。
+- 使用影响：Shell 命令统一为 commit；检查与修改使用同一入口，逐条部署会产生审批切换成本。后续调用没有再次停留在审批，不据此判断审批策略或 Bypass 的变更原因；本次未尝试通过 Agent 开启 Bypass。
+- 建议：提供插件原生的系统信息、文件元信息、容器状态等有限只读工具；不要依靠命令字符串猜测安全性，也不要让 Agent 自批。
+
+### 结果嵌套和 base64 增加客户端处理成本
+
+- 操作：读取直接完成的命令结果，以及 pending 后的 `coterm.get_operation`。
+- 结果：命令数据位于 `content[].text` 中的 JSON 字符串，终端字节在 `data` 内 base64 编码；操作查询还包含 `structuredContent` 与文本副本。直接结果的操作元信息也可能再次携带输出。
+- 使用影响：客户端需要多层 JSON 解析、base64 解码和去重，才能提取退出码与实际输出；原始响应明显大于实际命令输出。本次临时客户端增加了解码和展示去重才能顺畅检查。
+- 建议：插件提供原生 `structuredContent` 和 schema，保持二进制数据编码但补有界可读文本；收据尽量只包含操作元信息，避免重复大块输出。
+
+### 共享 PTY 的后台作业通知污染下一条输出
+
+- 操作：后台安装 Docker，再通过另一条命令查询日志；镜像拉取也使用相同方式。
+- 结果：下一条命令捕获到 `[1]+ Done ...` 作业通知，其中重复整段后台启动命令。
+- 使用影响：输出同时包含当前检查与前一次后台任务信息，增加解析负担；本次退出码和完成标记正常，没有据此认定执行失败。
+- 建议：增加明确的后台作业 ID、状态、日志游标和退出码；若仍用共享 PTY，明确标记作业通知与命令输出的关系。
+
+### 长任务缺少直接的作业进度入口
+
+- 操作：安装 Docker、拉取镜像。
+- 结果：为适应 SSH 命令最长 120 秒的已知限制，主动将任务放入后台，写日志与退出码文件，再查询进度。本次没有实际触发 120 秒超时。短 MCP 等待窗口返回 pending 后，也需要另调操作查询取得完成结果。
+- 使用影响：部署流程需要自行实现任务状态和日志读取；`ssh.read` 可以读取终端回放，但不等于独立后台作业管理。
+- 建议：插件增加有界、可取消的长任务接口，提供进度、退出码和日志读取；保持客户端等待时间与远端作业生命周期的明确区别。
+
+## 部署结果与验证
+
+用户清理会话后，重新初始化成功。通过已有、已认证的 root SSH 实例完成以下操作；未另建 SSH 连接，因此本次未覆盖指纹确认或密码交互。
+
+| 项目 | 结果 |
+|---|---|
+| 服务器环境 | Ubuntu 20.04.4 LTS，Linux x86_64 |
+| 用户 | `liu`，UID/GID 1000，家目录 `/home/liu`，Shell `/bin/bash` |
+| 附加组 | `root`（GID 0）；未授予 sudo，未加入 docker 组 |
+| 认证 | 未设置密码，`passwd -S liu` 为锁定状态；未配置 SSH 密钥 |
+| Docker | Ubuntu 软件源 `docker.io` 26.1.3；服务 active / enabled |
+| 内核 | `metacubex/mihomo:v1.19.33`；实际运行固定 digest，见下文 |
+| 容器 | `mihomo`，running，`unless-stopped` |
+| 配置 | 服务器 `/opt/mihomo/config.yaml`，目录 0700、文件 0600，root 所有 |
+| 代理 | 宿主 `127.0.0.1:7890/tcp`；容器内 mixed HTTP/SOCKS 端口 |
+| 规则 | `MATCH,DIRECT`，无订阅、无节点；未启用管理 API、TUN 或 UDP 端口映射 |
+| 资源与日志 | 256 MiB 内存、1 CPU、日志单文件 10 MiB、最多 3 个；移除 Linux capabilities，开启 no-new-privileges |
+
+镜像 digest：`sha256:9211361a3ed85305383288d38c05e85862d6d5a590c10007c37fc059cca82e9c`。上游版本依据：[Mihomo v1.19.33](https://github.com/MetaCubeX/mihomo/releases/tag/v1.19.33)，发布于 2026-10-21。
+
+验证结果：
+
+- 内核 `-t` 配置校验通过；`/mihomo -v` 确认为 v1.19.33 linux amd64。
+- 通过 HTTP 代理访问 `http://example.com`：200。
+- 通过 HTTP CONNECT 访问 `https://example.com`：200。
+- 通过 SOCKS5 hostname 访问 `https://example.com`：200。
+- `docker restart mihomo` 后再次通过 HTTPS 代理访问：200。
+- Docker inspect 和宿主 `ss` 均确认端口发布在 `127.0.0.1:7890`；内核日志确认请求匹配 DIRECT。未进行公网外部连接测试。
+- Docker 提示服务器内核不支持 swap limit，内存限制不包含 swap；未修改宿主内核配置。
+
+## 使用与维护
+
+以下命令在服务器执行。配置只提供直连能力；不包含 Clash Verge 桌面 GUI。
+
+```sh
+curl --noproxy '' -x http://127.0.0.1:7890 https://example.com
+curl --noproxy '' --socks5-hostname 127.0.0.1:7890 https://example.com
+docker ps --filter name=^/mihomo$
+docker logs --tail 50 mihomo
+docker restart mihomo
+```
+
+如修改配置，先校验再重启：
+
+```sh
+docker exec mihomo /mihomo -t -f /root/.config/mihomo/config.yaml
+docker restart mihomo
+```
+
+安装与镜像拉取的临时日志保留在服务器 `/var/tmp/coterm-docker-install.log`、`/var/tmp/coterm-mihomo-pull.log`，对应 `.exit` 文件均为 0。未验证宿主重启、订阅节点、UDP、TUN 或服务器外部访问。
