@@ -5,9 +5,10 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { HostInteractions } from "../../apps/desktop/src/components/host/HostInteractions";
-import { retryHostAttention } from "../../apps/desktop/src/host-api";
+import { createPluginAPI, retryHostAttention } from "../../apps/desktop/src/host-api";
 
 window.__cotermHostInteractions = {
+  createPluginAPI,
   retryHostAttention,
   mount() {
     const root = document.getElementById("root");

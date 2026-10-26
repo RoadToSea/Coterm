@@ -8,6 +8,7 @@ members = [
     "plugins/plugin-ssh",
     "plugins/plugin-serial",
     "apps/desktop/src-tauri",
+    "tests/fixtures/runtime-plugin",
 ]
 
 [workspace.package]

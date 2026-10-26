@@ -370,6 +370,8 @@ test("promptForSecret: resolves submitted once, ignores later submits, and binds
     elements.push(element);
     return element;
   };
+  globalThis.HTMLDialogElement = class {};
+  globalThis.HTMLInputElement = class { static [Symbol.hasInstance](value) { return value?.tagName === "INPUT"; } };
   globalThis.document = { body: { append: () => {} }, createElement };
 
   const { promptForSecret, cancelSecretInput } = await import("../apps/desktop/src/secret-input.ts");

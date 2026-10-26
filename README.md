@@ -2,29 +2,41 @@
 
 人类与 Agent 共享连接实例的插件式通信工具。Tauri 基座负责运行时和公共交互，协议与领域界面由独立插件实现。
 
-当前处于基础闭环收尾阶段，已接通 SSH 与 MCP，串口为初版。完成情况和已知缺口统一维护在 [项目进度](docs/PROGRESS.md)。
+当前目标为 Windows 上运行可信本地插件的基座首版；SSH、串口与跨平台发布独立迭代。完成情况和已知缺口统一维护在 [项目进度](docs/PROGRESS.md)。
 
 ## 开发
 
 使用兼容 Tauri v2 的 Rust 工具链；已验证 Node.js 22.22.2、pnpm 11.0.8。测试脚本需要 Node 的类型剥离与 `registerHooks` 支持。
 
 ```bash
-pnpm install
+pnpm install --frozen-lockfile
 pnpm plugin:ssh:build
 pnpm plugin:serial:build
 pnpm tauri:dev
 ```
 
-插件构建仅生成当前平台的开发包。安装包构建使用 `pnpm tauri:build`，跨平台发布尚待验收。
+插件构建仅生成当前平台的开发包，产物 manifest 也只声明该平台。Windows 安装包：`pnpm tauri:build --bundles nsis`。安装版从 `%APPDATA%/com.coterm.app/plugins/<包名>/manifest.json` 加载包，需将完整 `dist` 内容复制到该包目录；开发版另外扫描仓库 `plugins/*/dist`。安装包不包含插件。
+
+Windows 工作区自动加密保存；下次启动点击 **Restore workspace** 重建实例，再主动连接。历史仅保留本次启动，Bypass 每次重置为关闭。
 
 ## 检查
 
 ```bash
-cargo check --workspace
-cargo test --workspace
-cargo clippy --workspace -- -D warnings
+cargo check --workspace --locked
+cargo test --workspace --locked
+cargo clippy --workspace --all-targets --locked -- -D warnings
 pnpm build
 pnpm test
+```
+
+Windows CI 执行检查、浏览器与真实安装验收，并上传 NSIS；`v*` 标签发布 Windows 安装包。跨平台安装另行验收。
+
+真实 Tauri 验收使用独立 `com.coterm.smoke` 标识，安装到临时目录，不使用产品工作区：
+
+```powershell
+cargo build -p coterm-runtime-fixture --locked
+pnpm tauri:build --config ../../tests/fixtures/tauri-smoke.conf.json --bundles nsis
+./scripts/test-installer.ps1
 ```
 
 浏览器测试前需构建桌面与 SSH 前端，并安装 Chrome/Edge/Chromium；可用 `CHROME_BIN` 或 `EDGE_BIN` 指定。串口硬件测试默认 ignored，启用方式见串口说明。

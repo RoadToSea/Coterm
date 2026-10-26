@@ -173,6 +173,10 @@ export function makeHostMockSource(initial) {
     };
 
     const handlers = {
+      runtime_snapshot: () => ({ instances: scenario.instances, runningPlugins: scenario.catalog.plugins.filter((plugin) => plugin.running).map((plugin) => plugin.id) }),
+      workspace_snapshot: () => scenario.workspace ?? { entries: [], layout: { activeConfigRef: null, instancesCollapsed: innerWidth < 900 }, historyPolicy: "session_only" },
+      save_workspace_layout: () => null,
+      provide_secret: ({ pluginInstanceId, purpose }) => ({ id: "secret-test", pluginInstanceId, purpose, expiresAt: "2099-01-01T00:00:00Z" }),
       list_plugins: () => scenario.catalog,
       list_instances: () => scenario.instances,
       get_bypass: () => scenario.bypass,

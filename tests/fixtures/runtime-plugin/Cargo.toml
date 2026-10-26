@@ -1,0 +1,14 @@
+[package]
+name = "coterm-runtime-fixture"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+coterm-proto.workspace = true
+tokio.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+coterm-core.workspace = true

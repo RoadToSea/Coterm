@@ -1,4 +1,5 @@
-/** 插件前端契约；桌面 SDK 适配器位于 host-api.ts，接口尚未冻结。 */
+/** SDK v1.0: additive optional features use minor versions; breaking changes use a major version. */
+export const FRONTEND_API_VERSION = "1.0" as const;
 
 export type OperationSource = "human" | "agent" | "system";
 export type OperationEffect = "read" | "draft" | "commit";
@@ -117,6 +118,8 @@ export interface CommonComponents {
 
 /** 绑定当前实例；不允许从调用参数改目标、伪造来源或选择低风险 effect。 */
 export interface PluginAPI {
+  readonly apiVersion: typeof FRONTEND_API_VERSION;
+  readonly capabilities: Readonly<{ interactions: true; events: true; streams: false }>;
   readonly pluginId: string;
   readonly pluginInstanceId: string;
   readonly sessionId: string;

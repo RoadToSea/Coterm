@@ -1,0 +1,5 @@
+{
+  "productName": "Coterm Smoke",
+  "identifier": "com.coterm.smoke",
+  "bundle": { "targets": ["nsis"] }
+}

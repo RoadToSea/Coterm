@@ -1,7 +1,13 @@
 // Prevents additional console window on Windows in release
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use std::{path::{Path, PathBuf}, sync::Arc};
+mod workspace;
+mod workspace_commands;
+
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use coterm_core::{
     plugin_manager::{DiscoveredPackage, PackageOrigin, PluginLoadIssue, ProcessPluginRuntime},
@@ -41,6 +47,12 @@ struct InstanceEvent {
 }
 
 struct AppState {
+    workspace: Arc<
+        std::sync::Mutex<Result<workspace::WorkspaceStore, coterm_proto::runtime::RuntimeError>>,
+    >,
+    workspace_actions: tokio::sync::Mutex<()>,
+    workspace_path: PathBuf,
+    exiting: std::sync::atomic::AtomicBool,
     event_subscriptions: EventSubscriptions,
     _session_mgr: Arc<SessionManager>,
     plugin_runtime: Arc<ProcessPluginRuntime>,
@@ -249,8 +261,7 @@ async fn list_plugins(state: tauri::State<'_, AppState>) -> Result<PluginCatalog
     // 该路径只在本进程内用于读取，不写入任何 IPC 负载。
     #[cfg(debug_assertions)]
     {
-        let development = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../plugins");
+        let development = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../plugins");
         scan_packages(
             &development,
             PackageOrigin::Development,
@@ -260,7 +271,10 @@ async fn list_plugins(state: tauri::State<'_, AppState>) -> Result<PluginCatalog
         )
         .await;
         // 开发包位于 <repo>/plugins/<dir>/dist；已安装包直接是 <dir>。
-        for package in scanned.iter_mut().filter(|p| p.origin == PackageOrigin::Development) {
+        for package in scanned
+            .iter_mut()
+            .filter(|p| p.origin == PackageOrigin::Development)
+        {
             package.root = package.root.join("dist");
         }
     }
@@ -300,6 +314,7 @@ async fn start_plugin(plugin_id: String, state: tauri::State<'_, AppState>) -> R
 
 #[tauri::command]
 async fn stop_plugin(plugin_id: String, state: tauri::State<'_, AppState>) -> Result<(), String> {
+    let _guard = state.workspace_actions.lock().await;
     state
         .plugin_runtime
         .stop(&plugin_id)
@@ -317,6 +332,32 @@ async fn list_instances(
         .list_instances(plugin_id.as_deref())
         .await
         .map_err(|error| format!("{}: {}", error.code, error.message))
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RuntimeSnapshot {
+    instances: Vec<InstanceInfo>,
+    running_plugins: Vec<String>,
+}
+
+#[tauri::command]
+async fn runtime_snapshot(state: tauri::State<'_, AppState>) -> Result<RuntimeSnapshot, String> {
+    let instances = state
+        .plugin_runtime
+        .list_instances(None)
+        .await
+        .map_err(|error| error.code)?;
+    let mut running_plugins = Vec::new();
+    for manifest in state.plugin_runtime.loaded_manifests().await {
+        if state.plugin_runtime.is_running(&manifest.id).await {
+            running_plugins.push(manifest.id);
+        }
+    }
+    Ok(RuntimeSnapshot {
+        instances,
+        running_plugins,
+    })
 }
 
 #[tauri::command]
@@ -398,11 +439,26 @@ async fn create_instance(
     config: Value,
     state: tauri::State<'_, AppState>,
 ) -> Result<InstanceInfo, String> {
-    state
+    let _guard = state.workspace_actions.lock().await;
+    let instance = state
         .plugin_runtime
-        .create_instance(&plugin_id, config)
+        .create_instance(&plugin_id, config.clone())
         .await
-        .map_err(|error| format!("{}: {}", error.code, error.message))
+        .map_err(|error| format!("{}: {}", error.code, error.message))?;
+    let id = instance.plugin_instance_id.clone();
+    let label = instance.label.clone();
+    if let Err(error) = workspace_commands::access(&state, move |store| {
+        store.insert(plugin_id, id, label, config)
+    })
+    .await
+    {
+        let _ = state
+            .plugin_runtime
+            .destroy_instance(&instance.plugin_instance_id)
+            .await;
+        return Err(format!("{}: {}", error.code, error.message));
+    }
+    Ok(instance)
 }
 
 #[tauri::command]
@@ -410,11 +466,17 @@ async fn destroy_instance(
     plugin_instance_id: String,
     state: tauri::State<'_, AppState>,
 ) -> Result<(), String> {
+    let _guard = state.workspace_actions.lock().await;
     state
         .plugin_runtime
         .destroy_instance(&plugin_instance_id)
         .await
-        .map_err(|error| format!("{}: {}", error.code, error.message))
+        .map_err(|error| format!("{}: {}", error.code, error.message))?;
+    workspace_commands::access(&state, move |store| {
+        store.remove_instance(&plugin_instance_id)
+    })
+    .await
+    .map_err(|error| format!("{}: {}", error.code, error.message))
 }
 
 #[tauri::command]
@@ -722,12 +784,14 @@ fn main() {
         },
     };
 
-    tauri::Builder::default()
+    let application = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             let app_data = app.path().app_data_dir()?;
             let plugins_dir = app_data.join("plugins");
             std::fs::create_dir_all(&plugins_dir)?;
+            let workspace_path = app_data.join("workspace.v1.dpapi");
+            let workspace = workspace::WorkspaceStore::open(workspace_path.clone());
             let plugin_runtime = Arc::new(ProcessPluginRuntime::new(
                 current_platform(),
                 runtime_limits,
@@ -755,6 +819,10 @@ fn main() {
                 }
             });
             app.manage(AppState {
+                workspace: Arc::new(std::sync::Mutex::new(workspace)),
+                workspace_actions: tokio::sync::Mutex::new(()),
+                workspace_path,
+                exiting: std::sync::atomic::AtomicBool::new(false),
                 event_subscriptions: Arc::new(tokio::sync::Mutex::new(
                     std::collections::HashMap::new(),
                 )),
@@ -766,6 +834,11 @@ fn main() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            workspace_commands::workspace_snapshot,
+            workspace_commands::save_workspace_layout,
+            workspace_commands::restore_saved_instance,
+            workspace_commands::forget_saved_instance,
+            workspace_commands::reset_saved_workspace,
             subscribe_plugin_events,
             ack_plugin_event,
             unsubscribe_plugin_events,
@@ -774,6 +847,7 @@ fn main() {
             start_plugin,
             stop_plugin,
             list_instances,
+            runtime_snapshot,
             list_operations,
             plugin_frontend_source,
             provide_secret,
@@ -796,8 +870,40 @@ fn main() {
             set_bypass,
             get_bypass
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running Coterm desktop application");
+        .build(tauri::generate_context!());
+    let application = match application {
+        Ok(application) => application,
+        Err(error) => {
+            eprintln!("Coterm startup failed: {error}");
+            return;
+        }
+    };
+    application.run(|app, event| {
+        if let tauri::RunEvent::ExitRequested { api, code, .. } = event {
+            let state = app.state::<AppState>();
+            if state
+                .exiting
+                .swap(true, std::sync::atomic::Ordering::AcqRel)
+            {
+                if code.is_none() {
+                    api.prevent_exit();
+                }
+                return;
+            }
+            api.prevent_exit();
+            let handle = app.clone();
+            let runtime = state.plugin_runtime.clone();
+            let subscriptions = state.event_subscriptions.clone();
+            tauri::async_runtime::spawn(async move {
+                for (_, subscription) in subscriptions.lock().await.drain() {
+                    subscription.task.abort();
+                }
+                let _ = tokio::time::timeout(std::time::Duration::from_secs(5), runtime.shutdown())
+                    .await;
+                handle.exit(code.unwrap_or(0));
+            });
+        }
+    });
 }
 
 fn current_platform() -> &'static str {

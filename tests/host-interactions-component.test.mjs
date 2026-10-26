@@ -594,3 +594,54 @@ test("HostInteractions: an older prefetch failure does not overwrite a newer sta
     await new Promise((resolve) => server.close(resolve));
   }
 });
+
+
+test("Frontend SDK v1: typed host dialogs, rejection, timeout, scope replacement and disposal", async (t) => {
+  if (!browserPath) { t.skip("No browser available for SDK dialog acceptance"); return; }
+  assertFreshTestArtifacts();
+  const { url, server } = await startStaticServer();
+  serverUrl = url;
+  const session = await openSession({ browserPath, totalTimeoutMs: 60_000 });
+  const page = await openInteractionsPage(session, scenarioBase(attention(1, [])));
+  try {
+    await page.evaluate(`window.api = window.__cotermHostInteractions.createPluginAPI({pluginId:'fixture',pluginInstanceId:'sdk-instance',sessionId:'session',label:'SDK',status:'ready'});
+      window.result = null; window.api.requestText({title:'Text',prompt:'<b>plain text</b>'}).then(value=>window.result=value); true;`);
+    await waitForDialogs(page, 1, "text prompt");
+    assert.equal(await page.evaluate("document.querySelector('dialog label span').textContent"), "<b>plain text</b>");
+    assert.equal(await page.evaluate("document.querySelector('dialog b')"), null);
+    await page.evaluate("document.querySelector('dialog input').value='typed'; document.querySelector('dialog form').requestSubmit()");
+    await waitForValue({send:page.send}, "window.result?.outcome === 'submitted'");
+    assert.deepEqual(await page.evaluate("window.result"), {outcome:"submitted",value:"typed"});
+    assert.equal(await page.evaluate("window.api.apiVersion"), "1.0");
+    assert.equal(await page.evaluate("window.api.capabilities.streams"), false);
+
+    await page.evaluate("window.result=null; window.api.requestSelection({title:'Select',prompt:'Choose',options:[{value:'a',label:'Alpha'},{value:'b',label:'Beta'}]}).then(value=>window.result=value); true");
+    await waitForDialogs(page, 1, "selection prompt");
+    await page.evaluate("document.querySelector('dialog select').value='b'; document.querySelector('dialog form').requestSubmit()");
+    await waitForValue({send:page.send}, "window.result?.outcome === 'submitted'");
+    assert.deepEqual(await page.evaluate("window.result"), {outcome:"submitted",value:"b"});
+
+    await page.evaluate("window.result=null; window.api.requestConfirmation({title:'Confirm',prompt:'Proceed?'}).then(value=>window.result=value); true");
+    await waitForDialogs(page, 1, "confirmation prompt");
+    await page.evaluate("[...document.querySelectorAll('dialog button')].find(button=>button.textContent==='Reject').click()");
+    assert.deepEqual(await page.evaluate("window.result"), {outcome:"rejected"});
+
+    await page.evaluate("window.result=null; window.api.requestText({title:'Timeout',prompt:'Wait',timeoutMs:1000}).then(value=>window.result=value); true");
+    await waitForValue({send:page.send}, "window.result?.outcome === 'timed_out'");
+    await waitForDialogs(page, 0, "timeout removes dialog");
+    await page.evaluate("window.oldResult=null; window.api.requestText({title:'Old',prompt:'Old'}).then(value=>window.oldResult=value); window.api.requestConfirmation({title:'New',prompt:'New',allowCancel:false}).then(value=>window.result=value); true");
+    assert.deepEqual(await page.evaluate("window.oldResult"), {outcome:"cancelled"});
+    await waitForDialogs(page, 1, "replacement does not stack");
+    await page.evaluate("document.querySelector('dialog').dispatchEvent(new Event('cancel',{cancelable:true}))");
+    await waitForDialogs(page, 1, "allowCancel false blocks escape");
+    await page.evaluate("window.api.dispose()");
+    await waitForDialogs(page, 0, "dispose removes prompt");
+    assert.deepEqual(await page.evaluate("window.result"), {outcome:"cancelled"});
+    assert.deepEqual(await page.evaluate("window.api.requestText({title:'Disposed',prompt:'No'})"), {outcome:"unavailable"});
+    assert.equal(await page.evaluate("window.api.invoke('fixture.commit',{}).then(()=>false,()=>true)"), true);
+  } finally {
+    await page.close();
+    await session.close();
+    await new Promise(resolve=>server.close(resolve));
+  }
+});

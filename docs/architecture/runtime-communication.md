@@ -1,6 +1,6 @@
 # 运行时通信
 
-**基线：控制协议 v1.0（2026-10-26）**。固定现有 stdio JSON-RPC、实例调用、审批、单轮秘密交互和 JSON 通知；二进制流、通用交互与前端 SDK 不在本次冻结范围。类型见 [runtime](../../crates/coterm-proto/src/runtime)，唯一编解码入口为 [wire.rs](../../crates/coterm-proto/src/runtime/wire.rs)，可执行契约见 [control_contract.rs](../../crates/coterm-proto/tests/control_contract.rs)。
+**基线：控制协议 v1.0（2026-10-26）**。固定现有 stdio JSON-RPC、实例调用、审批、单轮秘密交互和 JSON 通知；前端 SDK v1.0 另见[开发指南](plugin-development.md)；二进制流与后端扩展交互另行冻结。类型见 [runtime](../../crates/coterm-proto/src/runtime)，唯一编解码入口为 [wire.rs](../../crates/coterm-proto/src/runtime/wire.rs)，可执行契约见 [control_contract.rs](../../crates/coterm-proto/tests/control_contract.rs)。
 
 ## 评审结论与兼容规则
 
@@ -58,7 +58,7 @@
 
 等待上限只结束调用方等待，不取消操作。取消必须显式请求：插件确认未提交或已停止才记为 cancelled，无法确认时为 unknown。断开、超时或崩溃均不得触发写操作自动重放。
 
-宿主普通和 transient 账本各有每实例 100 条的上限；非终态记录受保护，容量被活动操作占满时拒绝新操作。账本在内存中，敏感参数与批准快照必须脱敏。
+宿主普通和 transient 账本各有每实例 100 条的上限；非终态记录受保护，容量被活动操作占满时拒绝新操作。账本仅保留本次启动，退出清除；敏感参数与批准快照必须脱敏。
 
 ## 秘密与延迟交互
 
@@ -90,3 +90,11 @@
 - 决策、取消、过期、实例销毁和插件停止后收敛；条目消失即关闭对应交互，其他待处理项不受影响。
 
 实现见 [host-api.ts](../../apps/desktop/src/host-api.ts) 与 [HostInteractions.tsx](../../apps/desktop/src/components/host/HostInteractions.tsx)，回归见 [tests](../../tests)。
+
+## 工作区与生命周期
+
+Windows 首版将版本化工作区、初始配置及配置引用整体用当前用户 DPAPI 加密，原子替换 `workspace.v1.dpapi`；UI 只读配置引用和标签。最多 128 项、明文编码上限 512 KiB，不保存 Bypass、操作账本或运行期秘密句柄；配置中出现宿主秘密句柄结构时拒绝保存。损坏/不兼容文件显示错误，须用户显式重置；非 Windows 暂保留会话内工作区并明确提示，不回退明文存盘。
+
+启动只读取保存项；用户可逐项或整体恢复。恢复分配新的实例/会话 ID，只调用创建，不重放历史操作、不自动连接。保存项保留顺序、选中引用与侧栏折叠状态；销毁实例移除保存项，停止插件保留恢复入口。插件领域数据仍由插件管理。
+
+进程断开后移除运行态和操作目录，实例收敛为 `failed`；未派发操作取消，已派发/运行中的结果标为 `unknown`，并清理审批和交互。失败实例可删除或从保存配置重建；旧实例不能路由到新进程。退出停止事件订阅，并有界关闭、强制回收子进程。

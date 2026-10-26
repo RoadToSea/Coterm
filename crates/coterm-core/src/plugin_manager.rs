@@ -142,7 +142,10 @@ impl DiscoveredPackage {
     }
 
     /// 读取并校验 manifest 与包内入口；任何失败都转成不含绝对路径的诊断。
-    async fn load_into(&self, runtime: &ProcessPluginRuntime) -> Result<PluginManifest, PluginLoadIssue> {
+    async fn load_into(
+        &self,
+        runtime: &ProcessPluginRuntime,
+    ) -> Result<PluginManifest, PluginLoadIssue> {
         let missing_manifest = match self.origin {
             PackageOrigin::Development => {
                 "Package has no built manifest; run the package build to produce dist/manifest.json"
@@ -153,16 +156,21 @@ impl DiscoveredPackage {
             .await
             .map_err(|_| self.issue("plugin_manifest_unavailable", missing_manifest))?;
         if !metadata.is_file() || metadata.len() > MAX_MANIFEST_BYTES {
-            return Err(self.issue(
-                "plugin_manifest_unavailable",
-                missing_manifest,
-            ));
+            return Err(self.issue("plugin_manifest_unavailable", missing_manifest));
         }
         let bytes = tokio::fs::read(self.root.join("manifest.json"))
             .await
-            .map_err(|_| self.issue("plugin_manifest_read_failed", "Package manifest could not be read"))?;
+            .map_err(|_| {
+                self.issue(
+                    "plugin_manifest_read_failed",
+                    "Package manifest could not be read",
+                )
+            })?;
         let value: Value = serde_json::from_slice(&bytes).map_err(|_| {
-            self.issue("plugin_manifest_invalid", "Package manifest is not valid JSON")
+            self.issue(
+                "plugin_manifest_invalid",
+                "Package manifest is not valid JSON",
+            )
         })?;
         // 旧格式包缺少 manifestVersion：给出可定位诊断，不静默当成有效插件。
         if value.get("manifestVersion").is_none() {
@@ -271,6 +279,8 @@ pub struct ProcessPluginRuntime {
     bypass: Arc<tokio::sync::RwLock<bool>>,
     /// 仅承载版本号；快照内容以 `state` 为准，二者在同一把锁内推进。
     attention: Arc<std::sync::Mutex<u64>>,
+    children: Arc<std::sync::Mutex<HashMap<String, std::sync::Weak<JsonRpcPluginProcess>>>>,
+    shutting_down: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl ProcessPluginRuntime {
@@ -282,17 +292,74 @@ impl ProcessPluginRuntime {
             history: Arc::new(OperationHistory::new(100, 16 * 1024)),
             bypass: Arc::new(tokio::sync::RwLock::new(false)),
             attention: Arc::new(std::sync::Mutex::new(0)),
+            children: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        }
+    }
+
+    fn ensure_accepting(&self) -> Result<(), RuntimeError> {
+        if self
+            .shutting_down
+            .load(std::sync::atomic::Ordering::Acquire)
+        {
+            Err(runtime_error(
+                ErrorCategory::Conflict,
+                "runtime_shutting_down",
+            ))
+        } else {
+            Ok(())
         }
     }
 
     /// 必须在持有 `state` 锁时调用，保证版本与快照内容一致。
     fn bump_attention(&self) {
-        let mut version = self.attention.lock().unwrap_or_else(|error| error.into_inner());
+        let mut version = self
+            .attention
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         *version += 1;
     }
 
+    /// Stop every child within a bounded deadline, without replaying any operation.
+    pub async fn shutdown(&self) {
+        self.shutting_down
+            .store(true, std::sync::atomic::Ordering::Release);
+        // This registry is independent of the routing lock: an unresponsive control
+        // request may hold that lock, but must never prevent killing its child.
+        let processes = self
+            .children
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .values()
+            .filter_map(std::sync::Weak::upgrade)
+            .collect::<Vec<_>>();
+        let mut tasks = tokio::task::JoinSet::new();
+        for process in processes {
+            tasks.spawn(async move {
+                let _ = tokio::time::timeout(
+                    std::time::Duration::from_millis(750),
+                    process.request(HostCommand::Shutdown),
+                )
+                .await;
+                let _ = process.close().await;
+            });
+        }
+        while tasks.join_next().await.is_some() {}
+        let mut state = self.state.lock().await;
+        let ids = state.processes.keys().cloned().collect::<Vec<_>>();
+        state.processes.clear();
+        for id in ids {
+            settle_closed_plugin(&mut state, &self.history, &id).await;
+        }
+        state.instances.clear();
+        self.bump_attention();
+    }
+
     pub fn attention_version(&self) -> u64 {
-        *self.attention.lock().unwrap_or_else(|error| error.into_inner())
+        *self
+            .attention
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
     }
 
     /// 一次调用覆盖全部实例级与插件级待处理项。
@@ -305,22 +372,24 @@ impl ProcessPluginRuntime {
         let mut approvals = state
             .pending_approvals
             .iter()
-            .map(|(operation_id, (plugin_id, instance, proposal_id, operation))| {
-                let target_label = instance
-                    .as_ref()
-                    .and_then(|id| state.instances.get(id))
-                    .map(|instance| instance.label.clone())
-                    .unwrap_or_else(|| plugin_id.clone());
-                PendingApproval {
-                    operation_id: operation_id.clone(),
-                    proposal_id: proposal_id.clone(),
-                    plugin_id: plugin_id.clone(),
-                    plugin_instance_id: instance.clone(),
-                    operation: operation.clone(),
-                    target_label,
-                    created_at: String::new(),
-                }
-            })
+            .map(
+                |(operation_id, (plugin_id, instance, proposal_id, operation))| {
+                    let target_label = instance
+                        .as_ref()
+                        .and_then(|id| state.instances.get(id))
+                        .map(|instance| instance.label.clone())
+                        .unwrap_or_else(|| plugin_id.clone());
+                    PendingApproval {
+                        operation_id: operation_id.clone(),
+                        proposal_id: proposal_id.clone(),
+                        plugin_id: plugin_id.clone(),
+                        plugin_instance_id: instance.clone(),
+                        operation: operation.clone(),
+                        target_label,
+                        created_at: String::new(),
+                    }
+                },
+            )
             .collect::<Vec<_>>();
         approvals.sort_by(|left, right| left.operation_id.cmp(&right.operation_id));
         let mut interactions = state
@@ -337,7 +406,10 @@ impl ProcessPluginRuntime {
                 prompt: request.prompt.clone(),
                 allow_cancel: request.allow_cancel,
                 remaining_ms: deadline.duration_since(now).as_millis() as u64,
-                deadline: request.deadline.map(|value| value.to_rfc3339()).unwrap_or_default(),
+                deadline: request
+                    .deadline
+                    .map(|value| value.to_rfc3339())
+                    .unwrap_or_default(),
             })
             .collect::<Vec<_>>();
         drop(state);
@@ -422,7 +494,9 @@ impl ProcessPluginRuntime {
     }
 
     /// 确定性排序：先插件名，再插件 ID；同名不同 ID 也不会因遍历顺序抖动。
-    fn sorted_manifests<'a>(manifests: impl Iterator<Item = &'a PluginManifest>) -> Vec<PluginManifest> {
+    fn sorted_manifests<'a>(
+        manifests: impl Iterator<Item = &'a PluginManifest>,
+    ) -> Vec<PluginManifest> {
         let mut manifests = manifests.cloned().collect::<Vec<_>>();
         manifests.sort_by(|left, right| {
             left.name
@@ -434,10 +508,7 @@ impl ProcessPluginRuntime {
 
     /// 按稳定顺序加载启动扫描到的目录；单个包失败只产出一条诊断，不影响其余包。
     /// 每个目录都是一个 `<root>/<package>` 包根，manifest 位于包根下的 `dist/manifest.json`。
-    pub async fn load_discovered(
-        &self,
-        scanned: Vec<DiscoveredPackage>,
-    ) -> Vec<PluginLoadIssue> {
+    pub async fn load_discovered(&self, scanned: Vec<DiscoveredPackage>) -> Vec<PluginLoadIssue> {
         let mut issues = Vec::new();
         for package in scanned {
             if let Err(issue) = package.load_into(self).await {
@@ -927,7 +998,14 @@ impl ProcessPluginRuntime {
                             .history
                             .transition(
                                 &record.operation_id,
-                                OperationStatus::Cancelled,
+                                if matches!(
+                                    record.status,
+                                    OperationStatus::Dispatched | OperationStatus::Running
+                                ) {
+                                    OperationStatus::Unknown
+                                } else {
+                                    OperationStatus::Cancelled
+                                },
                                 None,
                                 None,
                             )
@@ -956,6 +1034,49 @@ impl ProcessPluginRuntime {
     }
 }
 
+/// State convergence runs under the manager lock and includes plugin-scoped operations.
+async fn settle_closed_plugin(state: &mut State, history: &OperationHistory, plugin_id: &str) {
+    state.operation_catalog.remove(plugin_id);
+    state.mcp_tools.remove(plugin_id);
+    state.features.remove(plugin_id);
+    let ids = state
+        .instances
+        .values_mut()
+        .filter(|instance| instance.plugin_id == plugin_id)
+        .map(|instance| {
+            instance.status = InstanceStatus::Failed;
+            instance.plugin_instance_id.clone()
+        })
+        .collect::<HashSet<_>>();
+    state
+        .pending_approvals
+        .retain(|_, pending| pending.0 != plugin_id);
+    state
+        .interactions
+        .retain(|_, (request, _)| !ids.contains(&request.plugin_instance_id));
+    for record in history.active_plugin(plugin_id).await {
+        let status = if matches!(
+            record.status,
+            OperationStatus::Dispatched | OperationStatus::Running
+        ) {
+            OperationStatus::Unknown
+        } else {
+            OperationStatus::Cancelled
+        };
+        let _ = history
+            .transition(
+                &record.operation_id,
+                status,
+                None,
+                Some(runtime_error(
+                    ErrorCategory::Transport,
+                    "plugin_connection_closed",
+                )),
+            )
+            .await;
+    }
+}
+
 impl PluginRuntime for ProcessPluginRuntime {
     fn load<'a>(&'a self, package_path: &'a Path) -> RuntimeFuture<'a, PluginManifest> {
         Box::pin(async move {
@@ -968,6 +1089,15 @@ impl PluginRuntime for ProcessPluginRuntime {
     fn start<'a>(&'a self, plugin_id: &'a str) -> RuntimeFuture<'a, ()> {
         Box::pin(async move {
             let mut state = self.state.lock().await;
+            if self
+                .shutting_down
+                .load(std::sync::atomic::Ordering::Acquire)
+            {
+                return Err(runtime_error(
+                    ErrorCategory::Conflict,
+                    "runtime_shutting_down",
+                ));
+            }
             if state.processes.contains_key(plugin_id) {
                 return Ok(());
             }
@@ -977,6 +1107,20 @@ impl PluginRuntime for ProcessPluginRuntime {
                 .cloned()
                 .ok_or_else(|| runtime_error(ErrorCategory::NotFound, "plugin_not_loaded"))?;
             let process = Arc::new(JsonRpcPluginProcess::spawn(&package.backend_entry, &[]).await?);
+            self.children
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .insert(plugin_id.to_owned(), Arc::downgrade(&process));
+            if self
+                .shutting_down
+                .load(std::sync::atomic::Ordering::Acquire)
+            {
+                let _ = process.close().await;
+                return Err(runtime_error(
+                    ErrorCategory::Conflict,
+                    "runtime_shutting_down",
+                ));
+            }
             let handshake = RuntimeHello {
                 interface_major: coterm_proto::runtime::lifecycle::INTERFACE_MAJOR,
                 interface_minor: coterm_proto::runtime::lifecycle::INTERFACE_MINOR,
@@ -1107,6 +1251,7 @@ impl PluginRuntime for ProcessPluginRuntime {
             if let Some(mut notifications) = notifications {
                 let state_ref = Arc::downgrade(&self.state);
                 let history_ref = Arc::downgrade(&self.history);
+                let attention_ref = Arc::downgrade(&self.attention);
                 let plugin_id = plugin_id.to_owned();
                 tokio::spawn(async move {
                     while let Some(notification) = notifications.recv().await {
@@ -1166,7 +1311,7 @@ impl PluginRuntime for ProcessPluginRuntime {
                     if let (Some(state), Some(history)) =
                         (state_ref.upgrade(), history_ref.upgrade())
                     {
-                        let state = state.lock().await;
+                        let mut state = state.lock().await;
                         if !state.processes.get(&plugin_id).is_some_and(|current| {
                             process_ref
                                 .upgrade()
@@ -1174,29 +1319,14 @@ impl PluginRuntime for ProcessPluginRuntime {
                         }) {
                             return;
                         }
-                        for instance in state
-                            .instances
-                            .values()
-                            .filter(|i| i.plugin_id == plugin_id)
-                        {
-                            for record in history
-                                .active(&plugin_id, &instance.plugin_instance_id)
-                                .await
-                            {
-                                if !crate::operation_history::terminal(record.status) {
-                                    let _ = history
-                                        .transition(
-                                            &record.operation_id,
-                                            OperationStatus::Unknown,
-                                            None,
-                                            Some(runtime_error(
-                                                ErrorCategory::Transport,
-                                                "plugin_connection_closed",
-                                            )),
-                                        )
-                                        .await;
-                                }
-                            }
+                        let process = state.processes.remove(&plugin_id);
+                        settle_closed_plugin(&mut state, &history, &plugin_id).await;
+                        if let Some(attention) = attention_ref.upgrade() {
+                            *attention.lock().unwrap_or_else(|error| error.into_inner()) += 1;
+                        }
+                        drop(state);
+                        if let Some(process) = process {
+                            let _ = process.close().await;
                         }
                     }
                 });
@@ -1236,30 +1366,25 @@ impl PluginRuntime for ProcessPluginRuntime {
             self.bump_attention();
             self.cancel_instance_interactions(&mut state, &instance_ids)
                 .await;
-            let mut first_error = None;
-            for instance_id in &instance_ids {
-                if let Err(error) = process
-                    .request(HostCommand::DestroyInstance {
-                        plugin_instance_id: instance_id.clone(),
-                    })
-                    .await
-                {
-                    first_error.get_or_insert(error);
+            // One deadline for the entire plugin, including many instances.
+            let graceful = async {
+                for instance_id in &instance_ids {
+                    process
+                        .request(HostCommand::DestroyInstance {
+                            plugin_instance_id: instance_id.clone(),
+                        })
+                        .await?;
                 }
-            }
-            if let Err(error) = process.request(HostCommand::Shutdown).await {
-                first_error.get_or_insert(error);
-            }
-            if let Err(error) = process.close().await {
-                first_error.get_or_insert(error);
-            }
+                process.request(HostCommand::Shutdown).await?;
+                Ok::<(), RuntimeError>(())
+            };
+            let _ = tokio::time::timeout(std::time::Duration::from_secs(2), graceful).await;
+            let result = process.close().await;
+            settle_closed_plugin(&mut state, &self.history, plugin_id).await;
             for instance_id in instance_ids {
                 state.instances.remove(&instance_id);
             }
-            match first_error {
-                Some(error) => Err(error),
-                None => Ok(()),
-            }
+            result
         })
     }
 
@@ -1270,6 +1395,7 @@ impl PluginRuntime for ProcessPluginRuntime {
     ) -> RuntimeFuture<'a, InstanceInfo> {
         Box::pin(async move {
             let mut state = self.state.lock().await;
+            self.ensure_accepting()?;
             let package = state
                 .packages
                 .get(plugin_id)
@@ -1323,15 +1449,15 @@ impl PluginRuntime for ProcessPluginRuntime {
             let instance = state.instances.get(instance_id).cloned().ok_or_else(|| {
                 runtime_error(ErrorCategory::NotFound, "plugin_instance_not_found")
             })?;
-            let process = state
-                .processes
-                .get(&instance.plugin_id)
-                .ok_or_else(|| runtime_error(ErrorCategory::Conflict, "plugin_not_started"))?;
-            process
-                .request(HostCommand::DestroyInstance {
-                    plugin_instance_id: instance_id.to_owned(),
-                })
-                .await?;
+            if instance.status != InstanceStatus::Failed {
+                if let Some(process) = state.processes.get(&instance.plugin_id) {
+                    process
+                        .request(HostCommand::DestroyInstance {
+                            plugin_instance_id: instance_id.to_owned(),
+                        })
+                        .await?;
+                }
+            }
             self.cancel_instance_interactions(&mut state, &[instance_id.to_owned()])
                 .await;
             state.instances.remove(instance_id);
@@ -1370,6 +1496,7 @@ impl Operations for ProcessPluginRuntime {
         Box::pin(async move {
             let bypass = *self.bypass.read().await;
             let state = self.state.lock().await;
+            self.ensure_accepting()?;
             let descriptor = state
                 .operation_catalog
                 .get(&request.plugin_id)
@@ -1392,6 +1519,12 @@ impl Operations for ProcessPluginRuntime {
                 }
                 if instance.session_id != caller.session_id {
                     return Err(runtime_error(ErrorCategory::Conflict, "session_mismatch"));
+                }
+                if instance.status != InstanceStatus::Ready {
+                    return Err(runtime_error(
+                        ErrorCategory::Conflict,
+                        "plugin_instance_not_ready",
+                    ));
                 }
             }
             validate_operation_args(
@@ -1442,6 +1575,13 @@ impl Operations for ProcessPluginRuntime {
             let runtime = self.clone();
             tokio::spawn(async move {
                 let mut state = runtime.state.lock().await;
+                if runtime.ensure_accepting().is_err() {
+                    let _ = runtime
+                        .history
+                        .transition(&operation_id, OperationStatus::Cancelled, None, None)
+                        .await;
+                    return;
+                }
                 if !runtime
                     .history
                     .get(&operation_id)
@@ -1620,6 +1760,7 @@ impl Operations for ProcessPluginRuntime {
                 ));
             }
             let mut state = self.state.lock().await;
+            self.ensure_accepting()?;
             let pending = state
                 .pending_approvals
                 .get(&request.operation_id)
@@ -1675,7 +1816,11 @@ impl Operations for ProcessPluginRuntime {
                 .await
                 .map_err(map_history_error)?;
             let result = process.request(HostCommand::Approve(request.clone())).await;
-            if state.pending_approvals.remove(&request.operation_id).is_some() {
+            if state
+                .pending_approvals
+                .remove(&request.operation_id)
+                .is_some()
+            {
                 self.bump_attention();
             }
             let record = self
@@ -2091,12 +2236,14 @@ mod tests {
         let state = Arc::clone(&runtime.state);
         {
             let mut state = state.lock().await;
-            state
-                .instances
-                .insert("instance-a".to_owned(), instance("com.example.alpha", "instance-a"));
-            state
-                .instances
-                .insert("instance-b".to_owned(), instance("com.example.alpha", "instance-b"));
+            state.instances.insert(
+                "instance-a".to_owned(),
+                instance("com.example.alpha", "instance-a"),
+            );
+            state.instances.insert(
+                "instance-b".to_owned(),
+                instance("com.example.alpha", "instance-b"),
+            );
             for (operation_id, instance_id) in [("op-1", "instance-a"), ("op-2", "instance-b")] {
                 state.pending_approvals.insert(
                     operation_id.to_owned(),
@@ -2138,7 +2285,10 @@ mod tests {
             .map(|approval| approval.operation_id.as_str())
             .collect::<Vec<_>>();
         assert_eq!(ids, ["op-1", "op-2", "op-3"]);
-        assert_eq!(snapshot.approvals[0].target_label, "com.example.alpha instance-a");
+        assert_eq!(
+            snapshot.approvals[0].target_label,
+            "com.example.alpha instance-a"
+        );
         assert_eq!(snapshot.approvals[2].plugin_instance_id, None);
         assert_eq!(snapshot.approvals[2].target_label, "com.example.beta");
         assert_eq!(snapshot.approvals[0].operation, "session.write");
@@ -2425,9 +2575,19 @@ mod tests {
         #[tokio::test]
         async fn one_broken_package_does_not_hide_healthy_plugins() {
             let root = scratch("mixed");
-            write_package(&root, "alpha", Some(&valid_manifest("com.example.alpha", "Alpha"))).await;
+            write_package(
+                &root,
+                "alpha",
+                Some(&valid_manifest("com.example.alpha", "Alpha")),
+            )
+            .await;
             write_package(&root, "broken", Some("{ not json")).await;
-            write_package(&root, "omega", Some(&valid_manifest("com.example.omega", "Omega"))).await;
+            write_package(
+                &root,
+                "omega",
+                Some(&valid_manifest("com.example.omega", "Omega")),
+            )
+            .await;
             // 缺少 manifest.json 的包应有诊断，而不是静默当成有效插件。
             write_package(&root, "unbuilt", None).await;
 
@@ -2508,7 +2668,12 @@ mod tests {
             })
             .to_string();
             write_package(&root, "future", Some(&mismatched)).await;
-            write_package(&root, "alpha", Some(&valid_manifest("com.example.alpha", "Alpha"))).await;
+            write_package(
+                &root,
+                "alpha",
+                Some(&valid_manifest("com.example.alpha", "Alpha")),
+            )
+            .await;
 
             let catalog = runtime()
                 .discover(vec![
@@ -2522,7 +2687,10 @@ mod tests {
                 codes(&catalog.issues),
                 [("future", "plugin_manifest_version_unsupported")]
             );
-            assert_eq!(catalog.issues[0].plugin_id.as_deref(), Some("com.example.future"));
+            assert_eq!(
+                catalog.issues[0].plugin_id.as_deref(),
+                Some("com.example.future")
+            );
             fs::remove_dir_all(&root).await.ok();
         }
 
@@ -2530,8 +2698,18 @@ mod tests {
         async fn duplicate_ids_keep_the_first_package_and_diagnose_the_rest() {
             let root = scratch("duplicate");
             // 同一个 ID 出现在两个目录：两者都有效，后者必须被诊断为冲突。
-            write_package(&root, "alpha-a", Some(&valid_manifest("com.example.alpha", "Alpha"))).await;
-            write_package(&root, "alpha-b", Some(&valid_manifest("com.example.alpha", "Alpha Again"))).await;
+            write_package(
+                &root,
+                "alpha-a",
+                Some(&valid_manifest("com.example.alpha", "Alpha")),
+            )
+            .await;
+            write_package(
+                &root,
+                "alpha-b",
+                Some(&valid_manifest("com.example.alpha", "Alpha Again")),
+            )
+            .await;
 
             let catalog = runtime()
                 .discover(vec![
@@ -2541,10 +2719,7 @@ mod tests {
                 .await;
             assert_eq!(catalog.plugins.len(), 1);
             assert_eq!(catalog.plugins[0].name, "Alpha");
-            assert_eq!(
-                codes(&catalog.issues),
-                [("alpha-b", "plugin_id_conflict")]
-            );
+            assert_eq!(codes(&catalog.issues), [("alpha-b", "plugin_id_conflict")]);
             fs::remove_dir_all(&root).await.ok();
         }
 

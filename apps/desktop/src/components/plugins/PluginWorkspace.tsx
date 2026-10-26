@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from "react";
 import { createPluginAPI, type InstanceInfo } from "../../host-api";
 import type { PluginFrontend } from "@coterm/plugin-sdk";
 import { loadPluginFrontend } from "../../plugin-loader";
-import { cancelSecretInput } from "../../secret-input";
 
 export function PluginWorkspace({ instance }: { instance: InstanceInfo }) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -10,17 +9,18 @@ export function PluginWorkspace({ instance }: { instance: InstanceInfo }) {
   useEffect(() => {
     let disposed = false;
     let frontend: PluginFrontend | undefined;
+    const api = createPluginAPI(instance);
     const container = containerRef.current;
     if (!container) return;
     void loadPluginFrontend(instance.pluginId).then((module) => {
       if (disposed || !module) return;
-      frontend = module.mount(container, createPluginAPI(instance));
+      frontend = module.mount(container, api);
     }).catch((reason) => {
       if (!disposed) setError(String(reason));
     });
     return () => {
       disposed = true;
-      cancelSecretInput(instance.pluginInstanceId);
+      api.dispose();
       frontend?.unmount();
       container.replaceChildren();
     };

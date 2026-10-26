@@ -90,7 +90,7 @@ button:disabled {
 .host-secret-dialog::backdrop { background: rgb(0 0 0 / 55%); }
 .host-secret-dialog h2 { margin-bottom: 18px; font-weight: 600; }
 .host-secret-dialog label { display: grid; gap: 8px; }
-.host-secret-dialog input { padding: 8px; border: 1px solid var(--coterm-border-input); background: var(--coterm-surface); color: var(--coterm-text-primary); }
+.host-secret-dialog input, .host-secret-dialog select { padding: 8px; border: 1px solid var(--coterm-border-input); background: var(--coterm-surface); color: var(--coterm-text-primary); }
 .host-secret-dialog form > div { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
 .host-secret-dialog button { padding: 6px 12px; background: var(--coterm-border-subtle); color: var(--coterm-text-primary); }
 .host-secret-dialog button[type="submit"] { background: var(--coterm-accent); color: var(--coterm-text-bright); }

@@ -239,7 +239,7 @@ export async function openSession({ browserPath, totalTimeoutMs = 90_000 }) {
   }
 }
 
-function connectCdp(wsUrl, expired) {
+export function connectCdp(wsUrl, expired = () => false) {
   return new Promise((resolve, reject) => {
     const socket = new WebSocket(wsUrl);
     const pending = new Map();

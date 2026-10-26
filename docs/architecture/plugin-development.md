@@ -1,6 +1,6 @@
 # 插件开发
 
-后端 JSON 控制协议采用 [v1.0 基线](runtime-communication.md)，前端 SDK 与二进制流仍在演进。字段以 [Rust 运行时类型](../../crates/coterm-proto/src/runtime) 和 [前端 SDK](../../packages/plugin-sdk/src/plugin-api.ts) 为准，未实现能力见 [项目进度](../PROGRESS.md)。
+后端 JSON 控制协议采用 [v1.0 基线](runtime-communication.md)，前端 SDK 采用 v1.0；二进制流仍在演进。字段以 [Rust 运行时类型](../../crates/coterm-proto/src/runtime) 和 [前端 SDK](../../packages/plugin-sdk/src/plugin-api.ts) 为准，未实现能力见 [项目进度](../PROGRESS.md)。
 
 ## 插件边界
 
@@ -68,10 +68,14 @@ MCP Tools 需单独注册 descriptor 与内部 operation 的映射；不会自�
 | `invoke/getOperation/recentOperations/cancelOperation` | 可用，绑定当前实例 |
 | `approveProposal/rejectProposal` | 可用，基座校验提案与快照 |
 | `subscribeEvents/subscribe` | 可用，有界 JSON 事件 |
-| `requestSecret` | 可用，前端只拿到一次性秘密引用 |
-| `requestConfirmation` | 当前使用浏览器确认框 |
+| `requestText/requestSelection/requestConfirmation` | 宿主对话框；提交、拒绝、取消、超时与不可用显式区分 |
+| `requestSecret` | 宿主密码框，前端只拿到一次性秘密引用 |
 | `components.blocks` | 可选块列表；块数据、选择结果和上下文由插件管理 |
-| `subscribeStream/requestText/requestSelection` | 已有类型，尚未接通 |
+| `subscribeStream` | 预留，不支持；`api.capabilities.streams === false` |
+
+`api.apiVersion === "1.0"` 是契约版本，与 npm 包版本独立。新增可选能力采用次版本并通过 `capabilities` 检测；破坏性修改升主版本，插件不应静默兼容未知主版本。
+
+公共对话框每挂载作用域最多一个，全局最多 16 个；超时 1–300 秒，默认 60 秒。`requestConfirmation` 提交为 `true`，拒绝为 `rejected`；卸载会取消挂起交互并回收 SDK 订阅。普通文本不能代替秘密输入。后端 v1.0 仍只支持单轮秘密交互。
 
 挂载时先订阅，再读取状态及回放快照；按版本、连接 ID 和游标接续。卸载必须注销订阅、DOM 监听器及自身 UI 资源，但不因此断开后端实例。
 
@@ -86,4 +90,4 @@ MCP Tools 需单独注册 descriptor 与内部 operation 的映射；不会自�
 - 验证前端卸载后 MCP 仍可使用实例；插件崩溃或结果不明时不得自动重放写操作。
 - 先运行 `cargo test -p coterm-proto --test control_contract`；新增插件另补真实进程、多实例与领域契约测试。流接口需用持续订阅型插件验证后独立冻结。
 
-构建与检查命令见 [仓库 README](../../README.md)。数据归插件保存，宿主操作账本不能作为永久业务存储。
+构建与检查命令见 [仓库 README](../../README.md)。数据归插件保存，宿主操作账本仅保留本次启动内的有界记录。Windows 工作区加密保存实例初始配置与布局；显式恢复仅重新创建实例，连接和写操作由用户重新发起。

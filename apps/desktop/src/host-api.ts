@@ -17,7 +17,8 @@ import type {
 } from "@coterm/plugin-sdk";
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { promptForSecret } from "./secret-input";
+import { cancelSecretInput, promptForSecret, promptForText, promptForConfirmation, promptForSelection } from "./secret-input";
+import { FRONTEND_API_VERSION } from "@coterm/plugin-sdk";
 import { mountBlockList } from "@coterm/plugin-sdk/components/block-list";
 
 /** 宿主待处理状态变化的全局事件；payload 只有版本号。 */
@@ -84,6 +85,13 @@ export interface InstanceInfo {
   status: "starting" | "ready" | "stopping" | "stopped" | "failed";
 }
 
+export interface SavedWorkspace {
+  entries: { configRef: string; pluginId: string; label: string; instanceId: string | null }[];
+  layout: { activeConfigRef: string | null; instancesCollapsed: boolean };
+  historyPolicy: "session_only";
+  persistence: "windows_dpapi" | "memory_only";
+}
+
 export interface BackendSecretRequest extends InteractionOptions {
   interactionId: string;
   pluginInstanceId: string;
@@ -96,6 +104,12 @@ export interface McpClientConfiguration {
 }
 
 export interface HostAPI {
+  runtimeStatus(): Promise<{ instances: InstanceInfo[]; runningPlugins: string[] }>;
+  workspace(): Promise<SavedWorkspace>;
+  saveLayout(activeInstanceId: string | null, instancesCollapsed: boolean, order: string[]): Promise<void>;
+  restoreInstance(configRef: string): Promise<InstanceInfo>;
+  forgetInstance(configRef: string): Promise<void>;
+  resetWorkspace(): Promise<void>;
   pendingInteractions(): Promise<BackendSecretRequest[]>;
   respondSecret(interactionId: string, value: string | null): Promise<void>;
   mcpConfiguration(): Promise<McpClientConfiguration>;
@@ -307,6 +321,12 @@ export interface PluginFrontendLoader {
 
 /** Tauri-backed desktop API. Package paths stay inside the app data plugins directory. */
 export const hostAPI: HostAPI = {
+  runtimeStatus: () => invoke("runtime_snapshot"),
+  workspace: () => invoke<SavedWorkspace>("workspace_snapshot"),
+  saveLayout: (activeInstanceId, instancesCollapsed, order) => invoke<void>("save_workspace_layout", { activeInstanceId, instancesCollapsed, order }),
+  restoreInstance: (configRef) => invoke<InstanceInfo>("restore_saved_instance", { configRef }),
+  forgetInstance: (configRef) => invoke<void>("forget_saved_instance", { configRef }),
+  resetWorkspace: () => invoke<void>("reset_saved_workspace"),
   hostAttention: () => invoke<HostAttention>("host_attention"),
   pendingInteractions: () => invoke<BackendSecretRequest[]>("pending_interactions"),
   respondSecret: (interactionId, value) => invoke<void>("respond_secret", { interactionId, value }),
@@ -359,16 +379,22 @@ export const hostAPI: HostAPI = {
 };
 
 /** Binds plugin-facing calls to one instance; unsupported event features fail explicitly. */
-export function createPluginAPI(instance: InstanceInfo): PluginAPI {
+export function createPluginAPI(instance: InstanceInfo): PluginAPI & { dispose(): void } {
   const unsupported = (feature: string): Error => new Error(`${feature} is not connected yet`);
+  let disposed = false;
+  const whileMounted = <T>(call: () => Promise<T>): Promise<T> => disposed
+    ? Promise.reject(new Error("Plugin frontend is disposed")) : call();
+  const scope = `frontend:${instance.pluginInstanceId}`;
+  const subscriptions = new Set<() => void>();
   const subscribeEvents = async (handler: (event: PluginInstanceEvent) => void | Promise<void>): Promise<() => void> => {
+    if (disposed) throw new Error("Plugin frontend is disposed");
     let active = true;
     const channel = new Channel<PluginInstanceEvent>();
     const ready = invoke<string>("subscribe_plugin_events", { pluginInstanceId: instance.pluginInstanceId, onEvent: channel });
     channel.onmessage = (event) => {
       void (async () => {
         const subscriptionId = await ready;
-        if (!active) return;
+        if (!active || disposed) return;
         try { await handler(event); }
         catch {
           active = false;
@@ -379,33 +405,44 @@ export function createPluginAPI(instance: InstanceInfo): PluginAPI {
       })().catch(() => { active = false; });
     };
     const subscriptionId = await ready;
-    return () => {
+    const cancel = () => {
+      subscriptions.delete(cancel);
       if (!active) return;
       active = false;
       void invoke("unsubscribe_plugin_events", { pluginInstanceId: instance.pluginInstanceId, subscriptionId }).catch(() => {});
     };
+    subscriptions.add(cancel);
+    if (disposed) cancel();
+    return cancel;
   };
   return {
+    apiVersion: FRONTEND_API_VERSION,
+    capabilities: Object.freeze({ interactions: true, events: true, streams: false }),
+    dispose: () => {
+      disposed = true;
+      cancelSecretInput(scope);
+      for (const cancel of subscriptions) cancel();
+    },
     pluginId: instance.pluginId,
     pluginInstanceId: instance.pluginInstanceId,
     sessionId: instance.sessionId,
     components: { blocks: mountBlockList },
     invoke: <T = unknown>(operation: string, args: unknown, options?: { waitTimeoutMs?: number }) =>
-      hostAPI.invokeOperation<T>(
+      whileMounted(() => hostAPI.invokeOperation<T>(
         instance.pluginInstanceId,
         operation,
         args,
         options?.waitTimeoutMs,
-      ),
+      )),
     getOperation: (operationId) =>
       hostAPI.getOperation(instance.pluginInstanceId, operationId),
     recentOperations: (limit) => hostAPI.recentOperations(instance.pluginInstanceId, limit),
     cancelOperation: (operationId) =>
-      hostAPI.cancelOperation(instance.pluginInstanceId, operationId),
+      whileMounted(() => hostAPI.cancelOperation(instance.pluginInstanceId, operationId)),
     approveProposal: <T = unknown>(proposalId: string, args: unknown) =>
-      hostAPI.approveProposal<T>(instance.pluginInstanceId, proposalId, args),
+      whileMounted(() => hostAPI.approveProposal<T>(instance.pluginInstanceId, proposalId, args)),
     rejectProposal: (proposalId) =>
-      hostAPI.rejectProposal(instance.pluginInstanceId, proposalId),
+      whileMounted(() => hostAPI.rejectProposal(instance.pluginInstanceId, proposalId)),
     subscribeEvents,
     subscribe: <T = unknown>(event: string, handler: (event: T) => void | Promise<void>) => {
       let disposed = false;
@@ -422,20 +459,13 @@ export function createPluginAPI(instance: InstanceInfo): PluginAPI {
     ): Promise<StreamSubscription> => {
       throw unsupported("stream subscriptions");
     },
-    requestText: async (_request: InteractionOptions): Promise<InteractionOutcome<string>> => {
-      throw unsupported("user interactions");
-    },
+    requestText: (request) => disposed ? Promise.resolve({ outcome: "unavailable" }) : promptForText(scope, request),
     requestSecret: async (
       request: InteractionOptions & { purpose: string },
     ): Promise<InteractionOutcome<SecretHandle>> => {
-      return promptForSecret(instance.pluginInstanceId, request, hostAPI.provideSecret);
+      return disposed ? { outcome: "unavailable" } : promptForSecret(instance.pluginInstanceId, request, hostAPI.provideSecret, scope);
     },
-    requestConfirmation: async (request: InteractionOptions): Promise<InteractionOutcome<boolean>> =>
-      ({ outcome: "submitted", value: window.confirm(`${request.title}\n\n${request.prompt}`) }),
-    requestSelection: async (
-      _request: InteractionOptions & { options: SelectionOption[] },
-    ): Promise<InteractionOutcome<string>> => {
-      throw unsupported("selection interactions");
-    },
+    requestConfirmation: (request) => disposed ? Promise.resolve({ outcome: "unavailable" }) : promptForConfirmation(scope, request),
+    requestSelection: (request) => disposed ? Promise.resolve({ outcome: "unavailable" }) : promptForSelection(scope, request),
   };
 }

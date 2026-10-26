@@ -11,7 +11,9 @@ import {
   type InstanceInfo,
   type PluginLoadIssue,
   type PluginSummary,
+  type SavedWorkspace,
 } from "./host-api";
+import { promptForConfirmation } from "./secret-input";
 import type { OperationDescriptor, OperationRecord, OperationReceipt } from "@coterm/plugin-sdk";
 
 export default function App() {
@@ -56,11 +58,51 @@ export default function App() {
   const [selectedPluginOperation, setSelectedPluginOperation] = useState("");
   const [operationArgs, setOperationArgs] = useState("{}");
   const [operationResult, setOperationResult] = useState<OperationReceipt | null>(null);
+  const [workspace, setWorkspace] = useState<SavedWorkspace | null>(null);
+  const [workspaceError, setWorkspaceError] = useState<string | null>(null);
+  const formatError = (reason: unknown) => typeof reason === "object" && reason !== null && "code" in reason
+    ? String((reason as { code: unknown }).code) : String(reason);
+
+  const refreshWorkspace = useCallback(async () => {
+    try {
+      const saved = await hostAPI.workspace();
+      setWorkspace(saved);
+      setWorkspaceError(null);
+      return saved;
+    } catch (reason) {
+      setWorkspaceError(formatError(reason));
+      return null;
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshWorkspace().then((saved) => {
+      if (saved) setInstancesCollapsed(saved.layout.instancesCollapsed);
+    });
+  }, [refreshWorkspace]);
+
 
   const activeInstance = useMemo(
     () => instances.find((instance) => instance.pluginInstanceId === activeInstanceId) ?? null,
     [instances, activeInstanceId],
   );
+
+  const orderedInstances = useMemo(() => [...instances].sort((left, right) => {
+    const rank = (id: string) => {
+      const index = workspace?.entries.findIndex((entry) => entry.instanceId === id) ?? -1;
+      return index < 0 ? Number.MAX_SAFE_INTEGER : index;
+    };
+    return rank(left.pluginInstanceId) - rank(right.pluginInstanceId);
+  }), [instances, workspace]);
+
+  useEffect(() => {
+    if (!workspace || workspaceError) return;
+    const timer = window.setTimeout(() => {
+      void hostAPI.saveLayout(activeInstanceId, instancesCollapsed, orderedInstances.map((item) => item.pluginInstanceId))
+        .catch((reason) => setWorkspaceError(formatError(reason)));
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [activeInstanceId, instancesCollapsed, orderedInstances, workspace, workspaceError]);
 
   const selectedPlugin = plugins.find((plugin) => plugin.id === selectedPluginId) ?? null;
   const selectedOperationDescriptor = operations.find((item) => item.name === selectedOperation) ?? null;
@@ -116,6 +158,55 @@ export default function App() {
     void refresh();
   }, [refresh]);
 
+  // A failed process cannot leave a mounted frontend presenting stale success.
+  useEffect(() => {
+    let disposed = false;
+    let pending = false;
+    const timer = window.setInterval(() => {
+      if (pending) return;
+      pending = true;
+      void hostAPI.runtimeStatus().then(({ instances: next, runningPlugins }) => {
+        if (disposed) return;
+        setInstances((current) => JSON.stringify(current) === JSON.stringify(next) ? current : next);
+        setPlugins((current) => current.some((plugin) => plugin.running !== runningPlugins.includes(plugin.id))
+          ? current.map((plugin) => ({ ...plugin, running: runningPlugins.includes(plugin.id) })) : current);
+      }).catch((reason) => { if (!disposed) setError(formatError(reason)); })
+        .finally(() => { pending = false; });
+    }, 1000);
+    return () => { disposed = true; window.clearInterval(timer); };
+  }, []);
+
+  const restoreSavedInstance = async (configRef: string) => {
+    setBusyId(configRef);
+    try {
+      const instance = await hostAPI.restoreInstance(configRef);
+      await refresh();
+      await refreshWorkspace();
+      setActiveInstanceId(instance.pluginInstanceId);
+    } catch (reason) { setError(formatError(reason)); }
+    finally { setBusyId(null); }
+  };
+
+  const restoreWorkspace = async () => {
+    if (!workspace) return;
+    setBusyId("restore-workspace");
+    setError(null);
+    const failures: string[] = [];
+    let active: string | null = null;
+    for (const entry of workspace.entries) {
+      if (instances.some((item) => item.pluginInstanceId === entry.instanceId)) continue;
+      try {
+        const instance = await hostAPI.restoreInstance(entry.configRef);
+        if (!active || entry.configRef === workspace.layout.activeConfigRef) active = instance.pluginInstanceId;
+      } catch (reason) { failures.push(`${entry.label}: ${formatError(reason)}`); }
+    }
+    await refresh();
+    await refreshWorkspace();
+    if (active) setActiveInstanceId(active);
+    if (failures.length) setError(failures.join("; "));
+    setBusyId(null);
+  };
+
   useEffect(() => {
     if (!activeInstance) {
       setOperations([]);
@@ -166,6 +257,7 @@ export default function App() {
     try {
       await action();
       await refresh();
+      await refreshWorkspace();
     } catch (reason) {
       setError(String(reason));
     } finally {
@@ -182,6 +274,7 @@ export default function App() {
       }
       const instance = await hostAPI.createInstance(pluginId, config);
       await refresh();
+      await refreshWorkspace();
       setActiveInstanceId(instance.pluginInstanceId);
       setSelectedPluginId(null);
     } catch (reason) {
@@ -300,6 +393,18 @@ export default function App() {
         </div>
       </div>
       <HostInteractions />
+      {workspace?.persistence === "memory_only" && <p role="status" className="px-3 py-2 text-xs text-[#d7ba7d]">Workspace is session-only on this platform; secure disk storage is not available.</p>}
+      {workspaceError && <div role="alert" className="px-3 py-2 text-xs text-[#f48771]">
+        Workspace: {workspaceError}. Saved state is preserved.
+        {instances.length === 0 && <button className="ml-3 underline" onClick={() => {
+          void promptForConfirmation("workspace-reset", { title: "Reset saved workspace?", prompt: "This removes saved configuration references and layout. Plugin data is unaffected." })
+            .then(async (result) => {
+              if (result.outcome !== "submitted") return;
+              await hostAPI.resetWorkspace();
+              await refreshWorkspace();
+            }).catch((reason) => setWorkspaceError(formatError(reason)));
+        }}>Reset saved workspace</button>}
+      </div>}
       {pluginIssueNotice}
       {mcpOpen && <McpConfiguration onClose={() => setMcpOpen(false)} />}
 
@@ -370,11 +475,22 @@ export default function App() {
             <span className="ml-auto pr-1 font-mono text-[10px] font-normal text-[#969696]">{instances.length}</span>
           </div>
           <nav aria-label="Instance list" aria-busy={loading} className="min-h-0 flex-1 overflow-y-auto py-1">
+            {workspace?.entries.some((entry) => !instances.some((item) => item.pluginInstanceId === entry.instanceId)) &&
+              <button disabled={busyId !== null} className="px-3 py-2 text-xs text-[#75beff]" onClick={() => void restoreWorkspace()}>Restore workspace</button>}
+            {workspace?.entries.filter((entry) => !instances.some((item) => item.pluginInstanceId === entry.instanceId)).map((entry) => (
+              <div key={entry.configRef} className="px-3 py-2 text-xs text-[#b7b7b7]">
+                <p className="truncate">{entry.label}</p>
+                <button disabled={busyId !== null} className="mr-3 text-[#75beff] disabled:opacity-50" onClick={() => void restoreSavedInstance(entry.configRef)}>Restore instance</button>
+                <button disabled={busyId !== null} onClick={() => {
+                  void hostAPI.forgetInstance(entry.configRef).then(refreshWorkspace).catch((reason) => setError(formatError(reason)));
+                }}>Forget</button>
+              </div>
+            ))}
             {loading && instances.length === 0 ? (
               <div aria-label="Loading instances" className="space-y-3 px-5 py-3">
                 {["w-3/4", "w-1/2"].map((width) => <div key={width} className={`h-3 bg-[#333333] ${width}`} />)}
               </div>
-            ) : instances.map((instance) => (
+            ) : orderedInstances.map((instance) => (
               <div key={instance.pluginInstanceId} className={`group flex h-8 items-center ${activeInstanceId === instance.pluginInstanceId ? "bg-coterm-surface-active" : "hover:bg-coterm-surface-hover"}`}>
                 <button
                   type="button"
@@ -412,7 +528,12 @@ export default function App() {
         </aside>
 
         <main aria-label="Plugin workspace" className="relative isolate min-w-0 flex-1 overflow-hidden bg-coterm-surface">
-          {activeInstance && <PluginWorkspace key={activeInstance.pluginInstanceId} instance={activeInstance} />}
+          {activeInstance?.status === "ready" && <PluginWorkspace key={activeInstance.pluginInstanceId} instance={activeInstance} />}
+          {activeInstance?.status === "failed" && <div role="alert" className="p-5 text-sm text-[#f48771]">
+            <p>Plugin stopped unexpectedly. In-flight results are unknown. Operations will not be replayed.</p>
+            {workspace?.entries.filter((entry) => entry.instanceId === activeInstance.pluginInstanceId).map((entry) =>
+              <button key={entry.configRef} disabled={busyId !== null} className="mt-3 underline" onClick={() => void restoreSavedInstance(entry.configRef)}>Restart instance</button>)}
+          </div>}
           <HostApprovals />
         </main>
       </div>
@@ -421,6 +542,7 @@ export default function App() {
         <div className="flex items-center gap-4">
           <span>{plugins.length} plugins</span>
           <span>{instances.length} instances</span>
+          <span title="Bounded operation history is cleared on application exit">History: this session</span>
           {busyId && <span role="status">Updating…</span>}
         </div>
         <span className={bypass ? "text-[#cca770]" : ""}>{bypass ? "Bypass on" : "Agent approval on"}</span>

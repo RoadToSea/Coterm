@@ -160,6 +160,18 @@ impl OperationHistory {
             .collect()
     }
 
+    pub async fn active_plugin(&self, plugin_id: &str) -> Vec<OperationRecord> {
+        self.state
+            .lock()
+            .await
+            .buckets
+            .values()
+            .flatten()
+            .filter(|record| record.plugin_id == plugin_id && !terminal(record.status))
+            .cloned()
+            .collect()
+    }
+
     pub async fn set_wait_expired(
         &self,
         operation_id: &str,
