@@ -118,6 +118,20 @@
 
 本轮使用短命令和自动结束的进程，没有修改用户、Docker 或 Mihomo 配置。已显式取消未完成的重连操作并释放 MCP HTTP 会话；远端因语法错误退出和取消测试产生的 PTY 均已断开，容器仍在运行。
 
+## 修复后真实程序回归（2026-10-27）
+
+使用当前分支启动真实 Tauri 开发程序（`pnpm tauri:dev`），通过桌面实际 MCP HTTP 入口和已有 SSH 实例回归此前问题。测试命令均为临时输出或短时进程，没有修改远端部署配置。
+
+- **语法错误恢复**：`printf 'BEFORE'; if` 返回 `exitCode=2`、`syntaxError=true`、`isError=true`，输出包含受控的 `unexpected end of file`；连接没有退出。随后 `printf 'RECOVERY_OK'` 成功返回，操作状态为 completed。
+- **非零退出码**：`printf 'OUT'; printf 'ERR' >&2; (exit 23)` 返回 `exitCode=23`、`isError=true`，输出为 `OUTERR`。
+- **截断元数据**：输出 8193 字节时返回 `originalBytes=8193`、`bytes=8192`、`droppedBytes=1`、`limit=8192`、`outputTruncated=true`，不再只有布尔截断标志。
+- **结构化结果**：命令结果直接提供 `structuredContent`，字段包含 `durationMs`、`encoding`、`exitCode`、`syntaxError`、`truncated`；操作收据只保留输出字节摘要，不重复嵌入整段结果。
+- **取消后的连接恢复**：`sleep 20; printf ...` 在短等待下取消，返回 `operation_cancellation_unconfirmed` / `unknown`；随后无需断开重连即可执行 `printf 'AFTER_CANCEL2_OK'` 并成功完成。另一次取消请求等待较长，原命令自然完成并返回 `cancelled=false`，符合等待窗口影响取消观察结果的预期。
+- **回放隔离**：从 `ssh.read` 回放尾部检查到 `has_marker=false`、`has_eval=false`、`has_wrapper=false`；随机 marker、`eval` 和 `__coterm` 包装命令不再进入用户可见回放。
+- **桌面启动体验**：Tauri、Vite、WebView2 均成功启动，MCP 初始化和实例发现成功；真实命令仍按安全策略进入桌面审批，批准后可以查询最终结果。
+
+本次回归未覆盖远端网络中断、真实主机密钥不匹配、SSH 密码错误、MCP 会话达到上限时的桌面管理 UI，以及订阅节点代理。
+
 ## 问题修复记录
 
 日期：2026-10-27。修复分支 `fix/ssh-field-test-findings`，提交 `760aa82`。本节只记录代码与测试层面的处理，不代表已在真实服务器复测；现场复测项见文末清单。
