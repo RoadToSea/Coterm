@@ -601,23 +601,40 @@ test("Multi-card independent approvals and UI convergence in the browser", async
   try {
     const page = await openPage(session, multiScenario);
     try {
-      // 3 张卡片均正确显示
+      // 队列默认折叠：只显示当前卡片，其他提案保持在固定高度的队列中。
       await waitForValue(
         { send: page.send },
-        `document.querySelectorAll('form[aria-label="Agent operation approval"]').length === 3`,
-        { label: "all 3 approval cards rendered" },
+        `document.querySelectorAll('form[aria-label="Agent operation approval"]').length === 1`,
+        { label: "active approval card rendered" },
       );
 
       // 用户批准第一张卡片（inst-1）——按卡片自身的 targetLabel 定位，避免依赖 DOM 顺序。
       const cardTargets = async () => page.evaluate(`[...document.querySelectorAll('form[aria-label="Agent operation approval"]')]
-        .map((card) => card.querySelector('[id^="approval-target"]').textContent)`);
+        .map((card) => card.querySelector('[id$="-target"]').textContent)`);
       const initialTargets = await cardTargets();
-      assert.equal(initialTargets.length, 3, "all 3 cards rendered before any decision");
+      assert.equal(initialTargets.length, 1, "only the active card renders while the queue is collapsed");
       assert.ok(initialTargets[0].includes("Web-Server"), "card 1 identifies Web-Server");
+
+      const queueSummary = await page.evaluate(`({
+        pending: document.querySelector('[aria-label="Agent approvals"]').textContent,
+        expanded: document.querySelector('[aria-label="Agent approvals"] button[aria-expanded]')?.getAttribute('aria-expanded'),
+      })`);
+      assert.match(queueSummary.pending, /3 pending/);
+      assert.match(queueSummary.pending, /2 queued/);
+      assert.equal(queueSummary.expanded, "false", "approval queue starts collapsed");
+
+      await page.evaluate(`document.querySelector('[aria-label="Agent approvals"] button[aria-expanded]').click()`);
+      await waitForValue(
+        { send: page.send },
+        `document.querySelectorAll('form[aria-label="Agent operation approval"]').length === 3`,
+        { label: "expanded approval queue renders all cards" },
+      );
+      const expandedTargets = await cardTargets();
+      assert.equal(expandedTargets.length, 3, "expanded queue renders all pending cards");
 
       await page.evaluate(`(() => {
         const cards = [...document.querySelectorAll('form[aria-label="Agent operation approval"]')];
-        const card = cards.find((item) => item.querySelector('[id^="approval-target"]').textContent.includes("Web-Server"));
+        const card = cards.find((item) => item.querySelector('[id$="-target"]').textContent.includes("Web-Server"));
         card.querySelector('button[type="submit"]').click();
       })()`);
 
@@ -643,7 +660,7 @@ test("Multi-card independent approvals and UI convergence in the browser", async
       // 用户拒绝插件级卡片（SSH Plugin）——按身份定位，不按索引。
       await page.evaluate(`(() => {
         const cards = [...document.querySelectorAll('form[aria-label="Agent operation approval"]')];
-        const card = cards.find((item) => item.querySelector('[id^="approval-target"]').textContent.includes("SSH Plugin"));
+        const card = cards.find((item) => item.querySelector('[id$="-target"]').textContent.includes("SSH Plugin"));
         card.querySelector('button[type="button"]').click();
       })()`);
 

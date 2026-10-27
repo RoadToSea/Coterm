@@ -539,7 +539,7 @@ export default function App() {
           {errorNotice}
         </aside>
 
-        <main aria-label="Plugin workspace" className="relative isolate min-w-0 flex-1 overflow-hidden bg-coterm-surface">
+        <main aria-label="Plugin workspace" className="relative isolate min-w-0 flex-1 overflow-hidden flex flex-col bg-coterm-surface">
           {activeInstance?.status === "ready" && <PluginWorkspace key={activeInstance.pluginInstanceId} instance={activeInstance} />}
           {activeInstance?.status === "failed" && <div role="alert" className="p-5 text-sm text-[#f48771]">
             <p>Plugin stopped unexpectedly. In-flight results are unknown. Operations will not be replayed.</p>

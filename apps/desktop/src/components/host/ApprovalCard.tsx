@@ -4,6 +4,7 @@ import type { OperationRecord } from "@coterm/plugin-sdk";
 interface ApprovalCardProps {
   record: OperationRecord;
   targetLabel: string;
+  idPrefix?: string;
   onApprove(args: unknown): Promise<void>;
   onReject(): Promise<void>;
 }
@@ -24,12 +25,15 @@ function createEditor(record: OperationRecord) {
 }
 
 /** Non-modal approval surface. Keyboard actions stay within the card's focus. */
-export function ApprovalCard({ record, targetLabel, onApprove, onReject }: ApprovalCardProps) {
+export function ApprovalCard({ record, targetLabel, idPrefix = "approval-command", onApprove, onReject }: ApprovalCardProps) {
   const [editor] = useState(() => createEditor(record));
   const [draft, setDraft] = useState(editor.value);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const deciding = useRef(false);
+  const commandId = `${idPrefix}-${record.operationId}`;
+  const targetId = `${commandId}-target`;
+  const errorId = `${commandId}-error`;
 
   const decide = async (approve: boolean) => {
     if (deciding.current) return;
@@ -64,21 +68,21 @@ export function ApprovalCard({ record, targetLabel, onApprove, onReject }: Appro
         }
       }}
     >
-      <label htmlFor="approval-command" className="sr-only">{editor.json ? "Operation arguments JSON" : "Command or argument"}</label>
+      <label htmlFor={commandId} className="sr-only">{editor.json ? "Operation arguments JSON" : "Command or argument"}</label>
       <input
-        id="approval-command"
+        id={commandId}
         type="text"
         value={draft}
         readOnly={busy}
         autoComplete="off"
         spellCheck={false}
         aria-invalid={!!error}
-        aria-describedby={error ? "approval-target approval-error" : "approval-target"}
+        aria-describedby={error ? `${targetId} ${errorId}` : targetId}
         onChange={(event) => { setDraft(event.target.value); setError(""); }}
         className="h-10 w-full min-w-0 rounded-md border border-[#454545] bg-[#1e1e1e] px-3 font-mono text-[13px] outline-none focus:border-[#007fd4]"
       />
       <div className="mt-3 flex min-w-0 flex-wrap items-center justify-end gap-2">
-        <span id="approval-target" title={`${targetLabel} · ${record.operation}`} className="mr-auto min-w-0 flex-1 truncate text-[11px] text-[#a8a8a8]">
+        <span id={targetId} title={`${targetLabel} · ${record.operation}`} className="mr-auto min-w-0 flex-1 truncate text-[11px] text-[#a8a8a8]">
           {targetLabel} · {record.operation}
         </span>
         <button type="submit" disabled={busy} className="inline-flex h-8 items-center gap-3 rounded-md bg-[#0e639c] px-4 text-xs text-white transition-colors hover:bg-[#1177bb] active:bg-[#094f80] disabled:opacity-50">
@@ -88,7 +92,7 @@ export function ApprovalCard({ record, targetLabel, onApprove, onReject }: Appro
           Reject<kbd className="font-sans text-[10px] text-[#969696]">Esc</kbd>
         </button>
       </div>
-      {error && <p id="approval-error" role="alert" className="mt-2 break-words text-xs text-[#f48771]">{error}</p>}
+      {error && <p id={errorId} role="alert" className="mt-2 break-words text-xs text-[#f48771]">{error}</p>}
     </form>
   );
 }

@@ -96,15 +96,37 @@ button:disabled {
 .host-secret-dialog button[type="submit"] { background: var(--coterm-accent); color: var(--coterm-text-bright); }
 .host-secret-dialog p { color: var(--coterm-danger); margin-top: 8px; }
 
-.approval-card {
-  animation: approval-slide-in 240ms cubic-bezier(0.16, 1, 0.3, 1) both;
+.approval-tray-shell {
+  max-height: min(46vh, 360px);
+  overflow: hidden;
+  animation: approval-tray-rise 320ms cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
-@keyframes approval-slide-in {
-  from { transform: translateY(100%); opacity: 0; }
+.approval-queue {
+  max-height: 180px;
+  overflow: hidden;
+}
+
+.approval-queue-expanded {
+  max-height: min(34vh, 260px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.approval-card {
+  animation: approval-card-reveal 220ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@keyframes approval-tray-rise {
+  from { max-height: 0; transform: translateY(18px); opacity: 0; }
+  to { max-height: min(46vh, 360px); transform: translateY(0); opacity: 1; }
+}
+
+@keyframes approval-card-reveal {
+  from { transform: translateY(8px); opacity: 0; }
   to { transform: translateY(0); opacity: 1; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .approval-card { animation: none; }
+  .approval-tray-shell, .approval-card { animation: none; }
 }

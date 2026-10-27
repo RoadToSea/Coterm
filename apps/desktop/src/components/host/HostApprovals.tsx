@@ -28,6 +28,7 @@ async function loadRecord(approval: AttentionApproval): Promise<{ record: Operat
 export function HostApprovals() {
   const [pending, setPending] = useState<PendingApproval[]>([]);
   const [notice, setNotice] = useState("");
+  const [expanded, setExpanded] = useState(false);
   const disposed = useRef(false);
 
   useEffect(() => {
@@ -87,57 +88,73 @@ export function HostApprovals() {
   };
 
   if (pending.length === 0 && !notice) return null;
-  return (
-    <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20 flex max-h-full flex-col items-center gap-2 overflow-y-auto">
-      {notice && <p role="alert" className="pointer-events-auto w-full max-w-[760px] rounded-lg border border-[#65433d] bg-[#332626] px-3 py-2 text-xs text-[#f48771]">{notice}</p>}
-      {pending.map((item) => item.record ? (
-        <ApprovalCard
-          key={item.operationId}
-          record={item.record}
-          targetLabel={item.targetLabel}
-          onApprove={async (args) => {
-            if (item.pluginInstanceId) {
-              await hostAPI.approveProposal(item.pluginInstanceId, item.proposalId, args);
-            } else {
-              await hostAPI.approvePluginProposal(item.pluginId, item.proposalId, args);
-            }
-            decide(item.operationId);
-          }}
-          onReject={async () => {
+  const visible = expanded ? pending : pending.slice(0, 1);
+  const queued = Math.max(0, pending.length - 1);
+
+  const renderApproval = (item: PendingApproval) => item.record ? (
+    <ApprovalCard
+      key={item.operationId}
+      record={item.record}
+      targetLabel={item.targetLabel}
+      idPrefix="agent-approval"
+      onApprove={async (args) => {
+        if (item.pluginInstanceId) {
+          await hostAPI.approveProposal(item.pluginInstanceId, item.proposalId, args);
+        } else {
+          await hostAPI.approvePluginProposal(item.pluginId, item.proposalId, args);
+        }
+        decide(item.operationId);
+      }}
+      onReject={async () => {
+        if (item.pluginInstanceId) {
+          await hostAPI.rejectProposal(item.pluginInstanceId, item.proposalId);
+        } else {
+          await hostAPI.rejectPluginProposal(item.pluginId, item.proposalId);
+        }
+        decide(item.operationId);
+      }}
+    />
+  ) : (
+    <div key={item.operationId} className="pointer-events-auto flex w-full flex-wrap items-center gap-2 border-t border-[#383838] bg-[#252526] px-5 py-3 text-xs text-[#cccccc]">
+      <span className="min-w-0 flex-1 truncate" title={`${item.targetLabel} · ${item.operation}`}>
+        {item.targetLabel} · {item.operation}
+        {item.loadError && <span className="ml-2 text-[#f48771]">details unavailable: {item.loadError}</span>}
+      </span>
+      <button
+        type="button"
+        onClick={async () => {
+          try {
             if (item.pluginInstanceId) {
               await hostAPI.rejectProposal(item.pluginInstanceId, item.proposalId);
             } else {
               await hostAPI.rejectPluginProposal(item.pluginId, item.proposalId);
             }
             decide(item.operationId);
-          }}
-        />
-      ) : (
-        <div key={item.operationId} className="pointer-events-auto flex w-full max-w-[760px] flex-wrap items-center gap-2 rounded-t-[32px] border border-b-0 border-[#4c4c4c] bg-[#252526] px-5 py-3 text-xs text-[#cccccc]">
-          <span className="min-w-0 flex-1 truncate" title={`${item.targetLabel} · ${item.operation}`}>
-            {item.targetLabel} · {item.operation}
-            {item.loadError && <span className="ml-2 text-[#f48771]">details unavailable: {item.loadError}</span>}
-          </span>
-          <button
-            type="button"
-            onClick={async () => {
-              try {
-                if (item.pluginInstanceId) {
-                  await hostAPI.rejectProposal(item.pluginInstanceId, item.proposalId);
-                } else {
-                  await hostAPI.rejectPluginProposal(item.pluginId, item.proposalId);
-                }
-                decide(item.operationId);
-              } catch (reason) {
-                setNotice(String(reason));
-              }
-            }}
-            className="inline-flex h-8 items-center rounded-md border border-[#4c4c4c] px-4 text-xs transition-colors hover:bg-[#383838]"
-          >
-            Reject
-          </button>
-        </div>
-      ))}
+          } catch (reason) {
+            setNotice(String(reason));
+          }
+        }}
+        className="inline-flex h-8 items-center rounded-md border border-[#4c4c4c] px-4 text-xs transition-colors hover:bg-[#383838]"
+      >
+        Reject
+      </button>
     </div>
+  );
+
+  return (
+    <section aria-label="Agent approvals" className="approval-tray-shell shrink-0 border-t border-[#454545] bg-[#1e1e1e] shadow-[0_-8px_24px_rgb(0_0_0/18%)]">
+      <div className="mx-auto w-full max-w-[900px]">
+        <div className="flex min-h-10 items-center gap-3 border-b border-[#383838] px-4 py-2 text-xs text-[#cccccc]">
+          <span className="font-medium">Agent approval</span>
+          <span className="text-[#969696]">{pending.length} pending</span>
+          {queued > 0 && <span className="text-[#d7ba7d]">{queued} queued</span>}
+          {pending.length > 1 && <button type="button" aria-expanded={expanded} onClick={() => setExpanded((value) => !value)} className="ml-auto rounded px-2 py-1 text-[#75beff] transition-colors hover:bg-white/10">{expanded ? "Collapse queue" : "Show queue"}</button>}
+        </div>
+        {notice && <p role="alert" className="mx-4 mt-2 rounded border border-[#65433d] bg-[#332626] px-3 py-2 text-xs text-[#f48771]">{notice}</p>}
+        <div className={`approval-queue ${expanded ? "approval-queue-expanded" : ""}`}>
+          {visible.map(renderApproval)}
+        </div>
+      </div>
+    </section>
   );
 }
