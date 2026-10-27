@@ -234,6 +234,7 @@ async fn process_host_routes_approval_snapshot_and_hides_terminal_input() -> Res
                 assert!(!bytes
                     .windows(16)
                     .any(|window| window == b"original-command"));
+                assert!(!bytes.windows(9).any(|window| window == b"]777;co"));
                 return Ok::<(), anyhow::Error>(());
             }
             sleep(Duration::from_millis(10)).await;
@@ -310,6 +311,46 @@ impl server::Handler for Echo {
         session.data(channel, b"test shell ready\r\n".to_vec())?;
         Ok(())
     }
+    async fn exec_request(
+        &mut self,
+        channel: ChannelId,
+        data: &[u8],
+        session: &mut Session,
+    ) -> Result<(), Self::Error> {
+        let source = String::from_utf8_lossy(data);
+        // Read-only queries and exec commands run outside the shared PTY.
+        if source.starts_with("printf 'user=") {
+            session.data(channel, b"user=tester
+uid=1000
+os=TestOS
+".to_vec())?;
+        } else if let Some(rest) = source.strip_prefix("__p='") {
+            let target = rest.trim_start_matches(char::from(39)).split(char::from(39)).next().unwrap_or("");
+            if target.ends_with("/exists") {
+                session.data(
+                    channel,
+                    format!("exists=1
+type=regular file
+size=11
+path={target}
+").into_bytes(),
+                )?;
+            } else {
+                session.data(channel, format!("exists=0
+path={target}
+").into_bytes())?;
+            }
+        } else {
+            session.data(channel, data.to_vec())?;
+            if source.contains("false") {
+                session.exit_status_request(channel, 1)?;
+            } else {
+                session.exit_status_request(channel, 0)?;
+            }
+        }
+        session.close(channel)?;
+        Ok(())
+    }
     async fn data(
         &mut self,
         channel: ChannelId,
@@ -319,17 +360,28 @@ impl server::Handler for Echo {
         let source = String::from_utf8_lossy(data);
         if let Some(rest) = source.strip_prefix("printf '\\033]777;coterm;") {
             let token = rest.split(';').next().ok_or(russh::Error::Disconnect)?;
+            // Current wrapper: __coterm_src='...'; ... eval "$__coterm_src" ...
             let text = source
-                .split("; eval '")
+                .split("__coterm_src='")
                 .nth(1)
-                .and_then(|s| s.split("'; __coterm_rc=").next())
+                .and_then(|s| s.split("'; __coterm_flag=").next())
                 .unwrap_or("")
-                .replace("'\\''", "'");
+                .replace("'\''", "'");
             let begin = format!("\x1b]777;coterm;{token};begin\x07");
             session.data(channel, begin.into_bytes())?;
             session.data(channel, format!("{text}\r\n").into_bytes())?;
-            let code = if text.contains("false") { 1 } else { 0 };
-            let end = format!("\x1b]777;coterm;{token};end;{code}\x07");
+            let (code, flag) = if text.trim() == "if" {
+                (2, "syntax")
+            } else if text.contains("false") {
+                (1, "")
+            } else {
+                (0, "")
+            };
+            if flag == "syntax" {
+                session
+                    .data(channel, b"bash: syntax error: unexpected end of file\r\n".to_vec())?;
+            }
+            let end = format!("\x1b]777;coterm;{token};end;{code};{flag}\x07");
             if !text.contains("never-completes") {
                 session.data(channel, end.into_bytes())?;
             }
@@ -722,11 +774,7 @@ async fn external_mcp_uses_shared_ssh_and_host_secret_and_approval_paths() -> Re
     let plugin_info = client
         .tool("coterm-plugin-ssh__ssh.plugin_info", json!({}))
         .await?;
-    let plugin_info: Value = serde_json::from_str(
-        plugin_info["content"][0]["text"]
-            .as_str()
-            .ok_or_else(|| anyhow::anyhow!("Missing plugin info"))?,
-    )?;
+    let plugin_info = &plugin_info["structuredContent"];
     assert_eq!(plugin_info["instanceCount"], 2);
     let connect_args =
         json!({"pluginInstanceId":instance.plugin_instance_id,"fingerprint":ssh.fingerprint});
@@ -770,11 +818,7 @@ async fn external_mcp_uses_shared_ssh_and_host_secret_and_approval_paths() -> Re
             json!({"pluginInstanceId":instance.plugin_instance_id}),
         )
         .await?;
-    let domain: Value = serde_json::from_str(
-        status["content"][0]["text"]
-            .as_str()
-            .ok_or_else(|| anyhow::anyhow!("Missing status"))?,
-    )?;
+    let domain = &status["structuredContent"];
     assert_eq!(domain["connected"], false);
     runtime
         .respond_secret(
@@ -853,15 +897,10 @@ async fn external_mcp_uses_shared_ssh_and_host_secret_and_approval_paths() -> Re
         response["result"]["_meta"]["coterm/operation"]["status"],
         "completed"
     );
-    let domain: Value = serde_json::from_str(
-        response["result"]["content"][0]["text"]
-            .as_str()
-            .ok_or_else(|| anyhow::anyhow!("No command result"))?,
-    )?;
+    let domain = &response["result"]["structuredContent"];
     assert_eq!(domain["exitCode"], 1);
     assert_eq!(response["result"]["isError"], true);
-    let captured = STANDARD.decode(domain["data"].as_str().unwrap_or_default())?;
-    assert_eq!(captured, b"approved-default-wait false\r\n");
+    assert_eq!(domain["text"], "approved-default-wait false\r\n");
     // HTTP clients use only a URL, sharing this same authenticated SSH instance.
     let http = coterm_mcp::http::HttpBridgeServer::bind_at(runtime.clone(), "127.0.0.1:0".parse()?)
         .await?;
@@ -927,16 +966,9 @@ async fn external_mcp_uses_shared_ssh_and_host_secret_and_approval_paths() -> Re
         response["result"]["_meta"]["coterm/operation"]["status"],
         "completed"
     );
-    let domain: Value = serde_json::from_str(
-        response["result"]["content"][0]["text"]
-            .as_str()
-            .ok_or_else(|| anyhow::anyhow!("No HTTP command output"))?,
-    )?;
+    let domain = &response["result"]["structuredContent"];
     assert_eq!(domain["exitCode"], 1);
-    assert_eq!(
-        STANDARD.decode(domain["data"].as_str().unwrap_or_default())?,
-        b"http-human-approved false\r\n"
-    );
+    assert_eq!(domain["text"], "http-human-approved false\r\n");
     // Closing the HTTP session cannot approve, cancel, or replay a pending write.
     let pending: Value = http_request(json!({"jsonrpc":"2.0","id":"http-pending","method":"tools/call","params":{
         "name":"coterm-plugin-ssh__ssh.command","arguments":{"pluginInstanceId":instance.plugin_instance_id,"text":"http-must-not-replay"},
@@ -974,7 +1006,7 @@ async fn external_mcp_uses_shared_ssh_and_host_secret_and_approval_paths() -> Re
                 name, payload, ..
             } = notification
             {
-                if name == "ssh.output" {
+                if name == "ssh.terminal.output" {
                     visible.extend(STANDARD.decode(payload["data"].as_str().unwrap_or_default())?);
                 }
                 if visible
@@ -1092,11 +1124,7 @@ async fn external_mcp_uses_shared_ssh_and_host_secret_and_approval_paths() -> Re
                     json!({"pluginInstanceId":instance.plugin_instance_id,"cursor":"0"}),
                 )
                 .await?;
-            let domain: Value = serde_json::from_str(
-                output["content"][0]["text"]
-                    .as_str()
-                    .ok_or_else(|| anyhow::anyhow!("Missing output"))?,
-            )?;
+            let domain = &output["structuredContent"];
             let bytes = STANDARD.decode(domain["data"].as_str().unwrap_or_default())?;
             if bytes.windows(20).any(|w| w == b"human-terminal-input") {
                 assert!(bytes.windows(19).any(|w| w == b"human-approved-edit"));
@@ -1217,5 +1245,414 @@ async fn external_mcp_uses_shared_ssh_and_host_secret_and_approval_paths() -> Re
     );
     drop(bridge);
     std::fs::remove_dir_all(directory)?;
+    Ok(())
+}
+
+
+/// Builds one plugin package directory for a test and returns its path.
+async fn load_runtime(
+    server: &TestServer,
+    tag: &str,
+) -> Result<(
+    std::sync::Arc<coterm_core::plugin_manager::ProcessPluginRuntime>,
+    coterm_proto::runtime::lifecycle::InstanceInfo,
+)> {
+    use coterm_core::{
+        plugin_manager::ProcessPluginRuntime,
+        plugin_runtime::PluginRuntime,
+    };
+    use coterm_proto::runtime::{lifecycle::RuntimeLimits, stream::FlowWindow};
+    let directory = std::env::temp_dir().join(format!(
+        "coterm-ssh-{tag}-{}-{}",
+        std::process::id(),
+        server.config.port
+    ));
+    std::fs::create_dir_all(directory.join("backend"))?;
+    std::fs::create_dir_all(directory.join("frontend"))?;
+    let executable = std::path::Path::new(env!("CARGO_BIN_EXE_coterm-plugin-ssh"));
+    std::fs::copy(
+        executable,
+        directory.join("backend").join(
+            executable
+                .file_name()
+                .ok_or_else(|| anyhow::anyhow!("Missing binary name"))?,
+        ),
+    )?;
+    std::fs::write(
+        directory.join("manifest.json"),
+        include_str!("../manifest.json"),
+    )?;
+    std::fs::write(
+        directory.join("frontend/index.js"),
+        "export function mount() {}",
+    )?;
+    let os = if cfg!(target_os = "macos") {
+        "macos"
+    } else {
+        std::env::consts::OS
+    };
+    let arch = if cfg!(target_arch = "aarch64") {
+        "arm64"
+    } else {
+        "x64"
+    };
+    let runtime = std::sync::Arc::new(ProcessPluginRuntime::new(
+        format!("{os}-{arch}"),
+        RuntimeLimits {
+            max_control_bytes: 1024 * 1024,
+            max_data_chunk_bytes: 8192,
+            initial_window: FlowWindow {
+                chunks: 16,
+                bytes: 1024 * 1024,
+            },
+        },
+    ));
+    runtime.load(&directory).await?;
+    runtime.start("coterm-plugin-ssh").await?;
+    let instance = runtime
+        .create_instance("coterm-plugin-ssh", serde_json::to_value(&server.config)?)
+        .await?;
+    Ok((runtime, instance))
+}
+
+async fn connect_instance(
+    runtime: &std::sync::Arc<coterm_core::plugin_manager::ProcessPluginRuntime>,
+    instance: &coterm_proto::runtime::lifecycle::InstanceInfo,
+    server: &TestServer,
+) -> Result<()> {
+    use coterm_core::plugin_runtime::{CallerContext, Operations, SubmitOperation};
+    use coterm_proto::runtime::operation::{OperationSource, OperationStatus};
+    let human = || CallerContext {
+        source: OperationSource::Human,
+        session_id: instance.session_id.clone(),
+        plugin_id: Some(instance.plugin_id.clone()),
+    };
+    let handle = runtime
+        .provide_secret(
+            &instance.plugin_instance_id,
+            "ssh.password".to_owned(),
+            "local-test-password".to_owned(),
+        )
+        .await?;
+    let receipt = runtime
+        .submit(
+            human(),
+            SubmitOperation {
+                plugin_id: instance.plugin_id.clone(),
+                plugin_instance_id: Some(instance.plugin_instance_id.clone()),
+                operation: "ssh.connect".to_owned(),
+                args: json!({"fingerprint":server.fingerprint,"secret":handle}),
+                wait_timeout_ms: None,
+            },
+        )
+        .await?;
+    assert_eq!(receipt.status, OperationStatus::Completed);
+    Ok(())
+}
+
+#[tokio::test]
+async fn syntax_errors_are_rejected_without_killing_the_shared_shell() -> Result<()> {
+    use coterm_core::plugin_runtime::{CallerContext, Operations, PluginRuntime, SubmitOperation};
+    use coterm_proto::runtime::operation::{OperationSource, OperationStatus};
+    let ssh = server().await?;
+    let (runtime, instance) = load_runtime(&ssh, "syntax").await?;
+    connect_instance(&runtime, &instance, &ssh).await?;
+    let human = || CallerContext {
+        source: OperationSource::Human,
+        session_id: instance.session_id.clone(),
+        plugin_id: Some(instance.plugin_id.clone()),
+    };
+    let command = |text: &str| SubmitOperation {
+        plugin_id: instance.plugin_id.clone(),
+        plugin_instance_id: Some(instance.plugin_instance_id.clone()),
+        operation: "ssh.command".to_owned(),
+        args: json!({"text": text}),
+        wait_timeout_ms: Some(3_000),
+    };
+    let receipt = runtime.submit(human(), command("if")).await?;
+    assert_eq!(receipt.status, OperationStatus::Completed, "{receipt:?}");
+    let output = receipt.output.ok_or_else(|| anyhow::anyhow!("no output"))?;
+    assert_eq!(output["syntaxError"], true, "{output}");
+    assert_eq!(output["exitCode"], 2, "{output}");
+    // The same shell still accepts the next command.
+    let receipt = runtime.submit(human(), command("echo still-alive")).await?;
+    assert_eq!(receipt.status, OperationStatus::Completed, "{receipt:?}");
+    let output = receipt.output.ok_or_else(|| anyhow::anyhow!("no output"))?;
+    assert_eq!(output["exitCode"], 0);
+    assert!(output["text"]
+        .as_str()
+        .is_some_and(|text| text.contains("still-alive")));
+    let status = runtime
+        .submit(
+            human(),
+            SubmitOperation {
+                plugin_id: instance.plugin_id.clone(),
+                plugin_instance_id: Some(instance.plugin_instance_id.clone()),
+                operation: "ssh.status".to_owned(),
+                args: json!({}),
+                wait_timeout_ms: None,
+            },
+        )
+        .await?;
+    assert_eq!(
+        status.output.as_ref().map(|value| &value["connected"]),
+        Some(&json!(true))
+    );
+    runtime.stop("coterm-plugin-ssh").await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn exec_is_isolated_from_the_shared_pty_and_streams_output() -> Result<()> {
+    use coterm_core::plugin_runtime::{CallerContext, Operations, PluginRuntime, SubmitOperation};
+    use coterm_proto::runtime::operation::{OperationSource, OperationStatus};
+    let ssh = server().await?;
+    let (runtime, instance) = load_runtime(&ssh, "exec").await?;
+    connect_instance(&runtime, &instance, &ssh).await?;
+    let human = || CallerContext {
+        source: OperationSource::Human,
+        session_id: instance.session_id.clone(),
+        plugin_id: Some(instance.plugin_id.clone()),
+    };
+    let exec = |text: &str| SubmitOperation {
+        plugin_id: instance.plugin_id.clone(),
+        plugin_instance_id: Some(instance.plugin_instance_id.clone()),
+        operation: "ssh.exec".to_owned(),
+        args: json!({"text": text}),
+        wait_timeout_ms: Some(3_000),
+    };
+    let receipt = runtime.submit(human(), exec("echo isolated")).await?;
+    assert_eq!(receipt.status, OperationStatus::Completed, "{receipt:?}");
+    let output = receipt.output.ok_or_else(|| anyhow::anyhow!("no output"))?;
+    assert_eq!(output["exitCode"], 0);
+    assert_eq!(output["stdout"]["text"], "echo isolated");
+    // Exec output is not written into the interactive terminal replay.
+    let read = runtime
+        .submit(
+            human(),
+            SubmitOperation {
+                plugin_id: instance.plugin_id.clone(),
+                plugin_instance_id: Some(instance.plugin_instance_id.clone()),
+                operation: "ssh.read".to_owned(),
+                args: json!({"cursor":"0"}),
+                wait_timeout_ms: None,
+            },
+        )
+        .await?;
+    let replay = read.output.ok_or_else(|| anyhow::anyhow!("no replay"))?;
+    let bytes = STANDARD.decode(replay["data"].as_str().unwrap_or_default())?;
+    assert!(!bytes.windows(8).any(|window| window == b"isolated"));
+    // Progress polling uses the same bounded job buffer.
+    let operation_id = receipt.operation_id.clone();
+    let output_view = runtime
+        .submit(
+            human(),
+            SubmitOperation {
+                plugin_id: instance.plugin_id.clone(),
+                plugin_instance_id: Some(instance.plugin_instance_id.clone()),
+                operation: "ssh.output".to_owned(),
+                args: json!({"operationId": operation_id, "stdoutCursor":"0"}),
+                wait_timeout_ms: None,
+            },
+        )
+        .await?;
+    let view = output_view.output.ok_or_else(|| anyhow::anyhow!("no view"))?;
+    assert_eq!(view["done"], true);
+    assert_eq!(view["stdout"]["text"], "echo isolated");
+    assert_eq!(view["exitCode"], 0);
+    runtime.stop("coterm-plugin-ssh").await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn read_only_queries_use_fixed_scripts_outside_the_pty() -> Result<()> {
+    use coterm_core::plugin_runtime::{CallerContext, Operations, PluginRuntime, SubmitOperation};
+    use coterm_proto::runtime::operation::{OperationSource, OperationStatus};
+    let ssh = server().await?;
+    let (runtime, instance) = load_runtime(&ssh, "readonly").await?;
+    connect_instance(&runtime, &instance, &ssh).await?;
+    let human = || CallerContext {
+        source: OperationSource::Human,
+        session_id: instance.session_id.clone(),
+        plugin_id: Some(instance.plugin_id.clone()),
+    };
+    let call = |operation: &str, args: Value| SubmitOperation {
+        plugin_id: instance.plugin_id.clone(),
+        plugin_instance_id: Some(instance.plugin_instance_id.clone()),
+        operation: operation.to_owned(),
+        args,
+        wait_timeout_ms: Some(3_000),
+    };
+    let info = runtime
+        .submit(human(), call("ssh.system_info", json!({})))
+        .await?;
+    assert_eq!(info.status, OperationStatus::Completed, "{info:?}");
+    let info = info.output.ok_or_else(|| anyhow::anyhow!("no info"))?;
+    assert_eq!(info["uid"], "1000");
+    assert_eq!(info["os"], "TestOS");
+    let file = runtime
+        .submit(human(), call("ssh.file_info", json!({"path":"/tmp/exists"})))
+        .await?;
+    let file = file.output.ok_or_else(|| anyhow::anyhow!("no file info"))?;
+    assert_eq!(file["exists"], "1");
+    assert_eq!(file["size"], "11");
+    // Read-only tools never require approval, even for an Agent source.
+    let agent = CallerContext {
+        source: OperationSource::Agent,
+        session_id: instance.session_id.clone(),
+        plugin_id: Some(instance.plugin_id.clone()),
+    };
+    let agent_info = runtime
+        .submit(agent, call("ssh.system_info", json!({})))
+        .await?;
+    assert_eq!(agent_info.status, OperationStatus::Completed);
+    runtime.stop("coterm-plugin-ssh").await?;
+    Ok(())
+}
+
+/// A shell that accepts commands but never emits a completion marker for them.
+struct Stuck;
+
+impl server::Handler for Stuck {
+    type Error = russh::Error;
+    async fn auth_password(
+        &mut self,
+        user: &str,
+        password: &str,
+    ) -> Result<server::Auth, Self::Error> {
+        Ok(if user == "tester" && password == "local-test-password" {
+            server::Auth::Accept
+        } else {
+            server::Auth::reject()
+        })
+    }
+    async fn channel_open_session(
+        &mut self,
+        _: Channel<server::Msg>,
+        reply: server::ChannelOpenHandle,
+        _: &mut Session,
+    ) -> Result<(), Self::Error> {
+        reply.accept().await;
+        Ok(())
+    }
+    async fn pty_request(
+        &mut self,
+        channel: ChannelId,
+        _: &str,
+        _: u32,
+        _: u32,
+        _: u32,
+        _: u32,
+        _: &[(Pty, u32)],
+        session: &mut Session,
+    ) -> Result<(), Self::Error> {
+        session.channel_success(channel)?;
+        Ok(())
+    }
+    async fn shell_request(
+        &mut self,
+        channel: ChannelId,
+        session: &mut Session,
+    ) -> Result<(), Self::Error> {
+        session.channel_success(channel)?;
+        Ok(())
+    }
+    async fn data(
+        &mut self,
+        channel: ChannelId,
+        _: &[u8],
+        session: &mut Session,
+    ) -> Result<(), Self::Error> {
+        // Never answer, so cancellation cannot confirm completion.
+        let _ = (channel, session);
+        Ok(())
+    }
+}
+
+async fn stuck_server() -> Result<TestServer> {
+    let key = russh::keys::PrivateKey::random(&mut rand::rng(), russh::keys::Algorithm::Ed25519)?;
+    let fingerprint = key
+        .public_key()
+        .fingerprint(russh::keys::HashAlg::Sha256)
+        .to_string();
+    let config = Arc::new(server::Config {
+        keys: vec![key],
+        auth_rejection_time: Duration::from_millis(5),
+        auth_rejection_time_initial: Some(Duration::ZERO),
+        ..Default::default()
+    });
+    let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
+    let port = listener.local_addr()?.port();
+    let task = tokio::spawn(async move {
+        loop {
+            let Ok((socket, _)) = listener.accept().await else {
+                break;
+            };
+            let config = config.clone();
+            tokio::spawn(async move {
+                if let Ok(session) = server::run_stream(config, socket, Stuck).await {
+                    let _ = session.await;
+                }
+            });
+        }
+    });
+    Ok(TestServer {
+        config: Config {
+            host: "127.0.0.1".to_owned(),
+            port,
+            username: "tester".to_owned(),
+        },
+        fingerprint,
+        task,
+    })
+}
+
+#[tokio::test]
+async fn unconfirmed_cancel_resets_the_terminal_instead_of_blocking_it() -> Result<()> {
+    let ssh = stuck_server().await?;
+    let connection = Connection::connect(
+        &ssh.config,
+        ssh.fingerprint.clone(),
+        "local-test-password",
+    )
+    .await?;
+    connection
+        .command("op-stuck".into(), false, "sleep 20")
+        .await?;
+    // Give the input a moment to reach the remote shell before cancelling.
+    sleep(Duration::from_millis(50)).await;
+    let cancel = connection.cancel("op-stuck".to_owned()).await?;
+    assert_eq!(cancel["outcome"], "unknown");
+    assert_eq!(cancel["terminalReset"], true);
+    // The connection remains usable: a fresh command is accepted on the new shell.
+    connection.command("op-next".into(), false, "true").await?;
+    assert!(!connection.is_closed());
+    connection.disconnect().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn explicit_reset_abandons_an_unknown_command_and_keeps_exec_available() -> Result<()> {
+    let ssh = server().await?;
+    let connection = Connection::connect(
+        &ssh.config,
+        ssh.fingerprint.clone(),
+        "local-test-password",
+    )
+    .await?;
+    connection
+        .command("op-never".into(), false, "never-completes")
+        .await?;
+    let reset = connection.reset().await?;
+    assert_eq!(reset["reset"], true);
+    // A subsequent command runs normally after the reset.
+    connection
+        .command("op-after".into(), false, "echo after-reset")
+        .await?;
+    let output = read_until(&connection, b"after-reset").await?;
+    assert!(output.windows(11).any(|window| window == b"after-reset"));
+    connection.reset().await?;
+    assert!(!connection.is_closed());
+    connection.disconnect().await?;
     Ok(())
 }

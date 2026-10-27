@@ -27,6 +27,7 @@ Bridge 保留插件参数和原生 `CallToolResult`，仅处理命名空间、�
 - 插件级工具不绑定实例；插件授权域由已注册工具名称确定。
 - 查询/取消公共工具使用 `pluginInstanceId` 或 `pluginId` 定位记录授权域。
 - 所有外部调用固定为 Agent 来源；Agent 不能自行批准、伪造来源或开启 Bypass。
+- 工具结果的机器可读副本是 `structuredContent`；`content[].text` 是简短摘要，不再完整重复负载。`_meta["coterm/operation"]` 只含操作收据，`output` 已替换为大小标记，避免同一结果在响应里出现两次。
 - Agent commit 默认经过人工审批。Bypass 只跳过提交审批，仍需协议认证及秘密输入。
 
 SSH 认证步骤和工具边界见 [SSH](ssh-plugin.md)，串口可用工具见 [串口](serial-plugin.md)。
@@ -54,7 +55,7 @@ SSH 认证步骤和工具边界见 [SSH](ssh-plugin.md)，串口可用工具见 
 - 当前支持 `2025-06-18`、`2025-03-26`；初始化完成通知后才能调用工具。
 - `GET /mcp` 提供可选 SSE 目录变化通知，每会话最多一条流；无事件回放或断点续传，不传终端输出。
 - `DELETE /mcp` 只关闭客户端会话；过期或重启前的会话返回 404，应重新初始化。
-- 最多 8 会话、每会话 16 个在途请求、全局 128 个 HTTP 请求；空闲 30 分钟过期。
+- 最多 8 会话、每会话 16 个在途请求、全局 128 个 HTTP 请求；空闲 30 分钟过期。会话满时返回 429，附 `mcp_sessions_full`、上限、当前会话的客户端名称与空闲时长、`Retry-After: 30` 和两条恢复路径：客户端发送 `DELETE /mcp`，或在 Coterm 的 MCP 面板按前缀关闭会话。面板只显示 ID 前缀，不公开完整会话 ID。
 - 请求与 JSON 结果各不超过 1 MiB，读取请求体限时 10 秒；超限明确失败，不无限排队。
 
 实现与测试位于 [coterm-mcp](../../crates/coterm-mcp)。Resources、Prompts、订阅、进度和 MCP cancellation notification 尚未实现；`coterm.cancel_operation` 是操作工具。

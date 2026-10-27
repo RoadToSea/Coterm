@@ -433,6 +433,30 @@ fn mcp_connection_info(
         .map_err(Clone::clone)
 }
 
+/// Live MCP sessions for the desktop panel. IDs are prefixes, never full session tokens.
+#[tauri::command]
+async fn mcp_sessions(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<coterm_mcp::http::SessionInfo>, String> {
+    match state.mcp_server.as_ref() {
+        Ok(server) => Ok(server.sessions().await),
+        Err(error) => Err(error.clone()),
+    }
+}
+
+/// Closes one client session by its prefix so a new client can initialize.
+#[tauri::command]
+async fn close_mcp_session(
+    session_prefix: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<bool, String> {
+    match state.mcp_server.as_ref() {
+        Ok(server) if server.close_session(&session_prefix).await => Ok(true),
+        Ok(_) => Err("MCP session not found or ambiguous".to_owned()),
+        Err(error) => Err(error.clone()),
+    }
+}
+
 #[tauri::command]
 async fn create_instance(
     plugin_id: String,
@@ -855,6 +879,8 @@ fn main() {
             host_attention,
             respond_secret,
             mcp_connection_info,
+            mcp_sessions,
+            close_mcp_session,
             create_instance,
             destroy_instance,
             invoke_operation,

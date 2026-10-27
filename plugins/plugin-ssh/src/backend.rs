@@ -20,6 +20,7 @@ use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
 use zeroize::Zeroizing;
 
+use crate::result::tool_result;
 use crate::session::{self, Config, Connection};
 
 pub const PLUGIN_ID: &str = "coterm-plugin-ssh";
@@ -79,6 +80,7 @@ pub fn catalog() -> Vec<OperationDescriptor> {
             json!({"fingerprint":{"type":"string"},"secret":{"type":"object"}}),
         ),
         ("ssh.disconnect", OperationEffect::Commit, false, json!({})),
+        ("ssh.reset", OperationEffect::Commit, false, json!({})),
         (
             "ssh.read",
             OperationEffect::Read,
@@ -98,21 +100,52 @@ pub fn catalog() -> Vec<OperationDescriptor> {
             json!({"text":{"type":"string","minLength":1,"maxLength":4096}}),
         ),
         (
+            "ssh.exec",
+            OperationEffect::Commit,
+            false,
+            json!({"text":{"type":"string","minLength":1,"maxLength":4096}}),
+        ),
+        (
+            "ssh.output",
+            OperationEffect::Read,
+            false,
+            json!({
+                "operationId":{"type":"string","minLength":1,"maxLength":128},
+                "stdoutCursor":{"type":"string","default":"0"},
+                "stderrCursor":{"type":"string","default":"0"}
+            }),
+        ),
+        ("ssh.system_info", OperationEffect::Read, false, json!({})),
+        (
+            "ssh.file_info",
+            OperationEffect::Read,
+            false,
+            json!({"path":{"type":"string","minLength":1,"maxLength":4096}}),
+        ),
+        (
             "ssh.resize",
             OperationEffect::Draft,
             false,
             json!({"cols":{"type":"integer","minimum":1,"maximum":1000},"rows":{"type":"integer","minimum":1,"maximum":1000}}),
         ),
     ];
-    let mut operations: Vec<_> = definitions.into_iter().map(|(name, effect, sensitive_input, properties)| OperationDescriptor {
-        name: name.to_owned(),
-        scope: OperationScope::Instance,
-        effect,
-        input_schema: json!({"type":"object","properties":properties,"additionalProperties":false}),
-        output_schema: None,
-        sensitive_input,
-        transient: matches!(name, "ssh.read" | "ssh.status" | "ssh.resize" | "ssh.input"),
-    }).collect();
+    let mut operations: Vec<_> = definitions
+        .into_iter()
+        .map(
+            |(name, effect, sensitive_input, properties)| OperationDescriptor {
+                name: name.to_owned(),
+                scope: OperationScope::Instance,
+                effect,
+                input_schema: json!({"type":"object","properties":properties,"additionalProperties":false}),
+                output_schema: None,
+                sensitive_input,
+                transient: matches!(
+                    name,
+                    "ssh.read" | "ssh.status" | "ssh.resize" | "ssh.input" | "ssh.output"
+                ),
+            },
+        )
+        .collect();
     operations.push(OperationDescriptor {
         name: "ssh.plugin_info".to_owned(),
         scope: OperationScope::Plugin,
@@ -136,12 +169,18 @@ pub fn catalog() -> Vec<OperationDescriptor> {
 }
 
 /// MCP is an explicit plugin API. Raw terminal input and password handles are excluded.
-pub fn mcp_tools() -> Vec<McpToolRegistration> {    let mut tools: Vec<_> = [
+pub fn mcp_tools() -> Vec<McpToolRegistration> {
+    let mut tools: Vec<_> = [
         ("ssh.status", "Read connection status.", json!({}), vec![]),
         ("ssh.probe", "Probe the host key without authenticating. Verify it before connect.", json!({}), vec![]),
         ("ssh.connect", "Connect the existing instance. Waits for host approval and a human password prompt; never supply a password.", json!({"fingerprint":{"type":"string"}}), vec!["fingerprint"]),
         ("ssh.disconnect", "Disconnect this instance. May return pending approval.", json!({}), vec![]),
-        ("ssh.command", "Run one command in the shared POSIX shell, waiting for approval and a completion marker. Returns bounded base64 output and exitCode. exit/exec or unsupported shells may produce an unknown result; never replay automatically.", json!({"text":{"type":"string","minLength":1,"maxLength":4096}}), vec!["text"]),
+        ("ssh.reset", "Replace the shared interactive shell after a stuck or malformed command. Running commands become unknown; exec jobs are unaffected.", json!({}), vec![]),
+        ("ssh.command", "Run one command in the shared POSIX shell, preserving cd/export. The source is syntax-checked before execution; malformed input returns syntaxError instead of exiting the shell. Returns text or base64 output plus exitCode and byte accounting. May return pending approval.", json!({"text":{"type":"string","minLength":1,"maxLength":4096}}), vec!["text"]),
+        ("ssh.exec", "Run one command on an isolated exec channel instead of the shared PTY. Output is separated into stdout/stderr, shell job notices cannot leak into it, and cancellation closes the channel. Does not preserve cd/export. May return pending approval; progress is available through ssh.output.", json!({"text":{"type":"string","minLength":1,"maxLength":4096}}), vec!["text"]),
+        ("ssh.output", "Read bounded stdout/stderr of an ssh.exec operation with decimal cursors. Reports done, exitCode, gaps and remaining data.", json!({"operationId":{"type":"string","minLength":1,"maxLength":128},"stdoutCursor":{"type":"string","default":"0"},"stderrCursor":{"type":"string","default":"0"}}), vec!["operationId"]),
+        ("ssh.system_info", "Read basic host, user, kernel and OS information with a fixed read-only query. No approval and no arbitrary shell.", json!({}), vec![]),
+        ("ssh.file_info", "Read metadata for one existing path (type, size, mode, owner, mtime, symlink target). No file content and no arbitrary shell.", json!({"path":{"type":"string","minLength":1,"maxLength":4096}}), vec!["path"]),
         ("ssh.read", "Read bounded base64 terminal bytes using a decimal cursor; reports gaps.", json!({"cursor":{"type":"string","default":"0"}}), vec![]),
     ].into_iter().map(|(name, description, mut properties, required)| {
         properties["pluginInstanceId"] = json!({"type":"string","minLength":1});
@@ -189,7 +228,7 @@ fn validate_mcp_args(operation: &str, args: &Value) -> Result<()> {
 }
 
 fn mcp_result(value: Value) -> Value {
-    json!({"content":[{"type":"text","text":value.to_string()}],"isError":false})
+    tool_result(&value)
 }
 
 impl coterm_proto::runtime::backend::PluginBackend for Backend {
@@ -240,6 +279,26 @@ impl Backend {
             .ok_or_else(|| anyhow!("SSH instance not found"))?;
         connected(instance)?
             .command(operation_id.to_owned(), mcp, text)
+            .await?;
+        Ok(serde_json::to_value(DeferredOperation {
+            operation_id: operation_id.to_owned(),
+        })?)
+    }
+
+    async fn start_exec(
+        &mut self,
+        id: &str,
+        args: &Value,
+        operation_id: &str,
+        mcp: bool,
+    ) -> Result<Value> {
+        let text = command(args)?.to_owned();
+        let instance = self
+            .instances
+            .get(id)
+            .ok_or_else(|| anyhow!("SSH instance not found"))?;
+        connected(instance)?
+            .exec(operation_id.to_owned(), mcp, text)
             .await?;
         Ok(serde_json::to_value(DeferredOperation {
             operation_id: operation_id.to_owned(),
@@ -380,16 +439,18 @@ impl Backend {
                 let CancelTarget::Operation(operation_id) = target else {
                     return Ok(json!({"outcome":"unsupported"}));
                 };
+                let mut last_error = None;
                 for instance in self.instances.values() {
                     if let Some(connection) = instance.connection.as_ref() {
-                        if connection
-                            .cancel_command(operation_id.clone())
-                            .await
-                            .is_ok()
-                        {
-                            return Ok(json!({"outcome":"unknown"}));
+                        match connection.cancel(operation_id.clone()).await {
+                            Ok(value) if value["outcome"] != "unsupported" => return Ok(value),
+                            Ok(_) => {}
+                            Err(error) => last_error = Some(error),
                         }
                     }
+                }
+                if let Some(error) = last_error {
+                    return Err(error);
                 }
                 Ok(json!({"outcome":"unsupported"}))
             }
@@ -478,8 +539,14 @@ impl Backend {
             if self.proposals.len() >= 64 {
                 bail!("Too many pending SSH proposals");
             }
-            if request.operation == "ssh.command" || request.operation == "mcp.ssh.command" {
+            if matches!(
+                request.operation.as_str(),
+                "ssh.command" | "mcp.ssh.command" | "ssh.exec" | "mcp.ssh.exec"
+            ) {
                 command(&request.args)?;
+            }
+            if request.operation == "ssh.file_info" || request.operation == "mcp.ssh.file_info" {
+                path(&request.args)?;
             }
             self.proposals.insert(
                 proposal_id.clone(),
@@ -555,19 +622,27 @@ impl Backend {
                     },
                 })?);
             }
-            if native == "ssh.command" {
-                return self.start_command(id, &args, operation_id, true).await;
-            }
-            let result = self.execute_domain(id, native, args).await?;
+            let result = match native {
+                "ssh.command" => return self.start_command(id, &args, operation_id, true).await,
+                "ssh.exec" => return self.start_exec(id, &args, operation_id, true).await,
+                _ => self.execute_domain(id, native, args, operation_id).await?,
+            };
             return Ok(mcp_result(result));
         }
-        if operation == "ssh.command" {
-            return self.start_command(id, &args, operation_id, false).await;
+        match operation {
+            "ssh.command" => self.start_command(id, &args, operation_id, false).await,
+            "ssh.exec" => self.start_exec(id, &args, operation_id, false).await,
+            _ => self.execute_domain(id, operation, args, operation_id).await,
         }
-        self.execute_domain(id, operation, args).await
     }
 
-    async fn execute_domain(&mut self, id: &str, operation: &str, args: Value) -> Result<Value> {
+    async fn execute_domain(
+        &mut self,
+        id: &str,
+        operation: &str,
+        args: Value,
+        operation_id: &str,
+    ) -> Result<Value> {
         if matches!(operation, "ssh.connect" | "ssh.disconnect") {
             self.interactions
                 .retain(|_, pending| pending.instance_id != id);
@@ -643,13 +718,12 @@ impl Backend {
                 instance.secret = None;
                 Ok(json!({"connected":false}))
             }
+            "ssh.reset" => {
+                let connection = connected(instance)?;
+                connection.reset().await
+            }
             "ssh.read" => {
-                let cursor = args
-                    .get("cursor")
-                    .and_then(Value::as_str)
-                    .unwrap_or("0")
-                    .parse::<u64>()
-                    .map_err(|_| anyhow!("Invalid SSH output cursor"))?;
+                let cursor = cursor(&args, "cursor")?;
                 let connection = instance
                     .connection
                     .as_ref()
@@ -657,6 +731,44 @@ impl Backend {
                 let mut result = connection.output.lock().await.read(cursor)?;
                 result["connectionId"] = json!(connection.id);
                 Ok(result)
+            }
+            "ssh.output" => {
+                let target = output_operation(&args)?;
+                let stdout = cursor(&args, "stdoutCursor")?;
+                let stderr = cursor(&args, "stderrCursor")?;
+                let connection = connected(instance)?;
+                let jobs = connection.jobs.lock().await;
+                jobs.read(target, stdout, stderr)
+            }
+            "ssh.system_info" => {
+                let connection = connected(instance)?;
+                let result = connection.query(session::SYSTEM_INFO_SCRIPT).await?;
+                if result.timed_out {
+                    bail!("SSH system information query timed out");
+                }
+                let mut fields = session::parse_fields(&result.stdout);
+                fields.insert("exitCode".into(), json!(result.exit_code));
+                let stderr = String::from_utf8_lossy(&result.stderr);
+                if !stderr.trim().is_empty() {
+                    fields.insert("error".into(), json!(truncate(&stderr, 1024)));
+                }
+                Ok(Value::Object(fields))
+            }
+            "ssh.file_info" => {
+                let path = path(&args)?;
+                let connection = connected(instance)?;
+                let result = connection.query(&session::file_info_script(path)).await?;
+                if result.timed_out {
+                    bail!("SSH file information query timed out");
+                }
+                let mut fields = session::parse_fields(&result.stdout);
+                fields.insert("path".into(), json!(path));
+                fields.insert("exitCode".into(), json!(result.exit_code));
+                let stderr = String::from_utf8_lossy(&result.stderr);
+                if !stderr.trim().is_empty() {
+                    fields.insert("error".into(), json!(truncate(&stderr, 1024)));
+                }
+                Ok(Value::Object(fields))
             }
             "ssh.input" => {
                 let data = string(&args, "data")?;
@@ -683,7 +795,10 @@ impl Backend {
                 connected(instance)?.resize(cols, rows).await?;
                 Ok(json!({"ok":true}))
             }
-            _ => bail!("Unknown SSH operation"),
+            _ => {
+                let _ = operation_id;
+                bail!("Unknown SSH operation")
+            }
         }
     }
 }
@@ -702,10 +817,46 @@ fn string<'a>(args: &'a Value, field: &str) -> Result<&'a str> {
         .ok_or_else(|| anyhow!("Missing or invalid {field}"))
 }
 
+fn cursor(args: &Value, field: &str) -> Result<u64> {
+    args.get(field)
+        .map(|value| {
+            value
+                .as_str()
+                .unwrap_or_default()
+                .parse::<u64>()
+                .map_err(|_| anyhow!("Invalid SSH output cursor"))
+        })
+        .unwrap_or(Ok(0))
+}
+
+fn output_operation(args: &Value) -> Result<&str> {
+    let id = string(args, "operationId")?;
+    if id.is_empty() || id.len() > 128 || id.chars().any(char::is_control) {
+        bail!("Invalid SSH operation ID");
+    }
+    Ok(id)
+}
+
 fn command(args: &Value) -> Result<&str> {
     let text = string(args, "text")?;
     if text.trim().is_empty() || text.len() > 4096 || text.chars().any(char::is_control) {
         bail!("SSH command must be a nonempty single line of at most 4096 bytes");
     }
     Ok(text)
+}
+
+fn path(args: &Value) -> Result<&str> {
+    let path = string(args, "path")?;
+    if path.is_empty() || path.len() > 4096 || path.chars().any(char::is_control) {
+        bail!("SSH path must be 1 to 4096 bytes without control characters");
+    }
+    Ok(path)
+}
+
+fn truncate(text: &str, limit: usize) -> String {
+    let mut end = text.len().min(limit);
+    while end > 0 && !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    text[..end].to_owned()
 }

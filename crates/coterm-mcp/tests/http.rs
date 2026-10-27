@@ -291,3 +291,51 @@ async fn sessions_and_sse_are_bounded_and_close_on_shutdown() -> anyhow::Result<
         .is_none());
     Ok(())
 }
+
+#[tokio::test]
+async fn session_limit_reports_actionable_state_and_sessions_can_be_closed() -> anyhow::Result<()> {
+    let server =
+        HttpBridgeServer::bind_at(runtime(), SocketAddr::from((Ipv4Addr::LOCALHOST, 0))).await?;
+    let url = server.connection_info().url;
+    let client = Client::builder().no_proxy().build()?;
+    let mut sessions = Vec::new();
+    for _ in 0..8 {
+        sessions.push(initialize(&client, &url).await?);
+    }
+    let excess = post(
+        &client,
+        &url,
+        None,
+        json!({"jsonrpc":"2.0","id":"full","method":"initialize","params":{
+            "protocolVersion":"2025-06-18","clientInfo":{"name":"ninth-client","version":"2"},"capabilities":{}
+        }}),
+    )
+    .send()
+    .await?;
+    assert_eq!(excess.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(excess.headers()["retry-after"], "30");
+    let body: Value = excess.json().await?;
+    assert_eq!(body["id"], "full");
+    assert_eq!(body["error"]["data"]["code"], "mcp_sessions_full");
+    assert_eq!(body["error"]["data"]["limit"], 8);
+    assert_eq!(body["error"]["data"]["active"], 8);
+    assert_eq!(body["error"]["data"]["sessions"][0]["clientName"], "http-test");
+    // The full session ID is never published; a short prefix is enough to identify one.
+    let prefix = body["error"]["data"]["sessions"][0]["idPrefix"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("No id prefix"))?;
+    assert_eq!(prefix.len(), 8);
+    assert!(!sessions.iter().any(|id| id == prefix));
+    let listed = server.sessions().await;
+    assert_eq!(listed.len(), 8);
+    assert!(listed.iter().all(|session| session.client_name.as_deref() == Some("http-test")));
+    assert!(server.close_session(prefix).await);
+    // Closing a session frees the slot for the ninth client.
+    let ninth = initialize(&client, &url).await?;
+    assert!(!sessions.contains(&ninth));
+    // Unknown or ambiguous prefixes are rejected instead of closing the wrong client.
+    assert!(!server.close_session("does-not-exist").await);
+    assert!(!server.close_session("").await);
+    server.shutdown().await;
+    Ok(())
+}

@@ -6,7 +6,7 @@ use coterm_core::{
     plugin_runtime::{CallerContext, Operations, PluginRuntime, SubmitOperation},
 };
 use coterm_proto::runtime::{
-    operation::{OperationSource, OperationStatus},
+    operation::{OperationReceipt, OperationSource, OperationStatus},
     RuntimeError,
 };
 use serde::Serialize;
@@ -274,8 +274,57 @@ pub async fn tools_list(runtime: &ProcessPluginRuntime) -> Result<Value, Runtime
     Ok(json!({"tools":tools}))
 }
 
+/// Structured content is the machine-readable copy. The text block is a bounded digest,
+/// so a large operation result is not serialized twice in one response.
 fn text_result(value: Value) -> Value {
-    json!({"content":[{"type":"text","text":value.to_string()}],"structuredContent":value,"isError":false})
+    let text = digest(&value);
+    json!({"content":[{"type":"text","text":text}],"structuredContent":value,"isError":false})
+}
+
+const DIGEST_LIMIT: usize = 2048;
+
+fn digest(value: &Value) -> String {
+    let encoded = value.to_string();
+    if encoded.len() <= DIGEST_LIMIT {
+        return encoded;
+    }
+    // Operation records can embed both the request and its result. Replace each large
+    // field with a size marker so the text block stays a digest of the same response.
+    let mut compact = value.clone();
+    if let Some(object) = compact.as_object_mut() {
+        for field in ["output", "input", "result"] {
+            let Some(full) = object.get(field) else {
+                continue;
+            };
+            let bytes = serde_json::to_vec(full).map_or(0, |bytes| bytes.len());
+            if bytes > 256 {
+                object.insert(field.into(), json!({"omitted": true, "bytes": bytes}));
+            }
+        }
+    }
+    let encoded = compact.to_string();
+    if encoded.len() <= DIGEST_LIMIT {
+        return encoded;
+    }
+    format!(
+        "structuredContent has {len} bytes; read structuredContent for the full value",
+        len = encoded.len()
+    )
+}
+
+/// The operation receipt attached to every tool result. Output already lives in the tool
+/// result, so the receipt only reports its size.
+fn receipt_meta(receipt: &OperationReceipt) -> Value {
+    let mut value = serde_json::to_value(receipt).unwrap_or_else(|_| json!({}));
+    if let Some(object) = value.as_object_mut() {
+        if let Some(output) = object.remove("output") {
+            object.insert(
+                "output".into(),
+                json!({"omitted": true, "bytes": serde_json::to_vec(&output).map_or(0, |bytes| bytes.len())}),
+            );
+        }
+    }
+    value
 }
 
 pub async fn call_tool(runtime: &ProcessPluginRuntime, params: &Value) -> anyhow::Result<Value> {
@@ -414,7 +463,7 @@ pub async fn call_tool(runtime: &ProcessPluginRuntime, params: &Value) -> anyhow
     if !result.get("_meta").is_some_and(Value::is_object) {
         result["_meta"] = json!({});
     }
-    result["_meta"]["coterm/operation"] = serde_json::to_value(receipt)?;
+    result["_meta"]["coterm/operation"] = receipt_meta(&receipt);
     Ok(result)
 }
 
@@ -424,4 +473,49 @@ pub fn loopback_address(value: &str) -> anyhow::Result<SocketAddr> {
         anyhow::bail!("Coterm MCP requires a loopback address");
     }
     Ok(address)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn receipts_report_output_size_instead_of_copying_it() {
+        let receipt = OperationReceipt {
+            operation_id: "op".into(),
+            proposal_id: None,
+            status: OperationStatus::Completed,
+            wait_expired: false,
+            output: Some(json!({"text":"x".repeat(4096)})),
+            error: None,
+        };
+        let meta = receipt_meta(&receipt);
+        assert_eq!(meta["output"]["omitted"], true);
+        assert!(meta["output"].get("text").is_none());
+        assert!(
+            serde_json::to_vec(&meta).expect("encode").len() < 1024,
+            "receipt must not repeat the payload"
+        );
+    }
+
+    #[test]
+    fn digests_stay_bounded_for_large_records() {
+        let record = json!({
+            "operationId": "op",
+            "status": "completed",
+            "operation": "ssh.command",
+            "input": {"text": "x".repeat(4096)},
+            "output": {"text": "y".repeat(8192)},
+        });
+        let text = digest(&record);
+        assert!(text.len() <= DIGEST_LIMIT, "digest was {} bytes", text.len());
+        assert!(text.contains("omitted"));
+        assert!(!text.contains(&"y".repeat(1024)));
+    }
+
+    #[test]
+    fn small_values_keep_their_full_structured_form_in_text() {
+        let value = json!({"instances": []});
+        assert_eq!(digest(&value), value.to_string());
+    }
 }

@@ -103,6 +103,17 @@ export interface McpClientConfiguration {
   url: string;
 }
 
+/** One live MCP client session. The ID is a prefix, never the full session token. */
+export interface McpSessionInfo {
+  idPrefix: string;
+  clientName: string | null;
+  clientVersion: string | null;
+  protocolVersion: string;
+  ready: boolean;
+  idleSeconds: number;
+  createdSecondsAgo: number;
+}
+
 export interface HostAPI {
   runtimeStatus(): Promise<{ instances: InstanceInfo[]; runningPlugins: string[] }>;
   workspace(): Promise<SavedWorkspace>;
@@ -113,6 +124,8 @@ export interface HostAPI {
   pendingInteractions(): Promise<BackendSecretRequest[]>;
   respondSecret(interactionId: string, value: string | null): Promise<void>;
   mcpConfiguration(): Promise<McpClientConfiguration>;
+  mcpSessions(): Promise<McpSessionInfo[]>;
+  closeMcpSession(sessionPrefix: string): Promise<boolean>;
   listPlugins(): Promise<PluginCatalog>;
   startPlugin(pluginId: string): Promise<void>;
   stopPlugin(pluginId: string): Promise<void>;
@@ -331,6 +344,8 @@ export const hostAPI: HostAPI = {
   pendingInteractions: () => invoke<BackendSecretRequest[]>("pending_interactions"),
   respondSecret: (interactionId, value) => invoke<void>("respond_secret", { interactionId, value }),
   mcpConfiguration: () => invoke<McpClientConfiguration>("mcp_connection_info"),
+  mcpSessions: () => invoke<McpSessionInfo[]>("mcp_sessions"),
+  closeMcpSession: (sessionPrefix) => invoke<boolean>("close_mcp_session", { sessionPrefix }),
   frontendSource: (pluginId) => invoke<string | null>("plugin_frontend_source", { pluginId }),
   provideSecret: (pluginInstanceId, purpose, value) => invoke<SecretHandle>("provide_secret", { pluginInstanceId, purpose, value }),
   listPlugins: () => invoke<PluginCatalog>("list_plugins"),

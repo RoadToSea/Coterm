@@ -248,7 +248,7 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
     const cancel = await api.subscribeEvents((event) => enqueue(async () => {
       if (event.name === "runtime.closed") { setConnected(false); notice.textContent = "Plugin connection closed."; return; }
       if (event.name === "runtime.gap" || event.name === "ssh.status") { await refreshSnapshot(); return; }
-      if (event.name !== "ssh.output") return;
+      if (event.name !== "ssh.terminal.output") return;
       const data = event.payload as PushedOutput;
       if (typeof data.data !== "string" || typeof data.connectionId !== "string" || typeof data.cursor !== "string" || !/^\d+$/.test(data.cursor)) throw new Error("Invalid SSH output event");
       if (data.connectionId !== connectionId) await refreshSnapshot();

@@ -43,6 +43,7 @@
 - 插件验收另覆盖远程 SSH 和物理串口，不与基座验收混算。
 - 2026-10-26 已完成一次真实远程 SSH / MCP 运维验证：用户与组管理、Docker 安装、Mihomo 部署及 HTTP/SOCKS5 直连检查；会话名额、审批、结果解析和共享 PTY 的使用问题见 [实测记录](ssh-mihomo-field-test.md)。认证交互、长任务超时和物理串口仍未覆盖。
 - 2026-10-26 第二轮真实 SSH 边界测试补充发现：顶层 Shell 语法错误会退出 PTY；取消未确认会长期阻塞连接，需断开重连；错误分类无法区分网络、握手、指纹和 Shell 阶段；命令包装会进入回放；输出在 8192 字节截断。详见 [实测记录](ssh-mihomo-field-test.md)。
+- 2026-10-27 已修复上述 SSH/MCP 边界问题：命令执行前先做静态语法检查，避免登录 Shell 因语法错误退出；取消未确认时自动重建 PTY 并新增 `ssh.reset`；连接错误改为稳定阶段码（`ssh_host_key_mismatch`、`ssh_remote_shell_exited` 等）；包装回显从回放中移除；结果新增 `text/base64` 双编码、原始/丢弃字节数与截断上限。新增 `ssh.exec` 独立通道、`ssh.output` 作业进度、`ssh.system_info`/`ssh.file_info` 只读工具；MCP 工具结果改为 `structuredContent` 加摘要文本，`_meta` 收据不再重复完整输出；MCP 面板可列出并按前缀关闭会话，429 附恢复指引与 `Retry-After`。SSH 与 MCP 新增 6 个回归测试，远端服务器真实验收仍需单独执行。
 
 ### P2：功能与生态
 
