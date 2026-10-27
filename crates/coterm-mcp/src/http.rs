@@ -51,7 +51,22 @@ pub struct HttpConnectionInfo {
 pub struct HttpBridgeServer {
     info: HttpConnectionInfo,
     shutdown: watch::Sender<bool>,
+    sessions: Arc<Mutex<HashMap<String, Arc<Session>>>>,
     task: Option<JoinHandle<()>>,
+}
+
+/// One live MCP client session, safe to expose to the desktop UI.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionInfo {
+    /// Short, non-secret prefix that lets a user match a client without publishing the full ID.
+    pub id_prefix: String,
+    pub client_name: Option<String>,
+    pub client_version: Option<String>,
+    pub protocol_version: String,
+    pub ready: bool,
+    pub idle_seconds: u64,
+    pub created_seconds_ago: u64,
 }
 
 impl HttpBridgeServer {
@@ -68,6 +83,16 @@ impl HttpBridgeServer {
         runtime: Arc<ProcessPluginRuntime>,
         address: SocketAddr,
     ) -> std::io::Result<Self> {
+        Self::bind_at_with_idle(runtime, address, SESSION_IDLE).await
+    }
+
+    /// Same listener with an explicit idle timeout. Integration tests use a short value;
+    /// production callers use the default 30 minutes.
+    pub async fn bind_at_with_idle(
+        runtime: Arc<ProcessPluginRuntime>,
+        address: SocketAddr,
+        idle: Duration,
+    ) -> std::io::Result<Self> {
         if address.ip() != Ipv4Addr::LOCALHOST {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
@@ -77,11 +102,13 @@ impl HttpBridgeServer {
         let listener = TcpListener::bind(address).await?;
         let address = listener.local_addr()?;
         let (shutdown, mut stopped) = watch::channel(false);
+        let sessions = Arc::new(Mutex::new(HashMap::new()));
         let state = Arc::new(HttpState {
             runtime,
             authority: address.to_string(),
-            sessions: Mutex::new(HashMap::new()),
+            sessions: sessions.clone(),
             requests: Arc::new(Semaphore::new(128)),
+            idle,
             shutdown: shutdown.subscribe(),
         });
         let app = Router::new()
@@ -103,12 +130,54 @@ impl HttpBridgeServer {
                 url: format!("http://{address}/mcp"),
             },
             shutdown,
+            sessions,
             task: Some(task),
         })
     }
 
     pub fn connection_info(&self) -> HttpConnectionInfo {
         self.info.clone()
+    }
+
+    /// Live sessions in idle order. Values contain no secrets: IDs are prefixes only.
+    pub async fn sessions(&self) -> Vec<SessionInfo> {
+        let sessions = self.sessions.lock().await;
+        let now = Instant::now();
+        let mut infos: Vec<_> = sessions
+            .iter()
+            .map(|(id, session)| {
+                let mut info = session.info(id);
+                // Keep the reported idle time consistent with a single clock read.
+                info.idle_seconds = session
+                    .touched
+                    .lock()
+                    .map_or(0, |touched| now.duration_since(*touched).as_secs());
+                info
+            })
+            .collect();
+        infos.sort_by_key(|info| info.idle_seconds);
+        infos
+    }
+
+    /// Closes a session by its short prefix. Returns false when the prefix is unknown or
+    /// ambiguous, so a UI cannot close the wrong client.
+    pub async fn close_session(&self, id_prefix: &str) -> bool {
+        let session = {
+            let mut sessions = self.sessions.lock().await;
+            let matches: Vec<_> = sessions
+                .keys()
+                .filter(|id| id.starts_with(id_prefix))
+                .cloned()
+                .collect();
+            if matches.len() != 1 {
+                return false;
+            }
+            sessions.remove(&matches[0])
+        };
+        if let Some(session) = session {
+            let _ = session.closed.send(true);
+        }
+        true
     }
 
     /// Wait for listener and in-flight HTTP handlers to close, without cancelling host operations.
@@ -129,8 +198,9 @@ impl Drop for HttpBridgeServer {
 struct HttpState {
     runtime: Arc<ProcessPluginRuntime>,
     authority: String,
-    sessions: Mutex<HashMap<String, Arc<Session>>>,
+    sessions: Arc<Mutex<HashMap<String, Arc<Session>>>>,
     requests: Arc<Semaphore>,
+    idle: Duration,
     shutdown: watch::Receiver<bool>,
 }
 
@@ -138,20 +208,36 @@ struct Session {
     version: String,
     ready: AtomicBool,
     touched: std::sync::Mutex<Instant>,
+    created: Instant,
+    client_name: Option<String>,
+    client_version: Option<String>,
     calls: Arc<Semaphore>,
     stream: Arc<Semaphore>,
     closed: watch::Sender<bool>,
 }
 
 impl Session {
-    fn expired(&self) -> bool {
-        self.touched
-            .lock()
-            .map_or(true, |t| t.elapsed() > SESSION_IDLE)
+    fn expired(&self, idle: Duration) -> bool {
+        self.touched.lock().map_or(true, |t| t.elapsed() > idle)
     }
     fn touch(&self) {
         if let Ok(mut touched) = self.touched.lock() {
             *touched = Instant::now();
+        }
+    }
+    fn info(&self, id: &str) -> SessionInfo {
+        let idle = self
+            .touched
+            .lock()
+            .map_or(0, |touched| touched.elapsed().as_secs());
+        SessionInfo {
+            id_prefix: id.chars().take(8).collect(),
+            client_name: self.client_name.clone(),
+            client_version: self.client_version.clone(),
+            protocol_version: self.version.clone(),
+            ready: self.ready.load(Ordering::Acquire),
+            idle_seconds: idle,
+            created_seconds_ago: self.created.elapsed().as_secs(),
         }
     }
 }
@@ -229,7 +315,7 @@ async fn session(state: &HttpState, headers: &HeaderMap) -> Result<Arc<Session>,
             "MCP session expired; initialize again",
         ));
     };
-    if session.expired() {
+    if session.expired(state.idle) {
         sessions.remove(id);
         let _ = session.closed.send(true);
         return Err(error(
@@ -334,7 +420,7 @@ async fn post_message(State(state): State<Arc<HttpState>>, request: Request) -> 
         }
         let mut sessions = state.sessions.lock().await;
         sessions.retain(|_, session| {
-            if session.expired() {
+            if session.expired(state.idle) {
                 let _ = session.closed.send(true);
                 false
             } else {
@@ -342,13 +428,42 @@ async fn post_message(State(state): State<Arc<HttpState>>, request: Request) -> 
             }
         });
         if sessions.len() >= MAX_SESSIONS {
-            return error(
-                StatusCode::TOO_MANY_REQUESTS,
-                "Too many MCP sessions; close an existing session",
-            );
+            // A client that has no session ID yet cannot act on "close an existing session".
+            // Report the live sessions, a retry hint and a server-side recovery route.
+            let mut active: Vec<_> = sessions
+                .iter()
+                .map(|(id, session)| session.info(id))
+                .collect();
+            active.sort_by_key(|session| session.idle_seconds);
+            let body = json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "error": {
+                    "code": -32000,
+                    "message": "Too many MCP sessions; close a session from Coterm's MCP panel or retry after an idle session expires",
+                    "data": {
+                        "code": "mcp_sessions_full",
+                        "limit": MAX_SESSIONS,
+                        "active": active.len(),
+                        "idleTimeoutSeconds": state.idle.as_secs(),
+                        "recovery": {
+                            "desktop": "Open the MCP panel in Coterm and close an unused session.",
+                            "client": "Stop the client that owns the session so it sends DELETE /mcp.",
+                            "retryAfterSeconds": 30
+                        },
+                        "sessions": active
+                    }
+                }
+            });
+            let mut response = json_response(StatusCode::TOO_MANY_REQUESTS, body);
+            response
+                .headers_mut()
+                .insert(header::RETRY_AFTER, HeaderValue::from_static("30"));
+            return response;
         }
         let session_id = uuid::Uuid::new_v4().to_string();
         let (closed, _) = watch::channel(false);
+        let client_info = &params["clientInfo"];
         sessions.insert(
             session_id.clone(),
             Arc::new(Session {
@@ -358,6 +473,9 @@ async fn post_message(State(state): State<Arc<HttpState>>, request: Request) -> 
                     .to_owned(),
                 ready: AtomicBool::new(false),
                 touched: std::sync::Mutex::new(Instant::now()),
+                created: Instant::now(),
+                client_name: client_info["name"].as_str().map(str::to_owned),
+                client_version: client_info["version"].as_str().map(str::to_owned),
                 calls: Arc::new(Semaphore::new(16)),
                 stream: Arc::new(Semaphore::new(1)),
                 closed,
@@ -461,8 +579,12 @@ async fn get_events(State(state): State<Arc<HttpState>>, headers: HeaderMap) -> 
                 tokio::select! {
                     _ = shutdown.changed() => return None,
                     _ = closed.changed() => return None,
+                    // A parked SSE stream is not client activity. Touching the session
+                    // here would keep it alive forever and fill the session limit.
                     _ = interval.tick() => {
-                        session.touch();
+                        if session.expired(state.idle) {
+                            return None;
+                        }
                         let tools = match tools_list(&state.runtime).await { Ok(tools) => tools, Err(_) => return None };
                         if tools != last {
                             last = tools;

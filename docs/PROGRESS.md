@@ -41,6 +41,10 @@
 - 扩展流接口时，用持续订阅型测试插件验证窗口信用、背压、取消与数据缺口。
 - 跨平台发布另补 CI、安装包和系统依赖验证；核验 macOS 图标，当前 `icon.icns` 仅 8 字节。
 - 插件验收另覆盖远程 SSH 和物理串口，不与基座验收混算。
+- 2026-10-26 已完成一次真实远程 SSH / MCP 运维验证：用户与组管理、Docker 安装、Mihomo 部署及 HTTP/SOCKS5 直连检查；会话名额、审批、结果解析和共享 PTY 的使用问题见 [实测记录](ssh-mihomo-field-test.md)。认证交互、长任务超时和物理串口仍未覆盖。
+- 2026-10-26 第二轮真实 SSH 边界测试补充发现：顶层 Shell 语法错误会退出 PTY；取消未确认会长期阻塞连接，需断开重连；错误分类无法区分网络、握手、指纹和 Shell 阶段；命令包装会进入回放；输出在 8192 字节截断。详见 [实测记录](ssh-mihomo-field-test.md)。
+- 2026-10-27 使用真实 Tauri 程序回归修复：语法错误返回结构化结果且保持连接、取消后连接可继续执行、结果提供原始/丢弃字节数、操作收据去重、SSH 包装从回放隔离；详见 [实测记录](ssh-mihomo-field-test.md)。
+- 2026-10-27 已修复上述 SSH/MCP 边界问题：命令执行前先做静态语法检查，避免登录 Shell 因语法错误退出；取消未确认时自动重建 PTY 并新增 `ssh.reset`；连接错误改为稳定阶段码（`ssh_host_key_mismatch`、`ssh_remote_shell_exited` 等）；包装回显从回放中移除；结果新增 `text/base64` 双编码、原始/丢弃字节数与截断上限。新增 `ssh.exec` 独立通道、`ssh.output` 作业进度、`ssh.system_info`/`ssh.file_info` 只读工具；MCP 工具结果改为 `structuredContent` 加摘要文本，`_meta` 收据不再重复完整输出；MCP 面板可列出并按前缀关闭会话，429 附恢复指引与 `Retry-After`。SSH 与 MCP 新增 6 个回归测试，远端服务器真实验收仍需单独执行。
 
 ### P2：功能与生态
 
@@ -61,4 +65,4 @@
 | 真实 Tauri / WebView2 | 多实例、SDK 公共交互、无 UI 秘密交互、慢消费者/缺口、崩溃/重建、加密恢复、Bypass 重置及退出回收通过 |
 | Windows NSIS | 隔离标识安装、启动与卸载；产品安装包构建及安装/卸载通过 |
 
-浏览器测试使用 IPC 替身；真实 Tauri 验收使用独立 `com.coterm.smoke` 工作区和无硬件测试插件。CI 流程已加入，云端结果以 Actions 为准。未覆盖远程 SSH、物理串口、macOS/Linux 安装包；普通回归不打开或写入物理串口。
+浏览器测试使用 IPC 替身；真实 Tauri 验收使用独立 `com.coterm.smoke` 工作区和无硬件测试插件。CI 流程已加入，云端结果以 Actions 为准。以上基座回归未覆盖远程 SSH、物理串口、macOS/Linux 安装包；另有同日真实远程 SSH 运维验证，范围见 [实测记录](ssh-mihomo-field-test.md)。普通回归不打开或写入物理串口。

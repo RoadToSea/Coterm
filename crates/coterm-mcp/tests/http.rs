@@ -291,3 +291,95 @@ async fn sessions_and_sse_are_bounded_and_close_on_shutdown() -> anyhow::Result<
         .is_none());
     Ok(())
 }
+
+#[tokio::test]
+async fn session_limit_reports_actionable_state_and_sessions_can_be_closed() -> anyhow::Result<()> {
+    let server =
+        HttpBridgeServer::bind_at(runtime(), SocketAddr::from((Ipv4Addr::LOCALHOST, 0))).await?;
+    let url = server.connection_info().url;
+    let client = Client::builder().no_proxy().build()?;
+    let mut sessions = Vec::new();
+    for _ in 0..8 {
+        sessions.push(initialize(&client, &url).await?);
+    }
+    let excess = post(
+        &client,
+        &url,
+        None,
+        json!({"jsonrpc":"2.0","id":"full","method":"initialize","params":{
+            "protocolVersion":"2025-06-18","clientInfo":{"name":"ninth-client","version":"2"},"capabilities":{}
+        }}),
+    )
+    .send()
+    .await?;
+    assert_eq!(excess.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(excess.headers()["retry-after"], "30");
+    let body: Value = excess.json().await?;
+    assert_eq!(body["id"], "full");
+    assert_eq!(body["error"]["data"]["code"], "mcp_sessions_full");
+    assert_eq!(body["error"]["data"]["limit"], 8);
+    assert_eq!(body["error"]["data"]["active"], 8);
+    assert_eq!(body["error"]["data"]["sessions"][0]["clientName"], "http-test");
+    // The full session ID is never published; a short prefix is enough to identify one.
+    let prefix = body["error"]["data"]["sessions"][0]["idPrefix"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("No id prefix"))?;
+    assert_eq!(prefix.len(), 8);
+    assert!(!sessions.iter().any(|id| id == prefix));
+    let listed = server.sessions().await;
+    assert_eq!(listed.len(), 8);
+    assert!(listed.iter().all(|session| session.client_name.as_deref() == Some("http-test")));
+    assert!(server.close_session(prefix).await);
+    // Closing a session frees the slot for the ninth client.
+    let ninth = initialize(&client, &url).await?;
+    assert!(!sessions.contains(&ninth));
+    // Unknown or ambiguous prefixes are rejected instead of closing the wrong client.
+    assert!(!server.close_session("does-not-exist").await);
+    assert!(!server.close_session("").await);
+    server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn parked_event_stream_does_not_keep_a_session_alive() -> anyhow::Result<()> {
+    // A short idle timeout makes the 30-minute production rule observable.
+    let server = HttpBridgeServer::bind_at_with_idle(
+        runtime(),
+        SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
+        Duration::from_millis(300),
+    )
+    .await?;
+    let url = server.connection_info().url;
+    let client = Client::builder().no_proxy().build()?;
+    let session = initialize(&client, &url).await?;
+    ready(&client, &url, &session).await?;
+    // Hold an SSE stream open for longer than the idle timeout.
+    let stream = client
+        .get(&url)
+        .header("Accept", "text/event-stream")
+        .header("Mcp-Session-Id", &session)
+        .header("MCP-Protocol-Version", "2025-06-18")
+        .send()
+        .await?;
+    assert_eq!(stream.status(), StatusCode::OK);
+    let mut events = stream.bytes_stream();
+    // The stream must end on its own once the session goes idle, without any request.
+    let ended = tokio::time::timeout(Duration::from_secs(3), async {
+        while let Some(chunk) = events.next().await {
+            if chunk.is_err() {
+                return true;
+            }
+        }
+        true
+    })
+    .await;
+    assert!(ended.is_ok(), "parked SSE stream kept the session alive");
+    // The session is gone, so a request with its ID is rejected.
+    let ping = json!({"jsonrpc":"2.0","id":1,"method":"ping"});
+    assert_eq!(
+        post(&client, &url, Some(&session), ping).send().await?.status(),
+        StatusCode::NOT_FOUND
+    );
+    server.shutdown().await;
+    Ok(())
+}

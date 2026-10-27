@@ -18,27 +18,47 @@ MCP 客户端先用 `coterm.list_instances` 定位实例，再 `ssh.probe` 获�
 |---|---|---|
 | `ssh.status/probe` | read | 状态、指纹探测；探测不等于信任服务器 |
 | `ssh.connect/disconnect` | commit | 认证连接或释放连接 |
+| `ssh.reset` | commit | 重建共享 PTY Shell；未完成命令记为 unknown，exec 任务不受影响 |
 | `ssh.read` | read | 按游标回放 base64 字节，报告 gap/closed/more |
 | `ssh.input` | commit | 人工原始按键，账本隐藏输入参数 |
 | `ssh.command` | commit | 共享 POSIX PTY 上执行命令并返回退出码 |
+| `ssh.exec` | commit | 独立 exec 通道执行命令，stdout/stderr 分离，不走共享 PTY |
+| `ssh.output` | read | 按游标读取 `ssh.exec` 作业的有界输出与完成状态 |
+| `ssh.system_info` | read | 固定只读脚本读取用户、内核、发行版等系统信息 |
+| `ssh.file_info` | read | 读取单个路径的元信息，不返回内容、不接受任意 shell |
 | `ssh.resize` | draft | 调整终端尺寸 |
 | `ssh.plugin_info` | read | 插件级信息 |
 
-MCP 显式注册 status、probe、connect、disconnect、command、read，并映射到 `mcp.ssh.*`；不开放原始按键和密码输入。基座可调用的插件级信息操作不代表自动注册了同名 MCP Tool。
+MCP 显式注册 status、probe、connect、disconnect、reset、command、exec、output、system_info、file_info、read，并映射到 `mcp.ssh.*`；不开放原始按键和密码输入。基座可调用的插件级信息操作不代表自动注册了同名 MCP Tool。
+
+两条执行路径的取舍：
+
+- `ssh.command` 保留 `cd`/`export`，适合需要共享会话状态的操作。它仍受 PTY 噪声影响：Shell 作业通知、其他人工输入都可能出现在回放中。
+- `ssh.exec` 为每次调用建立独立通道，不继承 Shell 状态，但没有回显、作业通知和登录 Shell 语法错误的连带影响；取消即关闭通道。长任务优先使用它。
+- `ssh.system_info`、`ssh.file_info` 使用固定脚本，效果为 read，不进入审批；它们不执行调用方提供的任意命令。`ssh.system_info` 返回 `user/uid/gid/groups/hostname/kernel/arch/shell/home/cwd/os/uptime` 字段，`ssh.file_info` 只返回存在性、类型、大小、权限、属主、mtime 和符号链接目标。
+- 需要放行其他命令时，由基座的「Agent approval」面板按操作名显式添加；不要在插件里依据命令字符串判断安全性。
 
 ## 命令与取消
 
 命令使用随机标记确定输出边界，通过当前 POSIX Shell 的 `eval` 执行，因此 `cd`、`export` 会保留。远端必须处于可接收命令的位置；当前不识别未完成的人工命令或 Windows Shell。
 
-- 每连接同时只跟踪一个命令，最长 120 秒；与客户端等待上限分别计时。
+- 执行前先用同一 Shell 的 `-n` 做静态语法检查。语法错误返回 `syntaxError=true` 和退出码 2，不进入 `eval`，共享 PTY 保持可用。检查只解析、不执行；依赖交互别名补全语法的写法可能被拒绝。
+- 包装命令的终端回显在进入回放前被移除；提示符和真实输出保留。远端关闭回显时不需要额外处理。
+- 每连接同时只跟踪一个命令，最长 120 秒；与客户端等待上限分别计时。`ssh.exec` 的作业上限为 30 分钟，最多 8 个并行作业。
 - 源命令最多 4096 字节，转义包装后还受 4000 字节 PTY 单行上限约束。
-- 结果含 base64 输出、退出码和截断标志，最多捕获 8 KiB；非零退出的 MCP 结果 `isError=true`。
-- 取消尽力发送 Ctrl+C，不能证明远端进程停止，结果为 unknown。
-- 断线、结束标记缺失或跟踪到期也可能 unknown；不推测成功、不自动重发。超时后拒绝下一条受跟踪命令，直到原标记到达或重连。
+- 结果字段：`exitCode`、`encoding`、`text` 或 `data`、`bytes`、`originalBytes`、`droppedBytes`、`limit`、`truncated`、`syntaxError`、`durationMs`。可打印 UTF-8 返回 `text`，否则返回 base64 `data`；不超过 8 KiB。非零退出的 MCP 结果 `isError=true`。
+- 取消先发送 Ctrl+C，最多等待 2 秒确认结束标记。确认成功为 `stopped`；否则返回 `unknown` 并自动重建 PTY Shell，连接保持可用。可用 `ssh.reset` 主动重建。
+- 断线、结束标记缺失或跟踪到期也可能 unknown；不推测成功、不自动重发。跟踪到期仍会阻塞下一条 PTY 命令，需 `ssh.reset` 或重连；`ssh.exec` 作业不受此限制。
+
+### exec 输出与进度
+
+`ssh.exec` 的结果包含 `exitCode`、`signal`、`timedOut`、`cancelled`，以及最多 4 KiB 的 `stdout`/`stderr` 预览。完整流保存在有界作业缓冲中（每流 64 KiB、最多 8 个作业），通过 `ssh.output` 用 `stdoutCursor`/`stderrCursor` 读取，返回 `done`、`exitCode`、`gap`、`more`。取消会关闭通道；通道关闭确认后返回 `stopped`，否则 `unknown`。作业缓冲随连接销毁。
 
 ## 输出与限制
 
-每连接回放缓冲 256 KiB，每块/单次读取 8 KiB；事件为 `ssh.output` 和 `ssh.status`，携带连接 ID 和游标。前端先订阅再回放，缺口时恢复；输入队列上限 16 KiB，控制队列 64 项，终端滚动缓存 3000 行。
+每连接回放缓冲 256 KiB，每块/单次读取 8 KiB；事件为 `ssh.terminal.output`、`ssh.status` 和 `ssh.job`，携带连接 ID 和游标。`ssh.job` 在 exec 作业开始和结束时各发一次，只含 `operationId`、源命令和 `done`，不携带输出；前端据此渲染终端底部的作业行，点击后在该行下方展开作业视图，通过 `ssh.output` 按游标取流。`ssh.status` 事件在重建 Shell 后带 `reset=true`；`ssh.status` 操作本身只报告当前配置与连接 ID。前端先订阅再回放，缺口时恢复；输入队列上限 16 KiB，控制队列 64 项，终端滚动缓存 3000 行。
+
+连接错误带稳定阶段：`tcp`、`handshake`、`host_key`、`auth`、`channel`、`pty`、`shell`、`connect`。指纹不匹配使用 `ssh_host_key_mismatch`；远端 Shell 退出使用 `ssh_remote_shell_exited` 并附退出码，网络中断使用 `ssh_connection_lost_before_completion`。
 
 指纹每次连接确认，不持久化。尚无私钥、ssh-agent、MFA、SFTP、端口转发、自动重连和凭据保存；命令块选择与上下文链路也未接通。秘密和背压规则见 [运行时通信](runtime-communication.md)。
 
