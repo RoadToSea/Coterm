@@ -128,3 +128,11 @@ pub async fn reset_saved_workspace(state: tauri::State<'_, AppState>) -> Result<
     .await
     .map_err(|_| workspace::error("workspace_task_failed"))?
 }
+
+/// Persists the approval allowlist without touching instance entries.
+pub async fn store_allowed_operations(
+    state: &tauri::State<'_, AppState>,
+    allowed: Vec<String>,
+) -> Result<(), coterm_proto::runtime::RuntimeError> {
+    access(state, move |store| store.save_allowed_operations(allowed)).await
+}

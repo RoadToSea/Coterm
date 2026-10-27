@@ -3,6 +3,7 @@ import { Box, ChevronDown, CircleStop, MoreHorizontal, PanelLeftClose, PanelLeft
 import { HostInteractions } from "./components/host/HostInteractions";
 import { HostApprovals } from "./components/host/HostApprovals";
 import { McpConfiguration } from "./components/mcp/McpConfiguration";
+import { ApprovalSettings } from "./components/host/ApprovalSettings";
 import { Modal } from "./components/ui/Modal";
 import { PluginWorkspace } from "./components/plugins/PluginWorkspace";
 import { PluginConfiguration } from "./components/plugins/PluginConfiguration";
@@ -40,6 +41,7 @@ export default function App() {
   }, []);
 
   const [mcpOpen, setMcpOpen] = useState(false);
+  const [approvalOpen, setApprovalOpen] = useState(false);
   const [plugins, setPlugins] = useState<PluginSummary[]>([]);
   const [pluginIssues, setPluginIssues] = useState<PluginLoadIssue[]>([]);
   const [instances, setInstances] = useState<InstanceInfo[]>([]);
@@ -407,6 +409,7 @@ export default function App() {
       </div>}
       {pluginIssueNotice}
       {mcpOpen && <McpConfiguration onClose={() => setMcpOpen(false)} />}
+      {approvalOpen && <ApprovalSettings plugins={plugins} onClose={() => setApprovalOpen(false)} />}
 
       <div className="flex min-h-0 flex-1">
         <aside aria-label="Installed plugins" className="flex w-[64px] shrink-0 flex-col border-r border-coterm-border bg-coterm-surface-sidebar sm:w-[72px]">
@@ -448,6 +451,15 @@ export default function App() {
               className="icon-button h-9 w-9"
             >
               {bypass ? <ShieldAlert size={22} className="text-[#cca770]" /> : <ShieldCheck size={22} />}
+            </button>
+            <button
+              type="button"
+              title="Choose which Agent operations skip approval"
+              aria-label="Open approval settings"
+              onClick={() => setApprovalOpen(true)}
+              className="icon-button h-9 w-9"
+            >
+              <SlidersHorizontal size={20} />
             </button>
           </div>
         </aside>

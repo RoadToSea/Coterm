@@ -53,6 +53,9 @@ struct Document {
     version: u32,
     entries: Vec<Entry>,
     layout: Layout,
+    /// Operations the user allowed to skip Agent approval. Empty by default.
+    #[serde(default)]
+    allowed_operations: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -60,6 +63,7 @@ struct Document {
 pub struct Snapshot {
     pub entries: Vec<SavedInstance>,
     pub layout: Layout,
+    pub allowed_operations: Vec<String>,
     pub history_policy: &'static str,
     pub persistence: &'static str,
 }
@@ -69,6 +73,7 @@ pub struct WorkspaceStore {
     path: PathBuf,
     entries: Vec<SavedInstance>,
     layout: Layout,
+    allowed_operations: Vec<String>,
 }
 
 impl WorkspaceStore {
@@ -80,6 +85,7 @@ impl WorkspaceStore {
             path,
             entries: Vec::new(),
             layout: Layout::default(),
+            allowed_operations: Vec::new(),
         }
     }
     pub fn open(path: PathBuf) -> Result<Self, RuntimeError> {
@@ -111,9 +117,19 @@ impl WorkspaceStore {
         }) {
             return Err(error("workspace_invalid"));
         }
+        if doc.allowed_operations.len() > MAX_ENTRIES
+            || doc.allowed_operations.iter().any(|operation| {
+                operation.trim().is_empty()
+                    || operation.len() > 128
+                    || operation.chars().any(char::is_control)
+            })
+        {
+            return Err(error("workspace_invalid"));
+        }
         Ok(Self {
             #[cfg(windows)]
             path,
+            allowed_operations: doc.allowed_operations,
             layout: doc.layout,
             entries: doc
                 .entries
@@ -133,6 +149,7 @@ impl WorkspaceStore {
         Snapshot {
             entries: self.entries.clone(),
             layout: self.layout.clone(),
+            allowed_operations: self.allowed_operations.clone(),
             history_policy: "session_only",
             persistence: if cfg!(windows) {
                 "windows_dpapi"
@@ -251,6 +268,7 @@ impl WorkspaceStore {
                 })
                 .collect(),
             layout: layout.clone(),
+            allowed_operations: self.allowed_operations.clone(),
         };
         let mut bytes = serde_json::to_vec(&doc).map_err(|_| error("workspace_invalid"))?;
         if bytes.len() > MAX_BYTES {
@@ -264,6 +282,38 @@ impl WorkspaceStore {
         atomic_write(&self.path, &encrypted?)?;
         self.entries = entries;
         self.layout = layout;
+        Ok(())
+    }
+
+    /// Persists the approval allowlist. The list is stored inside the same encrypted
+    /// envelope as instance configuration and never crosses the MCP boundary.
+    pub fn save_allowed_operations(
+        &mut self,
+        allowed: Vec<String>,
+    ) -> Result<(), RuntimeError> {
+        if allowed.len() > MAX_ENTRIES {
+            return Err(error("workspace_capacity"));
+        }
+        let mut normalized = Vec::new();
+        for operation in allowed {
+            let operation = operation.trim().to_owned();
+            if operation.is_empty()
+                || operation.len() > 128
+                || operation.chars().any(char::is_control)
+            {
+                return Err(error("workspace_invalid"));
+            }
+            if !normalized.contains(&operation) {
+                normalized.push(operation);
+            }
+        }
+        normalized.sort();
+        let entries = self.entries.clone();
+        let previous = std::mem::replace(&mut self.allowed_operations, normalized);
+        if let Err(error) = self.commit(entries, self.layout.clone()) {
+            self.allowed_operations = previous;
+            return Err(error);
+        }
         Ok(())
     }
 }

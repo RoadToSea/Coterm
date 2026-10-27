@@ -83,6 +83,16 @@ impl HttpBridgeServer {
         runtime: Arc<ProcessPluginRuntime>,
         address: SocketAddr,
     ) -> std::io::Result<Self> {
+        Self::bind_at_with_idle(runtime, address, SESSION_IDLE).await
+    }
+
+    /// Same listener with an explicit idle timeout. Integration tests use a short value;
+    /// production callers use the default 30 minutes.
+    pub async fn bind_at_with_idle(
+        runtime: Arc<ProcessPluginRuntime>,
+        address: SocketAddr,
+        idle: Duration,
+    ) -> std::io::Result<Self> {
         if address.ip() != Ipv4Addr::LOCALHOST {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
@@ -98,6 +108,7 @@ impl HttpBridgeServer {
             authority: address.to_string(),
             sessions: sessions.clone(),
             requests: Arc::new(Semaphore::new(128)),
+            idle,
             shutdown: shutdown.subscribe(),
         });
         let app = Router::new()
@@ -189,6 +200,7 @@ struct HttpState {
     authority: String,
     sessions: Arc<Mutex<HashMap<String, Arc<Session>>>>,
     requests: Arc<Semaphore>,
+    idle: Duration,
     shutdown: watch::Receiver<bool>,
 }
 
@@ -205,10 +217,8 @@ struct Session {
 }
 
 impl Session {
-    fn expired(&self) -> bool {
-        self.touched
-            .lock()
-            .map_or(true, |t| t.elapsed() > SESSION_IDLE)
+    fn expired(&self, idle: Duration) -> bool {
+        self.touched.lock().map_or(true, |t| t.elapsed() > idle)
     }
     fn touch(&self) {
         if let Ok(mut touched) = self.touched.lock() {
@@ -305,7 +315,7 @@ async fn session(state: &HttpState, headers: &HeaderMap) -> Result<Arc<Session>,
             "MCP session expired; initialize again",
         ));
     };
-    if session.expired() {
+    if session.expired(state.idle) {
         sessions.remove(id);
         let _ = session.closed.send(true);
         return Err(error(
@@ -410,7 +420,7 @@ async fn post_message(State(state): State<Arc<HttpState>>, request: Request) -> 
         }
         let mut sessions = state.sessions.lock().await;
         sessions.retain(|_, session| {
-            if session.expired() {
+            if session.expired(state.idle) {
                 let _ = session.closed.send(true);
                 false
             } else {
@@ -435,7 +445,7 @@ async fn post_message(State(state): State<Arc<HttpState>>, request: Request) -> 
                         "code": "mcp_sessions_full",
                         "limit": MAX_SESSIONS,
                         "active": active.len(),
-                        "idleTimeoutSeconds": SESSION_IDLE.as_secs(),
+                        "idleTimeoutSeconds": state.idle.as_secs(),
                         "recovery": {
                             "desktop": "Open the MCP panel in Coterm and close an unused session.",
                             "client": "Stop the client that owns the session so it sends DELETE /mcp.",
@@ -569,8 +579,12 @@ async fn get_events(State(state): State<Arc<HttpState>>, headers: HeaderMap) -> 
                 tokio::select! {
                     _ = shutdown.changed() => return None,
                     _ = closed.changed() => return None,
+                    // A parked SSE stream is not client activity. Touching the session
+                    // here would keep it alive forever and fill the session limit.
                     _ = interval.tick() => {
-                        session.touch();
+                        if session.expired(state.idle) {
+                            return None;
+                        }
                         let tools = match tools_list(&state.runtime).await { Ok(tools) => tools, Err(_) => return None };
                         if tools != last {
                             last = tools;

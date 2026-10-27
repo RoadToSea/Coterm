@@ -787,6 +787,30 @@ async fn get_bypass(state: tauri::State<'_, AppState>) -> Result<bool, String> {
     Ok(state.plugin_runtime.bypass_enabled().await)
 }
 
+/// 放行列表只在人工操作下修改；它跳过审批，但不改变 effect、不绕过插件校验。
+#[tauri::command]
+async fn set_allowed_operations(
+    operations: Vec<String>,
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<String>, String> {
+    let _guard = state.workspace_actions.lock().await;
+    state
+        .plugin_runtime
+        .set_allowed_operations(operations)
+        .await
+        .map_err(|error| format!("{}: {}", error.code, error.message))?;
+    let allowed = state.plugin_runtime.allowed_operations().await;
+    if let Err(error) = workspace_commands::store_allowed_operations(&state, allowed.clone()).await {
+        return Err(format!("{}: {}", error.code, error.message));
+    }
+    Ok(allowed)
+}
+
+#[tauri::command]
+async fn get_allowed_operations(state: tauri::State<'_, AppState>) -> Result<Vec<String>, String> {
+    Ok(state.plugin_runtime.allowed_operations().await)
+}
+
 async fn summary(state: &AppState, manifest: PluginManifest) -> PluginSummary {
     let id = manifest.id;
     PluginSummary {
@@ -820,6 +844,13 @@ fn main() {
                 current_platform(),
                 runtime_limits,
             ));
+            // Restore the approval allowlist before any client can submit work.
+            if let Ok(store) = &workspace {
+                tauri::async_runtime::block_on(
+                    plugin_runtime.set_allowed_operations(store.snapshot().allowed_operations),
+                )
+                .ok();
+            }
             let mcp_server = tauri::async_runtime::block_on(
                 coterm_mcp::http::HttpBridgeServer::bind(plugin_runtime.clone()),
             ).map_err(|error| format!("MCP unavailable at http://127.0.0.1:{}/mcp: {error}. Close the application using this port and restart Coterm.", coterm_mcp::http::DEFAULT_PORT));
@@ -894,7 +925,9 @@ fn main() {
             reject_proposal,
             cancel_operation,
             set_bypass,
-            get_bypass
+            get_bypass,
+            set_allowed_operations,
+            get_allowed_operations
         ])
         .build(tauri::generate_context!());
     let application = match application {

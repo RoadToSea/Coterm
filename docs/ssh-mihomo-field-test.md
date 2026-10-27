@@ -154,6 +154,14 @@
 - 随后 `echo STILL-ALIVE-$?` 正常执行，Shell 未退出；
 - 回显区包含 `__coterm` 提示串，可被回放过滤识别。
 
+### 后续补充（同日）
+
+用户复核时指出三点，已追加处理：
+
+1. **会话满的真实成因**：`GET /mcp` 的 SSE 每 1 秒调用 `session.touch()`，只要客户端挂着事件流，空闲 30 分钟的规则就永远不生效。修复后 SSE 等待不再续期，会话到期即释放；`bind_at_with_idle` 让超时可注入，新增 `parked_event_stream_does_not_keep_a_session_alive` 回归测试。
+2. **只读放行应由基座提供**：`ssh.system_info` 返回的是固定字段（`user/uid/gid/groups/hostname/kernel/arch/shell/home/cwd/os/uptime`），不是可配置的命令列表。基座新增「Agent approval」面板与 `set_allowed_operations`/`get_allowed_operations`，按操作名放行并写入加密工作区；放行只跳过审批，不改变 effect、不绕过插件校验、Agent 不能自批。`effect=read` 且无敏感输入的操作本来就不进入审批。
+3. **后台作业的界面**：SSH 前端在终端底部增加作业行，每个执行中的 exec 作业是一个圆角 tab；点击后在作业行下方展开该作业的 stdout/stderr 与退出码，可停止或关闭视图；上方主终端保持独立。插件新增 `ssh.job` 事件（开始/结束各一次，不携带输出），输出仍通过 `ssh.output` 按游标读取。
+
 ### 尚未复测
 
 以下项目本轮只有代码与本地测试，没有重新连接真实服务器：

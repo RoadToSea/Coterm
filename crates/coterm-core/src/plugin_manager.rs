@@ -277,6 +277,8 @@ pub struct ProcessPluginRuntime {
     state: Arc<Mutex<State>>,
     history: Arc<OperationHistory>,
     bypass: Arc<tokio::sync::RwLock<bool>>,
+    /// 用户显式放行的操作名（精确匹配）。放行只跳过审批，不改变 effect 或插件校验。
+    allowed_operations: Arc<tokio::sync::RwLock<HashSet<String>>>,
     /// 仅承载版本号；快照内容以 `state` 为准，二者在同一把锁内推进。
     attention: Arc<std::sync::Mutex<u64>>,
     children: Arc<std::sync::Mutex<HashMap<String, std::sync::Weak<JsonRpcPluginProcess>>>>,
@@ -291,6 +293,7 @@ impl ProcessPluginRuntime {
             state: Arc::new(Mutex::new(State::default())),
             history: Arc::new(OperationHistory::new(100, 16 * 1024)),
             bypass: Arc::new(tokio::sync::RwLock::new(false)),
+            allowed_operations: Arc::new(tokio::sync::RwLock::new(HashSet::new())),
             attention: Arc::new(std::sync::Mutex::new(0)),
             children: Arc::new(std::sync::Mutex::new(HashMap::new())),
             shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -536,6 +539,33 @@ impl ProcessPluginRuntime {
 
     pub async fn bypass_enabled(&self) -> bool {
         *self.bypass.read().await
+    }
+
+    /// Replaces the explicit allowlist. Names are `operation` values exactly as the
+    /// plugin catalog reports them; a pattern is never matched against command text.
+    pub async fn set_allowed_operations(&self, operations: Vec<String>) -> Result<(), RuntimeError> {
+        let mut allowed = HashSet::new();
+        for operation in operations {
+            let operation = operation.trim();
+            if operation.is_empty()
+                || operation.len() > 128
+                || operation.chars().any(char::is_control)
+            {
+                return Err(runtime_error(
+                    ErrorCategory::InvalidRequest,
+                    "allowed_operation_invalid",
+                ));
+            }
+            allowed.insert(operation.to_owned());
+        }
+        *self.allowed_operations.write().await = allowed;
+        Ok(())
+    }
+
+    pub async fn allowed_operations(&self) -> Vec<String> {
+        let mut allowed: Vec<_> = self.allowed_operations.read().await.iter().cloned().collect();
+        allowed.sort();
+        allowed
     }
 
     pub async fn operation_catalog(&self, plugin_id: &str) -> Vec<OperationDescriptor> {
@@ -1496,6 +1526,11 @@ impl Operations for ProcessPluginRuntime {
         Box::pin(async move {
             let bypass = *self.bypass.read().await;
             let state = self.state.lock().await;
+            let explicitly_allowed = self
+                .allowed_operations
+                .read()
+                .await
+                .contains(&request.operation);
             self.ensure_accepting()?;
             let descriptor = state
                 .operation_catalog
@@ -1537,8 +1572,9 @@ impl Operations for ProcessPluginRuntime {
                 return Err(runtime_error(ErrorCategory::Conflict, "plugin_not_started"));
             }
             let operation_id = uuid::Uuid::new_v4().to_string();
-            let proposal_id = requires_proposal(caller.source, descriptor.effect, bypass)
-                .then(|| uuid::Uuid::new_v4().to_string());
+            let proposal_id =
+                requires_proposal(caller.source, &descriptor, bypass, explicitly_allowed)
+                    .then(|| uuid::Uuid::new_v4().to_string());
             let now = Utc::now();
             let record = OperationRecord {
                 operation_id: operation_id.clone(),
@@ -2100,8 +2136,22 @@ fn validate_schema(schema: &Value, value: &Value) -> Result<(), ()> {
     validator.validate(value).map_err(|_| ())
 }
 
-fn requires_proposal(source: OperationSource, effect: OperationEffect, bypass: bool) -> bool {
-    source == OperationSource::Agent && effect == OperationEffect::Commit && !bypass
+/// Approval policy for Agent-submitted operations.
+///
+/// A read-only operation with no sensitive input only observes state, so it does not
+/// need a proposal. Everything else still does, unless the user enabled Bypass or
+/// explicitly allowed that operation by name. Neither path can change `effect`, bypass
+/// plugin-side checks, or let an Agent approve its own proposal.
+fn requires_proposal(
+    source: OperationSource,
+    descriptor: &OperationDescriptor,
+    bypass: bool,
+    explicitly_allowed: bool,
+) -> bool {
+    source == OperationSource::Agent
+        && descriptor.effect == OperationEffect::Commit
+        && !bypass
+        && !explicitly_allowed
 }
 
 fn failure_status(error: &RuntimeError) -> OperationStatus {
@@ -2127,7 +2177,9 @@ fn runtime_error_with(category: ErrorCategory, code: &str, message: String) -> R
 
 #[cfg(test)]
 mod tests {
-    use coterm_proto::runtime::operation::{OperationEffect, OperationSource};
+    use coterm_proto::runtime::operation::{
+        OperationDescriptor, OperationEffect, OperationScope, OperationSource,
+    };
 
     use super::{
         failure_status, requires_proposal, schema_is_valid, validate_plugin_authority,
@@ -2409,27 +2461,66 @@ mod tests {
         assert!(request.deadline.is_none());
     }
 
+    fn descriptor(effect: OperationEffect, sensitive_input: bool) -> OperationDescriptor {
+        OperationDescriptor {
+            name: "plugin.operation".into(),
+            scope: OperationScope::Instance,
+            effect,
+            input_schema: serde_json::json!({"type":"object"}),
+            output_schema: None,
+            sensitive_input,
+            transient: false,
+        }
+    }
+
     #[test]
-    fn agent_commit_requires_approval_unless_bypass_is_enabled() {
+    fn agent_commit_requires_approval_unless_bypass_or_allowlisted() {
+        let commit = descriptor(OperationEffect::Commit, false);
+        let draft = descriptor(OperationEffect::Draft, false);
+        let read = descriptor(OperationEffect::Read, false);
         assert!(requires_proposal(
             OperationSource::Agent,
-            OperationEffect::Commit,
+            &commit,
+            false,
             false
         ));
         assert!(!requires_proposal(
             OperationSource::Agent,
-            OperationEffect::Commit,
+            &commit,
+            true,
+            false
+        ));
+        assert!(!requires_proposal(
+            OperationSource::Agent,
+            &commit,
+            false,
             true
         ));
         assert!(!requires_proposal(
             OperationSource::Human,
-            OperationEffect::Commit,
+            &commit,
+            false,
             false
         ));
         assert!(!requires_proposal(
             OperationSource::Agent,
-            OperationEffect::Draft,
+            &draft,
+            false,
             false
+        ));
+        assert!(!requires_proposal(
+            OperationSource::Agent,
+            &read,
+            false,
+            false
+        ));
+        // An explicit allowlist entry must never be able to weaken a human-only path:
+        // the caller source is checked first.
+        assert!(!requires_proposal(
+            OperationSource::Human,
+            &commit,
+            false,
+            true
         ));
     }
 

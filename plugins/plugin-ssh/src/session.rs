@@ -647,14 +647,17 @@ impl Connection {
                                         continue;
                                     }
                                 }
+                                let command_text = text.clone();
                                 exec_tasks.spawn(run_exec(
                                     task_handle.clone(),
                                     task_jobs.clone(),
                                     events.clone(),
+                                    connection_id.clone(),
                                     operation_id,
                                     text,
                                     mcp,
                                     cancel_rx,
+                                    command_text,
                                 ));
                                 let _ = action.reply.send(Ok(json!({})));
                             }
@@ -1279,11 +1282,15 @@ async fn run_exec(
     handle: Arc<client::Handle<HostKey>>,
     jobs: Arc<Mutex<JobRegistry>>,
     events: Option<(String, mpsc::Sender<PluginNotification>)>,
+    connection_id: String,
     operation_id: String,
     text: String,
     mcp: bool,
     mut cancel: watch::Receiver<bool>,
+    command_text: String,
 ) {
+    // Announce the job before it starts so the terminal can show a running tab.
+    emit_job(&events, &connection_id, &operation_id, &command_text, false).await;
     let started = Instant::now();
     let mut stdout = OutputBuffer::new(EXEC_OUTPUT_LIMIT);
     let mut stderr = OutputBuffer::new(EXEC_OUTPUT_LIMIT);
@@ -1392,6 +1399,7 @@ async fn run_exec(
         "outputOperationId": operation_id,
     });
     if cancelled {
+        emit_job(&events, &connection_id, &operation_id, &command_text, true).await;
         return;
     }
     if let Some(error) = error {
@@ -1406,6 +1414,7 @@ async fn run_exec(
         return;
     }
     if timed_out {
+        emit_job(&events, &connection_id, &operation_id, &command_text, true).await;
         fail_operation(
             &events,
             &operation_id,
@@ -1416,12 +1425,38 @@ async fn run_exec(
         .await;
         return;
     }
+    emit_job(&events, &connection_id, &operation_id, &command_text, true).await;
     if let Some((_, sender)) = events {
         let result = if mcp { tool_result(&domain) } else { domain };
         let _ = sender
             .send(PluginNotification::OperationCompleted {
                 operation_id,
                 result,
+            })
+            .await;
+    }
+}
+
+/// Publishes the job list entry for an exec operation. It carries no output; the
+/// terminal reads output through `ssh.output` with cursors.
+async fn emit_job(
+    events: &Option<(String, mpsc::Sender<PluginNotification>)>,
+    connection_id: &str,
+    operation_id: &str,
+    text: &str,
+    done: bool,
+) {
+    if let Some((instance, sender)) = events {
+        let _ = sender
+            .send(PluginNotification::Event {
+                plugin_instance_id: instance.clone(),
+                name: "ssh.job".into(),
+                payload: json!({
+                    "connectionId": connection_id,
+                    "operationId": operation_id,
+                    "text": text,
+                    "done": done,
+                }),
             })
             .await;
     }

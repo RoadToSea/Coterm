@@ -88,6 +88,8 @@ export interface InstanceInfo {
 export interface SavedWorkspace {
   entries: { configRef: string; pluginId: string; label: string; instanceId: string | null }[];
   layout: { activeConfigRef: string | null; instancesCollapsed: boolean };
+  /** Agent 审批放行的操作名；持久化在加密工作区内。 */
+  allowedOperations: string[];
   historyPolicy: "session_only";
   persistence: "windows_dpapi" | "memory_only";
 }
@@ -154,6 +156,9 @@ export interface HostAPI {
   cancelOperation(pluginInstanceId: string, operationId: string): Promise<OperationReceipt>;
   setBypass(enabled: boolean): Promise<void>;
   getBypass(): Promise<boolean>;
+  /** 放行列表只跳过 Agent 审批；不改变 effect、不绕过插件校验。 */
+  setAllowedOperations(operations: string[]): Promise<string[]>;
+  getAllowedOperations(): Promise<string[]>;
   frontendSource(pluginId: string): Promise<string | null>;
   provideSecret(pluginInstanceId: string, purpose: string, value: string): Promise<SecretHandle>;
   /** 一次取回全部实例级与插件级待处理项，替代逐实例扫描历史。 */
@@ -391,6 +396,9 @@ export const hostAPI: HostAPI = {
     invoke<OperationReceipt>("cancel_operation", { pluginInstanceId, operationId }),
   setBypass: (enabled) => invoke<void>("set_bypass", { enabled }),
   getBypass: () => invoke<boolean>("get_bypass"),
+  setAllowedOperations: (operations) =>
+    invoke<string[]>("set_allowed_operations", { operations }),
+  getAllowedOperations: () => invoke<string[]>("get_allowed_operations"),
 };
 
 /** Binds plugin-facing calls to one instance; unsupported event features fail explicitly. */

@@ -35,7 +35,8 @@ MCP 显式注册 status、probe、connect、disconnect、reset、command、exec�
 
 - `ssh.command` 保留 `cd`/`export`，适合需要共享会话状态的操作。它仍受 PTY 噪声影响：Shell 作业通知、其他人工输入都可能出现在回放中。
 - `ssh.exec` 为每次调用建立独立通道，不继承 Shell 状态，但没有回显、作业通知和登录 Shell 语法错误的连带影响；取消即关闭通道。长任务优先使用它。
-- `ssh.system_info`、`ssh.file_info` 使用固定脚本，效果为 read，不进入审批；它们不执行调用方提供的任意命令。
+- `ssh.system_info`、`ssh.file_info` 使用固定脚本，效果为 read，不进入审批；它们不执行调用方提供的任意命令。`ssh.system_info` 返回 `user/uid/gid/groups/hostname/kernel/arch/shell/home/cwd/os/uptime` 字段，`ssh.file_info` 只返回存在性、类型、大小、权限、属主、mtime 和符号链接目标。
+- 需要放行其他命令时，由基座的「Agent approval」面板按操作名显式添加；不要在插件里依据命令字符串判断安全性。
 
 ## 命令与取消
 
@@ -55,7 +56,7 @@ MCP 显式注册 status、probe、connect、disconnect、reset、command、exec�
 
 ## 输出与限制
 
-每连接回放缓冲 256 KiB，每块/单次读取 8 KiB；事件为 `ssh.terminal.output` 和 `ssh.status`，携带连接 ID 和游标。`ssh.status` 事件在重建 Shell 后带 `reset=true`；`ssh.status` 操作本身只报告当前配置与连接 ID。前端先订阅再回放，缺口时恢复；输入队列上限 16 KiB，控制队列 64 项，终端滚动缓存 3000 行。
+每连接回放缓冲 256 KiB，每块/单次读取 8 KiB；事件为 `ssh.terminal.output`、`ssh.status` 和 `ssh.job`，携带连接 ID 和游标。`ssh.job` 在 exec 作业开始和结束时各发一次，只含 `operationId`、源命令和 `done`，不携带输出；前端据此渲染终端底部的作业行，点击后在该行下方展开作业视图，通过 `ssh.output` 按游标取流。`ssh.status` 事件在重建 Shell 后带 `reset=true`；`ssh.status` 操作本身只报告当前配置与连接 ID。前端先订阅再回放，缺口时恢复；输入队列上限 16 KiB，控制队列 64 项，终端滚动缓存 3000 行。
 
 连接错误带稳定阶段：`tcp`、`handshake`、`host_key`、`auth`、`channel`、`pty`、`shell`、`connect`。指纹不匹配使用 `ssh_host_key_mismatch`；远端 Shell 退出使用 `ssh_remote_shell_exited` 并附退出码，网络中断使用 `ssh_connection_lost_before_completion`。
 

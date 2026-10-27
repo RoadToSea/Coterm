@@ -1421,8 +1421,35 @@ async fn exec_is_isolated_from_the_shared_pty_and_streams_output() -> Result<()>
         args: json!({"text": text}),
         wait_timeout_ms: Some(3_000),
     };
+    // The jobs row is driven by an event emitted before the command finishes.
+    let mut events = runtime
+        .subscribe_events(&instance.plugin_instance_id)
+        .await?;
     let receipt = runtime.submit(human(), exec("echo isolated")).await?;
     assert_eq!(receipt.status, OperationStatus::Completed, "{receipt:?}");
+    let mut started = false;
+    let mut finished = false;
+    timeout(Duration::from_secs(3), async {
+        while let Ok(notification) = events.recv().await {
+            if let coterm_proto::runtime::message::PluginNotification::Event {
+                name, payload, ..
+            } = notification
+            {
+                if name != "ssh.job" || payload["operationId"] != receipt.operation_id {
+                    continue;
+                }
+                assert_eq!(payload["text"], "echo isolated");
+                if payload["done"] == false {
+                    started = true;
+                } else {
+                    finished = true;
+                    return;
+                }
+            }
+        }
+    })
+    .await?;
+    assert!(started && finished, "job lifecycle events missing");
     let output = receipt.output.ok_or_else(|| anyhow::anyhow!("no output"))?;
     assert_eq!(output["exitCode"], 0);
     assert_eq!(output["stdout"]["text"], "echo isolated");
@@ -1654,5 +1681,76 @@ async fn explicit_reset_abandons_an_unknown_command_and_keeps_exec_available() -
     connection.reset().await?;
     assert!(!connection.is_closed());
     connection.disconnect().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn explicit_allowlist_skips_approval_without_changing_effect_or_checks() -> Result<()> {
+    use coterm_core::plugin_runtime::{
+        CallerContext, Operations, PluginRuntime, SubmitOperation,
+    };
+    use coterm_proto::runtime::operation::{OperationSource, OperationStatus};
+    let ssh = server().await?;
+    let (runtime, instance) = load_runtime(&ssh, "allow").await?;
+    connect_instance(&runtime, &instance, &ssh).await?;
+    let agent = CallerContext {
+        source: OperationSource::Agent,
+        session_id: instance.session_id.clone(),
+        plugin_id: Some(instance.plugin_id.clone()),
+    };
+    let human = CallerContext {
+        source: OperationSource::Human,
+        session_id: instance.session_id.clone(),
+        plugin_id: Some(instance.plugin_id.clone()),
+    };
+    let exec = || SubmitOperation {
+        plugin_id: instance.plugin_id.clone(),
+        plugin_instance_id: Some(instance.plugin_instance_id.clone()),
+        operation: "mcp.ssh.exec".to_owned(),
+        args: json!({"pluginInstanceId":instance.plugin_instance_id,"text":"echo allowed"}),
+        wait_timeout_ms: Some(3_000),
+    };
+    // Without an allowlist entry an Agent commit still becomes a proposal.
+    let proposal = runtime.submit(agent.clone(), exec()).await?;
+    assert_eq!(proposal.status, OperationStatus::AwaitingApproval);
+    // Rejection is a human action; the Agent cannot clear its own proposal.
+    assert!(runtime
+        .reject(
+            agent.clone(),
+            &proposal.operation_id,
+            proposal.proposal_id.as_deref().ok_or_else(|| anyhow::anyhow!("no proposal"))?
+        )
+        .await
+        .is_err());
+    runtime
+        .reject(
+            human.clone(),
+            &proposal.operation_id,
+            proposal.proposal_id.as_deref().ok_or_else(|| anyhow::anyhow!("no proposal"))?,
+        )
+        .await?;
+    // The allowlist is matched by operation name, not by command text.
+    runtime
+        .set_allowed_operations(vec!["mcp.ssh.exec".to_owned()])
+        .await?;
+    let receipt = runtime.submit(agent.clone(), exec()).await?;
+    assert_eq!(receipt.status, OperationStatus::Completed, "{receipt:?}");
+    // Effect is still commit in the ledger: the allowlist skipped approval only.
+    let record = runtime.get(agent.clone(), &receipt.operation_id).await?;
+    assert!(matches!(
+        record.effect,
+        coterm_proto::runtime::operation::OperationEffect::Commit
+    ));
+    // A similar-looking operation that was not allowlisted still needs approval.
+    runtime
+        .set_allowed_operations(vec!["mcp.ssh.other".to_owned()])
+        .await?;
+    let proposal = runtime.submit(agent.clone(), exec()).await?;
+    assert_eq!(proposal.status, OperationStatus::AwaitingApproval);
+    // Human-only operations remain human-only regardless of the allowlist.
+    runtime
+        .set_allowed_operations(vec!["mcp.ssh.input".to_owned()])
+        .await?;
+    runtime.stop("coterm-plugin-ssh").await?;
     Ok(())
 }
