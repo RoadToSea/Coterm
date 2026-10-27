@@ -118,6 +118,52 @@
 
 本轮使用短命令和自动结束的进程，没有修改用户、Docker 或 Mihomo 配置。已显式取消未完成的重连操作并释放 MCP HTTP 会话；远端因语法错误退出和取消测试产生的 PTY 均已断开，容器仍在运行。
 
+## 问题修复记录
+
+日期：2026-10-27。修复分支 `fix/ssh-field-test-findings`，提交 `760aa82`。本节只记录代码与测试层面的处理，不代表已在真实服务器复测；现场复测项见文末清单。
+
+### 逐条对应
+
+| 实测问题 | 修复方式 | 验证 |
+|---|---|---|
+| MCP 会话满时无法开始任务 | 429 返回 `mcp_sessions_full`、上限、各会话客户端名与空闲时长、`Retry-After: 30` 和两条恢复路径；桌面 MCP 面板列出会话并按 8 位前缀关闭 | `crates/coterm-mcp/tests/http.rs` 新增会话限制用例 |
+| 只读 Shell 检查也必须审批 | 新增 `ssh.system_info`、`ssh.file_info`，固定脚本、effect=read、不执行调用方命令 | SSH 集成测试 `read_only_queries_use_fixed_scripts_outside_the_pty` |
+| 结果嵌套和 base64 增加处理成本 | 机器副本改为 `structuredContent`，文本块为有界摘要；可读 UTF-8 返回 `text`，二进制/控制字符保留 base64；`_meta` 收据只报输出大小 | 插件 MCP 测试、`crates/coterm-mcp/src/server.rs` 收据与摘要单测 |
+| 共享 PTY 后台作业通知污染输出 | 新增 `ssh.exec` 独立 exec 通道，stdout/stderr 分离，不经过共享 PTY | `exec_is_isolated_from_the_shared_pty_and_streams_output` |
+| 长任务缺少作业进度入口 | `ssh.exec` 最长 30 分钟、最多 8 个并行作业；`ssh.output` 按游标读取 `done/exitCode/gap/more` | 同上，并通过 `ssh.output` 校验完整输出 |
+| 顶层 Shell 语法错误关闭会话 | 执行前用同一 Shell 的 `-n` 静态检查；语法错误返回 `syntaxError=true`、退出码 2，不进入 `eval` | `syntax_errors_are_rejected_without_killing_the_shared_shell`；另在真实 bash PTY 上验证 |
+| 取消未确认永久阻塞连接 | 取消后等待 2 秒结束标记；确认则为 `stopped`，否则 `unknown` 并自动重建 PTY；新增 `ssh.reset` | `unconfirmed_cancel_resets_the_terminal_instead_of_blocking_it`、`explicit_reset_abandons_an_unknown_command_and_keeps_exec_available` |
+| 错误分类过于宽泛 | 连接错误带阶段码 `tcp/handshake/host_key/auth/channel/pty/shell`；区分 `ssh_remote_shell_exited` 与 `ssh_connection_lost_before_completion` | 代码审查；真实断线场景未复测 |
+| 回放包含完整包装命令 | 回显区在进入回放前丢弃；用短提示串识别，兼容 readline 对长行的 CRLF 重绘 | `readline_redraws_are_dropped_and_partial_markers_survive`；真实 PTY 确认回显区含提示串 |
+| 8192 字节截断无摘要字段 | 结果新增 `bytes`、`originalBytes`、`droppedBytes`、`limit`，保留 `truncated`/`outputTruncated` | `binary_and_control_bytes_stay_base64_and_report_truncation` |
+
+### 新增接口
+
+- `ssh.exec`：独立 exec 通道，不保留 `cd`/`export`；取消即关闭通道。
+- `ssh.output`：读取 exec 作业的有界输出，参数 `operationId`、`stdoutCursor`、`stderrCursor`。
+- `ssh.reset`：重建共享 PTY Shell，未完成命令记为 unknown。
+- `ssh.system_info`、`ssh.file_info`：固定只读脚本，无审批。
+- MCP 事件名 `ssh.output` 改为 `ssh.terminal.output`，避免与作业读取操作同名；前端已同步。
+
+### 真实 PTY 验证
+
+在 WSL 交互式 bash 5.1 上直接写入插件 `Command::new` 生成的真实包装字节，确认：
+
+- 语法错误被拦截，输出 `bash: ... syntax error: unexpected end of file`；
+- 结束标记为 `end;2;syntax`；
+- 随后 `echo STILL-ALIVE-$?` 正常执行，Shell 未退出；
+- 回显区包含 `__coterm` 提示串，可被回放过滤识别。
+
+### 尚未复测
+
+以下项目本轮只有代码与本地测试，没有重新连接真实服务器：
+
+- 真实指纹确认、密码交互与 MFA；
+- 真实网络中断后的错误阶段码；
+- 跨公网的长连接、keepalive 与 exec 通道并发；
+- `ssh.exec` 在 Ubuntu 20.04 目标服务器上的 `$SHELL -c` 行为；
+- Docker/Mihomo 部署本身未改动，容器仍按原记录运行。
+
 ## 使用与维护
 
 以下命令在服务器执行。配置只提供直连能力；不包含 Clash Verge 桌面 GUI。
