@@ -22,6 +22,7 @@
 - 先 `initialize`，成功前只允许握手和 `shutdown`；重复成功握手返回 conflict。失败握手可修正后重试，不允许在原进程重新协商已启用能力。
 - 插件只声明真正实现的能力；类型中存在某条消息不代表所有插件支持它。
 - Rust 插件实现 `PluginBackend`，共享传输层负责读取、tick 和串行输出。
+- Windows GUI 宿主启动插件进程时使用 `CREATE_NO_WINDOW`，不分配或继承控制台；stdin/stdout 继续使用独立管道，stderr 保持诊断通道。macOS/Linux 的启动方式不变。控制台分配行为须在真实 Release Tauri GUI 中验收，仅从 `cargo test` 启动子进程不能覆盖 GUI 宿主场景。
 
 | 方法/通知 | 参数 → 成功结果 | 特性 |
 |---|---|---|

@@ -55,6 +55,14 @@
 
 ## 最近代码验证
 
+### 2026-10-28 Windows 插件控制台修复
+
+- 用户报告点击创建实例后出现空白黑色窗口；使用旧版 Smoke NSIS 与新增原生断言复现，插件自报 `consoleAttached=true`。其 stdout 已接入宿主协议管道，黑色窗口不提供交互内容。
+- 根因是 GUI 宿主启动控制台子系统插件时未禁止控制台分配。Windows 启动路径增加 `CREATE_NO_WINDOW`，保留标准输入/输出协议管道、诊断 stderr 与退出回收；非 Windows 路径不变，无新增依赖或权限。
+- 相同真实 Tauri 回归修复后通过，确认 `consoleAttached=false` 且握手、实例操作、离线安装、重启和退出回收正常。另增加真实 SSH 配置界面提交、后端握手及未连接终端渲染验收，不发起网络连接。
+- `cargo check --workspace --locked`、Clippy、99 个 workspace 测试通过，1 个硬件测试 ignored；桌面前端、Smoke 与产品 Release NSIS 构建通过，两类安装包均完成临时目录安装与卸载。首次与 Release 构建并行运行测试时，本地插件 2 秒启动用例耗时 2.75 秒失败；构建结束后全 workspace 串行重跑通过，未放宽测试阈值。
+- 原生回归的运行前提新增 SSH `dist` 构建，README 与现有 CI 命令保持一致。此次补充的是 GUI 宿主启动边界，不能以控制台测试父进程下的启动结果替代。
+
 ### 2026-10-28 Alpha 使用入口
 
 Windows x86_64：新增语言切换与离线安装，尚未创建 Alpha 发布标签。

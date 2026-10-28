@@ -156,12 +156,20 @@ impl JsonRpcPluginProcess {
     /// Starts a previously validated executable. stdout is reserved for JSON-RPC;
     /// stderr is inherited for plugin diagnostics.
     pub async fn spawn(executable: &Path, args: &[String]) -> Result<Self, RuntimeError> {
-        let mut child = Command::new(executable)
+        let mut command = Command::new(executable);
+        command
             .args(args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
-            .kill_on_drop(true)
+            .kill_on_drop(true);
+        #[cfg(windows)]
+        {
+            // A GUI host must not open a console for its stdio-only plugin backend.
+            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+            command.creation_flags(CREATE_NO_WINDOW);
+        }
+        let mut child = command
             .spawn()
             .map_err(|error| transport_error("plugin_start_failed", error))?;
 

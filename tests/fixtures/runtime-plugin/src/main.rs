@@ -15,6 +15,23 @@ use std::collections::HashMap;
 use tokio::sync::mpsc;
 
 const ID: &str = "coterm-runtime-fixture";
+
+fn console_attached() -> Option<bool> {
+    #[cfg(windows)]
+    {
+        #[link(name = "kernel32")]
+        extern "system" {
+            fn GetConsoleWindow() -> *mut std::ffi::c_void;
+        }
+        // SAFETY: This parameterless Win32 query only reads this process's console handle.
+        Some(unsafe { !GetConsoleWindow().is_null() })
+    }
+    #[cfg(not(windows))]
+    {
+        None
+    }
+}
+
 struct Backend {
     instances: HashMap<String, Value>,
     writes: usize,
@@ -137,7 +154,7 @@ impl PluginBackend for Backend {
                 match request.operation.as_str() {
                     "fixture.block" => std::future::pending::<Result<Value, RuntimeError>>().await,
                     "fixture.info" => Ok(
-                        json!({"pid":std::process::id(),"instanceId":instance,"writes":self.writes}),
+                        json!({"pid":std::process::id(),"instanceId":instance,"writes":self.writes,"consoleAttached":console_attached()}),
                     ),
                     "fixture.crash" => std::process::exit(23),
                     "fixture.hang" | "fixture.plugin_hang" => {

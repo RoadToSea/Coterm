@@ -31,6 +31,7 @@ const manifest = {
 };
 const manifestPath = path.join(packages, "manifest.json");
 await fs.writeFile(manifestPath, JSON.stringify(manifest));
+await fs.cp(path.join(root, "plugins/plugin-ssh/dist"), path.join(appData, "plugins/ssh"), { recursive: true });
 const fixturePids = new Set();
 let app;
 let client;
@@ -117,6 +118,24 @@ async function poll(command, args, condition, label) {
   }
   throw new Error(`Native condition timed out: ${label}`);
 }
+async function createSshInstance() {
+  await run("document.querySelector('[aria-label=\"Manage SSH\"]').click()");
+  await waitForValue(client, "[...document.querySelectorAll('dialog div')].some(node=>node.shadowRoot?.querySelector('form'))", { label: "real SSH configuration form" });
+  await run(`(() => {
+    const root = [...document.querySelectorAll('dialog div')].find(node=>node.shadowRoot?.querySelector('form')).shadowRoot;
+    const inputs = root.querySelectorAll('input');
+    inputs[0].value = '127.0.0.1'; inputs[1].value = '22'; inputs[2].value = 'coterm-test';
+    root.querySelector('form').requestSubmit();
+  })()`);
+  await waitForValue(client, "!document.querySelector('dialog[open]') && [...document.querySelectorAll('main div')].some(node=>node.shadowRoot?.querySelector('.bar span')?.textContent==='Disconnected' && node.shadowRoot.querySelector('.xterm'))", { label: "real SSH instance workspace" });
+  const instances = await invoke("list_instances", { pluginId: "coterm-plugin-ssh" });
+  assert.equal(instances.length, 1);
+  assert.equal(instances[0].status, "ready");
+  const status = await operation(instances[0].pluginInstanceId, "ssh.status");
+  assert.equal(status.status, "completed");
+  assert.equal(status.output.connected, false, "creating an SSH instance never connects to a remote server automatically");
+  console.log("PASS native real SSH configuration submit, backend handshake and disconnected terminal workspace");
+}
 async function closeApp() {
   // Close through the actual Windows window message, exercising Tauri ExitRequested.
   const child = spawn("powershell", ["-NoProfile", "-NonInteractive", "-Command",
@@ -144,6 +163,7 @@ try {
   assert.notEqual(first.sessionId, second.sessionId);
   const info = await operation(first.pluginInstanceId, "fixture.info");
   fixturePids.add(info.output.pid);
+  assert.equal(info.output.consoleAttached, false, "creating an instance must not open a plugin console window");
   assert.equal((await operation(second.pluginInstanceId, "fixture.info")).output.instanceId, second.pluginInstanceId);
   await poll("runtime_snapshot", {}, (result) => result.instances.length === 2, "two instances");
   // Mount the real bundled plugin through the real workspace.
@@ -210,6 +230,7 @@ try {
   const final = await poll("get_operation", { pluginInstanceId: headless.pluginInstanceId, operationId: credential.operationId }, (record) => record.status === "completed", "headless secret completed");
   assert.deepEqual(final.output, { accepted: true });
   assert.equal(JSON.stringify(final).includes("native-entered-secret"), false);
+  await createSshInstance();
   await operation(headless.pluginInstanceId, "fixture.block", 0);
   await delay(100);
   await closeApp();
