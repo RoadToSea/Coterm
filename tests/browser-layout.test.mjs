@@ -68,6 +68,97 @@ async function openPage(session, scenario = defaultScenario, viewport = { width:
 let serverUrl;
 let server;
 
+test("Alpha language switching and offline installation preserve live SSH state", async (t) => {
+  if (!browserPath) { t.skip("No Chrome/Edge binary found; alpha browser verification did not run"); return; }
+  assertFreshBuild();
+  const staticServer = await startStaticServer();
+  serverUrl = staticServer.url;
+  const session = await openSession({ browserPath, totalTimeoutMs: 120_000 });
+  const preview = { token: "install-ticket", id: "test.offline", name: "Offline test", version: "0.1.0-alpha.1", platform: "windows-x64" };
+  let page;
+  try {
+    page = await openPage(session, { ...defaultScenario, installPreview: preview });
+    await waitForValue({ send: page.send }, `(() => {
+      const host = [...document.querySelectorAll('main div')].find((node) => node.shadowRoot?.querySelector('.layout'));
+      if (!host || host.shadowRoot.querySelector('.bar span')?.textContent !== 'Connected') return false;
+      window.__alphaSshHost = host;
+      window.__alphaTerminal = host.shadowRoot.querySelector('.xterm');
+      window.__alphaSubscriptions = window.__cotermTest.calls.filter((command) => command === 'subscribe_plugin_events').length;
+      return !!window.__alphaTerminal;
+    })()`, { label: "live SSH frontend" });
+    const switchLanguage = (locale) => page.evaluate(`(() => {
+      const select = document.getElementById('locale-select'); select.value = ${JSON.stringify(locale)};
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+    })()`);
+    await switchLanguage("zh-CN");
+    await waitForValue({ send: page.send }, `document.documentElement.lang === 'zh-CN' && document.getElementById('install-plugin-button').title === '安装插件'`, { label: "Chinese host controls" });
+    assert.equal(await page.evaluate(`window.__alphaSshHost.shadowRoot.querySelector('.bar span').textContent`), "已连接");
+    assert.equal(await page.evaluate(`window.__alphaSshHost.shadowRoot.querySelector('.bar button').textContent`), "断开连接");
+    assert.equal(await page.evaluate(`window.__alphaTerminal === window.__alphaSshHost.shadowRoot.querySelector('.xterm')`), true, "language changes preserve the terminal object");
+    assert.equal(await page.evaluate(`window.__cotermTest.calls.filter((command) => command === 'subscribe_plugin_events').length === window.__alphaSubscriptions`), true, "language changes never reconnect the plugin");
+
+    await page.evaluate(`document.getElementById('install-plugin-button').click()`);
+    await waitForValue({ send: page.send }, `!!document.querySelector('dialog[aria-label="离线安装插件"]')`, { label: "offline installer" });
+    await page.evaluate(`(() => {
+      window.__alphaChooseGate = window.__cotermTest.gate('prepare_plugin_install');
+      [...document.querySelectorAll('dialog button')].find((button) => button.textContent === '选择插件包').click();
+    })()`);
+    await waitForValue({ send: page.send }, `window.__alphaChooseGate.size() === 1`, { label: "package selection pending" });
+    assert.equal(await page.evaluate(`document.querySelector('dialog [aria-busy]').getAttribute('aria-busy')`), "true");
+    await page.evaluate(`window.__alphaChooseGate.release(${JSON.stringify(preview)})`);
+    await waitForValue({ send: page.send }, `document.querySelector('dialog dl')?.textContent.includes('0.1.0-alpha.1')`, { label: "validated preview" });
+    assert.equal(await page.evaluate(`window.__cotermTest.calls.includes('install_plugin_package')`), false, "preview requires a separate trust confirmation");
+    await page.resize(800, 600);
+    const screenshot = await page.send("Page.captureScreenshot", { format: "png" });
+    fs.writeFileSync(path.join(rootDir, "target/alpha-installer-zh.png"), Buffer.from(screenshot.data, "base64"));
+    await page.evaluate(`(() => {
+      const button = [...document.querySelectorAll('dialog button')].find((button) => button.textContent === '安装此可信插件包');
+      button.click(); button.click();
+    })()`);
+    await waitForValue({ send: page.send }, `document.querySelector('dialog [role="status"]')?.textContent.includes('插件安装成功')`, { label: "installation completed" });
+    assert.equal(await page.evaluate(`window.__cotermTest.calls.filter((command) => command === 'install_plugin_package').length`), 1, "double click installs once");
+    await waitForValue({ send: page.send }, `!!document.querySelector('button[aria-label="管理 Offline test"]')`, { label: "installed plugin appears without restarting" });
+    assert.equal(await page.evaluate(`window.__cotermTest.calls.includes('start_plugin') || window.__cotermTest.calls.includes('create_instance')`), false, "installation never executes the package");
+    await page.evaluate(`document.querySelector('dialog button[aria-label="关闭对话框"]').click()`);
+
+    // A rejected archive stays recoverable, and a cancelled native picker is a normal outcome.
+    await page.evaluate(`document.getElementById('install-plugin-button').click()`);
+    await page.evaluate(`(() => {
+      window.__alphaChooseGate = window.__cotermTest.gate('prepare_plugin_install');
+      [...document.querySelectorAll('dialog button')].find((button) => button.textContent === '选择插件包').click();
+    })()`);
+    await waitForValue({ send: page.send }, `window.__alphaChooseGate.size() === 1`);
+    await page.evaluate(`window.__alphaChooseGate.fail({ code: 'plugin_archive_invalid', message: 'plugin_archive_invalid' })`);
+    await waitForValue({ send: page.send }, `document.querySelector('dialog [role="alert"]')?.textContent.includes('无法读取插件压缩包')`, { label: "localized package failure" });
+    await page.evaluate(`(() => {
+      window.__alphaChooseGate = window.__cotermTest.gate('prepare_plugin_install');
+      [...document.querySelectorAll('dialog button')].find((button) => button.textContent === '选择插件包').click();
+    })()`);
+    await waitForValue({ send: page.send }, `window.__alphaChooseGate.size() === 1`);
+    await page.evaluate(`window.__alphaChooseGate.release(null)`);
+    await waitForValue({ send: page.send }, `document.querySelector('dialog [aria-busy]')?.getAttribute('aria-busy') === 'false'`);
+    assert.equal(await page.evaluate(`!!document.querySelector('dialog [role="alert"]') || !!document.querySelector('dialog dl')`), false);
+
+    await page.evaluate(`(() => {
+      window.__alphaChooseGate = window.__cotermTest.gate('prepare_plugin_install');
+      [...document.querySelectorAll('dialog button')].find((button) => button.textContent === '选择插件包').click();
+    })()`);
+    await waitForValue({ send: page.send }, `window.__alphaChooseGate.size() === 1`);
+    await page.evaluate(`window.__alphaChooseGate.release(${JSON.stringify(preview)})`);
+    await waitForValue({ send: page.send }, `!!document.querySelector('dialog dl')`);
+    await page.evaluate(`document.querySelector('dialog button[aria-label="关闭对话框"]').click()`);
+    await waitForValue({ send: page.send }, `window.__cotermTest.invocations.some((item) => item.command === 'discard_plugin_install' && item.args.token === 'install-ticket')`, { label: "cancelled preview released" });
+    await page.send("Page.reload");
+    await waitForValue({ send: page.send }, `document.documentElement.lang === 'zh-CN' && document.getElementById('locale-select')?.value === 'zh-CN'`, { label: "language preference survives reload" });
+    await switchLanguage("en");
+    await waitForValue({ send: page.send }, `document.getElementById('install-plugin-button')?.title === 'Install plugin'`, { label: "switch back to English" });
+  } finally {
+    await page?.close();
+    await session.close();
+    await new Promise((resolve) => staticServer.server.close(resolve));
+  }
+});
+
 test("Browser layout, catalog diagnostics, and keyboard collapse on the current build", async (t) => {
   if (!browserPath) {
     t.skip("No Chrome/Edge binary found; browser verification did not run and is not counted as passing");

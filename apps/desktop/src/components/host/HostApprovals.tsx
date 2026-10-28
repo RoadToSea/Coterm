@@ -1,3 +1,5 @@
+import { t } from "../../i18n";
+import { useI18n } from "../../use-i18n";
 import { useEffect, useRef, useState } from "react";
 import { hostAPI, subscribeHostAttention, type AttentionApproval } from "../../host-api";
 import type { OperationRecord } from "@coterm/plugin-sdk";
@@ -26,6 +28,7 @@ async function loadRecord(approval: AttentionApproval): Promise<{ record: Operat
 
 /** Host-level approval surface: inactive instances and headless plugins share it. */
 export function HostApprovals() {
+  useI18n();
   const [pending, setPending] = useState<PendingApproval[]>([]);
   const [notice, setNotice] = useState("");
   const [expanded, setExpanded] = useState(false);
@@ -118,7 +121,7 @@ export function HostApprovals() {
     <div key={item.operationId} className="pointer-events-auto flex w-full flex-wrap items-center gap-2 border-t border-[#383838] bg-[#252526] px-5 py-3 text-xs text-[#cccccc]">
       <span className="min-w-0 flex-1 truncate" title={`${item.targetLabel} · ${item.operation}`}>
         {item.targetLabel} · {item.operation}
-        {item.loadError && <span className="ml-2 text-[#f48771]">details unavailable: {item.loadError}</span>}
+        {item.loadError && <span className="ml-2 text-[#f48771]">{t("details unavailable:")} {item.loadError}</span>}
       </span>
       <button
         type="button"
@@ -136,19 +139,19 @@ export function HostApprovals() {
         }}
         className="inline-flex h-8 items-center rounded-md border border-[#4c4c4c] px-4 text-xs transition-colors hover:bg-[#383838]"
       >
-        Reject
+        {t("Reject")}
       </button>
     </div>
   );
 
   return (
-    <section aria-label="Agent approvals" className="approval-tray-shell shrink-0 border-t border-[#454545] bg-[#1e1e1e] shadow-[0_-8px_24px_rgb(0_0_0/18%)]">
+    <section aria-label={t("Agent approvals")} className="approval-tray-shell shrink-0 border-t border-[#454545] bg-[#1e1e1e] shadow-[0_-8px_24px_rgb(0_0_0/18%)]">
       <div className="mx-auto w-full max-w-[900px]">
         <div className="flex min-h-10 items-center gap-3 border-b border-[#383838] px-4 py-2 text-xs text-[#cccccc]">
-          <span className="font-medium">Agent approval</span>
-          <span className="text-[#969696]">{pending.length} pending</span>
-          {queued > 0 && <span className="text-[#d7ba7d]">{queued} queued</span>}
-          {pending.length > 1 && <button type="button" aria-expanded={expanded} onClick={() => setExpanded((value) => !value)} className="ml-auto rounded px-2 py-1 text-[#75beff] transition-colors hover:bg-white/10">{expanded ? "Collapse queue" : "Show queue"}</button>}
+          <span className="font-medium">{t("Agent approval")}</span>
+          <span className="text-[#969696]">{pending.length} {t("pending")}</span>
+          {queued > 0 && <span className="text-[#d7ba7d]">{queued} {t("queued")}</span>}
+          {pending.length > 1 && <button type="button" aria-expanded={expanded} onClick={() => setExpanded((value) => !value)} className="ml-auto rounded px-2 py-1 text-[#75beff] transition-colors hover:bg-white/10">{expanded ? t("Collapse queue") : t("Show queue")}</button>}
         </div>
         {notice && <p role="alert" className="mx-4 mt-2 rounded border border-[#65433d] bg-[#332626] px-3 py-2 text-xs text-[#f48771]">{notice}</p>}
         <div className={`approval-queue ${expanded ? "approval-queue-expanded" : ""}`}>

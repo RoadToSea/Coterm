@@ -2,6 +2,7 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import terminalCSS from "@xterm/xterm/css/xterm.css?inline";
 import type { PluginAPI, PluginConfigurationAPI, PluginFrontend, OperationReceipt } from "@coterm/plugin-sdk";
+import { createTranslator } from "./i18n";
 
 const css = `
   :host {
@@ -150,26 +151,28 @@ function surface(container: HTMLElement): ShadowRoot {
   return root;
 }
 
-function field(caption: string, value = "", type = "text"): { label: HTMLLabelElement; input: HTMLInputElement } {
+function field(caption: string, value = "", type = "text"): { label: HTMLLabelElement; caption: HTMLSpanElement; input: HTMLInputElement } {
   const label = document.createElement("label");
-  label.textContent = caption;
+  const text = document.createElement("span");
+  text.textContent = caption;
   const input = document.createElement("input");
   input.type = type;
   input.value = value;
   input.required = true;
-  label.append(input);
-  return { label, input };
+  label.append(text, input);
+  return { label, caption: text, input };
 }
 
 /** The plugin owns configuration fields; the base never learns SSH field semantics. */
 export function configure(container: HTMLElement, api: PluginConfigurationAPI): PluginFrontend {
+  const t = createTranslator(api.i18n);
   const root = surface(container);
   const form = document.createElement("form");
-  const host = field("Host");
-  const port = field("Port", "22", "number");
+  const host = field(t("Host"));
+  const port = field(t("Port"), "22", "number");
   port.input.min = "1";
   port.input.max = "65535";
-  const username = field("Username");
+  const username = field(t("Username"));
   const pair = document.createElement("div");
   pair.className = "pair";
   pair.append(host.label, port.label);
@@ -179,7 +182,13 @@ export function configure(container: HTMLElement, api: PluginConfigurationAPI): 
   const submit = document.createElement("button");
   submit.type = "submit";
   submit.className = "primary";
-  submit.textContent = "Open SSH";
+  submit.textContent = t("Open SSH");
+  const stopLocale = api.i18n?.subscribe(() => {
+    host.caption.textContent = t("Host");
+    port.caption.textContent = t("Port");
+    username.caption.textContent = t("Username");
+    submit.textContent = t("Open SSH");
+  });
   form.append(pair, username.label, error, submit);
   root.append(form);
   let disposed = false;
@@ -198,7 +207,7 @@ export function configure(container: HTMLElement, api: PluginConfigurationAPI): 
       if (!disposed) { busy = false; submit.disabled = false; }
     }
   }, { signal: controller.signal });
-  return { unmount() { disposed = true; controller.abort(); container.replaceChildren(); } };
+  return { unmount() { disposed = true; stopLocale?.(); controller.abort(); container.replaceChildren(); } };
 }
 
 interface Status { config: { host: string; port: number; username: string }; connected: boolean; connectionId: string | null }
@@ -217,6 +226,7 @@ function base64(data: Uint8Array): string {
 }
 
 export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
+  const t = createTranslator(api.i18n);
   const root = surface(container);
   const xtermStyle = document.createElement("style");
   xtermStyle.textContent = terminalCSS;
@@ -228,9 +238,10 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
   const label = document.createElement("strong");
   label.textContent = "SSH";
   const state = document.createElement("span");
-  state.textContent = "Loading…";
+  let stateMessage = "Loading…";
+  state.textContent = t(stateMessage);
   const connect = document.createElement("button");
-  connect.textContent = "Connect";
+  connect.textContent = t("Connect");
   connect.disabled = true;
   bar.append(label, state, connect);
   const main = document.createElement("div");
@@ -240,7 +251,7 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
   const jobsBar = document.createElement("div");
   jobsBar.className = "jobs";
   jobsBar.setAttribute("role", "list");
-  jobsBar.setAttribute("aria-label", "Background jobs");
+  jobsBar.setAttribute("aria-label", t("Background jobs"));
   main.append(terminalContainer, jobsBar);
   const jobView = document.createElement("section");
   jobView.className = "job-view";
@@ -251,10 +262,10 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
   const jobState = document.createElement("span");
   const jobStop = document.createElement("button");
   jobStop.type = "button";
-  jobStop.textContent = "Stop";
+  jobStop.textContent = t("Stop");
   const jobClose = document.createElement("button");
   jobClose.type = "button";
-  jobClose.textContent = "Close view";
+  jobClose.textContent = t("Close view");
   jobHead.append(jobCommand, jobState, jobStop, jobClose);
   const jobBody = document.createElement("div");
   jobBody.className = "job-body";
@@ -289,8 +300,9 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
   const showError = (reason: unknown) => { if (!disposed) notice.textContent = String(reason); };
   const setConnected = (next: boolean) => {
     connected = next;
-    state.textContent = next ? "Connected" : "Disconnected";
-    connect.textContent = next ? "Disconnect" : "Connect";
+    stateMessage = next ? "Connected" : "Disconnected";
+    state.textContent = t(stateMessage);
+    connect.textContent = next ? t("Disconnect") : t("Connect");
   };
   const resize = () => {
     if (disposed || terminalContainer.clientWidth === 0 || terminalContainer.clientHeight === 0) return;
@@ -326,7 +338,7 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
       await write(data.data);
       cursor = data.cursor;
       if (!data.more) break;
-      if (batch === 63) notice.textContent = "Replay limit reached; waiting for the next output event.";
+      if (batch === 63) notice.textContent = t("Replay limit reached; waiting for the next output event.");
     }
     if (connected) resize();
   };
@@ -366,7 +378,7 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
     if (jobs.size === 0) { jobView.hidden = true; return; }
     const label = document.createElement("span");
     label.className = "jobs-label";
-    label.textContent = "JOBS";
+    label.textContent = t("JOBS");
     jobsBar.append(label);
     for (const job of jobs.values()) {
       const tab = document.createElement("button");
@@ -385,7 +397,7 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
       dismiss.className = "dismiss";
       dismiss.textContent = "×";
       dismiss.setAttribute("role", "button");
-      dismiss.setAttribute("aria-label", "Remove job from list");
+      dismiss.setAttribute("aria-label", t("Remove job from list"));
       dismiss.addEventListener("click", (event) => {
         event.stopPropagation();
         jobs.delete(job.operationId);
@@ -409,11 +421,11 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
     jobCommand.textContent = job.text;
     jobState.textContent = job.done
       ? job.cancelled
-        ? "cancelled"
+        ? t("cancelled")
         : job.timedOut
-          ? "timed out"
-          : `exit ${job.exitCode ?? "?"}`
-      : "running";
+          ? t("timed out")
+          : t("exit {code}", { code: job.exitCode ?? "?" })
+      : t("running");
     jobStop.disabled = job.done;
     jobBody.replaceChildren();
     for (const [name, value] of [["stdout", job.stdout], ["stderr", job.stderr]] as const) {
@@ -475,7 +487,7 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
 
   const startEvents = async () => {
     const cancel = await api.subscribeEvents((event) => enqueue(async () => {
-      if (event.name === "runtime.closed") { setConnected(false); notice.textContent = "Plugin connection closed."; return; }
+      if (event.name === "runtime.closed") { setConnected(false); notice.textContent = t("Plugin connection closed."); return; }
       if (event.name === "runtime.gap" || event.name === "ssh.status") { await refreshSnapshot(); return; }
       if (event.name === "ssh.job") {
         // The plugin announces an exec operation before it finishes; tracking it here
@@ -513,9 +525,9 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
       } else {
         const probe = await invoke<{ fingerprint: string }>("ssh.probe", {});
         if (disposed) return;
-        const confirmation = await api.requestConfirmation({ title: "Verify SSH server", prompt: `${label.textContent}\n\n${probe.fingerprint}\n\nCompare this fingerprint with the server administrator before continuing.` });
+        const confirmation = await api.requestConfirmation({ title: t("Verify SSH server"), prompt: `${label.textContent}\n\n${probe.fingerprint}\n\n${t("Compare this fingerprint with the server administrator before continuing.")}` });
         if (disposed || confirmation.outcome !== "submitted" || !confirmation.value) return;
-        const secret = await api.requestSecret({ title: "SSH authentication", prompt: `Password for ${label.textContent}`, purpose: "ssh.password", allowCancel: true, timeoutMs: 60_000 });
+        const secret = await api.requestSecret({ title: t("SSH authentication"), prompt: t("Password for {server}", { server: label.textContent ?? "" }), purpose: "ssh.password", allowCancel: true, timeoutMs: 60_000 });
         if (disposed || secret.outcome !== "submitted") return;
         await invoke("ssh.connect", { fingerprint: probe.fingerprint, secret: secret.value });
         if (disposed) return;
@@ -529,7 +541,7 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
   const onData = terminal.onData((text) => {
     if (!connected || working || disposed) return;
     const data = new TextEncoder().encode(text);
-    if (queuedBytes + data.length > 16 * 1024) { notice.textContent = "Input queue is full. Wait before typing or pasting more."; return; }
+    if (queuedBytes + data.length > 16 * 1024) { notice.textContent = t("Input queue is full. Wait before typing or pasting more."); return; }
     queuedBytes += data.length;
     inputQueue = inputQueue.then(async () => {
       if (!disposed && connected) await invoke("ssh.input", { data: base64(data) });
@@ -540,11 +552,21 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
     resizeTimer = window.setTimeout(resize, 100);
   });
   observer.observe(terminalContainer);
+  const stopLocale = api.i18n?.subscribe(() => {
+    jobStop.textContent = t("Stop");
+    jobClose.textContent = t("Close view");
+    jobsBar.setAttribute("aria-label", t("Background jobs"));
+    state.textContent = t(stateMessage);
+    connect.textContent = t(connected ? "Disconnect" : "Connect");
+    renderJobs();
+    renderJobView();
+  });
   void startEvents().catch(showError);
 
   return { unmount() {
     disposed = true;
     controller.abort();
+    stopLocale?.();
     unsubscribe?.();
     window.clearTimeout(resizeTimer);
     observer.disconnect();

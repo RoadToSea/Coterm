@@ -1,4 +1,5 @@
 import type { InteractionOptions, InteractionOutcome, SecretHandle, SelectionOption } from "@coterm/plugin-sdk";
+import { subscribeLocale, t } from "./i18n";
 
 const pending = new Map<string, () => void>();
 export function cancelSecretInput(key: string): void { pending.get(key)?.(); }
@@ -16,10 +17,10 @@ function prompt<T>(key: string, request: InteractionOptions, kind: InputKind,
     dialog.className = "host-secret-dialog";
     const form = document.createElement("form");
     const title = document.createElement("h2");
-    title.textContent = request.title;
+    title.textContent = t(request.title);
     const label = document.createElement("label");
     const caption = document.createElement("span");
-    caption.textContent = request.prompt;
+    caption.textContent = t(request.prompt);
     const input = Array.isArray(kind) ? document.createElement("select") : document.createElement("input");
     if (input instanceof HTMLInputElement) {
       input.type = kind === "password" ? "password" : "text";
@@ -41,14 +42,15 @@ function prompt<T>(key: string, request: InteractionOptions, kind: InputKind,
     const actions = document.createElement("div");
     const submit = document.createElement("button");
     submit.type = "submit";
-    submit.textContent = kind === "confirmation" ? "Confirm" : "Continue";
+    submit.textContent = t(kind === "confirmation" ? "Confirm" : "Continue");
     const cancel = document.createElement("button");
     cancel.type = "button";
-    cancel.textContent = "Cancel";
+    cancel.textContent = t("Cancel");
+    let reject: HTMLButtonElement | undefined;
     if (kind === "confirmation") {
-      const reject = document.createElement("button");
+      reject = document.createElement("button");
       reject.type = "button";
-      reject.textContent = "Reject";
+      reject.textContent = t("Reject");
       reject.addEventListener("click", () => finish({ outcome: "rejected" }));
       actions.append(reject);
     }
@@ -58,9 +60,15 @@ function prompt<T>(key: string, request: InteractionOptions, kind: InputKind,
     document.body.append(dialog);
     let settled = false;
     let busy = false;
+    const stopLocale = subscribeLocale(() => {
+      submit.textContent = t(kind === "confirmation" ? "Confirm" : "Continue");
+      cancel.textContent = t("Cancel");
+      if (reject) reject.textContent = t("Reject");
+    });
     const finish = (result: InteractionOutcome<T>) => {
       if (settled) return;
       settled = true;
+      stopLocale();
       window.clearTimeout(timer);
       pending.delete(key);
       input.value = "";
@@ -92,7 +100,7 @@ function prompt<T>(key: string, request: InteractionOptions, kind: InputKind,
         if (!settled) {
           busy = false;
           submit.disabled = false;
-          error.textContent = "Unable to deliver the response. Try again or cancel.";
+          error.textContent = t("Unable to deliver the response. Try again or cancel.");
         }
       }
     });

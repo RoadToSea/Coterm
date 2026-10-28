@@ -33,7 +33,7 @@ use crate::{
     operation_history::{OperationHistory, OperationHistoryError},
     plugin_process::{
         resolve_backend_entry, resolve_package_file, validate_manifest, JsonRpcPluginProcess,
-        MAX_MANIFEST_BYTES,
+        MAX_FRONTEND_BYTES, MAX_MANIFEST_BYTES,
     },
     plugin_runtime::{CallerContext, Operations, PluginConnection, PluginRuntime, SubmitOperation},
 };
@@ -200,7 +200,18 @@ impl DiscoveredPackage {
         };
         validate_manifest(&manifest).map_err(|error| diagnose(&error.code))?;
         // 同 ID 冲突：先扫描到的来源胜出，其余包得到可定位诊断而不是静默消失。
-        if runtime.is_discovered(&id).await {
+        let root = self
+            .root
+            .canonicalize()
+            .map_err(|_| diagnose("plugin_package_unavailable"))?;
+        if runtime
+            .state
+            .lock()
+            .await
+            .packages
+            .get(&id)
+            .is_some_and(|package| package.root != root)
+        {
             return Err(PluginLoadIssue {
                 directory: self.directory.clone(),
                 plugin_id: Some(id),
@@ -208,10 +219,6 @@ impl DiscoveredPackage {
                 message: issue_message("plugin_id_conflict").to_owned(),
             });
         }
-        let root = self
-            .root
-            .canonicalize()
-            .map_err(|_| diagnose("plugin_package_unavailable"))?;
         // 逐平台入口缺失是包的问题，不是本次平台的限制：全部校验后才允许加载。
         for relative in manifest.backend.values() {
             resolve_package_file(&root, relative, "plugin_entry_invalid")
@@ -441,6 +448,28 @@ impl ProcessPluginRuntime {
         self.state.lock().await.packages.contains_key(plugin_id)
     }
 
+    /// Installer registration is atomic with respect to discovery and never replaces a package.
+    pub(crate) async fn register_installed(
+        &self,
+        root: &Path,
+    ) -> Result<PluginManifest, RuntimeError> {
+        let package = super::plugin_process::load_plugin_package(root, &self.platform).await?;
+        let mut state = self.state.lock().await;
+        if let Some(registered) = state.packages.get(&package.manifest.id) {
+            // A concurrent catalog refresh may discover the just-published directory.
+            if registered.root == package.root {
+                return Ok(registered.manifest.clone());
+            }
+            return Err(runtime_error(
+                ErrorCategory::Conflict,
+                "plugin_install_conflict",
+            ));
+        }
+        let manifest = package.manifest.clone();
+        state.packages.insert(manifest.id.clone(), package);
+        Ok(manifest)
+    }
+
     /// 发现路径已经校验过 manifest 与包内入口；这里补上目标平台的入口装配。
     async fn insert_validated(
         &self,
@@ -652,7 +681,7 @@ impl ProcessPluginRuntime {
             .await
             .map_err(|_| runtime_error(ErrorCategory::Transport, "frontend_unavailable"))?
             .len();
-        if size > 2 * 1024 * 1024 {
+        if size > MAX_FRONTEND_BYTES {
             return Err(runtime_error(
                 ErrorCategory::InvalidRequest,
                 "frontend_too_large",

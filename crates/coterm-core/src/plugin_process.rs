@@ -31,6 +31,7 @@ const EVENT_QUEUE_CAPACITY: usize = 64;
 const MAX_CONTROL_LINE_BYTES: usize = MAX_CONTROL_BYTES;
 const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 pub(crate) const MAX_MANIFEST_BYTES: u64 = 1024 * 1024;
+pub(crate) const MAX_FRONTEND_BYTES: u64 = 2 * 1024 * 1024;
 
 #[derive(Debug, Clone)]
 pub struct PluginPackage {

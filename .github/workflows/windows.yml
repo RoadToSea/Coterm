@@ -38,15 +38,23 @@ jobs:
       - name: Verify production installer
         shell: pwsh
         run: ./scripts/test-installer.ps1 -Production
+      - name: Build distributable SSH plugin
+        run: |
+          pnpm plugin:ssh:build --release
+          pnpm plugin:pack plugins/plugin-ssh/dist target/release/bundle/plugins/coterm-plugin-ssh-windows-x64.coterm
       - uses: actions/upload-artifact@v4
         with:
           name: coterm-windows-x64
-          path: target/release/bundle/nsis/Coterm_*_x64-setup.exe
+          path: |
+            target/release/bundle/nsis/Coterm_*_x64-setup.exe
+            target/release/bundle/plugins/*.coterm
           if-no-files-found: error
       - name: Publish tagged Windows installer
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: target/release/bundle/nsis/Coterm_*_x64-setup.exe
+          files: |
+            target/release/bundle/nsis/Coterm_*_x64-setup.exe
+            target/release/bundle/plugins/*.coterm
     permissions:
       contents: write

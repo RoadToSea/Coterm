@@ -15,7 +15,18 @@ pnpm plugin:serial:build
 pnpm tauri:dev
 ```
 
-插件构建仅生成当前平台的开发包，产物 manifest 也只声明该平台。Windows 安装包：`pnpm tauri:build --bundles nsis`。安装版从 `%APPDATA%/com.coterm.app/plugins/<包名>/manifest.json` 加载包，需将完整 `dist` 内容复制到该包目录；开发版另外扫描仓库 `plugins/*/dist`。安装包不包含插件。
+插件构建仅生成当前平台的开发包，产物 manifest 也只声明该平台。Windows 安装包：`pnpm tauri:build --bundles nsis`。安装包与插件独立分发；安装后点击左侧 **安装插件 / Install plugin**，选择 `.coterm` 或 `.zip` 离线包，核对插件信息并确认来源可信即可使用，无需手动复制目录。开发版另外扫描仓库 `plugins/*/dist`。
+
+顶部 **语言 / Language** 支持简体中文、English，首次跟随系统语言，选择后自动保存；切换语言保留已打开的实例与 SSH 连接。第三方插件需接入可选语言 API 才能同步切换。
+
+生成当前平台的 SSH 离线包：
+
+```bash
+pnpm plugin:ssh:build --release
+pnpm plugin:pack plugins/plugin-ssh/dist target/release/bundle/plugins/coterm-plugin-ssh.coterm
+```
+
+`.coterm` 是 ZIP 格式，根目录须直接包含 `manifest.json`、`backend/` 和可选 `frontend/`。Alpha 暂不支持覆盖安装同 ID 插件；签名、更新、回滚和市场另行开发。发布步骤与边界见 [Alpha 交付说明](docs/alpha-release.md)。
 
 Windows 工作区自动加密保存；下次启动点击 **Restore workspace** 重建实例，再主动连接。历史仅保留本次启动，Bypass 每次重置为关闭。
 
@@ -29,7 +40,7 @@ pnpm build
 pnpm test
 ```
 
-Windows CI 执行检查、浏览器与真实安装验收，并上传 NSIS；`v*` 标签发布 Windows 安装包。跨平台安装另行验收。
+Windows CI 执行检查、浏览器与真实安装验收，并上传 NSIS 和独立 SSH 离线包；`v*` 标签发布这两类产物。跨平台安装另行验收。
 
 真实 Tauri 验收使用独立 `com.coterm.smoke` 标识，安装到临时目录，不使用产品工作区：
 

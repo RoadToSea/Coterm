@@ -118,6 +118,8 @@ export interface CommonComponents {
 
 /** 绑定当前实例；不允许从调用参数改目标、伪造来源或选择低风险 effect。 */
 export interface PluginAPI {
+  /** Optional host language capability; older hosts may omit it. */
+  readonly i18n?: PluginI18n;
   readonly apiVersion: typeof FRONTEND_API_VERSION;
   readonly capabilities: Readonly<{ interactions: true; events: true; streams: false }>;
   readonly pluginId: string;
@@ -153,8 +155,15 @@ export interface PluginFrontend { unmount(): void }
 /** 前端模块导出 mount，容器内部 DOM 与状态全部由插件负责。 */
 export type PluginMount = (container: HTMLElement, api: PluginAPI) => PluginFrontend;
 export interface PluginConfigurationAPI {
+  readonly i18n?: PluginI18n;
   /** Completes plugin-owned configuration; the host starts/creates the instance. */
   submit(config: unknown): Promise<void>;
+}
+
+export interface PluginI18n {
+  readonly locale: "en" | "zh-CN";
+  /** Release the subscription when the frontend is unmounted. */
+  subscribe(listener: () => void): () => void;
 }
 
 export interface PluginFrontendModule {

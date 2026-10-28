@@ -59,12 +59,55 @@ async function launch() {
   if (!page?.webSocketDebuggerUrl) throw new Error(`No native WebView CDP endpoint: ${failures}`);
   client = await connectCdp(page.webSocketDebuggerUrl);
   await client.send("Runtime.enable");
+  await waitForValue(client, "!!document.getElementById('locale-select')", { label: "language selector mounted" });
+  await evaluate(client, "(() => { const select=document.getElementById('locale-select'); select.value='en'; select.dispatchEvent(new Event('change',{bubbles:true})); })()");
   await waitForValue(client, "!!window.__TAURI_INTERNALS__ && !!document.querySelector('[aria-label=\"Plugin list\"]')", { label: "real Tauri UI loaded" });
   await waitForValue(client, "!!document.querySelector('[aria-label=\"Manage Fixture\"]')", { label: "installed fixture discovered" });
 }
 const run = (expression) => evaluate(client, expression);
 const invoke = (command, args = {}) => run(`window.__TAURI_INTERNALS__.invoke(${JSON.stringify(command)},${JSON.stringify(args)})`);
 const operation = (id, name, waitTimeoutMs = 100) => invoke("invoke_operation", { pluginInstanceId: id, operation: name, args: {}, waitTimeoutMs });
+async function checkedProcess(command, args) {
+  const child = spawn(command, args, { cwd: root, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+  let output = "";
+  child.stdout.on("data", (chunk) => { output += chunk.toString(); });
+  child.stderr.on("data", (chunk) => { output += chunk.toString(); });
+  await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => { child.kill(); reject(new Error(`${command} timed out`)); }, 120_000);
+    child.on("error", (error) => { clearTimeout(timer); reject(error); });
+    child.on("exit", (code) => { clearTimeout(timer); code === 0 ? resolve() : reject(new Error(`${command} failed (${code}): ${output}`)); });
+  });
+}
+async function offlineInstall() {
+  const source = path.join(scratch, "offline-source");
+  await fs.mkdir(path.join(source, "backend"), { recursive: true });
+  const offlineManifest = { ...manifest, id: "coterm-offline-fixture", name: "Offline Fixture", backend: { "windows-x64": "backend/fixture.exe" } };
+  // The installer treats native bytes as opaque; this package is never started.
+  delete offlineManifest.frontend;
+  await fs.copyFile(path.join(root, "target/debug/coterm-runtime-fixture.exe"), path.join(source, "backend/fixture.exe"));
+  await fs.writeFile(path.join(source, "manifest.json"), JSON.stringify(offlineManifest));
+  const archive = path.join(scratch, "offline.coterm");
+  await checkedProcess("cargo", ["run", "--locked", "-p", "coterm-core", "--example", "package_plugin", "--", source, archive]);
+  await run("document.getElementById('install-plugin-button').click()");
+  await waitForValue(client, "!!document.querySelector('dialog[aria-label=\"Install offline plugin\"]')");
+  const choose = () => run("[...document.querySelectorAll('dialog button')].find(button=>button.textContent==='Choose plugin package').click()");
+  const nativeDialog = (cancel) => checkedProcess("powershell", ["-NoProfile", "-NonInteractive", "-File", path.join(root, "scripts/test-plugin-file-dialog.ps1"), "-TaskProcessId", String(app.pid), ...(cancel ? ["-Cancel"] : ["-PackagePath", archive])]);
+  await choose();
+  await nativeDialog(true);
+  await waitForValue(client, "document.querySelector('dialog [aria-busy]')?.getAttribute('aria-busy')==='false'");
+  assert.equal(await run("!!document.querySelector('dialog [role=alert]')"), false, "cancelling the real native picker is not an error");
+  await choose();
+  await nativeDialog(false);
+  await waitForValue(client, "document.querySelector('dialog dl')?.textContent.includes('coterm-offline-fixture')", { label: "native package preview" });
+  assert.equal((await invoke("list_plugins")).plugins.some((plugin) => plugin.id === offlineManifest.id), false, "preview never registers a package");
+  await run("[...document.querySelectorAll('dialog button')].find(button=>button.textContent==='Install trusted package').click()");
+  await waitForValue(client, "!!document.querySelector('[aria-label=\"Manage Offline Fixture\"]')", { label: "native offline installation" });
+  const installed = (await invoke("list_plugins")).plugins.find((plugin) => plugin.id === offlineManifest.id);
+  assert.equal(installed.running, false, "installation must not start native code");
+  assert.ok(await fs.stat(path.join(appData, "plugins", offlineManifest.id, "manifest.json")));
+  await run("document.querySelector('dialog button[aria-label=\"Close dialog\"]').click()");
+  console.log("PASS native offline picker cancellation, package preview, trust confirmation, installation and immediate catalog refresh");
+}
 async function poll(command, args, condition, label) {
   const deadline = Date.now() + 10_000;
   while (Date.now() < deadline) {
@@ -93,6 +136,7 @@ async function closeApp() {
 }
 try {
   await launch();
+  await offlineInstall();
   await invoke("start_plugin", { pluginId: manifest.id });
   const first = await invoke("create_instance", { pluginId: manifest.id, config: { label: "First", password: "native-config-secret" } });
   const second = await invoke("create_instance", { pluginId: manifest.id, config: { label: "Second" } });
@@ -149,6 +193,7 @@ try {
   delete manifest.frontend;
   await fs.writeFile(manifestPath, JSON.stringify(manifest));
   await launch();
+  assert.ok((await invoke("list_plugins")).plugins.some((plugin) => plugin.id === "coterm-offline-fixture"), "offline installation survives app restart");
   assert.equal((await invoke("list_instances")).length, 0, "startup does not auto execute or recreate connections");
   assert.equal(await invoke("get_bypass"), false, "Bypass never persists");
   saved = await invoke("workspace_snapshot");

@@ -37,6 +37,7 @@ export function sdkModuleSource() {
 export function makeHostMockSource(initial) {
   return `(() => {
     const scenario = ${JSON.stringify(initial)};
+    if (!localStorage.getItem("coterm.locale")) localStorage.setItem("coterm.locale", "en");
     const callbacks = new Map();
     const listeners = new Map();
     const calls = [];
@@ -99,7 +100,7 @@ export function makeHostMockSource(initial) {
             queue.splice(index, 1);
             if (queue.length === 0) gates.delete(command);
             entry.done = true;
-            entry.reject(String(reason));
+            entry.reject(reason);
           },
         };
       },
@@ -178,6 +179,16 @@ export function makeHostMockSource(initial) {
       save_workspace_layout: () => null,
       provide_secret: ({ pluginInstanceId, purpose }) => ({ id: "secret-test", pluginInstanceId, purpose, expiresAt: "2099-01-01T00:00:00Z" }),
       list_plugins: () => scenario.catalog,
+      prepare_plugin_install: () => scenario.installPreview ?? null,
+      install_plugin_package: ({ token }) => {
+        if (!scenario.installPreview || token !== scenario.installPreview.token) throw new Error("plugin_install_unavailable");
+        const { id, name, version } = scenario.installPreview;
+        const plugin = { id, name, version, hasFrontend: false, running: false };
+        // Real Tauri IPC deserializes a fresh catalog on the following refresh.
+        scenario.catalog = { ...scenario.catalog, plugins: [...scenario.catalog.plugins, plugin] };
+        return plugin;
+      },
+      discard_plugin_install: () => null,
       list_instances: () => scenario.instances,
       get_bypass: () => scenario.bypass,
       list_operations: () => scenario.operations ?? [],

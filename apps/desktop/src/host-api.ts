@@ -16,6 +16,7 @@ import type {
   PluginInstanceEvent,
 } from "@coterm/plugin-sdk";
 import { Channel, invoke } from "@tauri-apps/api/core";
+import { pluginI18n } from "./i18n";
 import { listen } from "@tauri-apps/api/event";
 import { cancelSecretInput, promptForSecret, promptForText, promptForConfirmation, promptForSelection } from "./secret-input";
 import { FRONTEND_API_VERSION } from "@coterm/plugin-sdk";
@@ -77,6 +78,14 @@ export interface PluginCatalog {
   issues: PluginLoadIssue[];
 }
 
+export interface PluginInstallPreview {
+  token: string;
+  id: string;
+  name: string;
+  version: string;
+  platform: string;
+}
+
 export interface InstanceInfo {
   pluginId: string;
   pluginInstanceId: string;
@@ -129,6 +138,9 @@ export interface HostAPI {
   mcpSessions(): Promise<McpSessionInfo[]>;
   closeMcpSession(sessionPrefix: string): Promise<boolean>;
   listPlugins(): Promise<PluginCatalog>;
+  preparePluginInstall(locale: "en" | "zh-CN"): Promise<PluginInstallPreview | null>;
+  installPluginPackage(token: string): Promise<PluginSummary>;
+  discardPluginInstall(token: string): Promise<void>;
   startPlugin(pluginId: string): Promise<void>;
   stopPlugin(pluginId: string): Promise<void>;
   listInstances(pluginId?: string): Promise<InstanceInfo[]>;
@@ -354,6 +366,9 @@ export const hostAPI: HostAPI = {
   frontendSource: (pluginId) => invoke<string | null>("plugin_frontend_source", { pluginId }),
   provideSecret: (pluginInstanceId, purpose, value) => invoke<SecretHandle>("provide_secret", { pluginInstanceId, purpose, value }),
   listPlugins: () => invoke<PluginCatalog>("list_plugins"),
+  preparePluginInstall: (locale) => invoke<PluginInstallPreview | null>("prepare_plugin_install", { locale }),
+  installPluginPackage: (token) => invoke<PluginSummary>("install_plugin_package", { token }),
+  discardPluginInstall: (token) => invoke<void>("discard_plugin_install", { token }),
   startPlugin: (pluginId) => invoke<void>("start_plugin", { pluginId }),
   stopPlugin: (pluginId) => invoke<void>("stop_plugin", { pluginId }),
   listInstances: (pluginId) => invoke<InstanceInfo[]>("list_instances", { pluginId }),
@@ -441,6 +456,16 @@ export function createPluginAPI(instance: InstanceInfo): PluginAPI & { dispose()
   return {
     apiVersion: FRONTEND_API_VERSION,
     capabilities: Object.freeze({ interactions: true, events: true, streams: false }),
+    i18n: {
+      get locale() { return pluginI18n.locale; },
+      subscribe: (listener) => {
+        if (disposed) return () => {};
+        const stop = pluginI18n.subscribe(listener);
+        const cancel = () => { subscriptions.delete(cancel); stop(); };
+        subscriptions.add(cancel);
+        return cancel;
+      },
+    },
     dispose: () => {
       disposed = true;
       cancelSecretInput(scope);

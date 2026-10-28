@@ -81,7 +81,22 @@ async function waitFor(predicate, timeoutMs = 2000) {
   if (!predicate()) throw new Error("Timed out waiting for condition");
 }
 
-const { subscribeHostAttention, retryHostAttention, hostAPI } = await import("../apps/desktop/src/host-api.ts");
+const { subscribeHostAttention, retryHostAttention, hostAPI, createPluginAPI } = await import("../apps/desktop/src/host-api.ts");
+const { setLocale } = await import("../apps/desktop/src/i18n.ts");
+
+test("Plugin SDK language subscriptions are released with their frontend scope", () => {
+  setLocale("en");
+  const api = createPluginAPI({ pluginId: "ssh", pluginInstanceId: "locale-instance", sessionId: "locale-session", label: "Locale", status: "ready" });
+  let calls = 0;
+  api.i18n.subscribe(() => calls++);
+  setLocale("zh-CN");
+  assert.equal(api.i18n.locale, "zh-CN");
+  assert.equal(calls, 1);
+  api.dispose();
+  api.i18n.subscribe(() => calls++);
+  setLocale("en");
+  assert.equal(calls, 1, "both existing and late subscriptions are disabled after disposal");
+});
 
 // --- 2. subscribeHostAttention 可控并发、代次与生命周期测试 ---
 

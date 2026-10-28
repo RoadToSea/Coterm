@@ -13,6 +13,7 @@ coterm-core.workspace = true
 coterm-mcp.workspace = true
 tauri = { version = "2.0", features = [] }
 tauri-plugin-opener = "2.0"
+tauri-plugin-dialog = "2.8"
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true

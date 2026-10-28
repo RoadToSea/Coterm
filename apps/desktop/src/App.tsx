@@ -1,3 +1,5 @@
+import { t } from "./i18n";
+import { useI18n } from "./use-i18n";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Box, ChevronDown, CircleStop, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Plus, PlugZap, ShieldAlert, ShieldCheck, SlidersHorizontal, Trash2 } from "lucide-react";
 import { HostInteractions } from "./components/host/HostInteractions";
@@ -7,6 +9,7 @@ import { ApprovalSettings } from "./components/host/ApprovalSettings";
 import { Modal } from "./components/ui/Modal";
 import { PluginWorkspace } from "./components/plugins/PluginWorkspace";
 import { PluginConfiguration } from "./components/plugins/PluginConfiguration";
+import { PluginInstaller } from "./components/plugins/PluginInstaller";
 import {
   hostAPI,
   type InstanceInfo,
@@ -18,6 +21,7 @@ import { promptForConfirmation } from "./secret-input";
 import type { OperationDescriptor, OperationRecord, OperationReceipt } from "@coterm/plugin-sdk";
 
 export default function App() {
+  const { locale, setLocale } = useI18n();
   const [instancesCollapsed, setInstancesCollapsed] = useState(() => {
     if (typeof window !== "undefined" && typeof window.innerWidth === "number") {
       return window.innerWidth < 900;
@@ -42,6 +46,7 @@ export default function App() {
 
   const [mcpOpen, setMcpOpen] = useState(false);
   const [approvalOpen, setApprovalOpen] = useState(false);
+  const [installerOpen, setInstallerOpen] = useState(false);
   const [plugins, setPlugins] = useState<PluginSummary[]>([]);
   const [pluginIssues, setPluginIssues] = useState<PluginLoadIssue[]>([]);
   const [instances, setInstances] = useState<InstanceInfo[]>([]);
@@ -335,7 +340,7 @@ export default function App() {
 
   const toggleBypass = async () => {
     if (!bypass && !window.confirm(
-      "Enable Bypass? Agent commit operations will skip Coterm approval. You assume the risk.",
+      t("Enable Bypass? Agent commit operations will skip Coterm approval. You assume the risk."),
     )) return;
     try {
       await hostAPI.setBypass(!bypass);
@@ -352,12 +357,12 @@ export default function App() {
   );
 
   const pluginIssueNotice = pluginIssues.length > 0 && (
-    <ul role="status" aria-label="Plugin package issues" className="max-h-32 overflow-y-auto break-words border-l-2 border-[#d7ba7d] bg-[#3a3224] px-3 py-2 text-xs leading-relaxed text-[#e8d5a9]">
+    <ul role="status" aria-label={t("Plugin package issues")} className="max-h-32 overflow-y-auto break-words border-l-2 border-[#d7ba7d] bg-[#3a3224] px-3 py-2 text-xs leading-relaxed text-[#e8d5a9]">
       {pluginIssues.map((issue) => (
         <li key={`${issue.directory}:${issue.code}`} title={issue.code}>
           <span className="font-medium">{issue.pluginId ? `${issue.pluginId} (${issue.directory})` : issue.directory}</span>
           {" — "}
-          {issue.message}
+          {locale === "zh-CN" && t(issue.code) !== issue.code ? t(issue.code) : issue.message}
         </li>
       ))}
     </ul>
@@ -367,7 +372,7 @@ export default function App() {
     <div className="flex h-dvh flex-col overflow-hidden bg-[#1e1e1e] text-[#cccccc]">
       <div
         role="toolbar"
-        aria-label="Workspace tools"
+        aria-label={t("Workspace tools")}
         className="flex h-8 shrink-0 items-center justify-between border-b border-coterm-border bg-coterm-surface-toolbar px-3"
       >
         <div className="flex items-center gap-2">
@@ -376,8 +381,8 @@ export default function App() {
             id="toggle-instances-button"
             aria-controls="instances-sidebar"
             aria-expanded={!instancesCollapsed}
-            aria-label={instancesCollapsed ? "Expand instances panel" : "Collapse instances panel"}
-            title={instancesCollapsed ? "Expand instances panel" : "Collapse instances panel"}
+            aria-label={instancesCollapsed ? t("Expand instances panel") : t("Collapse instances panel")}
+            title={instancesCollapsed ? t("Expand instances panel") : t("Collapse instances panel")}
             onClick={() => setInstancesCollapsed((prev) => !prev)}
             className="icon-button text-coterm-text-muted hover:text-coterm-text-bright"
           >
@@ -393,40 +398,50 @@ export default function App() {
             MCP
           </button>
         </div>
+        <label className="flex items-center gap-2 text-[11px] text-coterm-text-muted">
+          <span>{t("Language")}</span>
+          <select id="locale-select" aria-label={t("Language")} value={locale}
+            onChange={(event) => setLocale(event.target.value as "en" | "zh-CN")}
+            className="h-6 rounded-sm border border-coterm-border bg-coterm-surface-raised px-1 text-coterm-text">
+            <option value="zh-CN">简体中文</option>
+            <option value="en">English</option>
+          </select>
+        </label>
       </div>
       <HostInteractions />
-      {workspace?.persistence === "memory_only" && <p role="status" className="px-3 py-2 text-xs text-[#d7ba7d]">Workspace is session-only on this platform; secure disk storage is not available.</p>}
+      {workspace?.persistence === "memory_only" && <p role="status" className="px-3 py-2 text-xs text-[#d7ba7d]">{t("Workspace is session-only on this platform; secure disk storage is not available.")}</p>}
       {workspaceError && <div role="alert" className="px-3 py-2 text-xs text-[#f48771]">
-        Workspace: {workspaceError}. Saved state is preserved.
+        {t("Workspace:")} {workspaceError}{t(". Saved state is preserved.")}
         {instances.length === 0 && <button className="ml-3 underline" onClick={() => {
-          void promptForConfirmation("workspace-reset", { title: "Reset saved workspace?", prompt: "This removes saved configuration references and layout. Plugin data is unaffected." })
+          void promptForConfirmation("workspace-reset", { title: t("Reset saved workspace?"), prompt: t("This removes saved configuration references and layout. Plugin data is unaffected.") })
             .then(async (result) => {
               if (result.outcome !== "submitted") return;
               await hostAPI.resetWorkspace();
               await refreshWorkspace();
             }).catch((reason) => setWorkspaceError(formatError(reason)));
-        }}>Reset saved workspace</button>}
+        }}>{t("Reset saved workspace")}</button>}
       </div>}
       {pluginIssueNotice}
       {mcpOpen && <McpConfiguration onClose={() => setMcpOpen(false)} />}
       {approvalOpen && <ApprovalSettings plugins={plugins} onClose={() => setApprovalOpen(false)} />}
+      {installerOpen && <PluginInstaller onClose={() => setInstallerOpen(false)} onInstalled={refresh} />}
 
       <div className="flex min-h-0 flex-1">
-        <aside aria-label="Installed plugins" className="flex w-[64px] shrink-0 flex-col border-r border-coterm-border bg-coterm-surface-sidebar sm:w-[72px]">
+        <aside aria-label={t("Installed plugins")} className="flex w-[64px] shrink-0 flex-col border-r border-coterm-border bg-coterm-surface-sidebar sm:w-[72px]">
           <h1 className="px-1 pb-3 pt-4 text-center text-[9px] font-medium leading-[14px] tracking-[0.04em] text-[#b7b7b7]">
-            INSTALLED<br />PLUGINS
+            {t("INSTALLED")}<br />{t("PLUGINS")}
           </h1>
-          <nav aria-label="Plugin list" aria-busy={loading} className="min-h-0 flex-1 overflow-y-auto">
+          <nav aria-label={t("Plugin list")} aria-busy={loading} className="min-h-0 flex-1 overflow-y-auto">
             {loading && plugins.length === 0 ? (
-              <div aria-label="Loading plugins" className="flex flex-col items-center gap-4 py-2">
+              <div aria-label={t("Loading plugins")} className="flex flex-col items-center gap-4 py-2">
                 {[0, 1, 2].map((item) => <div key={item} className="h-8 w-8 rounded bg-[#484848]" />)}
               </div>
             ) : plugins.map((plugin) => (
               <button
                 key={plugin.id}
                 type="button"
-                title={`${plugin.name} · ${plugin.version} · ${plugin.running ? "Running" : "Stopped"}`}
-                aria-label={`Manage ${plugin.name}`}
+                title={`${plugin.name} · ${plugin.version} · ${plugin.running ? t("Running") : t("Stopped")}`}
+                aria-label={t("Manage {name}", { name: plugin.name })}
                 aria-haspopup="dialog"
                 aria-pressed={selectedPluginId === plugin.id}
                 onClick={() => setSelectedPluginId(plugin.id)}
@@ -439,13 +454,17 @@ export default function App() {
                 <span className="w-full truncate text-center text-[10px] text-[#bcbcbc]">{plugin.name}</span>
               </button>
             ))}
-            {!loading && plugins.length === 0 && <p className="px-1 py-3 text-center text-[10px] leading-relaxed text-[#aaaaaa]">No plugins</p>}
+            {!loading && plugins.length === 0 && <p className="px-1 py-3 text-center text-[10px] leading-relaxed text-[#aaaaaa]">{t("No plugins")}</p>}
           </nav>
-          <div className="flex justify-center border-t border-[#414141] py-3">
+          <div className="flex flex-col items-center gap-2 border-t border-[#414141] py-3">
+            <button type="button" id="install-plugin-button" title={t("Install plugin")} aria-label={t("Install plugin")}
+              aria-haspopup="dialog" onClick={() => setInstallerOpen(true)} className="icon-button h-9 w-9">
+              <Plus size={22} />
+            </button>
             <button
               type="button"
-              title={bypass ? "Bypass on — click to require approval" : "Agent approval on — click to enable bypass"}
-              aria-label={bypass ? "Disable approval bypass" : "Enable approval bypass"}
+              title={t(bypass ? "Bypass on — click to require approval" : "Agent approval on — click to enable bypass")}
+              aria-label={t(bypass ? "Disable approval bypass" : "Enable approval bypass")}
               aria-pressed={bypass}
               onClick={() => void toggleBypass()}
               className="icon-button h-9 w-9"
@@ -454,8 +473,8 @@ export default function App() {
             </button>
             <button
               type="button"
-              title="Choose which Agent operations skip approval"
-              aria-label="Open approval settings"
+              title={t("Choose which Agent operations skip approval")}
+              aria-label={t("Open approval settings")}
               onClick={() => setApprovalOpen(true)}
               className="icon-button h-9 w-9"
             >
@@ -466,15 +485,15 @@ export default function App() {
 
         <aside
           id="instances-sidebar"
-          aria-label="Instances"
+          aria-label={t("Instances")}
           className={`flex w-[240px] min-w-0 shrink-0 flex-col border-r border-coterm-border bg-coterm-surface-raised max-[1024px]:w-[200px] transition-[width] duration-200 ${instancesCollapsed ? "hidden" : ""}`}
         >
           <div className="flex h-10 shrink-0 items-center justify-between px-4">
-            <h2 className="text-[11px] font-medium tracking-[0.06em]">INSTANCES</h2>
+            <h2 className="text-[11px] font-medium tracking-[0.06em]">{t("INSTANCES")}</h2>
             <button
               type="button"
-              aria-label="Collapse instances panel"
-              title="Collapse instances panel"
+              aria-label={t("Collapse instances panel")}
+              title={t("Collapse instances panel")}
               onClick={() => setInstancesCollapsed(true)}
               className="icon-button text-coterm-text-muted hover:text-coterm-text-bright"
             >
@@ -483,23 +502,23 @@ export default function App() {
           </div>
           <div className="flex h-7 shrink-0 items-center gap-1 border-y border-coterm-border bg-coterm-surface-panel px-2 text-[11px] font-semibold">
             <ChevronDown size={14} className="text-[#b7b7b7]" />
-            <span>WORKSPACE</span>
+            <span>{t("WORKSPACE")}</span>
             <span className="ml-auto pr-1 font-mono text-[10px] font-normal text-[#969696]">{instances.length}</span>
           </div>
-          <nav aria-label="Instance list" aria-busy={loading} className="min-h-0 flex-1 overflow-y-auto py-1">
+          <nav aria-label={t("Instance list")} aria-busy={loading} className="min-h-0 flex-1 overflow-y-auto py-1">
             {workspace?.entries.some((entry) => !instances.some((item) => item.pluginInstanceId === entry.instanceId)) &&
-              <button disabled={busyId !== null} className="px-3 py-2 text-xs text-[#75beff]" onClick={() => void restoreWorkspace()}>Restore workspace</button>}
+              <button disabled={busyId !== null} className="px-3 py-2 text-xs text-[#75beff]" onClick={() => void restoreWorkspace()}>{t("Restore workspace")}</button>}
             {workspace?.entries.filter((entry) => !instances.some((item) => item.pluginInstanceId === entry.instanceId)).map((entry) => (
               <div key={entry.configRef} className="px-3 py-2 text-xs text-[#b7b7b7]">
                 <p className="truncate">{entry.label}</p>
-                <button disabled={busyId !== null} className="mr-3 text-[#75beff] disabled:opacity-50" onClick={() => void restoreSavedInstance(entry.configRef)}>Restore instance</button>
+                <button disabled={busyId !== null} className="mr-3 text-[#75beff] disabled:opacity-50" onClick={() => void restoreSavedInstance(entry.configRef)}>{t("Restore instance")}</button>
                 <button disabled={busyId !== null} onClick={() => {
                   void hostAPI.forgetInstance(entry.configRef).then(refreshWorkspace).catch((reason) => setError(formatError(reason)));
-                }}>Forget</button>
+                }}>{t("Forget")}</button>
               </div>
             ))}
             {loading && instances.length === 0 ? (
-              <div aria-label="Loading instances" className="space-y-3 px-5 py-3">
+              <div aria-label={t("Loading instances")} className="space-y-3 px-5 py-3">
                 {["w-3/4", "w-1/2"].map((width) => <div key={width} className={`h-3 bg-[#333333] ${width}`} />)}
               </div>
             ) : orderedInstances.map((instance) => (
@@ -516,8 +535,8 @@ export default function App() {
                 </button>
                 <button
                   type="button"
-                  title={`Manage ${instance.label}`}
-                  aria-label={`Manage ${instance.label}`}
+                  title={t("Manage {name}", { name: instance.label })}
+                  aria-label={t("Manage {name}", { name: instance.label })}
                   aria-haspopup="dialog"
                   onClick={() => {
                     setActiveInstanceId(instance.pluginInstanceId);
@@ -531,20 +550,20 @@ export default function App() {
             ))}
             {!loading && instances.length === 0 && (
               <div className="px-5 py-5 text-xs leading-5 text-[#969696]">
-                <p>No instances yet.</p>
-                <p className="mt-1">Select a plugin on the left to create one.</p>
+                <p>{t("No instances yet.")}</p>
+                <p className="mt-1">{t("Select a plugin on the left to create one.")}</p>
               </div>
             )}
           </nav>
           {errorNotice}
         </aside>
 
-        <main aria-label="Plugin workspace" className="relative isolate min-w-0 flex-1 overflow-hidden flex flex-col bg-coterm-surface">
+        <main aria-label={t("Plugin workspace")} className="relative isolate min-w-0 flex-1 overflow-hidden flex flex-col bg-coterm-surface">
           {activeInstance?.status === "ready" && <PluginWorkspace key={activeInstance.pluginInstanceId} instance={activeInstance} />}
           {activeInstance?.status === "failed" && <div role="alert" className="p-5 text-sm text-[#f48771]">
-            <p>Plugin stopped unexpectedly. In-flight results are unknown. Operations will not be replayed.</p>
+            <p>{t("Plugin stopped unexpectedly. In-flight results are unknown. Operations will not be replayed.")}</p>
             {workspace?.entries.filter((entry) => entry.instanceId === activeInstance.pluginInstanceId).map((entry) =>
-              <button key={entry.configRef} disabled={busyId !== null} className="mt-3 underline" onClick={() => void restoreSavedInstance(entry.configRef)}>Restart instance</button>)}
+              <button key={entry.configRef} disabled={busyId !== null} className="mt-3 underline" onClick={() => void restoreSavedInstance(entry.configRef)}>{t("Restart instance")}</button>)}
           </div>}
           <HostApprovals />
         </main>
@@ -552,12 +571,12 @@ export default function App() {
 
       <footer className="flex h-[22px] shrink-0 items-center justify-between border-t border-coterm-border bg-coterm-surface-raised px-3 text-[11px] text-coterm-text-muted">
         <div className="flex items-center gap-4">
-          <span>{plugins.length} plugins</span>
-          <span>{instances.length} instances</span>
-          <span title="Bounded operation history is cleared on application exit">History: this session</span>
-          {busyId && <span role="status">Updating…</span>}
+          <span>{plugins.length} {t("plugins")}</span>
+          <span>{instances.length} {t("instances")}</span>
+          <span title={t("Bounded operation history is cleared on application exit")}>{t("History: this session")}</span>
+          {busyId && <span role="status">{t("Updating…")}</span>}
         </div>
-        <span className={bypass ? "text-[#cca770]" : ""}>{bypass ? "Bypass on" : "Agent approval on"}</span>
+        <span className={bypass ? "text-[#cca770]" : ""}>{bypass ? t("Bypass on") : t("Agent approval on")}</span>
       </footer>
 
       {selectedPlugin && (
@@ -567,7 +586,7 @@ export default function App() {
             <div className="min-w-0">
               <h3 className="text-sm font-medium">{selectedPlugin.name}</h3>
               <p className="mt-1 break-all text-xs text-[#969696]">{selectedPlugin.id} · {selectedPlugin.version}</p>
-              <p className="mt-2 text-xs">{selectedPlugin.running ? "Running" : "Stopped"}</p>
+              <p className="mt-2 text-xs">{selectedPlugin.running ? t("Running") : t("Stopped")}</p>
             </div>
           </div>
           <div className="mb-5 flex gap-2">
@@ -578,22 +597,22 @@ export default function App() {
               className="flex h-8 items-center gap-2 border border-[#454545] px-3 text-xs hover:bg-[#383838] disabled:opacity-50"
             >
               {selectedPlugin.running ? <CircleStop size={14} /> : <PlugZap size={14} />}
-              {selectedPlugin.running ? "Stop plugin" : "Start plugin"}
+              {selectedPlugin.running ? t("Stop plugin") : t("Start plugin")}
             </button>
           </div>
           {pluginOperations.length > 0 && (
             <section className="mb-5 border-t border-[#383838] pt-4">
-              <h3 className="mb-3 text-xs font-semibold uppercase text-[#cccccc]">Plugin operations</h3>
-              <select aria-label="Plugin operation" value={selectedPluginOperation} onChange={(event) => setSelectedPluginOperation(event.target.value)} className="mb-2 h-8 w-full border border-[#454545] bg-[#252526] px-2 text-xs">
+              <h3 className="mb-3 text-xs font-semibold uppercase text-[#cccccc]">{t("Plugin operations")}</h3>
+              <select aria-label={t("Plugin operation")} value={selectedPluginOperation} onChange={(event) => setSelectedPluginOperation(event.target.value)} className="mb-2 h-8 w-full border border-[#454545] bg-[#252526] px-2 text-xs">
                 {pluginOperations.map((item) => <option key={item.name} value={item.name}>{item.name} · {item.effect}</option>)}
               </select>
-              <textarea aria-label="Plugin operation arguments JSON" value={operationArgs} onChange={(event) => setOperationArgs(event.target.value)} spellCheck={false} className="h-24 w-full border border-[#454545] bg-[#1e1e1e] p-2 font-mono text-xs" />
+              <textarea aria-label={t("Plugin operation arguments JSON")} value={operationArgs} onChange={(event) => setOperationArgs(event.target.value)} spellCheck={false} className="h-24 w-full border border-[#454545] bg-[#1e1e1e] p-2 font-mono text-xs" />
               <button type="button" onClick={() => {
                 try {
                   const args: unknown = JSON.parse(operationArgs);
                   void hostAPI.invokePluginOperation(selectedPlugin.id, selectedPluginOperation, args).then(setOperationResult).catch((reason) => setError(String(reason)));
                 } catch (reason) { setError(String(reason)); }
-              }} className="mt-2 h-8 bg-[#0e639c] px-3 text-xs text-white hover:bg-[#1177bb]">Invoke plugin operation</button>
+              }} className="mt-2 h-8 bg-[#0e639c] px-3 text-xs text-white hover:bg-[#1177bb]">{t("Invoke plugin operation")}</button>
               {operationResult && <pre className="mt-2 max-h-32 overflow-auto border border-[#383838] bg-[#1e1e1e] p-2 font-mono text-xs">{JSON.stringify(operationResult, null, 2)}</pre>}
             </section>
           )}
@@ -601,9 +620,9 @@ export default function App() {
             <PluginConfiguration key={selectedPlugin.id} pluginId={selectedPlugin.id} onSubmit={(config) => createConfiguredInstance(selectedPlugin.id, config)} />
           )}
           <details className="border-t border-[#383838] pt-4" open={!selectedPlugin.hasFrontend}>
-            <summary className="mb-3 cursor-pointer text-xs text-[#969696]">Advanced JSON configuration</summary>
-            <h3 className="mb-4 flex items-center gap-2 text-xs font-medium"><SlidersHorizontal size={14} /> New instance</h3>
-            <label htmlFor="instance-config" className="mb-2 block text-xs text-[#aaaaaa]">Configuration (JSON)</label>
+            <summary className="mb-3 cursor-pointer text-xs text-[#969696]">{t("Advanced JSON configuration")}</summary>
+            <h3 className="mb-4 flex items-center gap-2 text-xs font-medium"><SlidersHorizontal size={14} /> {t("New instance")}</h3>
+            <label htmlFor="instance-config" className="mb-2 block text-xs text-[#aaaaaa]">{t("Configuration (JSON)")}</label>
             <textarea
               id="instance-config"
               value={configText}
@@ -617,14 +636,14 @@ export default function App() {
               onClick={() => void createInstance(selectedPlugin.id)}
               className="mt-3 inline-flex h-8 items-center gap-1.5 bg-[#0e639c] px-3 text-xs text-white hover:bg-[#1177bb] disabled:opacity-50"
             >
-              <Plus size={14} /> Create instance
+              <Plus size={14} /> {t("Create instance")}
             </button>
           </details>
           <div className="mt-4">{errorNotice}</div>
         </Modal>
       )}
       {instanceToolsOpen && activeInstance && (
-        <Modal title="Instance tools" onClose={() => setInstanceToolsOpen(false)}>
+        <Modal title={t("Instance tools")} onClose={() => setInstanceToolsOpen(false)}>
           {errorNotice}
           <div className="max-w-3xl">
             <div className="flex items-start justify-between gap-4 border-b border-[#383838] pb-4">
@@ -636,7 +655,7 @@ export default function App() {
               </div>
               <button
                 type="button"
-                title="Destroy instance"
+                title={t("Destroy instance")}
                 disabled={busyId !== null}
                 onClick={() => void runPluginAction(activeInstance.pluginInstanceId, async () => {
                   await hostAPI.destroyInstance(activeInstance.pluginInstanceId);
@@ -647,22 +666,22 @@ export default function App() {
               </button>
             </div>
             <dl className="grid grid-cols-[140px_1fr] gap-y-3 py-4 text-sm">
-              <dt className="text-[#969696]">Plugin</dt>
+              <dt className="text-[#969696]">{t("Plugin")}</dt>
               <dd>{activeInstance.pluginId}</dd>
-              <dt className="text-[#969696]">Session</dt>
+              <dt className="text-[#969696]">{t("Session")}</dt>
               <dd className="break-all font-mono text-xs">{activeInstance.sessionId}</dd>
-              <dt className="text-[#969696]">Status</dt>
+              <dt className="text-[#969696]">{t("Status")}</dt>
               <dd>{activeInstance.status}</dd>
             </dl>
             <div className="border-t border-[#383838] py-4 text-sm text-[#aaaaaa]">
               <div className="mb-3 flex items-center justify-between">
-                <h3 className="text-xs font-semibold uppercase text-[#cccccc]">Operations</h3>
-                <span className="text-xs text-[#969696]">{operations.length} registered</span>
+                <h3 className="text-xs font-semibold uppercase text-[#cccccc]">{t("Operations")}</h3>
+                <span className="text-xs text-[#969696]">{operations.length} {t("registered")}</span>
               </div>
               {operations.length > 0 ? (
                 <>
                   <label className="mb-1 block text-xs text-[#aaaaaa]" htmlFor="operation-name">
-                    Operation
+                    {t("Operation")}
                   </label>
                   <select
                     id="operation-name"
@@ -678,7 +697,7 @@ export default function App() {
                   </select>
                   {schemaProperties && Object.keys(schemaProperties).length > 0 && (
                     <fieldset className="mb-3 space-y-3 border border-[#383838] p-3">
-                      <legend className="px-1 text-xs text-[#969696]">Operation arguments</legend>
+                      <legend className="px-1 text-xs text-[#969696]">{t("Operation arguments")}</legend>
                       {Object.entries(schemaProperties).map(([name, property]) => {
                         let current: Record<string, unknown> = {};
                         try {
@@ -696,7 +715,7 @@ export default function App() {
                             {property.description && <span className="mb-1 block text-[11px] text-[#888888]">{property.description}</span>}
                             {property.enum ? (
                               <select value={value === undefined ? "" : JSON.stringify(value)} onChange={(event) => updateOperationArgument(name, event.target.value ? JSON.parse(event.target.value) : undefined)} className="h-8 w-full border border-[#454545] bg-[#1e1e1e] px-2 text-xs text-[#cccccc]">
-                                <option value="">Select…</option>
+                                <option value="">{t("Select…")}</option>
                                 {property.enum.map((option) => <option key={JSON.stringify(option)} value={JSON.stringify(option)}>{String(option)}</option>)}
                               </select>
                             ) : property.type === "boolean" ? (
@@ -712,8 +731,8 @@ export default function App() {
                     </fieldset>
                   )}
                   <details>
-                    <summary className="mb-2 cursor-pointer text-xs text-[#969696]">Advanced JSON</summary>
-                    <label className="mb-1 block text-xs text-[#aaaaaa]" htmlFor="operation-args">Arguments (JSON)</label>
+                    <summary className="mb-2 cursor-pointer text-xs text-[#969696]">{t("Advanced JSON")}</summary>
+                    <label className="mb-1 block text-xs text-[#aaaaaa]" htmlFor="operation-args">{t("Arguments (JSON)")}</label>
                     <textarea id="operation-args" value={operationArgs} onChange={(event) => setOperationArgs(event.target.value)} spellCheck={false} className="h-28 w-full resize-y border border-[#454545] bg-[#1e1e1e] p-2 font-mono text-xs text-[#cccccc] outline-none focus:border-[#75beff]" />
                   </details>
                   <button
@@ -721,11 +740,11 @@ export default function App() {
                     onClick={() => void submitOperation()}
                     className="mt-2 h-8 bg-[#0e639c] px-3 text-xs text-white hover:bg-[#1177bb]"
                   >
-                    Invoke as human
+                    {t("Invoke as human")}
                   </button>
                 </>
               ) : (
-                <p className="text-xs text-[#969696]">This plugin has no instance operations.</p>
+                <p className="text-xs text-[#969696]">{t("This plugin has no instance operations.")}</p>
               )}
               {operationResult && (
                 <pre className="mt-3 max-h-48 overflow-auto border border-[#383838] bg-[#1e1e1e] p-3 font-mono text-xs text-[#cccccc]">
@@ -733,7 +752,7 @@ export default function App() {
                 </pre>
               )}
               <div className="mt-5 border-t border-[#383838] pt-4">
-                <h3 className="mb-2 text-xs font-semibold uppercase text-[#cccccc]">Recent operations</h3>
+                <h3 className="mb-2 text-xs font-semibold uppercase text-[#cccccc]">{t("Recent operations")}</h3>
                 <div className="divide-y divide-[#383838]">
                   {operationHistory.map((record) => (
                     <article key={record.operationId} className="py-2.5">
@@ -751,21 +770,21 @@ export default function App() {
                             onClick={() => void respondToProposal(record, true)}
                             className="h-7 bg-[#0e639c] px-2 text-xs text-white hover:bg-[#1177bb]"
                           >
-                            Approve current JSON
+                            {t("Approve current JSON")}
                           </button>
                           <button
                             type="button"
                             onClick={() => void respondToProposal(record, false)}
                             className="h-7 border border-[#454545] px-2 text-xs text-[#cccccc] hover:bg-[#383838]"
                           >
-                            Reject
+                            {t("Reject")}
                           </button>
                         </div>
                       )}
                     </article>
                   ))}
                   {operationHistory.length === 0 && (
-                    <p className="py-3 text-xs text-[#969696]">No operations recorded.</p>
+                    <p className="py-3 text-xs text-[#969696]">{t("No operations recorded.")}</p>
                   )}
                 </div>
               </div>

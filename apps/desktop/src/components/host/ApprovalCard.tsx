@@ -1,3 +1,5 @@
+import { t } from "../../i18n";
+import { useI18n } from "../../use-i18n";
 import { useRef, useState } from "react";
 import type { OperationRecord } from "@coterm/plugin-sdk";
 
@@ -26,6 +28,7 @@ function createEditor(record: OperationRecord) {
 
 /** Non-modal approval surface. Keyboard actions stay within the card's focus. */
 export function ApprovalCard({ record, targetLabel, idPrefix = "approval-command", onApprove, onReject }: ApprovalCardProps) {
+  useI18n();
   const [editor] = useState(() => createEditor(record));
   const [draft, setDraft] = useState(editor.value);
   const [busy, setBusy] = useState(false);
@@ -53,7 +56,7 @@ export function ApprovalCard({ record, targetLabel, idPrefix = "approval-command
 
   return (
     <form
-      aria-label="Agent operation approval"
+      aria-label={t("Agent operation approval")}
       aria-busy={busy}
       className="approval-card pointer-events-auto w-full rounded-t-[32px] border border-b-0 border-[#4c4c4c] bg-[#252526] px-5 pb-4 pt-4 text-[#cccccc] shadow-[0_-6px_24px_rgb(0_0_0/18%)]"
       onSubmit={(event) => { event.preventDefault(); void decide(true); }}
@@ -68,7 +71,7 @@ export function ApprovalCard({ record, targetLabel, idPrefix = "approval-command
         }
       }}
     >
-      <label htmlFor={commandId} className="sr-only">{editor.json ? "Operation arguments JSON" : "Command or argument"}</label>
+      <label htmlFor={commandId} className="sr-only">{editor.json ? t("Operation arguments JSON") : t("Command or argument")}</label>
       <input
         id={commandId}
         type="text"
@@ -86,10 +89,10 @@ export function ApprovalCard({ record, targetLabel, idPrefix = "approval-command
           {targetLabel} · {record.operation}
         </span>
         <button type="submit" disabled={busy} className="inline-flex h-8 items-center gap-3 rounded-md bg-[#0e639c] px-4 text-xs text-white transition-colors hover:bg-[#1177bb] active:bg-[#094f80] disabled:opacity-50">
-          {busy ? "Working…" : "Approve"}<kbd className="font-sans text-[10px] opacity-70">Enter</kbd>
+          {busy ? t("Working…") : t("Approve")}<kbd className="font-sans text-[10px] opacity-70">Enter</kbd>
         </button>
         <button type="button" disabled={busy} onClick={() => void decide(false)} className="inline-flex h-8 items-center gap-3 rounded-md border border-[#4c4c4c] px-4 text-xs transition-colors hover:bg-[#383838] active:bg-[#454545] disabled:opacity-50">
-          Reject<kbd className="font-sans text-[10px] text-[#969696]">Esc</kbd>
+          {t("Reject")}<kbd className="font-sans text-[10px] text-[#969696]">Esc</kbd>
         </button>
       </div>
       {error && <p id={errorId} role="alert" className="mt-2 break-words text-xs text-[#f48771]">{error}</p>}

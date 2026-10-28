@@ -27,6 +27,21 @@ plugin/
 
 `list_plugins` 返回 `{ plugins, issues }`：坏包被隔离，诊断只包含目录名、可解析的插件 ID、稳定错误码和提示，不暴露绝对路径。具体校验见 [插件管理器](../../crates/coterm-core/src/plugin_manager.rs)。
 
+### 离线安装与分发
+
+桌面左侧的 **安装插件 / Install plugin** 打开原生文件选择器，接收 `.coterm` 或 `.zip` 文件。`.coterm` 是普通 ZIP，压缩包根目录直接包含 `manifest.json`，不能再包一层 `dist/`。可使用 `pnpm plugin:pack <dist目录> <输出.coterm>` 生成；打包器使用相同校验逻辑，并为 manifest 声明的后端入口保存 Unix 执行权限。SSH 的发布构建使用 `pnpm plugin:ssh:build --release`。
+
+安装分为选择/预览和确认两个阶段：
+
+1. 宿主选择本地文件，后台解压到应用数据目录的临时暂存区；不启动包中的后端，也不加载包中的前端。
+2. 校验 manifest、运行时能力、当前平台及所有声明的入口；前端入口还须为不超过 2 MiB 的 UTF-8 文件。界面只拿到一次性令牌、插件 ID、名称、版本和平台，不接收文件绝对路径。
+3. 用户确认信任后，将暂存目录原子移动到 `plugins/<pluginId>`，立即登记到运行时列表。安装不自动启动插件或创建实例，正常重启后仍可发现。
+4. 取消预览、改选文件或校验失败会清理对应暂存内容。每个应用进程只有一个暂存槽；确认令牌 10 分钟后失效。Alpha 拒绝同 ID 覆盖，包含开发包和已安装包。
+
+上限：压缩包 128 MiB、单文件 128 MiB、解压总量 512 MiB、4096 个条目、包内路径 512 字节。拒绝路径穿越、绝对路径、反斜杠、Windows 设备名/尾点/尾空格、大小写重复路径和符号链接等特殊文件；解压后复用运行时入口校验。诊断仅包含稳定错误码，无绝对路径或系统错误原文。
+
+Windows、macOS、Linux 共用 ZIP 校验与原子移动；原生选择器由 Tauri dialog 提供，Linux 沿用 Tauri/GTK 系统依赖。新增 dialog Rust 插件不向 WebView 授予通用文件系统或 dialog IPC 权限，前端只能调用专用安装命令。离线包仍是以当前用户权限执行的可信原生代码，校验不等于签名验证或安全沙箱。
+
 ## 后端
 
 Rust 插件实现 `coterm_proto::runtime::backend::PluginBackend`，通过 `transport::serve(Backend::default())` 运行。共享传输层负责行协议、握手顺序、请求关联、限额与通知输出；其他语言实现同一控制协议。
@@ -62,6 +77,12 @@ MCP Tools 需单独注册 descriptor 与内部 operation 的映射；不会自�
 导出 `mount(container, api)` 并返回 `{ unmount() }`。可额外导出 `configure(container, api)`，通过 `api.submit(config)` 创建实例；缺省时基座使用 JSON 配置。
 
 当前前端入口是无相对依赖的单文件 ES bundle，最大 2 MiB，经 Blob URL 加载。使用 `@coterm/plugin-sdk` 类型，不能导入桌面源码、直接调用 Tauri 内部接口或访问其他实例。
+
+### 界面语言
+
+基座提供简体中文与 English，首次优先读取保存的语言，否则按系统首选语言选择（中文变体使用简体中文，其余使用 English）。语言选择保存在本地 UI 偏好 `coterm.locale` 中，不包含工作区配置或秘密。切换时原地更新 UI，不卸载插件前端，不重建实例或连接。
+
+`PluginAPI` 与 `PluginConfigurationAPI` 新增可选 `i18n` 能力：`i18n.locale` 为 `"en" | "zh-CN"`，`i18n.subscribe(listener)` 返回注销函数。它是 SDK v1.0 的可选增量，插件须检测存在性；旧宿主可回退 English。监听器只通知 UI 语言变化，不携带协议事件；插件卸载时应注销，基座也会按挂载作用域回收。SSH 的配置、连接状态和前端认证对话框已接入；未接入的插件、后端领域诊断、工具描述及远端输出保留原文。
 
 | API | 当前状态 |
 |---|---|

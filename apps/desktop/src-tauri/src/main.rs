@@ -1,6 +1,7 @@
 // Prevents additional console window on Windows in release
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod plugin_install_commands;
 mod workspace;
 mod workspace_commands;
 
@@ -56,6 +57,7 @@ struct AppState {
     event_subscriptions: EventSubscriptions,
     _session_mgr: Arc<SessionManager>,
     plugin_runtime: Arc<ProcessPluginRuntime>,
+    plugin_install: tokio::sync::Mutex<Option<plugin_install_commands::PendingInstall>>,
     plugins_dir: PathBuf,
     mcp_server: Result<coterm_mcp::http::HttpBridgeServer, String>,
 }
@@ -834,6 +836,7 @@ fn main() {
 
     let application = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let app_data = app.path().app_data_dir()?;
             let plugins_dir = app_data.join("plugins");
@@ -883,6 +886,7 @@ fn main() {
                 )),
                 _session_mgr: Arc::new(SessionManager::new()),
                 plugin_runtime,
+                plugin_install: tokio::sync::Mutex::new(None),
                 mcp_server,
                 plugins_dir,
             });
@@ -899,6 +903,9 @@ fn main() {
             unsubscribe_plugin_events,
             get_version,
             list_plugins,
+            plugin_install_commands::prepare_plugin_install,
+            plugin_install_commands::install_plugin_package,
+            plugin_install_commands::discard_plugin_install,
             start_plugin,
             stop_plugin,
             list_instances,

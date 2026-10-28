@@ -122,7 +122,7 @@ test("App.tsx implements responsive navigation collapse and accessible controls"
     "Toggle button must indicate expanded/collapsed state via aria-expanded"
   );
   assert.ok(
-    appContent.includes('aria-label={instancesCollapsed ? "Expand instances panel" : "Collapse instances panel"}'),
+    appContent.includes('aria-label={instancesCollapsed ? t("Expand instances panel") : t("Collapse instances panel")}'),
     "Toggle button must have accessible name"
   );
 
@@ -132,13 +132,13 @@ test("App.tsx implements responsive navigation collapse and accessible controls"
     "Instances sidebar must have id='instances-sidebar'"
   );
   assert.ok(
-    appContent.includes('aria-label="Collapse instances panel"'),
+    appContent.includes('aria-label={t("Collapse instances panel")}'),
     "Instances header must contain accessible collapse button"
   );
 
   // 4. Verify workspace has min-w-0 flex-1 overflow-hidden
   assert.ok(
-    appContent.includes('main aria-label="Plugin workspace" className="relative isolate min-w-0 flex-1 overflow-hidden'),
+    appContent.includes('main aria-label={t("Plugin workspace")} className="relative isolate min-w-0 flex-1 overflow-hidden'),
     "Main workspace must be flex-1 min-w-0 to prevent horizontal overflow"
   );
 });

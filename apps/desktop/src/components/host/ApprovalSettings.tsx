@@ -1,3 +1,5 @@
+import { t } from "../../i18n";
+import { useI18n } from "../../use-i18n";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { hostAPI, type PluginSummary } from "../../host-api";
 import { Modal } from "../ui/Modal";
@@ -7,6 +9,7 @@ import { Modal } from "../ui/Modal";
  * 校验、不允许 Agent 自批。默认只放行基座内置的只读依赖查询。
  */
 export function ApprovalSettings({ plugins, onClose }: { plugins: PluginSummary[]; onClose: () => void }) {
+  useI18n();
   const [allowed, setAllowed] = useState<string[]>([]);
   const [operations, setOperations] = useState<string[]>([]);
   const [custom, setCustom] = useState("");
@@ -66,22 +69,18 @@ export function ApprovalSettings({ plugins, onClose }: { plugins: PluginSummary[
   );
 
   return (
-    <Modal title="Agent approval" onClose={onClose}>
+    <Modal title={t("Agent approval")} onClose={onClose}>
       <p className="mb-3 text-xs text-[#aaaaaa]">
-        An Agent operation normally waits for human approval. Adding an operation here lets
-        that operation skip the prompt. Approval is only the host-side gate: plugin checks,
-        secret input and protocol authentication still apply, and an Agent can never approve
-        its own proposal.
+        {t("An Agent operation normally waits for human approval. Adding an operation here lets that operation skip the prompt. Approval is only the host-side gate: plugin checks, secret input and protocol authentication still apply, and an Agent can never approve its own proposal.")}
       </p>
       <p className="mb-4 text-[11px] text-[#888888]">
-        Read-only operations are not listed: they are already exempt because they cannot
-        change state.
+        {t("Read-only operations are not listed: they are already exempt because they cannot change state.")}
       </p>
       {error && <p role="alert">{error}</p>}
       <section>
-        <h3 className="mb-2 text-xs font-medium">Allowed operations ({allowed.length})</h3>
+        <h3 className="mb-2 text-xs font-medium">{t("Allowed operations ({count})", { count: allowed.length })}</h3>
         {allowed.length === 0 ? (
-          <p className="text-[11px] text-[#888888]">No operation is allowed yet.</p>
+          <p className="text-[11px] text-[#888888]">{t("No operation is allowed yet.")}</p>
         ) : (
           <ul className="mb-4 divide-y divide-[#383838] border border-[#383838]">
             {allowed.map((name) => (
@@ -93,7 +92,7 @@ export function ApprovalSettings({ plugins, onClose }: { plugins: PluginSummary[
                   onClick={() => toggle(name)}
                   className="border border-[#454545] px-2 py-1 text-[11px] disabled:opacity-50"
                 >
-                  Remove
+                  {t("Remove")}
                 </button>
               </li>
             ))}
@@ -101,10 +100,10 @@ export function ApprovalSettings({ plugins, onClose }: { plugins: PluginSummary[
         )}
       </section>
       <section>
-        <h3 className="mb-2 text-xs font-medium">Add an operation</h3>
+        <h3 className="mb-2 text-xs font-medium">{t("Add an operation")}</h3>
         <div className="mb-3 flex gap-2">
           <input
-            aria-label="Operation name"
+            aria-label={t("Operation name")}
             value={custom}
             spellCheck={false}
             placeholder="plugin.operation"
@@ -120,12 +119,12 @@ export function ApprovalSettings({ plugins, onClose }: { plugins: PluginSummary[
             }}
             className="border border-[#454545] px-3 text-[11px] disabled:opacity-50"
           >
-            Allow
+            {t("Allow")}
           </button>
         </div>
         {suggestions.length > 0 && (
           <>
-            <p className="mb-2 text-[11px] text-[#888888]">From running plugins:</p>
+            <p className="mb-2 text-[11px] text-[#888888]">{t("From running plugins:")}</p>
             <ul className="max-h-48 overflow-auto border border-[#383838]">
               {suggestions.map((entry) => {
                 const [pluginId, name] = entry.split(" :: ");
@@ -140,7 +139,7 @@ export function ApprovalSettings({ plugins, onClose }: { plugins: PluginSummary[
                       onClick={() => toggle(name)}
                       className="border border-[#454545] px-2 py-0.5 text-[11px] disabled:opacity-50"
                     >
-                      Allow
+                      {t("Allow")}
                     </button>
                   </li>
                 );

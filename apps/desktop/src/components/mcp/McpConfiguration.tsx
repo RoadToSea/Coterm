@@ -1,3 +1,5 @@
+import { t } from "../../i18n";
+import { useI18n } from "../../use-i18n";
 import { useCallback, useEffect, useState } from "react";
 import { hostAPI, type McpSessionInfo } from "../../host-api";
 import { Modal } from "../ui/Modal";
@@ -10,6 +12,7 @@ function age(seconds: number): string {
 }
 
 export function McpConfiguration({ onClose }: { onClose: () => void }) {
+  useI18n();
   const [config, setConfig] = useState("");
   const [sessions, setSessions] = useState<McpSessionInfo[]>([]);
   const [error, setError] = useState("");
@@ -55,16 +58,15 @@ export function McpConfiguration({ onClose }: { onClose: () => void }) {
   };
 
   return (
-    <Modal title="MCP connection" onClose={onClose}>
+    <Modal title={t("MCP connection")} onClose={onClose}>
       <p className="mb-3 text-xs text-[#aaaaaa]">
-        Add this URL to your Agent as a Streamable HTTP MCP server. No token is required. Keep
-        Coterm open; the address stays the same after restarting.
+        {t("Add this URL to your Agent as a Streamable HTTP MCP server. No token is required. Keep Coterm open; the address stays the same after restarting.")}
       </p>
       {error && <p role="alert">{error}</p>}
       {config && (
         <div className="flex gap-2">
           <input
-            aria-label="MCP connection URL"
+            aria-label={t("MCP connection URL")}
             readOnly
             value={config}
             spellCheck={false}
@@ -79,46 +81,45 @@ export function McpConfiguration({ onClose }: { onClose: () => void }) {
                 .writeText(config)
                 .then(() => setCopied(true))
                 .catch(() =>
-                  setError("Could not copy. Select the address and copy it manually."),
+                  setError(t("Could not copy. Select the address and copy it manually.")),
                 );
             }}
             className="border border-[#454545] px-3 text-xs disabled:opacity-50"
           >
-            {copied ? "Copied" : "Copy URL"}
+            {copied ? t("Copied") : t("Copy URL")}
           </button>
         </div>
       )}
       <section className="mt-5">
         <div className="mb-2 flex items-center justify-between">
           <h3 className="text-xs font-medium">
-            Active sessions ({sessions.length}/8)
+            {t("Active sessions ({count}/8)", { count: sessions.length })}
           </h3>
           <button
             type="button"
             onClick={() => void refresh()}
             className="border border-[#454545] px-2 py-1 text-[11px]"
           >
-            Refresh
+            {t("Refresh")}
           </button>
         </div>
         <p className="mb-2 text-[11px] text-[#888888]">
-          When a new client reports “too many MCP sessions”, close an unused session here.
-          Idle sessions also expire automatically after 30 minutes.
+          {t("When a new client reports “too many MCP sessions”, close an unused session here. Idle sessions also expire automatically after 30 minutes.")}
         </p>
         {sessions.length === 0 ? (
-          <p className="text-[11px] text-[#888888]">No client is connected.</p>
+          <p className="text-[11px] text-[#888888]">{t("No client is connected.")}</p>
         ) : (
           <ul className="divide-y divide-[#383838] border border-[#383838]">
             {sessions.map((session) => (
               <li key={session.idPrefix} className="flex items-center gap-3 px-3 py-2">
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-xs">
-                    {session.clientName ?? "Unknown client"}
+                    {session.clientName ?? t("Unknown client")}
                     {session.clientVersion ? ` ${session.clientVersion}` : ""}
                   </div>
                   <div className="text-[11px] text-[#888888]">
-                    {session.idPrefix} · {session.protocolVersion} · idle {age(session.idleSeconds)}
-                    {session.ready ? "" : " · initializing"}
+                    {session.idPrefix} · {session.protocolVersion} {t("· idle")} {age(session.idleSeconds)}
+                    {session.ready ? "" : t(" · initializing")}
                   </div>
                 </div>
                 <button
@@ -127,7 +128,7 @@ export function McpConfiguration({ onClose }: { onClose: () => void }) {
                   onClick={() => void close(session.idPrefix)}
                   className="border border-[#454545] px-2 py-1 text-[11px] disabled:opacity-50"
                 >
-                  Close
+                  {t("Close")}
                 </button>
               </li>
             ))}

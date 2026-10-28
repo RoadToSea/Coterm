@@ -1,3 +1,5 @@
+import { t } from "../../i18n";
+import { useI18n } from "../../use-i18n";
 import { useEffect, useRef, type ReactNode } from "react";
 import { X } from "lucide-react";
 
@@ -9,6 +11,7 @@ interface ModalProps {
 
 /** Native dialog supplies focus trapping, Escape handling and a modal backdrop. */
 export function Modal({ title, onClose, children }: ModalProps) {
+  useI18n();
   const dialogRef = useRef<HTMLDialogElement>(null);
 
   useEffect(() => {
@@ -29,7 +32,7 @@ export function Modal({ title, onClose, children }: ModalProps) {
     >
       <header className="sticky top-0 flex h-10 items-center justify-between border-b border-[#383838] bg-[#252526] px-4">
         <h2 className="truncate text-xs font-medium">{title}</h2>
-        <button type="button" aria-label="Close dialog" onClick={onClose} className="icon-button">
+        <button type="button" aria-label={t("Close dialog")} onClick={onClose} className="icon-button">
           <X size={16} />
         </button>
       </header>

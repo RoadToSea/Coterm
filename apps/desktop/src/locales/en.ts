@@ -1,0 +1,22 @@
+/** Stable host error codes get readable text; third-party diagnostics keep their source text. */
+export const en: Readonly<Record<string, string>> = {
+  plugin_install_conflict: "A plugin with this ID already exists. The alpha installer does not support replacing it.",
+  plugin_archive_invalid: "The plugin archive is invalid or damaged.",
+  plugin_archive_unsafe: "The package contains an unsafe path or file type.",
+  plugin_archive_limit: "The package exceeds the file count or size limit.",
+  plugin_install_io: "Could not read the package or write to the installation directory.",
+  plugin_install_unavailable: "This installation request expired. Choose the package again.",
+  plugin_platform_unsupported: "This package does not support the current platform.",
+  plugin_manifest_invalid: "The package manifest.json is invalid.",
+  plugin_manifest_unavailable: "The package must contain manifest.json at its root.",
+  plugin_runtime_version_unsupported: "This package requires an incompatible runtime version.",
+  plugin_manifest_version_unsupported: "This package requires an unsupported manifest version.",
+  plugin_manifest_identity_invalid: "The package ID, name, or version is invalid.",
+  plugin_entry_unavailable: "A declared plugin entry is missing or unreadable.",
+  plugin_entry_invalid: "A declared backend entry is invalid.",
+  plugin_frontend_entry_invalid: "The declared frontend entry is invalid.",
+  plugin_required_feature_unsupported: "The package requires a feature this host does not provide.",
+  plugin_instance_declaration_invalid: "The package does not declare valid multi-instance support.",
+  frontend_too_large: "The frontend entry exceeds the 2 MiB limit.",
+  frontend_unavailable: "The frontend entry must be a readable UTF-8 JavaScript file.",
+};
