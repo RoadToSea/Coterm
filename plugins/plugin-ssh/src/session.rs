@@ -806,15 +806,7 @@ impl Connection {
                         _ => {}
                     },
                     _ = sleep_until(command_deadline.unwrap_or_else(|| Instant::now() + Duration::from_secs(86400))), if command_deadline.is_some() => {
-                        if let Some(mut command) = active.take() {
-                            command.timed_out = true;
-                            // Preserve bytes that were waiting for the completion marker before
-                            // replacing the channel. The command result remains unknown: a late
-                            // marker cannot prove whether a remote write completed.
-                            let remaining = command.remaining();
-                            if !remaining.is_empty() {
-                                push_output(&task_output, &events, &connection_id, &remaining).await;
-                            }
+                        if let Some(command) = active.take() {
                             fail_command(
                                 &events,
                                 &command,
