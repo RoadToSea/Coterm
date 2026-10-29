@@ -20,4 +20,3 @@ zeroize = "1"
 rand = "0.10"
 coterm-core.workspace = true
 coterm-mcp.workspace = true
-reqwest = { version = "0.12", default-features = false, features = ["json"] }

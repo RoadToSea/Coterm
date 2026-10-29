@@ -1,36 +1,23 @@
 import { t } from "../../i18n";
 import { useI18n } from "../../use-i18n";
 import { useCallback, useEffect, useState } from "react";
-import { hostAPI, type McpSessionInfo, type McpStdioStatus } from "../../host-api";
-import { McpStdioConfiguration } from "./McpStdioConfiguration";
+import { hostAPI, type McpStdioStatus } from "../../host-api";
 import { Modal } from "../ui/Modal";
 
-/** Formats an age in seconds without pulling in a date library. */
-function age(seconds: number): string {
-  if (seconds < 60) return `${seconds}s`;
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
-  return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`;
-}
-
+/**
+ * MCP 面板。对外只有 Stdio：桌面可执行文件的 `mcp stdio` 子命令把标准输入输出
+ * 转发到带 Token 的私有回环桥，桥只在用户启用期间存在。面板不展示任何 HTTP 地址。
+ */
 export function McpConfiguration({ onClose }: { onClose: () => void }) {
   useI18n();
-  const [config, setConfig] = useState("");
-  const [sessions, setSessions] = useState<McpSessionInfo[]>([]);
-  const [stdio, setStdio] = useState<McpStdioStatus | null>(null);
+  const [status, setStatus] = useState<McpStdioStatus | null>(null);
   const [error, setError] = useState("");
-  const [copied, setCopied] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [copied, setCopied] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
-      const [connection, live, adapter] = await Promise.all([
-        hostAPI.mcpConfiguration(),
-        hostAPI.mcpSessions(),
-        hostAPI.mcpStdioStatus(),
-      ]);
-      setConfig(connection.url);
-      setSessions(live);
-      setStdio(adapter);
+      setStatus(await hostAPI.mcpStdioStatus());
       setError("");
     } catch (reason) {
       setError(String(reason));
@@ -38,22 +25,16 @@ export function McpConfiguration({ onClose }: { onClose: () => void }) {
   }, []);
 
   useEffect(() => {
-    let disposed = false;
     void refresh();
-    const timer = window.setInterval(() => {
-      if (!disposed) void refresh();
-    }, 2000);
-    return () => {
-      disposed = true;
-      window.clearInterval(timer);
-    };
   }, [refresh]);
 
-  const close = async (prefix: string) => {
+  const toggle = async () => {
     setBusy(true);
+    // 停用会作废 Token，旧的「已复制」提示不能继续显示。
+    setCopied(false);
     try {
-      await hostAPI.closeMcpSession(prefix);
-      await refresh();
+      setStatus(await hostAPI.setMcpStdioEnabled(!status?.enabled));
+      setError("");
     } catch (reason) {
       setError(String(reason));
     } finally {
@@ -61,89 +42,69 @@ export function McpConfiguration({ onClose }: { onClose: () => void }) {
     }
   };
 
+  if (status?.command === null) {
+    return (
+      <Modal title={t("MCP connection")} onClose={onClose}>
+        {error && <p role="alert">{error}</p>}
+        <p className="text-xs text-[#888888]">
+          {t("This build cannot start the local Stdio adapter because its executable path is unavailable.")}
+        </p>
+      </Modal>
+    );
+  }
+
   return (
     <Modal title={t("MCP connection")} onClose={onClose}>
       <p className="mb-3 text-xs text-[#aaaaaa]">
-        {t("Streamable HTTP: add this URL to your Agent as an MCP server. No token is required. Keep Coterm open; the address stays the same after restarting.")}
+        {t("Agents connect through the adapter below. Keep Coterm running; the adapter routes to this desktop and never starts plugins on its own.")}
       </p>
       {error && <p role="alert">{error}</p>}
-      {config && (
-        <div className="flex gap-2">
-          <input
-            aria-label={t("MCP connection URL")}
+      <div className="mb-2 flex items-center justify-between gap-3">
+        <h3 className="text-xs font-medium">{t("Stdio adapter")}</h3>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={Boolean(status?.enabled)}
+          disabled={busy}
+          onClick={() => void toggle()}
+          className="border border-[#454545] px-2 py-1 text-[11px] disabled:opacity-50"
+        >
+          {status?.enabled ? t("Disable") : t("Enable")}
+        </button>
+      </div>
+      <p className="mb-2 text-[11px] text-[#888888]">
+        {t("Enabling opens a private loopback bridge protected by a token issued at startup. Disabling, or closing Coterm, revokes it.")}
+      </p>
+      {status?.clientConfig && (
+        <>
+          <p className="mb-1 text-[11px] text-[#888888]">
+            {t("Paste this into the agent's MCP settings. The token below is a secret: do not share the configuration.")}
+          </p>
+          <textarea
+            aria-label={t("Stdio client configuration")}
             readOnly
-            value={config}
+            rows={10}
+            value={status.clientConfig}
             spellCheck={false}
-            className="min-w-0 flex-1 border border-[#454545] bg-[#1e1e1e] p-3 font-mono text-xs"
+            className="w-full border border-[#454545] bg-[#1e1e1e] p-3 font-mono text-xs"
             onFocus={(event) => event.target.select()}
           />
           <button
             type="button"
-            disabled={!config}
             onClick={() => {
               void navigator.clipboard
-                .writeText(config)
+                .writeText(status.clientConfig ?? "")
                 .then(() => setCopied(true))
                 .catch(() =>
-                  setError(t("Could not copy. Select the address and copy it manually.")),
+                  setError(t("Could not copy. Select the configuration and copy it manually.")),
                 );
             }}
-            className="border border-[#454545] px-3 text-xs disabled:opacity-50"
+            className="mt-2 border border-[#454545] px-2 py-1 text-[11px]"
           >
-            {copied ? t("Copied") : t("Copy URL")}
+            {copied ? t("Copied") : t("Copy configuration")}
           </button>
-        </div>
+        </>
       )}
-      <McpStdioConfiguration
-        status={stdio}
-        onStatus={setStdio}
-        onError={setError}
-      />
-      <section className="mt-5">
-        <div className="mb-2 flex items-center justify-between">
-          <h3 className="text-xs font-medium">
-            {t("Active sessions ({count}/8)", { count: sessions.length })}
-          </h3>
-          <button
-            type="button"
-            onClick={() => void refresh()}
-            className="border border-[#454545] px-2 py-1 text-[11px]"
-          >
-            {t("Refresh")}
-          </button>
-        </div>
-        <p className="mb-2 text-[11px] text-[#888888]">
-          {t("When a new client reports “too many MCP sessions”, close an unused session here. Idle sessions also expire automatically after 30 minutes.")}
-        </p>
-        {sessions.length === 0 ? (
-          <p className="text-[11px] text-[#888888]">{t("No client is connected.")}</p>
-        ) : (
-          <ul className="divide-y divide-[#383838] border border-[#383838]">
-            {sessions.map((session) => (
-              <li key={session.idPrefix} className="flex items-center gap-3 px-3 py-2">
-                <div className="min-w-0 flex-1">
-                  <div className="truncate text-xs">
-                    {session.clientName ?? t("Unknown client")}
-                    {session.clientVersion ? ` ${session.clientVersion}` : ""}
-                  </div>
-                  <div className="text-[11px] text-[#888888]">
-                    {session.idPrefix} · {session.protocolVersion} {t("· idle")} {age(session.idleSeconds)}
-                    {session.ready ? "" : t(" · initializing")}
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  disabled={busy}
-                  onClick={() => void close(session.idPrefix)}
-                  className="border border-[#454545] px-2 py-1 text-[11px] disabled:opacity-50"
-                >
-                  {t("Close")}
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
     </Modal>
   );
 }

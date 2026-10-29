@@ -2,17 +2,33 @@
 
 ## 连接
 
-MCP 的首选入口是本地 Stdio 子进程；桌面前端通过 Tauri Host API 和插件事件工作，不经过 MCP。Streamable HTTP 是可选外部客户端接入方式，不是 Stdio 的下游或前端中间层。
+MCP 只有一个对外入口：本地 Stdio 子进程。桌面前端通过 Tauri Host API 和插件事件工作，不经过 MCP；对外不提供 HTTP 端点。
 
-保持 Coterm 桌面运行，在支持 Streamable HTTP 的客户端添加：
+适配器是桌面可执行文件自身，以 `mcp stdio` 启动，把 stdin/stdout 的 MCP JSON-RPC 转发给桌面的私有本机 IPC Bridge。该模式不创建窗口、插件运行时或网络监听，stdout 只写 MCP 帧，诊断只写 stderr。参数必须完全匹配，其他启动方式仍是普通桌面。
 
-```text
-http://127.0.0.1:23517/mcp
+桌面 MCP 面板负责交付配置：
+
+1. 用户点「启用」，桌面在随机回环端口启动私有 Bridge 并签发本次启动有效的 Token；停用或退出即释放，旧 Token 立即失效。
+2. 面板给出可直接粘贴的完整客户端配置：
+
+```json
+{
+  "mcpServers": {
+    "coterm": {
+      "command": "<Coterm 安装目录>\coterm-desktop.exe",
+      "args": ["mcp", "stdio"],
+      "env": {
+        "COTERM_MCP_ADDR": "127.0.0.1:<bridge-port>",
+        "COTERM_MCP_TOKEN": "<本次启动签发>"
+      }
+    }
+  }
+}
 ```
 
-无需 Token 或转接程序；桌面 MCP 面板可复制地址。重启后地址不变，客户端重新初始化。端口被占用时显示错误，不自动换端口或终止其他进程。
+`command` 取当前可执行文件的绝对路径，不搜索 PATH；`COTERM_MCP_ADDR` 与 `COTERM_MCP_TOKEN` 也可由用户自行设置，适配器只认这两个环境变量，不读取本机配置文件。运行时 Token 不匹配或端口不监听时，适配器在 stderr 报错退出，stdout 保持为空，客户端可据此显示启动失败而不是空目录。
 
-只监听 IPv4 回环，校验 Host/Origin，不开放任意 CORS。该模式不区分本机进程或系统用户，不用于远程访问或多用户隔离。
+安全边界：桥只监听 IPv4 回环、随机端口，并用定长比较校验 Token；Token 只经桌面私有 Tauri 命令返回面板，不写盘、不进事件、日志、MCP 返回值或插件前端，配置中的 Token 按秘密处理。未启用时面板不显示配置。桌面必须保持运行，适配器不启动插件、不接触前端。内部交互和事件见 [运行时通信](runtime-communication.md)。
 
 ## 工具与路由
 
@@ -50,44 +66,15 @@ SSH 认证步骤和工具边界见 [SSH](ssh-plugin.md)，串口可用工具见 
 }
 ```
 
-`0` 表示立即返回，`1..300000` 指定毫秒上限。等待超时、客户端断开或删除 HTTP 会话均不代表底层操作取消，也不触发重放。取消仅在插件确认未提交或已停止时成功，否则可能为 unknown。
+`0` 表示立即返回，`1..300000` 指定毫秒上限。等待超时或客户端断开均不代表底层操作取消，也不触发重放。取消仅在插件确认未提交或已停止时成功，否则可能为 unknown。
 
-## HTTP 契约
+## 适配器传输
 
-- `POST /mcp` 接收单条 JSON-RPC；Accept 包含 JSON 与 SSE。请求返回 JSON，通知/客户端响应返回空 202，不支持 batch。
-- `initialize` 不带旧会话 ID；从响应取得 `Mcp-Session-Id`，之后携带会话 ID 与协商的 `MCP-Protocol-Version`。
-- 当前支持 `2025-06-18`、`2025-03-26`；初始化完成通知后才能调用工具。
-- `GET /mcp` 提供可选 SSE 目录变化通知，每会话最多一条流；无事件回放或断点续传，不传终端输出。
-- `DELETE /mcp` 只关闭客户端会话；过期或重启前的会话返回 404，应重新初始化。
-- 最多 8 会话、每会话 16 个在途请求、全局 128 个 HTTP 请求；空闲 30 分钟过期。SSE 流处于等待状态不算客户端活动，不会续期，否则挂起的客户端会把名额占满；过期会话的下一条请求返回 404。会话满时返回 429，附 `mcp_sessions_full`、上限、当前会话的客户端名称与空闲时长、`Retry-After: 30` 和两条恢复路径：客户端发送 `DELETE /mcp`，或在 Coterm 的 MCP 面板按前缀关闭会话。面板只显示 ID 前缀，不公开完整会话 ID。
-- 请求与 JSON 结果各不超过 1 MiB，读取请求体限时 10 秒；超限明确失败，不无限排队。
+- 每会话走一条新建的 TCP 连接：先发一帧 `{"token":"…"}`，桌面回 `{"authenticated":true}` 后才开始转发 MCP 消息；认证失败直接断开。
+- 帧为单行 JSON，请求与响应各不超过 1 MiB；超限明确失败，不无限排队。
+- 每连接最多 16 个在途工具调用，最多 8 个并发连接；超出返回 JSON-RPC 错误而不是排队。
+- 支持 `2025-06-18`、`2025-03-26`、`2024-11-05`；`initialize` 后必须发送 `notifications/initialized` 才能调用工具。
+- 目录变化通过 `notifications/tools/list_changed` 通知，适配器逐帧透传，不做事件回放。
+- stdio 断开即结束对应桥连接；这不代表底层操作取消，也不会重放。
 
-实现与测试位于 [coterm-mcp](../../crates/coterm-mcp)。Resources、Prompts、订阅、进度和 MCP cancellation notification 尚未实现；`coterm.cancel_operation` 是操作工具。
-
-### Stdio 适配器
-
-仓库提供 `coterm-mcp-stdio`，stdin/stdout 承载标准 MCP JSON-RPC；它通过 Coterm 私有、仅监听回环地址并带 Token 的本机 IPC Bridge 调用桌面运行时。该二进制仅用于开发回归，发布版不再单独分发：**桌面可执行文件自身提供同一适配器**，以 `mcp stdio` 启动时不创建窗口、插件运行时或 HTTP 监听，stdout 只写 MCP 帧，诊断只写 stderr。
-
-桌面 MCP 面板的「Stdio 适配器」一节负责交付配置：
-
-1. 用户点「启用」，桌面在随机回环端口启动私有 Bridge 并签发本次启动有效的 Token；停用或退出即释放，旧 Token 立即失效。
-2. 面板给出可直接粘贴的完整客户端配置：
-
-```json
-{
-  "mcpServers": {
-    "coterm": {
-      "command": "<Coterm 安装目录>\coterm-desktop.exe",
-      "args": ["mcp", "stdio"],
-      "env": {
-        "COTERM_MCP_ADDR": "127.0.0.1:<bridge-port>",
-        "COTERM_MCP_TOKEN": "<本次启动签发>"
-      }
-    }
-  }
-}
-```
-
-`command` 取当前可执行文件的绝对路径，不搜索 PATH；`COTERM_MCP_ADDR` 与 `COTERM_MCP_TOKEN` 也可由用户自行设置，适配器只认这两个环境变量，不读取本机配置文件。
-
-安全边界：Token 只经桌面私有 Tauri 命令返回面板，不写盘、不进事件、日志、MCP 返回值或插件前端；配置中的 Token 按秘密处理，面板明确提示不要分享。未启用时面板不显示配置。桌面必须保持运行，适配器不启动插件、不接触前端。HTTP 端口 `127.0.0.1:23517/mcp` 可单独使用，不是 Stdio 的依赖。内部交互和事件见 [运行时通信](runtime-communication.md)。
+实现与测试位于 [coterm-mcp](../../crates/coterm-mcp)。Resources、Prompts、订阅、进度和 MCP cancellation notification 尚未实现；`coterm.cancel_operation` 是操作工具。仓库内的 `coterm-mcp-stdio` 二进制保留为开发回归入口，与桌面 `mcp stdio` 共用同一实现。

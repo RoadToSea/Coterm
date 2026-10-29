@@ -11,7 +11,7 @@
 | 操作与公共交互 | 来源/scope/schema 校验、提案审批、显式 Bypass、宿主公共交互、查询与取消；账本有界、仅保留本次启动 |
 | SSH | 密码认证、指纹确认、共享 PTY、命令输出/退出码、回放与事件 |
 | 串口 | 枚举、连接、字节读写、HEX/行结束符、回放与独立界面；仍有下列缺口 |
-| MCP | 固定本机 HTTP、插件原生 Tools、实例发现与操作路由；桌面面板可启用 Stdio 适配器并交付含 Token 的客户端配置 |
+| MCP | 唯一对外入口为 Stdio（桌面 `mcp stdio`）；私有 Token 桥、插件原生 Tools、实例发现与操作路由；HTTP 端点已移除 |
 | SDK 与 UI | 后端控制协议 v1.0、统一编解码与握手校验、前端 SDK v1.0、通用块列表、版本化宿主订阅 |
 | 本地终端 | 已接入当前运行时，仅有实例/配置与插件信息，尚无 PTY |
 
@@ -47,7 +47,7 @@
 - 2026-10-27 使用真实 Tauri 程序回归修复：语法错误返回结构化结果且保持连接、取消后连接可继续执行、结果提供原始/丢弃字节数、操作收据去重、SSH 包装从回放隔离；详见 [实测记录](ssh-mihomo-field-test.md)。
 - 2026-10-27 已修复上述 SSH/MCP 边界问题：命令执行前先做静态语法检查，避免登录 Shell 因语法错误退出；取消未确认时自动重建 PTY 并新增 `ssh.reset`；连接错误改为稳定阶段码（`ssh_host_key_mismatch`、`ssh_remote_shell_exited` 等）；包装回显从回放中移除；结果新增 `text/base64` 双编码、原始/丢弃字节数与截断上限。新增 `ssh.exec` 独立通道、`ssh.output` 作业进度、`ssh.system_info`/`ssh.file_info` 只读工具；MCP 工具结果改为 `structuredContent` 加摘要文本，`_meta` 收据不再重复完整输出；MCP 面板可列出并按前缀关闭会话，429 附恢复指引与 `Retry-After`。SSH 与 MCP 新增 6 个回归测试，远端服务器真实验收仍需单独执行。
 - 2026-10-29 SSH Agent 易用性：共享 PTY 命令超时后自动重建 Shell；新增有界 UTF-8 `ssh.read_file`/`ssh.write_file`（写入走审批及原子替换、无 sudo）；MCP `ssh.command`/`ssh.exec` 接收有序 `commands` 列表并在首个失败时停止。MCP 首选 Stdio、前端使用 Tauri Host API；私有 Stdio Bridge 已由桌面面板按需启停并交付客户端配置，桌面可执行文件的 `mcp stdio` 子命令即适配器，无需单独分发 CLI。
-- 2026-10-29 MCP Stdio 接入闭环：桌面 MCP 面板新增「Stdio 适配器」一节，用户启用后签发本次启动的 Token 并给出可粘贴的 `mcpServers` 配置；`coterm-desktop mcp stdio` 复用同一桥实现，不创建窗口或运行时。Token 只经私有命令返回面板，停用或退出即失效；仓库内的 `coterm-mcp-stdio` 保留为开发回归入口。
+- 2026-10-29 MCP 只保留 Stdio：桌面 MCP 面板按需启停私有 Token 桥并交付可粘贴的 `mcpServers` 配置，`coterm-desktop mcp stdio` 即适配器，不创建窗口或运行时；Token 只经私有命令返回面板，停用或退出即失效。移除 Streamable HTTP 端点、`axum`/`reqwest`/`futures` 依赖及面板中的地址与会话列表，SSH 的 HTTP 回归改为第二个桥客户端。仓库内的 `coterm-mcp-stdio` 保留为开发回归入口。
 
 ### P2：功能与生态
 

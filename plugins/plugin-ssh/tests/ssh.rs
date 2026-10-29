@@ -906,66 +906,62 @@ async fn external_mcp_uses_shared_ssh_and_host_secret_and_approval_paths() -> Re
     assert!(domain["text"]
         .as_str()
         .is_some_and(|text| text.contains("approved-default-wait false")));
-    // HTTP clients use only a URL, sharing this same authenticated SSH instance.
-    let http = coterm_mcp::http::HttpBridgeServer::bind_at(runtime.clone(), "127.0.0.1:0".parse()?)
+    // A second authenticated MCP client shares the same SSH instance and waits on
+    // approval. Closing that client must never approve, cancel, or replay a write.
+    let second_bridge = coterm_mcp::server::BridgeServer::bind(runtime.clone()).await?;
+    let mut second = McpWire::connect(second_bridge.connection_info()).await?;
+    second.next_id += 1;
+    let second_waiting_id = second.next_id;
+    coterm_mcp::transport::write_frame(
+        &mut second.writer,
+        &json!({"jsonrpc":"2.0","id":second_waiting_id,"method":"tools/call","params":{
+            "name":"coterm-plugin-ssh__ssh.command",
+            "arguments":{"pluginInstanceId":instance.plugin_instance_id,"commands":["second-client-command"]}
+        }}),
+    )
+    .await?;
+    {
+        let waiting = coterm_mcp::transport::read_frame(&mut second.reader);
+        tokio::pin!(waiting);
+        assert!(
+            timeout(Duration::from_millis(50), &mut waiting).await.is_err(),
+            "a pending approval keeps the second client waiting"
+        );
+    }
+    let status = second
+        .tool(
+            "coterm-plugin-ssh__ssh.status",
+            json!({"pluginInstanceId":instance.plugin_instance_id}),
+        )
         .await?;
-    let url = http.connection_info().url;
-    let http_client = reqwest::Client::builder().no_proxy().build()?;
-    let initialized = http_client.post(&url)
-        .header("Accept", "application/json, text/event-stream")
-        .json(&json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{
-            "protocolVersion":"2025-06-18","clientInfo":{"name":"ssh-http-test","version":"1"},"capabilities":{}
-        }})).send().await?;
-    assert_eq!(initialized.status(), reqwest::StatusCode::OK);
-    let http_session = initialized
-        .headers()
-        .get("Mcp-Session-Id")
-        .ok_or_else(|| anyhow::anyhow!("No HTTP session"))?
-        .to_str()?
-        .to_owned();
-    let http_request = |message: Value| {
-        http_client
-            .post(&url)
-            .header("Accept", "application/json, text/event-stream")
-            .header("Mcp-Session-Id", &http_session)
-            .header("MCP-Protocol-Version", "2025-06-18")
-            .json(&message)
-    };
-    assert_eq!(
-        http_request(json!({"jsonrpc":"2.0","method":"notifications/initialized"}))
-            .send()
-            .await?
-            .status(),
-        reqwest::StatusCode::ACCEPTED
-    );
-    let waiting = http_request(json!({"jsonrpc":"2.0","id":"http-command","method":"tools/call","params":{
-        "name":"coterm-plugin-ssh__ssh.command","arguments":{"pluginInstanceId":instance.plugin_instance_id,"commands":["http-original-command"]}
-    }})).send();
-    tokio::pin!(waiting);
-    assert!(timeout(Duration::from_millis(50), &mut waiting)
-        .await
-        .is_err());
-    let status: Value = http_request(json!({"jsonrpc":"2.0","id":"http-status","method":"tools/call","params":{
-        "name":"coterm-plugin-ssh__ssh.status","arguments":{"pluginInstanceId":instance.plugin_instance_id}
-    }})).send().await?.json().await?;
-    assert_eq!(status["result"]["isError"], false);
+    assert_eq!(status["isError"], false);
     let proposal = runtime
         .recent(human(), &instance.plugin_instance_id, 100)
         .await?
         .into_iter()
         .find(|r| r.status == OperationStatus::AwaitingApproval)
-        .ok_or_else(|| anyhow::anyhow!("No HTTP approval proposal"))?;
-    runtime.approve(human(), ApproveProposal {
-        operation_id: proposal.operation_id,
-        proposal_id: proposal.proposal_id.ok_or_else(|| anyhow::anyhow!("No HTTP proposal ID"))?,
-        plugin_instance_id: Some(instance.plugin_instance_id.clone()),
-        args: json!({"pluginInstanceId":instance.plugin_instance_id,"commands":["http-human-approved false"]}),
-    }).await?;
-    let response: Value = timeout(Duration::from_secs(3), waiting)
-        .await??
-        .json()
+        .ok_or_else(|| anyhow::anyhow!("No second-client approval proposal"))?;
+    runtime
+        .approve(
+            human(),
+            ApproveProposal {
+                operation_id: proposal.operation_id,
+                proposal_id: proposal
+                    .proposal_id
+                    .ok_or_else(|| anyhow::anyhow!("No proposal ID"))?,
+                plugin_instance_id: Some(instance.plugin_instance_id.clone()),
+                args: json!({"pluginInstanceId":instance.plugin_instance_id,"commands":["second-human-approved false"]}),
+            },
+        )
         .await?;
-    assert_eq!(response["id"], "http-command");
+    let frame = timeout(
+        Duration::from_secs(3),
+        coterm_mcp::transport::read_frame(&mut second.reader),
+    )
+    .await??
+    .ok_or_else(|| anyhow::anyhow!("No second-client response"))?;
+    let response: Value = serde_json::from_slice(&frame)?;
+    assert_eq!(response["id"], second_waiting_id);
     assert_eq!(response["result"]["isError"], true);
     assert_eq!(
         response["result"]["_meta"]["coterm/operation"]["status"],
@@ -975,36 +971,32 @@ async fn external_mcp_uses_shared_ssh_and_host_secret_and_approval_paths() -> Re
     assert_eq!(domain["exitCode"], 1);
     assert!(domain["text"]
         .as_str()
-        .is_some_and(|text| text.contains("http-human-approved false")));
-    // Closing the HTTP session cannot approve, cancel, or replay a pending write.
-    let pending: Value = http_request(json!({"jsonrpc":"2.0","id":"http-pending","method":"tools/call","params":{
-        "name":"coterm-plugin-ssh__ssh.command","arguments":{"pluginInstanceId":instance.plugin_instance_id,"commands":["http-must-not-replay"]},
-        "_meta":{"coterm/waitTimeoutMs":0}
-    }})).send().await?.json().await?;
-    let pending_id = pending["result"]["_meta"]["coterm/operation"]["operationId"]
+        .is_some_and(|text| text.contains("second-human-approved false")));
+    // An immediate receipt keeps the write pending; closing the client must not replay it.
+    let pending = second
+        .rpc(
+            "tools/call",
+            json!({
+                "name":"coterm-plugin-ssh__ssh.command",
+                "arguments":{"pluginInstanceId":instance.plugin_instance_id,"commands":["second-must-not-replay"]},
+                "_meta":{"coterm/waitTimeoutMs":0}
+            }),
+        )
+        .await?;
+    let pending_id = pending["_meta"]["coterm/operation"]["operationId"]
         .as_str()
-        .ok_or_else(|| anyhow::anyhow!("No immediate HTTP receipt"))?;
-    assert_eq!(
-        pending["result"]["_meta"]["coterm/operation"]["status"],
-        "accepted"
-    );
-    assert_eq!(
-        http_client
-            .delete(&url)
-            .header("Mcp-Session-Id", &http_session)
-            .header("MCP-Protocol-Version", "2025-06-18")
-            .send()
-            .await?
-            .status(),
-        reqwest::StatusCode::NO_CONTENT
-    );
-    let record = runtime.get(human(), pending_id).await?;
+        .ok_or_else(|| anyhow::anyhow!("No immediate receipt"))?
+        .to_owned();
+    assert_eq!(pending["_meta"]["coterm/operation"]["status"], "accepted");
+    // Dropping a client closes only its own bridge connection.
+    drop(second);
+    let record = runtime.get(human(), &pending_id).await?;
     assert!(matches!(
         record.status,
         OperationStatus::Accepted | OperationStatus::AwaitingApproval
     ));
-    runtime.cancel(human(), pending_id).await?;
-    http.shutdown().await;
+    runtime.cancel(human(), &pending_id).await?;
+    drop(second_bridge);
     // Visible data is pushed without any ssh.read calls and contains no marker.
     let visible = timeout(Duration::from_secs(3), async {
         let mut visible = Vec::new();

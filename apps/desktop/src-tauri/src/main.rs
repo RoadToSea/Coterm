@@ -60,7 +60,6 @@ struct AppState {
     plugin_runtime: Arc<ProcessPluginRuntime>,
     plugin_install: tokio::sync::Mutex<Option<plugin_install_commands::PendingInstall>>,
     plugins_dir: PathBuf,
-    mcp_server: Result<coterm_mcp::http::HttpBridgeServer, String>,
     stdio_bridge: mcp_commands::StdioBridge,
 }
 
@@ -426,18 +425,6 @@ async fn respond_secret(
         .await
 }
 
-#[tauri::command]
-fn mcp_connection_info(
-    state: tauri::State<'_, AppState>,
-) -> Result<coterm_mcp::http::HttpConnectionInfo, String> {
-    state
-        .mcp_server
-        .as_ref()
-        .map(|server| server.connection_info())
-        .map_err(Clone::clone)
-}
-
-/// Live MCP sessions for the desktop panel. IDs are prefixes, never full session tokens.
 /// Stdio 适配器状态：是否已允许本机客户端连接，以及可粘贴的客户端配置。
 /// `clientConfig` 含本次启动的 Token，只供该私有命令使用。
 #[tauri::command]
@@ -454,29 +441,6 @@ async fn set_mcp_stdio_enabled(
     state: tauri::State<'_, AppState>,
 ) -> Result<mcp_commands::StdioStatus, String> {
     state.stdio_bridge.set_enabled(enabled).await
-}
-
-#[tauri::command]
-async fn mcp_sessions(
-    state: tauri::State<'_, AppState>,
-) -> Result<Vec<coterm_mcp::http::SessionInfo>, String> {
-    match state.mcp_server.as_ref() {
-        Ok(server) => Ok(server.sessions().await),
-        Err(error) => Err(error.clone()),
-    }
-}
-
-/// Closes one client session by its prefix so a new client can initialize.
-#[tauri::command]
-async fn close_mcp_session(
-    session_prefix: String,
-    state: tauri::State<'_, AppState>,
-) -> Result<bool, String> {
-    match state.mcp_server.as_ref() {
-        Ok(server) if server.close_session(&session_prefix).await => Ok(true),
-        Ok(_) => Err("MCP session not found or ambiguous".to_owned()),
-        Err(error) => Err(error.clone()),
-    }
 }
 
 #[tauri::command]
@@ -844,7 +808,7 @@ async fn summary(state: &AppState, manifest: PluginManifest) -> PluginSummary {
     }
 }
 
-/// MCP 客户端以 `mcp stdio` 启动本程序；该模式不创建窗口、插件运行时或 HTTP 监听，
+/// MCP 客户端以 `mcp stdio` 启动本程序；该模式不创建窗口或插件运行时，
 /// stdout 只承载 MCP 帧。只有参数完全匹配才进入，其他参数仍按桌面启动处理。
 fn is_stdio_adapter(args: &[String]) -> bool {
     args.iter().map(String::as_str).eq(["mcp", "stdio"])
@@ -906,9 +870,6 @@ fn main() {
                 )
                 .ok();
             }
-            let mcp_server = tauri::async_runtime::block_on(
-                coterm_mcp::http::HttpBridgeServer::bind(plugin_runtime.clone()),
-            ).map_err(|error| format!("MCP unavailable at http://127.0.0.1:{}/mcp: {error}. Close the application using this port and restart Coterm.", coterm_mcp::http::DEFAULT_PORT));
             // 适配器就是本可执行文件的 `mcp stdio` 子命令：不搜索 PATH，也不依赖旁路文件。
             let stdio_bridge = mcp_commands::StdioBridge::new(
                 plugin_runtime.clone(),
@@ -944,7 +905,6 @@ fn main() {
                 _session_mgr: Arc::new(SessionManager::new()),
                 plugin_runtime,
                 plugin_install: tokio::sync::Mutex::new(None),
-                mcp_server,
                 stdio_bridge,
                 plugins_dir,
             });
@@ -974,11 +934,8 @@ fn main() {
             pending_interactions,
             host_attention,
             respond_secret,
-            mcp_connection_info,
             mcp_stdio_status,
             set_mcp_stdio_enabled,
-            mcp_sessions,
-            close_mcp_session,
             create_instance,
             destroy_instance,
             invoke_operation,
