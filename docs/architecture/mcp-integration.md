@@ -64,20 +64,30 @@ SSH 认证步骤和工具边界见 [SSH](ssh-plugin.md)，串口可用工具见 
 
 实现与测试位于 [coterm-mcp](../../crates/coterm-mcp)。Resources、Prompts、订阅、进度和 MCP cancellation notification 尚未实现；`coterm.cancel_operation` 是操作工具。
 
-仓库提供 `coterm-mcp-stdio`，stdin/stdout 承载标准 MCP JSON-RPC；它通过 Coterm 私有、仅监听回环地址并带 Token 的本机 IPC Bridge 调用桌面运行时：
+### Stdio 适配器
+
+仓库提供 `coterm-mcp-stdio`，stdin/stdout 承载标准 MCP JSON-RPC；它通过 Coterm 私有、仅监听回环地址并带 Token 的本机 IPC Bridge 调用桌面运行时。该二进制仅用于开发回归，发布版不再单独分发：**桌面可执行文件自身提供同一适配器**，以 `mcp stdio` 启动时不创建窗口、插件运行时或 HTTP 监听，stdout 只写 MCP 帧，诊断只写 stderr。
+
+桌面 MCP 面板的「Stdio 适配器」一节负责交付配置：
+
+1. 用户点「启用」，桌面在随机回环端口启动私有 Bridge 并签发本次启动有效的 Token；停用或退出即释放，旧 Token 立即失效。
+2. 面板给出可直接粘贴的完整客户端配置：
 
 ```json
 {
   "mcpServers": {
     "coterm": {
-      "command": "coterm-mcp-stdio",
+      "command": "<Coterm 安装目录>\coterm-desktop.exe",
+      "args": ["mcp", "stdio"],
       "env": {
         "COTERM_MCP_ADDR": "127.0.0.1:<bridge-port>",
-        "COTERM_MCP_TOKEN": "<desktop-issued-token>"
+        "COTERM_MCP_TOKEN": "<本次启动签发>"
       }
     }
   }
 }
 ```
 
-Stdio 适配器会把 MCP 目录、调用和操作结果路由到当前桌面运行时；它不负责启动插件，也不接触前端。桌面必须保持运行。当前 CLI 仍是开发回归入口，桌面尚未发布私有 Bridge 的客户端配置，因此开箱即用的 Stdio 启动尚未完成；发布前必须提供安全的本机配置发现/令牌交付及独立 CLI 分发。HTTP 端口 `127.0.0.1:23517/mcp` 可单独使用，不是 Stdio 的依赖。内部交互和事件见 [运行时通信](runtime-communication.md)。
+`command` 取当前可执行文件的绝对路径，不搜索 PATH；`COTERM_MCP_ADDR` 与 `COTERM_MCP_TOKEN` 也可由用户自行设置，适配器只认这两个环境变量，不读取本机配置文件。
+
+安全边界：Token 只经桌面私有 Tauri 命令返回面板，不写盘、不进事件、日志、MCP 返回值或插件前端；配置中的 Token 按秘密处理，面板明确提示不要分享。未启用时面板不显示配置。桌面必须保持运行，适配器不启动插件、不接触前端。HTTP 端口 `127.0.0.1:23517/mcp` 可单独使用，不是 Stdio 的依赖。内部交互和事件见 [运行时通信](runtime-communication.md)。

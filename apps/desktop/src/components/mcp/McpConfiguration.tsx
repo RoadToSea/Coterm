@@ -1,7 +1,8 @@
 import { t } from "../../i18n";
 import { useI18n } from "../../use-i18n";
 import { useCallback, useEffect, useState } from "react";
-import { hostAPI, type McpSessionInfo } from "../../host-api";
+import { hostAPI, type McpSessionInfo, type McpStdioStatus } from "../../host-api";
+import { McpStdioConfiguration } from "./McpStdioConfiguration";
 import { Modal } from "../ui/Modal";
 
 /** Formats an age in seconds without pulling in a date library. */
@@ -15,18 +16,21 @@ export function McpConfiguration({ onClose }: { onClose: () => void }) {
   useI18n();
   const [config, setConfig] = useState("");
   const [sessions, setSessions] = useState<McpSessionInfo[]>([]);
+  const [stdio, setStdio] = useState<McpStdioStatus | null>(null);
   const [error, setError] = useState("");
   const [copied, setCopied] = useState(false);
   const [busy, setBusy] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
-      const [connection, live] = await Promise.all([
+      const [connection, live, adapter] = await Promise.all([
         hostAPI.mcpConfiguration(),
         hostAPI.mcpSessions(),
+        hostAPI.mcpStdioStatus(),
       ]);
       setConfig(connection.url);
       setSessions(live);
+      setStdio(adapter);
       setError("");
     } catch (reason) {
       setError(String(reason));
@@ -60,7 +64,7 @@ export function McpConfiguration({ onClose }: { onClose: () => void }) {
   return (
     <Modal title={t("MCP connection")} onClose={onClose}>
       <p className="mb-3 text-xs text-[#aaaaaa]">
-        {t("Add this URL to your Agent as a Streamable HTTP MCP server. No token is required. Keep Coterm open; the address stays the same after restarting.")}
+        {t("Streamable HTTP: add this URL to your Agent as an MCP server. No token is required. Keep Coterm open; the address stays the same after restarting.")}
       </p>
       {error && <p role="alert">{error}</p>}
       {config && (
@@ -90,6 +94,11 @@ export function McpConfiguration({ onClose }: { onClose: () => void }) {
           </button>
         </div>
       )}
+      <McpStdioConfiguration
+        status={stdio}
+        onStatus={setStdio}
+        onError={setError}
+      />
       <section className="mt-5">
         <div className="mb-2 flex items-center justify-between">
           <h3 className="text-xs font-medium">

@@ -1,8 +1,10 @@
 use serde::{Deserialize, Serialize};
 
 pub mod bridge;
+pub mod config;
 pub mod http;
 pub mod server;
+pub mod stdio;
 pub mod transport;
 
 /// 获取命令块的 MCP 工具入参

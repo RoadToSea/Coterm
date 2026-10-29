@@ -801,6 +801,7 @@ dependencies = [
 name = "coterm-desktop"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "coterm-core",
  "coterm-mcp",
  "coterm-proto",

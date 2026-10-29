@@ -1,6 +1,7 @@
 // Prevents additional console window on Windows in release
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod mcp_commands;
 mod plugin_install_commands;
 mod workspace;
 mod workspace_commands;
@@ -60,6 +61,7 @@ struct AppState {
     plugin_install: tokio::sync::Mutex<Option<plugin_install_commands::PendingInstall>>,
     plugins_dir: PathBuf,
     mcp_server: Result<coterm_mcp::http::HttpBridgeServer, String>,
+    stdio_bridge: mcp_commands::StdioBridge,
 }
 
 #[derive(Serialize)]
@@ -436,6 +438,24 @@ fn mcp_connection_info(
 }
 
 /// Live MCP sessions for the desktop panel. IDs are prefixes, never full session tokens.
+/// Stdio 适配器状态：是否已允许本机客户端连接，以及可粘贴的客户端配置。
+/// `clientConfig` 含本次启动的 Token，只供该私有命令使用。
+#[tauri::command]
+async fn mcp_stdio_status(
+    state: tauri::State<'_, AppState>,
+) -> Result<mcp_commands::StdioStatus, String> {
+    Ok(state.stdio_bridge.status().await)
+}
+
+/// 用户显式启用或停用私有 Stdio Bridge。停用使已复制的 Token 立即失效。
+#[tauri::command]
+async fn set_mcp_stdio_enabled(
+    enabled: bool,
+    state: tauri::State<'_, AppState>,
+) -> Result<mcp_commands::StdioStatus, String> {
+    state.stdio_bridge.set_enabled(enabled).await
+}
+
 #[tauri::command]
 async fn mcp_sessions(
     state: tauri::State<'_, AppState>,
@@ -824,7 +844,39 @@ async fn summary(state: &AppState, manifest: PluginManifest) -> PluginSummary {
     }
 }
 
+/// MCP 客户端以 `mcp stdio` 启动本程序；该模式不创建窗口、插件运行时或 HTTP 监听，
+/// stdout 只承载 MCP 帧。只有参数完全匹配才进入，其他参数仍按桌面启动处理。
+fn is_stdio_adapter(args: &[String]) -> bool {
+    args.iter().map(String::as_str).eq(["mcp", "stdio"])
+}
+
+/// 适配器使用独立的单线程运行时，避免与桌面 UI 运行时共享线程池。
+/// 诊断只写 stderr：stdout 是 MCP 协议通道。
+fn run_stdio_adapter() -> i32 {
+    let runtime = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            eprintln!("Coterm MCP adapter could not start: {error}");
+            return 1;
+        }
+    };
+    match runtime.block_on(coterm_mcp::stdio::run_from_env()) {
+        Ok(()) => 0,
+        Err(error) => {
+            eprintln!("Coterm MCP adapter: {error:#}");
+            1
+        }
+    }
+}
+
 fn main() {
+    let arguments: Vec<String> = std::env::args().skip(1).collect();
+    if is_stdio_adapter(&arguments) {
+        std::process::exit(run_stdio_adapter());
+    }
     let runtime_limits = RuntimeLimits {
         max_control_bytes: 1024 * 1024,
         max_data_chunk_bytes: 64 * 1024,
@@ -857,6 +909,11 @@ fn main() {
             let mcp_server = tauri::async_runtime::block_on(
                 coterm_mcp::http::HttpBridgeServer::bind(plugin_runtime.clone()),
             ).map_err(|error| format!("MCP unavailable at http://127.0.0.1:{}/mcp: {error}. Close the application using this port and restart Coterm.", coterm_mcp::http::DEFAULT_PORT));
+            // 适配器就是本可执行文件的 `mcp stdio` 子命令：不搜索 PATH，也不依赖旁路文件。
+            let stdio_bridge = mcp_commands::StdioBridge::new(
+                plugin_runtime.clone(),
+                std::env::current_exe().ok(),
+            );
             let expiry_runtime = plugin_runtime.clone();
             let app_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
@@ -888,6 +945,7 @@ fn main() {
                 plugin_runtime,
                 plugin_install: tokio::sync::Mutex::new(None),
                 mcp_server,
+                stdio_bridge,
                 plugins_dir,
             });
             Ok(())
@@ -917,6 +975,8 @@ fn main() {
             host_attention,
             respond_secret,
             mcp_connection_info,
+            mcp_stdio_status,
+            set_mcp_stdio_enabled,
             mcp_sessions,
             close_mcp_session,
             create_instance,

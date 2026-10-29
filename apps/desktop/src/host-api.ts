@@ -114,6 +114,18 @@ export interface McpClientConfiguration {
   url: string;
 }
 
+/**
+ * 随包分发的 Stdio 适配器状态。`clientConfig` 含本次启动的 Token，
+ * 只用于用户复制，不得写入日志或转发给插件。
+ */
+export interface McpStdioStatus {
+  enabled: boolean;
+  /** 桌面可执行文件同目录的适配器；未附带时为 null。 */
+  command: string | null;
+  address: string | null;
+  clientConfig: string | null;
+}
+
 /** One live MCP client session. The ID is a prefix, never the full session token. */
 export interface McpSessionInfo {
   idPrefix: string;
@@ -135,6 +147,8 @@ export interface HostAPI {
   pendingInteractions(): Promise<BackendSecretRequest[]>;
   respondSecret(interactionId: string, value: string | null): Promise<void>;
   mcpConfiguration(): Promise<McpClientConfiguration>;
+  mcpStdioStatus(): Promise<McpStdioStatus>;
+  setMcpStdioEnabled(enabled: boolean): Promise<McpStdioStatus>;
   mcpSessions(): Promise<McpSessionInfo[]>;
   closeMcpSession(sessionPrefix: string): Promise<boolean>;
   listPlugins(): Promise<PluginCatalog>;
@@ -361,6 +375,8 @@ export const hostAPI: HostAPI = {
   pendingInteractions: () => invoke<BackendSecretRequest[]>("pending_interactions"),
   respondSecret: (interactionId, value) => invoke<void>("respond_secret", { interactionId, value }),
   mcpConfiguration: () => invoke<McpClientConfiguration>("mcp_connection_info"),
+  mcpStdioStatus: () => invoke<McpStdioStatus>("mcp_stdio_status"),
+  setMcpStdioEnabled: (enabled) => invoke<McpStdioStatus>("set_mcp_stdio_enabled", { enabled }),
   mcpSessions: () => invoke<McpSessionInfo[]>("mcp_sessions"),
   closeMcpSession: (sessionPrefix) => invoke<boolean>("close_mcp_session", { sessionPrefix }),
   frontendSource: (pluginId) => invoke<string | null>("plugin_frontend_source", { pluginId }),

@@ -37,6 +37,7 @@ pnpm plugin:pack plugins/plugin-ssh/dist target/release/bundle/plugins/coterm-pl
 - 安全：选择和预览阶段不运行包；确认前有可信来源提示；错误不暴露绝对路径；不授予任意文件访问或 shell 代理。
 - Windows 实例创建：GUI 宿主启动插件不弹出黑色控制台；SSH 配置提交后显示未连接终端，点击连接后才发起远端连接。
 - 已有回归：审批、公共交互、多实例、工作区加密恢复、MCP 和退出回收；远程 SSH 实机验收按 [实测记录](ssh-mihomo-field-test.md) 单独记录。
+- MCP Stdio：面板启用后复制配置，用真实 MCP 客户端（`coterm-desktop mcp stdio`）完成初始化与工具调用；停用或重启后旧 Token 失效，未启用时面板不显示配置。
 
 ## 本轮边界
 
