@@ -806,17 +806,42 @@ impl Connection {
                         _ => {}
                     },
                     _ = sleep_until(command_deadline.unwrap_or_else(|| Instant::now() + Duration::from_secs(86400))), if command_deadline.is_some() => {
-                        if let Some(command) = active.as_mut() {
-                            if !command.timed_out {
-                                command.timed_out = true;
-                                fail_command(
-                                    &events,
-                                    command,
-                                    "ssh_command_completion_unknown",
-                                    "SSH command did not complete within 120 seconds; reset the terminal or reconnect",
-                                    Some(json!({"timeoutMs": 120_000})),
-                                )
-                                .await;
+                        if let Some(mut command) = active.take() {
+                            command.timed_out = true;
+                            // Preserve bytes that were waiting for the completion marker before
+                            // replacing the channel. The command result remains unknown: a late
+                            // marker cannot prove whether a remote write completed.
+                            let remaining = command.remaining();
+                            if !remaining.is_empty() {
+                                push_output(&task_output, &events, &connection_id, &remaining).await;
+                            }
+                            fail_command(
+                                &events,
+                                &command,
+                                "ssh_command_completion_unknown",
+                                "SSH command did not complete within 120 seconds; the terminal was reset",
+                                Some(json!({"timeoutMs": 120_000, "terminalReset": true})),
+                            )
+                            .await;
+                            match timeout(
+                                CONNECT_TIMEOUT,
+                                reopen_shell(&task_handle, &task_output, &mut read, &mut write),
+                            )
+                            .await
+                            {
+                                Ok(Ok(())) => {
+                                    shell_exit = None;
+                                    shell_signal = None;
+                                    emit_status(
+                                        &events,
+                                        &connection_id,
+                                        true,
+                                        true,
+                                        &task_output,
+                                    )
+                                    .await;
+                                }
+                                _ => break,
                             }
                         }
                     },

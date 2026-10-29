@@ -48,7 +48,7 @@ MCP 显式注册 status、probe、connect、disconnect、reset、command、exec�
 - 源命令最多 4096 字节，转义包装后还受 4000 字节 PTY 单行上限约束。
 - 结果字段：`exitCode`、`encoding`、`text` 或 `data`、`bytes`、`originalBytes`、`droppedBytes`、`limit`、`truncated`、`syntaxError`、`durationMs`。可打印 UTF-8 返回 `text`，否则返回 base64 `data`；不超过 8 KiB。非零退出的 MCP 结果 `isError=true`。
 - 取消先发送 Ctrl+C，最多等待 2 秒确认结束标记。确认成功为 `stopped`；否则返回 `unknown` 并自动重建 PTY Shell，连接保持可用。可用 `ssh.reset` 主动重建。
-- 断线、结束标记缺失或跟踪到期也可能 unknown；不推测成功、不自动重发。跟踪到期仍会阻塞下一条 PTY 命令，需 `ssh.reset` 或重连；`ssh.exec` 作业不受此限制。
+- 断线、结束标记缺失或跟踪到期也可能 unknown；不推测成功、不自动重发。跟踪到期会自动重建共享 PTY，并发送 `ssh.status(reset=true)`；如果重建失败则连接关闭，需要重连。`ssh.exec` 作业不受此限制。
 
 ### exec 输出与进度
 
