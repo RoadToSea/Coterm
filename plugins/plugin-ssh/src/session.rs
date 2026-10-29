@@ -48,6 +48,9 @@ const MAX_EXEC_JOBS: usize = 8;
 const EXEC_MAX_DURATION: Duration = Duration::from_secs(30 * 60);
 const QUERY_LIMIT: usize = 8 * 1024;
 const QUERY_TIMEOUT: Duration = Duration::from_secs(5);
+const FILE_READ_LIMIT: usize = 8 * 1024;
+const FILE_WRITE_LIMIT: usize = 64 * 1024;
+const FILE_TIMEOUT: Duration = Duration::from_secs(15);
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -510,6 +513,7 @@ enum Input {
         operation_id: String,
         mcp: bool,
         text: String,
+        use_shell: bool,
     },
     Cancel(String),
     Reset,
@@ -638,7 +642,7 @@ impl Connection {
                                     }
                                 }
                             }
-                            Input::Exec { operation_id, mcp, text } => {
+                            Input::Exec { operation_id, mcp, text, use_shell } => {
                                 let (cancel, cancel_rx) = watch::channel(false);
                                 {
                                     let mut jobs = task_jobs.lock().await;
@@ -656,6 +660,7 @@ impl Connection {
                                     operation_id,
                                     text,
                                     mcp,
+                                    use_shell,
                                     cancel_rx,
                                     command_text,
                                 ));
@@ -949,11 +954,12 @@ impl Connection {
     }
 
     /// Starts an isolated one-shot exec channel. The operation completes by notification.
-    pub async fn exec(&self, operation_id: String, mcp: bool, text: String) -> Result<()> {
+    pub async fn exec(&self, operation_id: String, mcp: bool, text: String, use_shell: bool) -> Result<()> {
         self.submit(Input::Exec {
             operation_id,
             mcp,
             text,
+            use_shell,
         })
         .await?;
         Ok(())
@@ -999,6 +1005,56 @@ impl Connection {
                 )
             })?
     }
+
+    pub async fn read_file(&self, path: &str) -> Result<Value> {
+        if self.is_closed() {
+            bail!("SSH is not connected");
+        }
+        let command = format!("cat < '{}'", shell_quote(path));
+        let output = timeout(FILE_TIMEOUT, run_channel(self.handle.clone(), &command, None))
+            .await
+            .map_err(|_| anyhow!("SSH file read timed out"))??;
+        if output.exit_code != Some(0) {
+            bail!("SSH file read failed (exit code {:?})", output.exit_code);
+        }
+        let text = String::from_utf8(output.stdout)
+            .map_err(|_| anyhow!("SSH file is not valid UTF-8 text"))?;
+        let result = json!({"path":path,"text":text,"bytes":text.len(),"limit":FILE_READ_LIMIT,"truncated":false});
+        if serde_json::to_vec(&result)?.len() > 15 * 1024 {
+            bail!("SSH file text expands beyond the host result limit when encoded as JSON");
+        }
+        Ok(result)
+    }
+
+    pub async fn write_file(&self, path: &str, content: &str, mode: &str) -> Result<Value> {
+        if self.is_closed() {
+            bail!("SSH is not connected");
+        }
+        if content.len() > FILE_WRITE_LIMIT {
+            bail!("SSH file content exceeds the 65536 byte limit");
+        }
+        if !matches!(mode, "0600" | "0640" | "0644" | "0700" | "0750" | "0755") {
+            bail!("Unsupported SSH file mode");
+        }
+        let quoted_path = shell_quote(&shell_path(path));
+        let quoted_temp = shell_quote(&shell_path(&format!(
+            "{path}.coterm-{}",
+            uuid::Uuid::new_v4().simple()
+        )));
+        let command = format!(
+            "umask 077; __p='{quoted_path}'; __t='{quoted_temp}'; cat > \"$__t\" && chmod {mode} \"$__t\" && mv -f \"$__t\" \"$__p\"; __rc=$?; if [ $__rc -ne 0 ]; then rm -f \"$__t\"; fi; exit $__rc"
+        );
+        let output = timeout(
+            FILE_TIMEOUT,
+            run_channel(self.handle.clone(), &command, Some(content.as_bytes())),
+        )
+        .await
+        .map_err(|_| anyhow!("SSH file write timed out; remote result may be unknown"))??;
+        if output.exit_code != Some(0) {
+            bail!("SSH file write failed (exit code {:?})", output.exit_code);
+        }
+        Ok(json!({"path":path,"bytes":content.len(),"mode":mode,"written":true}))
+    }
 }
 
 pub struct QueryResult {
@@ -1006,6 +1062,54 @@ pub struct QueryResult {
     pub stdout: Vec<u8>,
     pub stderr: Vec<u8>,
     pub timed_out: bool,
+}
+
+struct ChannelResult {
+    exit_code: Option<i32>,
+    stdout: Vec<u8>,
+}
+
+pub(crate) fn shell_quote(value: &str) -> String {
+    value.replace('\'', "'\\''")
+}
+
+fn shell_path(value: &str) -> String {
+    if value.starts_with('-') {
+        format!("./{value}")
+    } else {
+        value.to_owned()
+    }
+}
+
+async fn run_channel(
+    handle: Arc<client::Handle<HostKey>>,
+    command: &str,
+    input: Option<&[u8]>,
+) -> Result<ChannelResult> {
+    let mut channel = handle.channel_open_session().await.map_err(|_| anyhow!("SSH could not open a file channel"))?;
+    channel.exec(true, command.as_bytes()).await.map_err(|_| anyhow!("SSH could not start file operation"))?;
+    if let Some(input) = input {
+        channel.data(input).await.map_err(|_| anyhow!("SSH file content delivery failed; remote result may be unknown"))?;
+        channel.eof().await.map_err(|_| anyhow!("SSH file write completion is unknown"))?;
+    }
+    let mut stdout = Vec::new();
+    let mut exit_code = None;
+    loop {
+        match channel.wait().await {
+            Some(ChannelMsg::Data { data }) => {
+                if stdout.len().saturating_add(data.len()) > FILE_READ_LIMIT {
+                    let _ = channel.close().await;
+                    bail!("SSH file exceeds the 8192 byte read limit");
+                }
+                stdout.extend_from_slice(&data);
+            }
+            Some(ChannelMsg::ExitStatus { exit_status }) => exit_code = Some(exit_status as i32),
+            Some(ChannelMsg::Failure) => bail!("SSH server refused the file operation"),
+            Some(ChannelMsg::Close) | None => break,
+            _ => {}
+        }
+    }
+    Ok(ChannelResult { exit_code, stdout })
 }
 
 async fn query_inner(handle: Arc<client::Handle<HostKey>>, script: &str) -> Result<QueryResult> {
@@ -1303,6 +1407,7 @@ async fn run_exec(
     operation_id: String,
     text: String,
     mcp: bool,
+    use_shell: bool,
     mut cancel: watch::Receiver<bool>,
     command_text: String,
 ) {
@@ -1329,7 +1434,12 @@ async fn run_exec(
         }
     };
     if let Some(channel) = channel.as_mut() {
-        if channel.exec(true, text.as_bytes()).await.is_err() {
+        let exec_text = if use_shell {
+            format!("/bin/sh -c '{}'", shell_quote(&text))
+        } else {
+            text.clone()
+        };
+        if channel.exec(true, exec_text.as_bytes()).await.is_err() {
             error = Some(RuntimeError {
                 category: ErrorCategory::Transport,
                 code: "ssh_exec_failed".to_owned(),

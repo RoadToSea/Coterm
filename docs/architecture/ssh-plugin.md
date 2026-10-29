@@ -21,21 +21,26 @@ MCP 客户端先用 `coterm.list_instances` 定位实例，再 `ssh.probe` 获�
 | `ssh.reset` | commit | 重建共享 PTY Shell；未完成命令记为 unknown，exec 任务不受影响 |
 | `ssh.read` | read | 按游标回放 base64 字节，报告 gap/closed/more |
 | `ssh.input` | commit | 人工原始按键，账本隐藏输入参数 |
-| `ssh.command` | commit | 共享 POSIX PTY 上执行命令并返回退出码 |
-| `ssh.exec` | commit | 独立 exec 通道执行命令，stdout/stderr 分离，不走共享 PTY |
+| `ssh.command` | commit | 按顺序在共享 POSIX PTY 上执行 `commands` 列表并返回退出码 |
+| `ssh.exec` | commit | 在独立 exec 通道按顺序执行 `commands` 列表，stdout/stderr 分离，不走共享 PTY |
 | `ssh.output` | read | 按游标读取 `ssh.exec` 作业的有界输出与完成状态 |
 | `ssh.system_info` | read | 固定只读脚本读取用户、内核、发行版等系统信息 |
 | `ssh.file_info` | read | 读取单个路径的元信息，不返回内容、不接受任意 shell |
+| `ssh.read_file` | read | 读取最多 8 KiB 的 UTF-8 文本文件 |
+| `ssh.write_file` | commit | 以受限权限模式原子写入最多 64 KiB 的 UTF-8 文本文件，Agent 默认审批 |
 | `ssh.resize` | draft | 调整终端尺寸 |
 | `ssh.plugin_info` | read | 插件级信息 |
 
-MCP 显式注册 status、probe、connect、disconnect、reset、command、exec、output、system_info、file_info、read，并映射到 `mcp.ssh.*`；不开放原始按键和密码输入。基座可调用的插件级信息操作不代表自动注册了同名 MCP Tool。
+MCP 显式注册 status、probe、connect、disconnect、reset、command、exec、output、system_info、file_info、read_file、write_file、read，并映射到 `mcp.ssh.*`；不开放原始按键和密码输入。基座可调用的插件级信息操作不代表自动注册了同名 MCP Tool。
 
 两条执行路径的取舍：
 
+- MCP 的 `ssh.command` 和 `ssh.exec` 都接收有序 `commands` 列表（1 至 64 项，每项最多 4096 字节，总量最多 64 KiB），由插件逐项执行并在首个非零退出码后停止。Agent 不需要拼接 `&&`；列表仍作为一个审批快照提交。
 - `ssh.command` 保留 `cd`/`export`，适合需要共享会话状态的操作。它仍受 PTY 噪声影响：Shell 作业通知、其他人工输入都可能出现在回放中。
-- `ssh.exec` 为每次调用建立独立通道，不继承 Shell 状态，但没有回显、作业通知和登录 Shell 语法错误的连带影响；取消即关闭通道。长任务优先使用它。
+- `ssh.exec` 在单个独立 exec 通道中通过远端 `/bin/sh -c` 按序执行列表，不继承共享 Shell 状态；没有回显、作业通知和登录 Shell 语法错误的连带影响；取消即关闭该通道。长任务优先使用它。
+- MCP `ssh.exec` 将列表中的每项通过远端 `/bin/sh -c` 执行，因此管道、重定向和 shell 展开无需 Agent 包装；内部单条 `ssh.exec` operation 仍可用 `useShell` 显式选择 Shell 模式。独立通道不继承共享 PTY 中的 `cd`、`export` 或提权状态。
 - `ssh.system_info`、`ssh.file_info` 使用固定脚本，效果为 read，不进入审批；它们不执行调用方提供的任意命令。`ssh.system_info` 返回 `user/uid/gid/groups/hostname/kernel/arch/shell/home/cwd/os/uptime` 字段，`ssh.file_info` 只返回存在性、类型、大小、权限、属主、mtime 和符号链接目标。
+- `ssh.read_file` / `ssh.write_file` 只接收显式远端路径，不提供目录枚举或任意本地文件访问。读写通过独立 SSH exec 通道完成，超时 15 秒；读取最多 8 KiB，拒绝非 UTF-8 文件；写入最多 64 KiB，先写同目录随机临时文件、设置 mode 后原子替换。mode 仅允许 `0600/0640/0644/0700/0750/0755`。写入是 commit，Agent 走基座审批；不支持 sudo，目标路径仍受 SSH 用户本身的远端权限约束。
 - 需要放行其他命令时，由基座的「Agent approval」面板按操作名显式添加；不要在插件里依据命令字符串判断安全性。
 
 ## 命令与取消

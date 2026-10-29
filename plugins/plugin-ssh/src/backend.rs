@@ -103,7 +103,7 @@ pub fn catalog() -> Vec<OperationDescriptor> {
             "ssh.exec",
             OperationEffect::Commit,
             false,
-            json!({"text":{"type":"string","minLength":1,"maxLength":4096}}),
+            json!({"text":{"type":"string","minLength":1,"maxLength":4096},"useShell":{"type":"boolean","default":false}}),
         ),
         (
             "ssh.output",
@@ -122,6 +122,8 @@ pub fn catalog() -> Vec<OperationDescriptor> {
             false,
             json!({"path":{"type":"string","minLength":1,"maxLength":4096}}),
         ),
+        ("ssh.read_file", OperationEffect::Read, false, json!({"path":{"type":"string","minLength":1,"maxLength":4096}})),
+        ("ssh.write_file", OperationEffect::Commit, true, json!({"path":{"type":"string","minLength":1,"maxLength":4096},"content":{"type":"string","maxLength":65536},"mode":{"type":"string","enum":["0600","0640","0644","0700","0750","0755"],"default":"0644"}})),
         (
             "ssh.resize",
             OperationEffect::Draft,
@@ -141,7 +143,7 @@ pub fn catalog() -> Vec<OperationDescriptor> {
                 sensitive_input,
                 transient: matches!(
                     name,
-                    "ssh.read" | "ssh.status" | "ssh.resize" | "ssh.input" | "ssh.output"
+                    "ssh.read" | "ssh.read_file" | "ssh.status" | "ssh.resize" | "ssh.input" | "ssh.output"
                 ),
             },
         )
@@ -160,7 +162,7 @@ pub fn catalog() -> Vec<OperationDescriptor> {
         if let Some(base) = operations.iter().find(|item| item.name == native).cloned() {
             operations.push(OperationDescriptor {
                 name: registration.operation,
-                sensitive_input: false,
+                sensitive_input: base.sensitive_input,
                 ..base
             });
         }
@@ -176,11 +178,13 @@ pub fn mcp_tools() -> Vec<McpToolRegistration> {
         ("ssh.connect", "Connect the existing instance. Waits for host approval and a human password prompt; never supply a password.", json!({"fingerprint":{"type":"string"}}), vec!["fingerprint"]),
         ("ssh.disconnect", "Disconnect this instance. May return pending approval.", json!({}), vec![]),
         ("ssh.reset", "Replace the shared interactive shell after a stuck or malformed command. Running commands become unknown; exec jobs are unaffected.", json!({}), vec![]),
-        ("ssh.command", "Run one command in the shared POSIX shell, preserving cd/export. The source is syntax-checked before execution; malformed input returns syntaxError instead of exiting the shell. Returns text or base64 output plus exitCode and byte accounting. May return pending approval.", json!({"text":{"type":"string","minLength":1,"maxLength":4096}}), vec!["text"]),
-        ("ssh.exec", "Run one command on an isolated exec channel instead of the shared PTY. Output is separated into stdout/stderr, shell job notices cannot leak into it, and cancellation closes the channel. Does not preserve cd/export. May return pending approval; progress is available through ssh.output.", json!({"text":{"type":"string","minLength":1,"maxLength":4096}}), vec!["text"]),
+        ("ssh.command", "Run commands in order in the shared POSIX shell, preserving cd/export. Execution stops at the first non-zero command. The plugin performs the sequencing so the Agent does not need to compose && or shell syntax. Returns text or base64 output plus exitCode and byte accounting. May return pending approval.", json!({"commands":{"type":"array","minItems":1,"maxItems":64,"items":{"type":"string","minLength":1,"maxLength":4096}}}), vec!["commands"]),
+        ("ssh.exec", "Run commands in order on isolated exec channels instead of the shared PTY. Execution stops at the first non-zero command. Output is separated into stdout/stderr, shell job notices cannot leak into it, and cancellation closes the channel. Each list entry is executed by /bin/sh, so pipelines and shell syntax work without Agent-side composition. May return pending approval; progress is available through ssh.output.", json!({"commands":{"type":"array","minItems":1,"maxItems":64,"items":{"type":"string","minLength":1,"maxLength":4096}}}), vec!["commands"]),
         ("ssh.output", "Read bounded stdout/stderr of an ssh.exec operation with decimal cursors. Reports done, exitCode, gaps and remaining data.", json!({"operationId":{"type":"string","minLength":1,"maxLength":128},"stdoutCursor":{"type":"string","default":"0"},"stderrCursor":{"type":"string","default":"0"}}), vec!["operationId"]),
         ("ssh.system_info", "Read basic host, user, kernel and OS information with a fixed read-only query. No approval and no arbitrary shell.", json!({}), vec![]),
         ("ssh.file_info", "Read metadata for one existing path (type, size, mode, owner, mtime, symlink target). No file content and no arbitrary shell.", json!({"path":{"type":"string","minLength":1,"maxLength":4096}}), vec!["path"]),
+        ("ssh.read_file", "Read a UTF-8 text file up to 8192 bytes from the remote host. No sudo or arbitrary shell.", json!({"path":{"type":"string","minLength":1,"maxLength":4096}}), vec!["path"]),
+        ("ssh.write_file", "Write a UTF-8 text file up to 65536 bytes to the remote host with an explicit mode. This is a commit and requires approval unless the user allowlists it. No sudo.", json!({"path":{"type":"string","minLength":1,"maxLength":4096},"content":{"type":"string","maxLength":65536},"mode":{"type":"string","enum":["0600","0640","0644","0700","0750","0755"],"default":"0644"}}), vec!["path","content"]),
         ("ssh.read", "Read bounded base64 terminal bytes using a decimal cursor; reports gaps.", json!({"cursor":{"type":"string","default":"0"}}), vec![]),
     ].into_iter().map(|(name, description, mut properties, required)| {
         properties["pluginInstanceId"] = json!({"type":"string","minLength":1});
@@ -210,9 +214,15 @@ fn validate_mcp_args(operation: &str, args: &Value) -> Result<()> {
     let properties = schema["properties"]
         .as_object()
         .ok_or_else(|| anyhow!("Invalid MCP schema"))?;
-    if object
-        .iter()
-        .any(|(name, value)| !properties.contains_key(name) || !value.is_string())
+    if object.iter().any(|(name, value)| {
+        let Some(property) = properties.get(name) else { return true };
+        match property["type"].as_str() {
+            Some("string") => !value.is_string(),
+            Some("boolean") => !value.is_boolean(),
+            Some("array") => !value.is_array(),
+            _ => true,
+        }
+    })
     {
         bail!("Unknown or invalid SSH MCP argument");
     }
@@ -224,7 +234,59 @@ fn validate_mcp_args(operation: &str, args: &Value) -> Result<()> {
     }) {
         bail!("Missing required SSH MCP argument");
     }
+    if operation.ends_with("ssh.write_file")
+        && (object
+            .get("content")
+            .and_then(Value::as_str)
+            .is_none_or(|content| content.len() > 65_536)
+            || object
+                .get("mode")
+                .and_then(Value::as_str)
+                .is_some_and(|mode| !matches!(mode, "0600" | "0640" | "0644" | "0700" | "0750" | "0755")))
+    {
+        bail!("SSH file content or mode is outside the supported limits");
+    }
+    if operation.ends_with("ssh.command") || operation.ends_with("ssh.exec") {
+        validate_commands(args)?;
+    }
     Ok(())
+}
+
+fn validate_commands(args: &Value) -> Result<Vec<&str>> {
+    let commands = args
+        .get("commands")
+        .and_then(Value::as_array)
+        .ok_or_else(|| anyhow!("MCP command input must be a commands array"))?;
+    if commands.is_empty() || commands.len() > 64 {
+        bail!("MCP commands must contain 1 to 64 entries");
+    }
+    let mut total = 0usize;
+    let mut result = Vec::with_capacity(commands.len());
+    for command in commands {
+        let command = command
+            .as_str()
+            .ok_or_else(|| anyhow!("Each MCP command must be a string"))?;
+        if command.trim().is_empty()
+            || command.len() > 4096
+            || command.chars().any(char::is_control)
+        {
+            bail!("Each MCP command must be a nonempty single line of at most 4096 bytes");
+        }
+        total = total.saturating_add(command.len());
+        result.push(command);
+    }
+    if total > 64 * 1024 {
+        bail!("MCP command list exceeds the 65536 byte total limit");
+    }
+    Ok(result)
+}
+
+fn command_sequence(commands: &[&str]) -> String {
+    commands
+        .iter()
+        .map(|command| format!("eval '{}'", session::shell_quote(command)))
+        .collect::<Vec<_>>()
+        .join(" && ")
 }
 
 fn mcp_result(value: Value) -> Value {
@@ -272,13 +334,17 @@ impl Backend {
         operation_id: &str,
         mcp: bool,
     ) -> Result<Value> {
-        let text = command(args)?;
+        let text = if mcp {
+            command_sequence(&validate_commands(args)?)
+        } else {
+            command(args)?.to_owned()
+        };
         let instance = self
             .instances
             .get(id)
             .ok_or_else(|| anyhow!("SSH instance not found"))?;
         connected(instance)?
-            .command(operation_id.to_owned(), mcp, text)
+            .command(operation_id.to_owned(), mcp, &text)
             .await?;
         Ok(serde_json::to_value(DeferredOperation {
             operation_id: operation_id.to_owned(),
@@ -292,13 +358,20 @@ impl Backend {
         operation_id: &str,
         mcp: bool,
     ) -> Result<Value> {
-        let text = command(args)?.to_owned();
+        let (text, use_shell) = if mcp {
+            (command_sequence(&validate_commands(args)?), true)
+        } else {
+            (
+                command(args)?.to_owned(),
+                args.get("useShell").and_then(Value::as_bool).unwrap_or(false),
+            )
+        };
         let instance = self
             .instances
             .get(id)
             .ok_or_else(|| anyhow!("SSH instance not found"))?;
         connected(instance)?
-            .exec(operation_id.to_owned(), mcp, text)
+            .exec(operation_id.to_owned(), mcp, text, use_shell)
             .await?;
         Ok(serde_json::to_value(DeferredOperation {
             operation_id: operation_id.to_owned(),
@@ -543,9 +616,16 @@ impl Backend {
                 request.operation.as_str(),
                 "ssh.command" | "mcp.ssh.command" | "ssh.exec" | "mcp.ssh.exec"
             ) {
-                command(&request.args)?;
+                if request.operation.starts_with("mcp.") {
+                    validate_mcp_args(&request.operation, &request.args)?;
+                } else {
+                    command(&request.args)?;
+                }
             }
             if request.operation == "ssh.file_info" || request.operation == "mcp.ssh.file_info" {
+                path(&request.args)?;
+            }
+            if matches!(request.operation.as_str(), "ssh.read_file" | "mcp.ssh.read_file" | "ssh.write_file" | "mcp.ssh.write_file") {
                 path(&request.args)?;
             }
             self.proposals.insert(
@@ -625,6 +705,10 @@ impl Backend {
             let result = match native {
                 "ssh.command" => return self.start_command(id, &args, operation_id, true).await,
                 "ssh.exec" => return self.start_exec(id, &args, operation_id, true).await,
+                "ssh.read_file" | "ssh.write_file" => {
+                    let result = self.execute_domain(id, native, args, operation_id).await?;
+                    return Ok(mcp_result(result));
+                }
                 _ => self.execute_domain(id, native, args, operation_id).await?,
             };
             return Ok(mcp_result(result));
@@ -770,6 +854,19 @@ impl Backend {
                 }
                 Ok(Value::Object(fields))
             }
+            "ssh.read_file" => {
+                let path = path(&args)?;
+                connected(instance)?.read_file(path).await
+            }
+            "ssh.write_file" => {
+                let path = path(&args)?;
+                let content = string(&args, "content")?;
+                if content.len() > 65_536 {
+                    bail!("SSH file content exceeds the 65536 byte limit");
+                }
+                let mode = args.get("mode").and_then(Value::as_str).unwrap_or("0644");
+                connected(instance)?.write_file(path, content, mode).await
+            }
             "ssh.input" => {
                 let data = string(&args, "data")?;
                 if data.len() > 22 * 1024 {
@@ -859,4 +956,63 @@ fn truncate(text: &str, limit: usize) -> String {
         end -= 1;
     }
     text[..end].to_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::{command_sequence, mcp_tools, session, validate_mcp_args};
+
+    #[test]
+    fn mcp_command_tools_accept_bounded_ordered_lists() {
+        for operation in ["mcp.ssh.command", "mcp.ssh.exec"] {
+            assert!(validate_mcp_args(
+                operation,
+                &json!({"pluginInstanceId":"instance","commands":["cd /tmp", "pwd | head -n 1"]})
+            )
+            .is_ok());
+            assert!(validate_mcp_args(
+                operation,
+                &json!({"pluginInstanceId":"instance","commands":[]})
+            )
+            .is_err());
+            assert!(validate_mcp_args(
+                operation,
+                &json!({"pluginInstanceId":"instance","commands":["if"]})
+            )
+            .is_ok());
+        }
+        let tools = mcp_tools();
+        for name in ["ssh.command", "ssh.exec"] {
+            let tool = tools
+                .iter()
+                .find(|tool| tool.descriptor["name"] == name)
+                .expect("registered SSH command tool");
+            assert_eq!(tool.descriptor["inputSchema"]["required"][0], "commands");
+            assert!(tool.descriptor["inputSchema"]["properties"].get("text").is_none());
+        }
+    }
+
+    #[test]
+    fn command_sequence_runs_in_order_and_stops_on_failure() -> anyhow::Result<()> {
+        let script = command_sequence(&["printf first", "false", "printf never"]);
+        let wrapped = format!("/bin/sh -c '{}'", session::shell_quote(&script));
+        let output = match std::process::Command::new("sh")
+            .arg("-c")
+            .arg(wrapped)
+            .output()
+        {
+            Ok(output) => output,
+            Err(error)
+                if cfg!(windows) && error.kind() == std::io::ErrorKind::NotFound =>
+            {
+                return Ok(())
+            }
+            Err(error) => return Err(error.into()),
+        };
+        assert_eq!(output.status.code(), Some(1));
+        assert_eq!(output.stdout, b"first");
+        Ok(())
+    }
 }

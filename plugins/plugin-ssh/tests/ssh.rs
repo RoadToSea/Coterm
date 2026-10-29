@@ -340,6 +340,9 @@ path={target}
 path={target}
 ").into_bytes())?;
             }
+        } else if source.starts_with("cat < '") {
+            session.data(channel, b"alpha=1\nbeta=two\n".to_vec())?;
+            session.exit_status_request(channel, 0)?;
         } else {
             session.data(channel, data.to_vec())?;
             if source.contains("false") {
@@ -857,7 +860,7 @@ async fn external_mcp_uses_shared_ssh_and_host_secret_and_approval_paths() -> Re
     let waiting_id = client.next_id;
     coterm_mcp::transport::write_frame(&mut client.writer, &json!({
         "jsonrpc":"2.0","id":waiting_id,"method":"tools/call","params":{
-            "name":"coterm-plugin-ssh__ssh.command","arguments":{"pluginInstanceId":instance.plugin_instance_id,"text":"original-waiting-command"}
+            "name":"coterm-plugin-ssh__ssh.command","arguments":{"pluginInstanceId":instance.plugin_instance_id,"commands":["original-waiting-command"]}
         }
     })).await?;
     assert!(timeout(
@@ -883,7 +886,7 @@ async fn external_mcp_uses_shared_ssh_and_host_secret_and_approval_paths() -> Re
     runtime.approve(human(), ApproveProposal {
         operation_id:result_id.clone(), proposal_id:pending_record.proposal_id.ok_or_else(|| anyhow::anyhow!("No proposal"))?,
         plugin_instance_id:Some(instance.plugin_instance_id.clone()),
-        args:json!({"pluginInstanceId":instance.plugin_instance_id,"text":"approved-default-wait false"}),
+        args:json!({"pluginInstanceId":instance.plugin_instance_id,"commands":["approved-default-wait false"]}),
     }).await?;
     let frame = timeout(
         Duration::from_secs(3),
@@ -900,7 +903,9 @@ async fn external_mcp_uses_shared_ssh_and_host_secret_and_approval_paths() -> Re
     let domain = &response["result"]["structuredContent"];
     assert_eq!(domain["exitCode"], 1);
     assert_eq!(response["result"]["isError"], true);
-    assert_eq!(domain["text"], "approved-default-wait false\r\n");
+    assert!(domain["text"]
+        .as_str()
+        .is_some_and(|text| text.contains("approved-default-wait false")));
     // HTTP clients use only a URL, sharing this same authenticated SSH instance.
     let http = coterm_mcp::http::HttpBridgeServer::bind_at(runtime.clone(), "127.0.0.1:0".parse()?)
         .await?;
@@ -934,7 +939,7 @@ async fn external_mcp_uses_shared_ssh_and_host_secret_and_approval_paths() -> Re
         reqwest::StatusCode::ACCEPTED
     );
     let waiting = http_request(json!({"jsonrpc":"2.0","id":"http-command","method":"tools/call","params":{
-        "name":"coterm-plugin-ssh__ssh.command","arguments":{"pluginInstanceId":instance.plugin_instance_id,"text":"http-original-command"}
+        "name":"coterm-plugin-ssh__ssh.command","arguments":{"pluginInstanceId":instance.plugin_instance_id,"commands":["http-original-command"]}
     }})).send();
     tokio::pin!(waiting);
     assert!(timeout(Duration::from_millis(50), &mut waiting)
@@ -954,7 +959,7 @@ async fn external_mcp_uses_shared_ssh_and_host_secret_and_approval_paths() -> Re
         operation_id: proposal.operation_id,
         proposal_id: proposal.proposal_id.ok_or_else(|| anyhow::anyhow!("No HTTP proposal ID"))?,
         plugin_instance_id: Some(instance.plugin_instance_id.clone()),
-        args: json!({"pluginInstanceId":instance.plugin_instance_id,"text":"http-human-approved false"}),
+        args: json!({"pluginInstanceId":instance.plugin_instance_id,"commands":["http-human-approved false"]}),
     }).await?;
     let response: Value = timeout(Duration::from_secs(3), waiting)
         .await??
@@ -968,10 +973,12 @@ async fn external_mcp_uses_shared_ssh_and_host_secret_and_approval_paths() -> Re
     );
     let domain = &response["result"]["structuredContent"];
     assert_eq!(domain["exitCode"], 1);
-    assert_eq!(domain["text"], "http-human-approved false\r\n");
+    assert!(domain["text"]
+        .as_str()
+        .is_some_and(|text| text.contains("http-human-approved false")));
     // Closing the HTTP session cannot approve, cancel, or replay a pending write.
     let pending: Value = http_request(json!({"jsonrpc":"2.0","id":"http-pending","method":"tools/call","params":{
-        "name":"coterm-plugin-ssh__ssh.command","arguments":{"pluginInstanceId":instance.plugin_instance_id,"text":"http-must-not-replay"},
+        "name":"coterm-plugin-ssh__ssh.command","arguments":{"pluginInstanceId":instance.plugin_instance_id,"commands":["http-must-not-replay"]},
         "_meta":{"coterm/waitTimeoutMs":0}
     }})).send().await?.json().await?;
     let pending_id = pending["result"]["_meta"]["coterm/operation"]["operationId"]
@@ -1078,7 +1085,7 @@ async fn external_mcp_uses_shared_ssh_and_host_secret_and_approval_paths() -> Re
     );
     // Explicit zero waiting returns an accepted receipt; cancellation never sends it.
     let immediate = client.rpc("tools/call", json!({"name":"coterm-plugin-ssh__ssh.command", "arguments":{
-        "pluginInstanceId":instance.plugin_instance_id,"text":"must-not-run"},"_meta":{"coterm/waitTimeoutMs":0}})).await?;
+        "pluginInstanceId":instance.plugin_instance_id,"commands":["must-not-run"]},"_meta":{"coterm/waitTimeoutMs":0}})).await?;
     assert_eq!(immediate["_meta"]["coterm/operation"]["status"], "accepted");
     let immediate_id = immediate["_meta"]["coterm/operation"]["operationId"]
         .as_str()
@@ -1093,7 +1100,7 @@ async fn external_mcp_uses_shared_ssh_and_host_secret_and_approval_paths() -> Re
     let pending = client
         .tool(
             "coterm-plugin-ssh__ssh.command",
-            json!({"pluginInstanceId":instance.plugin_instance_id,"text":"not-approved-original"}),
+            json!({"pluginInstanceId":instance.plugin_instance_id,"commands":["not-approved-original"]}),
         )
         .await?;
     let receipt = &pending["_meta"]["coterm/operation"];
@@ -1101,7 +1108,7 @@ async fn external_mcp_uses_shared_ssh_and_host_secret_and_approval_paths() -> Re
         operation_id:receipt["operationId"].as_str().ok_or_else(|| anyhow::anyhow!("Missing command"))?.to_owned(),
         proposal_id:receipt["proposalId"].as_str().ok_or_else(|| anyhow::anyhow!("Missing command proposal"))?.to_owned(),
         plugin_instance_id:Some(instance.plugin_instance_id.clone()),
-        args:json!({"pluginInstanceId":instance.plugin_instance_id,"text":"human-approved-edit"}),
+        args:json!({"pluginInstanceId":instance.plugin_instance_id,"commands":["human-approved-edit"]}),
     }).await?;
     // Human input goes into exactly the same shell the external Agent uses.
     runtime
@@ -1193,7 +1200,7 @@ async fn external_mcp_uses_shared_ssh_and_host_secret_and_approval_paths() -> Re
     client.next_id += 1;
     let interrupted_id = client.next_id;
     coterm_mcp::transport::write_frame(&mut client.writer, &json!({"jsonrpc":"2.0","id":interrupted_id,"method":"tools/call","params":{
-        "name":"coterm-plugin-ssh__ssh.command","arguments":{"pluginInstanceId":instance.plugin_instance_id,"text":"never-completes"}
+        "name":"coterm-plugin-ssh__ssh.command","arguments":{"pluginInstanceId":instance.plugin_instance_id,"commands":["never-completes"]}
     }})).await?;
     timeout(Duration::from_secs(3), async {
         loop {
@@ -1537,6 +1544,45 @@ async fn read_only_queries_use_fixed_scripts_outside_the_pty() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn file_tools_are_explicit_bounded_and_write_is_a_sensitive_commit() {
+    use coterm_proto::runtime::operation::OperationEffect;
+
+    let operations = coterm_plugin_ssh::backend::catalog();
+    let read = operations
+        .iter()
+        .find(|operation| operation.name == "ssh.read_file")
+        .expect("ssh.read_file descriptor");
+    assert_eq!(read.effect, OperationEffect::Read);
+    let write = operations
+        .iter()
+        .find(|operation| operation.name == "ssh.write_file")
+        .expect("ssh.write_file descriptor");
+    assert_eq!(write.effect, OperationEffect::Commit);
+    assert!(write.sensitive_input);
+    assert_eq!(write.input_schema["properties"]["content"]["maxLength"], 65536);
+
+    let tools = coterm_plugin_ssh::backend::mcp_tools();
+    assert!(tools.iter().any(|tool| tool.operation == "mcp.ssh.read_file"));
+    assert!(tools.iter().any(|tool| tool.operation == "mcp.ssh.write_file"));
+}
+
+#[tokio::test]
+async fn read_file_returns_utf8_text_on_an_isolated_channel() -> Result<()> {
+    let ssh = server().await?;
+    let connection = Connection::connect(
+        &ssh.config,
+        ssh.fingerprint.clone(),
+        "local-test-password",
+    )
+    .await?;
+    let result = connection.read_file("/tmp/config file").await?;
+    assert_eq!(result["text"], "alpha=1\nbeta=two\n");
+    assert_eq!(result["bytes"], 17);
+    connection.disconnect().await?;
+    Ok(())
+}
+
 /// A shell that accepts commands but never emits a completion marker for them.
 struct Stuck;
 
@@ -1707,7 +1753,7 @@ async fn explicit_allowlist_skips_approval_without_changing_effect_or_checks() -
         plugin_id: instance.plugin_id.clone(),
         plugin_instance_id: Some(instance.plugin_instance_id.clone()),
         operation: "mcp.ssh.exec".to_owned(),
-        args: json!({"pluginInstanceId":instance.plugin_instance_id,"text":"echo allowed"}),
+        args: json!({"pluginInstanceId":instance.plugin_instance_id,"commands":["echo allowed"]}),
         wait_timeout_ms: Some(3_000),
     };
     // Without an allowlist entry an Agent commit still becomes a proposal.

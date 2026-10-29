@@ -2,6 +2,8 @@
 
 ## 连接
 
+MCP 的首选入口是本地 Stdio 子进程；桌面前端通过 Tauri Host API 和插件事件工作，不经过 MCP。Streamable HTTP 是可选外部客户端接入方式，不是 Stdio 的下游或前端中间层。
+
 保持 Coterm 桌面运行，在支持 Streamable HTTP 的客户端添加：
 
 ```text
@@ -62,4 +64,20 @@ SSH 认证步骤和工具边界见 [SSH](ssh-plugin.md)，串口可用工具见 
 
 实现与测试位于 [coterm-mcp](../../crates/coterm-mcp)。Resources、Prompts、订阅、进度和 MCP cancellation notification 尚未实现；`coterm.cancel_operation` 是操作工具。
 
-旧 `coterm-mcp-stdio` 仅保留作开发回归，通过 `COTERM_MCP_ADDR`/`COTERM_MCP_TOKEN` 连接测试私有服务，不自动转接当前桌面 HTTP 入口。内部交互和事件见 [运行时通信](runtime-communication.md)。
+仓库提供 `coterm-mcp-stdio`，stdin/stdout 承载标准 MCP JSON-RPC；它通过 Coterm 私有、仅监听回环地址并带 Token 的本机 IPC Bridge 调用桌面运行时：
+
+```json
+{
+  "mcpServers": {
+    "coterm": {
+      "command": "coterm-mcp-stdio",
+      "env": {
+        "COTERM_MCP_ADDR": "127.0.0.1:<bridge-port>",
+        "COTERM_MCP_TOKEN": "<desktop-issued-token>"
+      }
+    }
+  }
+}
+```
+
+Stdio 适配器会把 MCP 目录、调用和操作结果路由到当前桌面运行时；它不负责启动插件，也不接触前端。桌面必须保持运行。当前 CLI 仍是开发回归入口，桌面尚未发布私有 Bridge 的客户端配置，因此开箱即用的 Stdio 启动尚未完成；发布前必须提供安全的本机配置发现/令牌交付及独立 CLI 分发。HTTP 端口 `127.0.0.1:23517/mcp` 可单独使用，不是 Stdio 的依赖。内部交互和事件见 [运行时通信](runtime-communication.md)。
