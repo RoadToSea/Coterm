@@ -13,6 +13,7 @@ use russh::{
 };
 use serde_json::{json, Value};
 use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
     net::TcpListener,
     task::JoinHandle,
     time::{sleep, timeout},
@@ -264,7 +265,63 @@ async fn process_host_routes_approval_snapshot_and_hides_terminal_input() -> Res
     Ok(())
 }
 
-struct Echo;
+#[derive(Default)]
+struct Echo {
+    scripts: std::collections::HashMap<ChannelId, Vec<u8>>,
+    children: std::collections::HashMap<ChannelId, tokio::process::ChildStdin>,
+    real_shell: bool,
+}
+
+fn start_test_child(
+    mut child: tokio::process::Child,
+    channel: ChannelId,
+    session: &Session,
+) -> Option<tokio::process::ChildStdin> {
+    let input = child.stdin.take();
+    let stdout = child.stdout.take();
+    let stderr = child.stderr.take();
+    let handle = session.handle();
+    tokio::spawn(async move {
+        let out = async {
+            if let Some(mut stdout) = stdout {
+                let mut bytes = [0; 4096];
+                while let Ok(count) = stdout.read(&mut bytes).await {
+                    if count == 0 {
+                        break;
+                    }
+                    if handle.data(channel, bytes[..count].to_vec()).await.is_err() {
+                        break;
+                    }
+                }
+            }
+        };
+        let err = async {
+            if let Some(mut stderr) = stderr {
+                let mut bytes = [0; 4096];
+                while let Ok(count) = stderr.read(&mut bytes).await {
+                    if count == 0 {
+                        break;
+                    }
+                    if handle
+                        .extended_data(channel, 1, bytes[..count].to_vec())
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+            }
+        };
+        let (status, _, _) = tokio::join!(child.wait(), out, err);
+        if let Ok(status) = status {
+            let _ = handle
+                .exit_status_request(channel, status.code().unwrap_or(255) as u32)
+                .await;
+        }
+        let _ = handle.close(channel).await;
+    });
+    input
+}
 
 impl server::Handler for Echo {
     type Error = russh::Error;
@@ -318,27 +375,83 @@ impl server::Handler for Echo {
         session: &mut Session,
     ) -> Result<(), Self::Error> {
         let source = String::from_utf8_lossy(data);
+        if self.real_shell {
+            session.channel_success(channel)?;
+            // Test-only sudo policy: consume one password line, refuse wrong input,
+            // then run the actual POSIX script without requiring administrator rights.
+            let sudo = if source.contains("NOPASSWD-fixture") {
+                "sudo() { shift 5; \"$@\"; }; "
+            } else {
+                "sudo() { __prompt=$4; shift 5; printf '%s' \"$__prompt\" >&2; IFS= read -r __pw; [ \"$__pw\" = local-sudo-password ] || return 1; unset __pw; \"$@\"; }; "
+            };
+            let command = if source.starts_with("sudo ") {
+                format!("{sudo}{source}")
+            } else {
+                source.to_string()
+            };
+            let child = tokio::process::Command::new("sh")
+                .arg("-c")
+                .arg(command)
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .kill_on_drop(true)
+                .spawn()
+                .map_err(|_| russh::Error::Disconnect)?;
+            let input = start_test_child(child, channel, session);
+            if source.contains("__coterm_script=$(cat)")
+                || source.contains("cat >")
+                || source.starts_with("sudo ")
+            {
+                if let Some(input) = input {
+                    self.children.insert(channel, input);
+                }
+            }
+            return Ok(());
+        }
+        if source.contains("__coterm_script=$(cat)") {
+            self.scripts.insert(channel, Vec::new());
+            session.channel_success(channel)?;
+            return Ok(());
+        }
         // Read-only queries and exec commands run outside the shared PTY.
         if source.starts_with("printf 'user=") {
-            session.data(channel, b"user=tester
+            session.data(
+                channel,
+                b"user=tester
 uid=1000
 os=TestOS
-".to_vec())?;
+"
+                .to_vec(),
+            )?;
         } else if let Some(rest) = source.strip_prefix("__p='") {
-            let target = rest.trim_start_matches(char::from(39)).split(char::from(39)).next().unwrap_or("");
+            let target = rest
+                .trim_start_matches(char::from(39))
+                .split(char::from(39))
+                .next()
+                .unwrap_or("");
             if target.ends_with("/exists") {
                 session.data(
                     channel,
-                    format!("exists=1
+                    format!(
+                        "exists=1
 type=regular file
 size=11
 path={target}
-").into_bytes(),
+"
+                    )
+                    .into_bytes(),
                 )?;
             } else {
-                session.data(channel, format!("exists=0
+                session.data(
+                    channel,
+                    format!(
+                        "exists=0
 path={target}
-").into_bytes())?;
+"
+                    )
+                    .into_bytes(),
+                )?;
             }
         } else if source.starts_with("cat < '") {
             session.data(channel, b"alpha=1\nbeta=two\n".to_vec())?;
@@ -360,6 +473,17 @@ path={target}
         data: &[u8],
         session: &mut Session,
     ) -> Result<(), Self::Error> {
+        if let Some(input) = self.children.get_mut(&channel) {
+            input
+                .write_all(data)
+                .await
+                .map_err(|_| russh::Error::Disconnect)?;
+            return Ok(());
+        }
+        if let Some(script) = self.scripts.get_mut(&channel) {
+            script.extend_from_slice(data);
+            return Ok(());
+        }
         let source = String::from_utf8_lossy(data);
         if let Some(rest) = source.strip_prefix("printf '\\033]777;coterm;") {
             let token = rest.split(';').next().ok_or(russh::Error::Disconnect)?;
@@ -381,8 +505,10 @@ path={target}
                 (0, "")
             };
             if flag == "syntax" {
-                session
-                    .data(channel, b"bash: syntax error: unexpected end of file\r\n".to_vec())?;
+                session.data(
+                    channel,
+                    b"bash: syntax error: unexpected end of file\r\n".to_vec(),
+                )?;
             }
             let end = format!("\x1b]777;coterm;{token};end;{code};{flag}\x07");
             if !text.contains("never-completes") {
@@ -390,6 +516,22 @@ path={target}
             }
         } else {
             session.data(channel, data.to_vec())?;
+        }
+        Ok(())
+    }
+
+    async fn channel_eof(
+        &mut self,
+        channel: ChannelId,
+        session: &mut Session,
+    ) -> Result<(), Self::Error> {
+        if let Some(input) = self.children.remove(&channel) {
+            drop(input);
+        } else if let Some(script) = self.scripts.remove(&channel) {
+            let code = u32::from(String::from_utf8_lossy(&script).contains("false"));
+            session.data(channel, script)?;
+            session.exit_status_request(channel, code)?;
+            session.close(channel)?;
         }
         Ok(())
     }
@@ -407,6 +549,10 @@ impl Drop for TestServer {
 }
 
 async fn server() -> Result<TestServer> {
+    server_mode(false).await
+}
+
+async fn server_mode(real_shell: bool) -> Result<TestServer> {
     let key = russh::keys::PrivateKey::random(&mut rand::rng(), russh::keys::Algorithm::Ed25519)?;
     let fingerprint = key
         .public_key()
@@ -427,7 +573,16 @@ async fn server() -> Result<TestServer> {
             };
             let config = config.clone();
             tokio::spawn(async move {
-                if let Ok(session) = server::run_stream(config, socket, Echo).await {
+                if let Ok(session) = server::run_stream(
+                    config,
+                    socket,
+                    Echo {
+                        real_shell,
+                        ..Default::default()
+                    },
+                )
+                .await
+                {
                     let _ = session.await;
                 }
             });
@@ -688,7 +843,10 @@ impl McpWire {
     async fn tool(&mut self, name: &str, args: Value) -> Result<Value> {
         let mut args = args;
         if let Some(object) = args.as_object_mut() {
-            if let Some(instance_id) = object.remove("pluginInstanceId").and_then(|id| id.as_str().map(str::to_owned)) {
+            if let Some(instance_id) = object
+                .remove("pluginInstanceId")
+                .and_then(|id| id.as_str().map(str::to_owned))
+            {
                 let instance_name = self
                     .instance_names
                     .get(&instance_id)
@@ -769,8 +927,10 @@ async fn external_mcp_uses_shared_ssh_and_host_secret_and_approval_paths() -> Re
     let other = runtime
         .create_instance("coterm-plugin-ssh", serde_json::to_value(&ssh.config)?)
         .await?;
-    let bridge = coterm_mcp::server::BridgeServer::bind_at(runtime.clone(), "127.0.0.1:0".parse()?).await?;
-    let mut client = McpWire::connect(bridge.connection_info(), &[instance.clone(), other.clone()]).await?;
+    let bridge =
+        coterm_mcp::server::BridgeServer::bind_at(runtime.clone(), "127.0.0.1:0".parse()?).await?;
+    let mut client =
+        McpWire::connect(bridge.connection_info(), &[instance.clone(), other.clone()]).await?;
     let tools = client.rpc("tools/list", json!({})).await?;
     let tools = tools["tools"]
         .as_array()
@@ -781,6 +941,20 @@ async fn external_mcp_uses_shared_ssh_and_host_secret_and_approval_paths() -> Re
     assert!(tools
         .iter()
         .any(|t| t["name"] == "coterm-plugin-ssh__ssh.plugin_info"));
+    for name in [
+        "coterm-plugin-ssh__ssh.read_file",
+        "coterm-plugin-ssh__ssh.write_file",
+    ] {
+        let tool = tools
+            .iter()
+            .find(|tool| tool["name"] == name)
+            .ok_or_else(|| anyhow::anyhow!("Missing published file tool: {name}"))?;
+        assert_eq!(tool["inputSchema"]["properties"]["sudo"]["type"], "boolean");
+        assert_eq!(tool["inputSchema"]["properties"]["name"]["type"], "string");
+        assert!(tool["inputSchema"]["properties"]
+            .get("pluginInstanceId")
+            .is_none());
+    }
     assert!(!tools
         .iter()
         .any(|t| t["name"] == "coterm-plugin-ssh__ssh.input"));
@@ -918,7 +1092,8 @@ async fn external_mcp_uses_shared_ssh_and_host_secret_and_approval_paths() -> Re
         .is_some_and(|text| text.contains("approved-default-wait false")));
     // A second MCP client shares the same SSH instance and waits on
     // approval. Closing that client must never approve, cancel, or replay a write.
-    let second_bridge = coterm_mcp::server::BridgeServer::bind_at(runtime.clone(), "127.0.0.1:0".parse()?).await?;
+    let second_bridge =
+        coterm_mcp::server::BridgeServer::bind_at(runtime.clone(), "127.0.0.1:0".parse()?).await?;
     let mut second = McpWire::connect(
         second_bridge.connection_info(),
         std::slice::from_ref(&instance),
@@ -938,7 +1113,9 @@ async fn external_mcp_uses_shared_ssh_and_host_secret_and_approval_paths() -> Re
         let waiting = coterm_mcp::transport::read_frame(&mut second.reader);
         tokio::pin!(waiting);
         assert!(
-            timeout(Duration::from_millis(50), &mut waiting).await.is_err(),
+            timeout(Duration::from_millis(50), &mut waiting)
+                .await
+                .is_err(),
             "a pending approval keeps the second client waiting"
         );
     }
@@ -1090,8 +1267,13 @@ async fn external_mcp_uses_shared_ssh_and_host_secret_and_approval_paths() -> Re
         OperationStatus::Completed
     );
     // Explicit zero waiting returns an accepted receipt; cancellation never sends it.
-    let immediate = client.rpc("tools/call", json!({"name":"coterm-plugin-ssh__ssh.command", "arguments":{
-        "name":instance.label,"commands":["must-not-run"]},"_meta":{"coterm/waitTimeoutMs":0}})).await?;
+    let immediate = client
+        .rpc(
+            "tools/call",
+            json!({"name":"coterm-plugin-ssh__ssh.command", "arguments":{
+        "name":instance.label,"commands":["must-not-run"]},"_meta":{"coterm/waitTimeoutMs":0}}),
+        )
+        .await?;
     assert_eq!(immediate["_meta"]["coterm/operation"]["status"], "accepted");
     let immediate_id = immediate["_meta"]["coterm/operation"]["operationId"]
         .as_str()
@@ -1261,7 +1443,6 @@ async fn external_mcp_uses_shared_ssh_and_host_secret_and_approval_paths() -> Re
     Ok(())
 }
 
-
 /// Builds one plugin package directory for a test and returns its path.
 async fn load_runtime(
     server: &TestServer,
@@ -1270,10 +1451,7 @@ async fn load_runtime(
     std::sync::Arc<coterm_core::plugin_manager::ProcessPluginRuntime>,
     coterm_proto::runtime::lifecycle::InstanceInfo,
 )> {
-    use coterm_core::{
-        plugin_manager::ProcessPluginRuntime,
-        plugin_runtime::PluginRuntime,
-    };
+    use coterm_core::{plugin_manager::ProcessPluginRuntime, plugin_runtime::PluginRuntime};
     use coterm_proto::runtime::{lifecycle::RuntimeLimits, stream::FlowWindow};
     let directory = std::env::temp_dir().join(format!(
         "coterm-ssh-{tag}-{}-{}",
@@ -1496,7 +1674,9 @@ async fn exec_is_isolated_from_the_shared_pty_and_streams_output() -> Result<()>
             },
         )
         .await?;
-    let view = output_view.output.ok_or_else(|| anyhow::anyhow!("no view"))?;
+    let view = output_view
+        .output
+        .ok_or_else(|| anyhow::anyhow!("no view"))?;
     assert_eq!(view["done"], true);
     assert_eq!(view["stdout"]["text"], "echo isolated");
     assert_eq!(view["exitCode"], 0);
@@ -1531,7 +1711,10 @@ async fn read_only_queries_use_fixed_scripts_outside_the_pty() -> Result<()> {
     assert_eq!(info["uid"], "1000");
     assert_eq!(info["os"], "TestOS");
     let file = runtime
-        .submit(human(), call("ssh.file_info", json!({"path":"/tmp/exists"})))
+        .submit(
+            human(),
+            call("ssh.file_info", json!({"path":"/tmp/exists"})),
+        )
         .await?;
     let file = file.output.ok_or_else(|| anyhow::anyhow!("no file info"))?;
     assert_eq!(file["exists"], "1");
@@ -1566,22 +1749,25 @@ fn file_tools_are_explicit_bounded_and_write_is_a_sensitive_commit() {
         .expect("ssh.write_file descriptor");
     assert_eq!(write.effect, OperationEffect::Commit);
     assert!(write.sensitive_input);
-    assert_eq!(write.input_schema["properties"]["content"]["maxLength"], 65536);
+    assert_eq!(
+        write.input_schema["properties"]["content"]["maxLength"],
+        65536
+    );
 
     let tools = coterm_plugin_ssh::backend::mcp_tools();
-    assert!(tools.iter().any(|tool| tool.operation == "mcp.ssh.read_file"));
-    assert!(tools.iter().any(|tool| tool.operation == "mcp.ssh.write_file"));
+    assert!(tools
+        .iter()
+        .any(|tool| tool.operation == "mcp.ssh.read_file"));
+    assert!(tools
+        .iter()
+        .any(|tool| tool.operation == "mcp.ssh.write_file"));
 }
 
 #[tokio::test]
 async fn read_file_returns_utf8_text_on_an_isolated_channel() -> Result<()> {
     let ssh = server().await?;
-    let connection = Connection::connect(
-        &ssh.config,
-        ssh.fingerprint.clone(),
-        "local-test-password",
-    )
-    .await?;
+    let connection =
+        Connection::connect(&ssh.config, ssh.fingerprint.clone(), "local-test-password").await?;
     let result = connection.read_file("/tmp/config file").await?;
     assert_eq!(result["text"], "alpha=1\nbeta=two\n");
     assert_eq!(result["bytes"], 17);
@@ -1689,12 +1875,8 @@ async fn stuck_server() -> Result<TestServer> {
 #[tokio::test]
 async fn unconfirmed_cancel_resets_the_terminal_instead_of_blocking_it() -> Result<()> {
     let ssh = stuck_server().await?;
-    let connection = Connection::connect(
-        &ssh.config,
-        ssh.fingerprint.clone(),
-        "local-test-password",
-    )
-    .await?;
+    let connection =
+        Connection::connect(&ssh.config, ssh.fingerprint.clone(), "local-test-password").await?;
     connection
         .command("op-stuck".into(), false, "sleep 20")
         .await?;
@@ -1713,12 +1895,8 @@ async fn unconfirmed_cancel_resets_the_terminal_instead_of_blocking_it() -> Resu
 #[tokio::test]
 async fn explicit_reset_abandons_an_unknown_command_and_keeps_exec_available() -> Result<()> {
     let ssh = server().await?;
-    let connection = Connection::connect(
-        &ssh.config,
-        ssh.fingerprint.clone(),
-        "local-test-password",
-    )
-    .await?;
+    let connection =
+        Connection::connect(&ssh.config, ssh.fingerprint.clone(), "local-test-password").await?;
     connection
         .command("op-never".into(), false, "never-completes")
         .await?;
@@ -1738,9 +1916,7 @@ async fn explicit_reset_abandons_an_unknown_command_and_keeps_exec_available() -
 
 #[tokio::test]
 async fn explicit_allowlist_skips_approval_without_changing_effect_or_checks() -> Result<()> {
-    use coterm_core::plugin_runtime::{
-        CallerContext, Operations, PluginRuntime, SubmitOperation,
-    };
+    use coterm_core::plugin_runtime::{CallerContext, Operations, PluginRuntime, SubmitOperation};
     use coterm_proto::runtime::operation::{OperationSource, OperationStatus};
     let ssh = server().await?;
     let (runtime, instance) = load_runtime(&ssh, "allow").await?;
@@ -1770,7 +1946,10 @@ async fn explicit_allowlist_skips_approval_without_changing_effect_or_checks() -
         .reject(
             agent.clone(),
             &proposal.operation_id,
-            proposal.proposal_id.as_deref().ok_or_else(|| anyhow::anyhow!("no proposal"))?
+            proposal
+                .proposal_id
+                .as_deref()
+                .ok_or_else(|| anyhow::anyhow!("no proposal"))?
         )
         .await
         .is_err());
@@ -1778,7 +1957,10 @@ async fn explicit_allowlist_skips_approval_without_changing_effect_or_checks() -
         .reject(
             human.clone(),
             &proposal.operation_id,
-            proposal.proposal_id.as_deref().ok_or_else(|| anyhow::anyhow!("no proposal"))?,
+            proposal
+                .proposal_id
+                .as_deref()
+                .ok_or_else(|| anyhow::anyhow!("no proposal"))?,
         )
         .await?;
     // The allowlist is matched by operation name, not by command text.
@@ -1804,5 +1986,388 @@ async fn explicit_allowlist_skips_approval_without_changing_effect_or_checks() -
         .set_allowed_operations(vec!["mcp.ssh.input".to_owned()])
         .await?;
     runtime.stop("coterm-plugin-ssh").await?;
+    Ok(())
+}
+
+async fn wait_for_test_operation(
+    runtime: &coterm_core::plugin_manager::ProcessPluginRuntime,
+    caller: coterm_core::plugin_runtime::CallerContext,
+    id: &str,
+) -> Result<coterm_proto::runtime::operation::OperationRecord> {
+    use coterm_core::plugin_runtime::Operations;
+    use coterm_proto::runtime::operation::OperationStatus;
+    timeout(Duration::from_secs(5), async {
+        loop {
+            let record = runtime.get(caller.clone(), id).await?;
+            if matches!(
+                record.status,
+                OperationStatus::Completed
+                    | OperationStatus::Failed
+                    | OperationStatus::Unknown
+                    | OperationStatus::Cancelled
+            ) {
+                return Ok::<_, anyhow::Error>(record);
+            }
+            sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await?
+}
+
+#[tokio::test]
+async fn real_mcp_file_tools_and_multiline_exec_preserve_content_and_stop_on_failure() -> Result<()>
+{
+    use coterm_core::plugin_runtime::{CallerContext, Operations, PluginRuntime};
+    use coterm_proto::runtime::operation::{ApproveProposal, OperationSource, OperationStatus};
+    let ssh = server_mode(true).await?;
+    let (runtime, instance) = load_runtime(&ssh, "scripts").await?;
+    connect_instance(&runtime, &instance, &ssh).await?;
+    let bridge =
+        coterm_mcp::server::BridgeServer::bind_at(runtime.clone(), "127.0.0.1:0".parse()?).await?;
+    let mut client =
+        McpWire::connect(bridge.connection_info(), std::slice::from_ref(&instance)).await?;
+    let human = CallerContext {
+        source: OperationSource::Human,
+        session_id: instance.session_id.clone(),
+        plugin_id: Some(instance.plugin_id.clone()),
+    };
+    let directory =
+        std::env::temp_dir().join(format!("coterm-script-fixture-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&directory)?;
+    let remote = directory.to_string_lossy().replace('\\', "/");
+    let path = format!("{remote}/config.txt");
+    let content = "setting='hello world'\n".repeat(260);
+    let args =
+        json!({"pluginInstanceId":instance.plugin_instance_id,"path":path,"content":content});
+    let proposal = client
+        .tool("coterm-plugin-ssh__ssh.write_file", args.clone())
+        .await?;
+    assert_eq!(
+        proposal["_meta"]["coterm/operation"]["status"], "awaiting_approval",
+        "{proposal}"
+    );
+    assert!(!directory.join("config.txt").exists());
+    let operation = &proposal["_meta"]["coterm/operation"];
+    let approved = runtime
+        .approve(
+            human.clone(),
+            ApproveProposal {
+                operation_id: operation["operationId"]
+                    .as_str()
+                    .ok_or_else(|| anyhow::anyhow!("no operation"))?
+                    .to_owned(),
+                proposal_id: operation["proposalId"]
+                    .as_str()
+                    .ok_or_else(|| anyhow::anyhow!("no proposal"))?
+                    .to_owned(),
+                plugin_instance_id: Some(instance.plugin_instance_id.clone()),
+                args,
+            },
+        )
+        .await?;
+    assert_eq!(approved.status, OperationStatus::Completed, "{approved:?}");
+    assert_eq!(
+        std::fs::read_to_string(directory.join("config.txt"))?,
+        content
+    );
+    let read = client.rpc("tools/call", json!({
+        "name":"coterm-plugin-ssh__ssh.read_file", "arguments":{"name":instance.label,"path":path},
+        "_meta":{"coterm/waitTimeoutMs":5000}
+    })).await?;
+    assert_eq!(read["structuredContent"]["text"], content, "{read}");
+    runtime
+        .set_allowed_operations(vec!["mcp.ssh.exec".to_owned()])
+        .await?;
+    let result = client
+        .rpc(
+            "tools/call",
+            json!({
+                "name":"coterm-plugin-ssh__ssh.exec",
+                "arguments":{"name":instance.label,"commands":[
+                    format!("cd '{}'\nexport COTERM_VALUE='a b'", remote.replace('\'', "'\\''")),
+                    format!("cat <<'EOF' > composed.conf\n{content}EOF"),
+                    "printf '\\033[32m%s\\033[0m\\n' \"$COTERM_VALUE\"; printf 'stderr-ok' >&2",
+                    "false", "printf never > should-not-exist"
+                ]}, "_meta":{"coterm/waitTimeoutMs":5000}
+            }),
+        )
+        .await?;
+    assert_eq!(result["structuredContent"]["exitCode"], 1, "{result}");
+    assert_eq!(result["isError"], true);
+    assert_eq!(
+        result["structuredContent"]["stdout"]["text"],
+        "\x1b[32ma b\x1b[0m\n"
+    );
+    assert_eq!(result["structuredContent"]["stderr"]["text"], "stderr-ok");
+    assert!(result["content"][0]["text"]
+        .as_str()
+        .is_some_and(|text| text.contains("a b") && text.contains("stderr-ok")));
+    assert_eq!(
+        std::fs::read_to_string(directory.join("composed.conf"))?,
+        content
+    );
+    assert!(!directory.join("should-not-exist").exists());
+    // Worst-case quote expansion must still travel over stdin, not an OS argv.
+    let prefix = "printf boundary-64k\n#";
+    let script = format!("{prefix}{}", "'".repeat(65536 - prefix.len()));
+    let boundary = client
+        .rpc(
+            "tools/call",
+            json!({
+                "name":"coterm-plugin-ssh__ssh.exec",
+                "arguments":{"name":instance.label,"commands":[script]},
+                "_meta":{"coterm/waitTimeoutMs":5000}
+            }),
+        )
+        .await?;
+    assert_eq!(boundary["structuredContent"]["exitCode"], 0, "{boundary}");
+    assert_eq!(
+        boundary["structuredContent"]["stdout"]["text"],
+        "boundary-64k"
+    );
+    runtime.stop("coterm-plugin-ssh").await?;
+    std::fs::remove_dir_all(&directory)?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn sudo_uses_one_desktop_secret_after_approval_without_leaking_or_replaying_writes(
+) -> Result<()> {
+    use coterm_core::plugin_runtime::{CallerContext, Operations, PluginRuntime, SubmitOperation};
+    use coterm_proto::runtime::{
+        interaction::InteractionKind,
+        operation::{ApproveProposal, OperationSource, OperationStatus},
+    };
+    let ssh = server_mode(true).await?;
+    let (runtime, instance) = load_runtime(&ssh, "sudo").await?;
+    connect_instance(&runtime, &instance, &ssh).await?;
+    let mut events = runtime
+        .subscribe_events(&instance.plugin_instance_id)
+        .await?;
+    let human = CallerContext {
+        source: OperationSource::Human,
+        session_id: instance.session_id.clone(),
+        plugin_id: Some(instance.plugin_id.clone()),
+    };
+    let agent = CallerContext {
+        source: OperationSource::Agent,
+        ..human.clone()
+    };
+    let directory =
+        std::env::temp_dir().join(format!("coterm-sudo-fixture-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&directory)?;
+    let path = directory
+        .join("protected.txt")
+        .to_string_lossy()
+        .replace('\\', "/");
+    let call = |operation: &str, args: Value| SubmitOperation {
+        plugin_id: instance.plugin_id.clone(),
+        plugin_instance_id: Some(instance.plugin_instance_id.clone()),
+        operation: operation.to_owned(),
+        args,
+        wait_timeout_ms: Some(0),
+    };
+    let args = json!({"pluginInstanceId":instance.plugin_instance_id,"path":path,"content":"first\n","sudo":true});
+    let receipt = runtime
+        .submit(agent.clone(), call("mcp.ssh.write_file", args.clone()))
+        .await?;
+    assert!(runtime.pending_interactions().await.is_empty());
+    assert!(!directory.join("protected.txt").exists());
+    let record = timeout(Duration::from_secs(3), async {
+        loop {
+            let record = runtime.get(human.clone(), &receipt.operation_id).await?;
+            if record.status == OperationStatus::AwaitingApproval {
+                return Ok::<_, anyhow::Error>(record);
+            }
+            sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await??;
+    runtime
+        .approve(
+            human.clone(),
+            ApproveProposal {
+                operation_id: receipt.operation_id.clone(),
+                proposal_id: record
+                    .proposal_id
+                    .ok_or_else(|| anyhow::anyhow!("no proposal"))?,
+                plugin_instance_id: Some(instance.plugin_instance_id.clone()),
+                args,
+            },
+        )
+        .await?;
+    let requests = runtime.pending_interactions().await;
+    assert_eq!(requests.len(), 1);
+    assert!(
+        matches!(&requests[0].kind, InteractionKind::Secret { purpose } if purpose == "ssh.sudo")
+    );
+    assert!(!directory.join("protected.txt").exists());
+    runtime
+        .respond_secret(
+            &requests[0].interaction_id,
+            Some("local-sudo-password".to_owned()),
+        )
+        .await?;
+    let record = wait_for_test_operation(&runtime, human.clone(), &receipt.operation_id).await?;
+    assert_eq!(record.status, OperationStatus::Completed, "{record:?}");
+    assert!(!serde_json::to_string(&record)?.contains("local-sudo-password"));
+    assert_eq!(
+        std::fs::read_to_string(directory.join("protected.txt"))?,
+        "first\n"
+    );
+    assert!(runtime
+        .respond_secret(
+            &requests[0].interaction_id,
+            Some("local-sudo-password".to_owned())
+        )
+        .await
+        .is_err());
+    // Bypass skips the operation approval, never the separate sudo secret interaction.
+    runtime.set_bypass(true).await;
+    for (operation, args, secret, expected) in [
+        (
+            "mcp.ssh.read_file",
+            json!({"pluginInstanceId":instance.plugin_instance_id,"path":path,"sudo":true}),
+            Some("local-sudo-password"),
+            OperationStatus::Completed,
+        ),
+        (
+            "mcp.ssh.exec",
+            json!({"pluginInstanceId":instance.plugin_instance_id,"commands":["printf elevated"],"sudo":true}),
+            Some("local-sudo-password"),
+            OperationStatus::Completed,
+        ),
+        (
+            "mcp.ssh.exec",
+            json!({"pluginInstanceId":instance.plugin_instance_id,"commands":[format!("printf changed >> '{}'", path.replace('\'', "'\\''"))],"sudo":true}),
+            Some("wrong-sudo-password"),
+            OperationStatus::Unknown,
+        ),
+        (
+            "mcp.ssh.write_file",
+            json!({"pluginInstanceId":instance.plugin_instance_id,"path":path,"content":"should-not-write","sudo":true}),
+            None,
+            OperationStatus::Cancelled,
+        ),
+    ] {
+        let receipt = runtime.submit(agent.clone(), call(operation, args)).await?;
+        let request = timeout(Duration::from_secs(3), async {
+            loop {
+                if let Some(request) = runtime
+                    .pending_interactions()
+                    .await
+                    .into_iter()
+                    .find(|r| r.operation_id.as_deref() == Some(&receipt.operation_id))
+                {
+                    return request;
+                }
+                sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await?;
+        runtime
+            .respond_secret(&request.interaction_id, secret.map(str::to_owned))
+            .await?;
+        let record =
+            wait_for_test_operation(&runtime, human.clone(), &receipt.operation_id).await?;
+        assert_eq!(record.status, expected, "{record:?}");
+        let serialized = serde_json::to_string(&record)?;
+        assert!(
+            !serialized.contains("local-sudo-password")
+                && !serialized.contains("wrong-sudo-password")
+        );
+        if operation == "mcp.ssh.exec" && expected == OperationStatus::Completed {
+            let output = record
+                .output
+                .ok_or_else(|| anyhow::anyhow!("no exec result"))?;
+            assert_eq!(
+                output["structuredContent"]["exitCode"],
+                if secret == Some("wrong-sudo-password") {
+                    1
+                } else {
+                    0
+                },
+                "{output}"
+            );
+        }
+    }
+    let nopasswd = directory
+        .join("NOPASSWD-fixture")
+        .to_string_lossy()
+        .replace('\\', "/");
+    let receipt = runtime.submit(agent.clone(), call("mcp.ssh.write_file", json!({"pluginInstanceId":instance.plugin_instance_id,"path":nopasswd,"content":"exact bytes\n","sudo":true}))).await?;
+    let request = timeout(Duration::from_secs(3), async {
+        loop {
+            if let Some(request) = runtime
+                .pending_interactions()
+                .await
+                .into_iter()
+                .find(|r| r.operation_id.as_deref() == Some(&receipt.operation_id))
+            {
+                return request;
+            }
+            sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await?;
+    runtime
+        .respond_secret(
+            &request.interaction_id,
+            Some("must-not-be-in-file".to_owned()),
+        )
+        .await?;
+    let record = wait_for_test_operation(&runtime, human.clone(), &receipt.operation_id).await?;
+    assert_eq!(record.status, OperationStatus::Completed, "{record:?}");
+    assert_eq!(
+        std::fs::read_to_string(directory.join("NOPASSWD-fixture"))?,
+        "exact bytes\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(directory.join("protected.txt"))?,
+        "first\n"
+    );
+    let late = runtime.submit(agent.clone(), call("mcp.ssh.write_file", json!({"pluginInstanceId":instance.plugin_instance_id,"path":path,"content":"late-write","sudo":true}))).await?;
+    let pending = timeout(Duration::from_secs(3), async {
+        loop {
+            if let Some(request) = runtime
+                .pending_interactions()
+                .await
+                .into_iter()
+                .find(|r| r.operation_id.as_deref() == Some(&late.operation_id))
+            {
+                return request;
+            }
+            sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await?;
+    let disconnected = runtime
+        .submit(human.clone(), call("ssh.disconnect", json!({})))
+        .await?;
+    let disconnected =
+        wait_for_test_operation(&runtime, human.clone(), &disconnected.operation_id).await?;
+    assert_eq!(disconnected.status, OperationStatus::Completed);
+    connect_instance(&runtime, &instance, &ssh).await?;
+    runtime
+        .respond_secret(
+            &pending.interaction_id,
+            Some("local-sudo-password".to_owned()),
+        )
+        .await?;
+    let record = wait_for_test_operation(&runtime, human.clone(), &late.operation_id).await?;
+    assert_eq!(record.status, OperationStatus::Failed, "{record:?}");
+    assert_eq!(
+        std::fs::read_to_string(directory.join("protected.txt"))?,
+        "first\n"
+    );
+    while let Ok(event) = events.try_recv() {
+        let serialized = serde_json::to_string(&event)?;
+        assert!(
+            !serialized.contains("local-sudo-password")
+                && !serialized.contains("wrong-sudo-password")
+        );
+    }
+    runtime.stop("coterm-plugin-ssh").await?;
+    std::fs::remove_dir_all(&directory)?;
     Ok(())
 }

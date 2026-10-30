@@ -18,12 +18,7 @@ use crate::result::tool_result;
 use anyhow::{anyhow, bail, Result};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use coterm_proto::runtime::{message::PluginNotification, ErrorCategory, RuntimeError};
-use russh::{
-    client,
-    keys::ssh_key,
-    ChannelMsg,
-    Disconnect,
-};
+use russh::{client, keys::ssh_key, ChannelMsg, Disconnect};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use tokio::{
@@ -31,9 +26,10 @@ use tokio::{
     task::{JoinHandle, JoinSet},
     time::{sleep_until, timeout, Instant},
 };
+use zeroize::Zeroizing;
 
 const MAX_OUTPUT_BYTES: usize = 256 * 1024;
-const OUTPUT_CHUNK_BYTES: usize = 8 * 1024;
+const OUTPUT_CHUNK_BYTES: usize = 4 * 1024;
 // Base64 plus envelope must fit the host ledger's 16 KiB result limit.
 const READ_BYTES: usize = 8 * 1024;
 const IO_TIMEOUT: Duration = Duration::from_secs(2);
@@ -83,12 +79,7 @@ impl Config {
 
 /// Builds a classified error. The host ledger keeps the code and bounded details;
 /// no credential or raw network error text is included.
-fn session_error(
-    category: ErrorCategory,
-    code: &str,
-    stage: &str,
-    message: &str,
-) -> anyhow::Error {
+fn session_error(category: ErrorCategory, code: &str, stage: &str, message: &str) -> anyhow::Error {
     anyhow::Error::new(RuntimeError {
         category,
         code: code.to_owned(),
@@ -215,16 +206,14 @@ async fn handshake(
                 .flatten();
             connect_error(error, observed)
         })?;
-    let fingerprint = observed
-        .lock()
-        .await
-        .clone()
-        .ok_or_else(|| session_error(
+    let fingerprint = observed.lock().await.clone().ok_or_else(|| {
+        session_error(
             ErrorCategory::Transport,
             "ssh_host_key_missing",
             "host_key",
             "SSH server provided no host key",
-        ))?;
+        )
+    })?;
     Ok((connection, fingerprint))
 }
 
@@ -316,18 +305,24 @@ impl OutputBuffer {
 
     pub fn read(&self, after: u64) -> Result<Value> {
         let (data, next, gap, more) = self.collect(after, READ_BYTES)?;
-        Ok(json!({"data": STANDARD.encode(data), "cursor": next.to_string(), "gap": gap, "closed": self.closed, "more": more}))
+        Ok(
+            json!({"data": STANDARD.encode(data), "cursor": next.to_string(), "gap": gap, "closed": self.closed, "more": more}),
+        )
     }
 
     /// Reads a job stream with a readable representation when the bytes are safe text.
     pub fn read_encoded(&self, after: u64) -> Result<Value> {
-        self.read_encoded_limit(after, READ_BYTES)
+        // A job response contains two streams plus a digest; bound their combined
+        // JSON/Base64 expansion below the 16 KiB host record limit.
+        self.read_encoded_limit(after, EXEC_RESULT_LIMIT)
     }
 
     pub fn read_encoded_limit(&self, after: u64, limit: usize) -> Result<Value> {
         let (data, next, gap, more) = self.collect(after, limit)?;
         let (encoding, field, value) = crate::command::encode_output(&data, false);
-        Ok(json!({field: value, "encoding": encoding, "cursor": next.to_string(), "gap": gap, "closed": self.closed, "more": more}))
+        Ok(
+            json!({field: value, "encoding": encoding, "cursor": next.to_string(), "gap": gap, "closed": self.closed, "more": more}),
+        )
     }
 
     /// First `limit` retained bytes with explicit loss accounting.
@@ -475,7 +470,9 @@ impl JobRegistry {
         stderr_cursor: u64,
     ) -> Result<Value> {
         let job = self.jobs.get(operation_id).ok_or_else(|| {
-            anyhow!("SSH output is unavailable for this operation; use ssh.read for terminal commands")
+            anyhow!(
+                "SSH output is unavailable for this operation; use ssh.read for terminal commands"
+            )
         })?;
         let mut result = json!({
             "operationId": operation_id,
@@ -514,6 +511,7 @@ enum Input {
         mcp: bool,
         text: String,
         use_shell: bool,
+        password: Option<Zeroizing<String>>,
     },
     Cancel(String),
     Reset,
@@ -587,7 +585,14 @@ impl Connection {
             let handle = Arc::new(handle);
             let output = Arc::new(Mutex::new(OutputBuffer::default()));
             let (read, write) = open_shell(&handle, &output).await?;
-            Ok::<_, anyhow::Error>((handle, read, write, output, Arc::new(Mutex::new(JobRegistry::default())), uuid::Uuid::new_v4().to_string()))
+            Ok::<_, anyhow::Error>((
+                handle,
+                read,
+                write,
+                output,
+                Arc::new(Mutex::new(JobRegistry::default())),
+                uuid::Uuid::new_v4().to_string(),
+            ))
         })
         .await
         .map_err(|_| {
@@ -642,7 +647,7 @@ impl Connection {
                                     }
                                 }
                             }
-                            Input::Exec { operation_id, mcp, text, use_shell } => {
+                            Input::Exec { operation_id, mcp, text, use_shell, password } => {
                                 let (cancel, cancel_rx) = watch::channel(false);
                                 {
                                     let mut jobs = task_jobs.lock().await;
@@ -663,6 +668,7 @@ impl Connection {
                                     use_shell,
                                     cancel_rx,
                                     command_text,
+                                    password,
                                 ));
                                 let _ = action.reply.send(Ok(json!({})));
                             }
@@ -947,19 +953,38 @@ impl Connection {
     pub async fn command(&self, operation_id: String, mcp: bool, text: &str) -> Result<()> {
         let (command, wire) = Command::new(operation_id, mcp, text);
         if wire.len() > 4000 {
-            bail!("Encoded command exceeds the shared PTY line limit; shorten the command");
+            bail!("Encoded command exceeds the 4000-byte shared PTY line limit; use ssh.exec for long/multiline scripts or ssh.write_file for file content");
         }
         self.submit(Input::Command(command, wire)).await?;
         Ok(())
     }
 
     /// Starts an isolated one-shot exec channel. The operation completes by notification.
-    pub async fn exec(&self, operation_id: String, mcp: bool, text: String, use_shell: bool) -> Result<()> {
+    pub async fn exec(
+        &self,
+        operation_id: String,
+        mcp: bool,
+        text: String,
+        use_shell: bool,
+    ) -> Result<()> {
+        self.exec_with_sudo(operation_id, mcp, text, use_shell, None)
+            .await
+    }
+
+    pub(crate) async fn exec_with_sudo(
+        &self,
+        operation_id: String,
+        mcp: bool,
+        text: String,
+        use_shell: bool,
+        password: Option<Zeroizing<String>>,
+    ) -> Result<()> {
         self.submit(Input::Exec {
             operation_id,
             mcp,
             text,
             use_shell,
+            password,
         })
         .await?;
         Ok(())
@@ -1007,26 +1032,47 @@ impl Connection {
     }
 
     pub async fn read_file(&self, path: &str) -> Result<Value> {
+        self.read_file_with_sudo(path, None).await
+    }
+
+    pub(crate) async fn read_file_with_sudo(
+        &self,
+        path: &str,
+        password: Option<&str>,
+    ) -> Result<Value> {
         if self.is_closed() {
             bail!("SSH is not connected");
         }
         let command = format!("cat < '{}'", shell_quote(path));
-        let output = timeout(FILE_TIMEOUT, run_channel(self.handle.clone(), &command, None))
-            .await
-            .map_err(|_| anyhow!("SSH file read timed out"))??;
+        let output = timeout(
+            FILE_TIMEOUT,
+            run_channel(self.handle.clone(), &command, None, password),
+        )
+        .await
+        .map_err(|_| anyhow!("SSH file read timed out"))??;
         if output.exit_code != Some(0) {
             bail!("SSH file read failed (exit code {:?})", output.exit_code);
         }
         let text = String::from_utf8(output.stdout)
             .map_err(|_| anyhow!("SSH file is not valid UTF-8 text"))?;
-        let result = json!({"path":path,"text":text,"bytes":text.len(),"limit":FILE_READ_LIMIT,"truncated":false});
-        if serde_json::to_vec(&result)?.len() > 15 * 1024 {
+        let result = json!({"path":path,"text":text,"bytes":text.len(),"limit":FILE_READ_LIMIT,"truncated":false,"executionContext":{"channel":"exec","inheritsPtyState":false,"sudo":password.is_some()}});
+        if serde_json::to_vec(&tool_result(&result))?.len() > 14 * 1024 {
             bail!("SSH file text expands beyond the host result limit when encoded as JSON");
         }
         Ok(result)
     }
 
     pub async fn write_file(&self, path: &str, content: &str, mode: &str) -> Result<Value> {
+        self.write_file_with_sudo(path, content, mode, None).await
+    }
+
+    pub(crate) async fn write_file_with_sudo(
+        &self,
+        path: &str,
+        content: &str,
+        mode: &str,
+        password: Option<&str>,
+    ) -> Result<Value> {
         if self.is_closed() {
             bail!("SSH is not connected");
         }
@@ -1046,14 +1092,21 @@ impl Connection {
         );
         let output = timeout(
             FILE_TIMEOUT,
-            run_channel(self.handle.clone(), &command, Some(content.as_bytes())),
+            run_channel(
+                self.handle.clone(),
+                &command,
+                Some(content.as_bytes()),
+                password,
+            ),
         )
         .await
         .map_err(|_| anyhow!("SSH file write timed out; remote result may be unknown"))??;
         if output.exit_code != Some(0) {
             bail!("SSH file write failed (exit code {:?})", output.exit_code);
         }
-        Ok(json!({"path":path,"bytes":content.len(),"mode":mode,"written":true}))
+        Ok(
+            json!({"path":path,"bytes":content.len(),"mode":mode,"written":true,"executionContext":{"channel":"exec","inheritsPtyState":false,"sudo":password.is_some()}}),
+        )
     }
 }
 
@@ -1085,12 +1138,15 @@ async fn run_channel(
     handle: Arc<client::Handle<HostKey>>,
     command: &str,
     input: Option<&[u8]>,
+    password: Option<&str>,
 ) -> Result<ChannelResult> {
-    let mut channel = handle.channel_open_session().await.map_err(|_| anyhow!("SSH could not open a file channel"))?;
-    channel.exec(true, command.as_bytes()).await.map_err(|_| anyhow!("SSH could not start file operation"))?;
-    if let Some(input) = input {
-        channel.data(input).await.map_err(|_| anyhow!("SSH file content delivery failed; remote result may be unknown"))?;
-        channel.eof().await.map_err(|_| anyhow!("SSH file write completion is unknown"))?;
+    let mut channel = handle
+        .channel_open_session()
+        .await
+        .map_err(|_| anyhow!("SSH could not open a file channel"))?;
+    if let Err(error) = start_channel(&mut channel, command, input, password).await {
+        let _ = channel.close().await;
+        return Err(error);
     }
     let mut stdout = Vec::new();
     let mut exit_code = None;
@@ -1111,6 +1167,82 @@ async fn run_channel(
     }
     Ok(ChannelResult { exit_code, stdout })
 }
+
+/// Passwords only travel on stdin, and only after sudo actually prompts. A
+/// NOPASSWD policy starts the child without consuming stdin: eagerly sending a
+/// password would corrupt a file or execute the password as part of a script.
+async fn start_channel(
+    channel: &mut russh::Channel<client::Msg>,
+    command: &str,
+    input: Option<&[u8]>,
+    password: Option<&str>,
+) -> Result<()> {
+    if let Some(password) = password {
+        let token = uuid::Uuid::new_v4().simple().to_string();
+        let prompt = format!("coterm-sudo-{token}-password");
+        let ready = format!("coterm-sudo-{token}-ready");
+        let child = format!("printf '%s' '{ready}' >&2; {command}");
+        let request = format!(
+            "sudo -k -S -p '{prompt}' -- /bin/sh -c '{}'",
+            shell_quote(&child)
+        );
+        channel.exec(true, request.as_bytes()).await?;
+        let mut pending = Vec::new();
+        let mut sent = false;
+        loop {
+            match channel.wait().await {
+                Some(ChannelMsg::ExtendedData { data, .. }) => {
+                    if pending.len().saturating_add(data.len()) > QUERY_LIMIT {
+                        bail!("SSH sudo authorization output exceeds its limit; operation was not submitted");
+                    }
+                    pending.extend_from_slice(&data);
+                    if pending
+                        .windows(ready.len())
+                        .any(|bytes| bytes == ready.as_bytes())
+                    {
+                        break;
+                    }
+                    if let Some(index) = pending
+                        .windows(prompt.len())
+                        .position(|bytes| bytes == prompt.as_bytes())
+                    {
+                        if sent {
+                            bail!("SSH sudo password was rejected; operation was not submitted and will not be retried");
+                        }
+                        pending.drain(..index + prompt.len());
+                        let line = Zeroizing::new(format!("{password}\n"));
+                        channel.data(line.as_bytes()).await?;
+                        sent = true;
+                    }
+                }
+                Some(ChannelMsg::Success | ChannelMsg::WindowAdjusted { .. }) => {}
+                Some(
+                    ChannelMsg::ExitStatus { .. }
+                    | ChannelMsg::Failure
+                    | ChannelMsg::Eof
+                    | ChannelMsg::Close,
+                )
+                | None => {
+                    bail!("SSH sudo authorization failed or the remote policy requires unsupported interaction; operation was not submitted");
+                }
+                _ => {}
+            }
+        }
+    } else {
+        channel.exec(true, command.as_bytes()).await?;
+    }
+    if let Some(input) = input {
+        channel.data(input).await?;
+    }
+    if input.is_some() || password.is_some() {
+        channel.eof().await?;
+    }
+    Ok(())
+}
+
+// Read the complete script before evaluation, so a command reading stdin cannot
+// consume subsequent script lines. No source code is placed in an exec argument.
+const EXEC_STDIN_SCRIPT: &str = "__coterm_script=$(cat); eval \"$__coterm_script\"";
 
 async fn query_inner(handle: Arc<client::Handle<HostKey>>, script: &str) -> Result<QueryResult> {
     let mut channel = handle.channel_open_session().await.map_err(|_| {
@@ -1273,7 +1405,10 @@ async fn wait_success(
                 let (code, message) = if stage == "pty" {
                     ("ssh_pty_refused", "SSH server refused a pseudo-terminal")
                 } else {
-                    ("ssh_shell_refused", "SSH server refused an interactive shell")
+                    (
+                        "ssh_shell_refused",
+                        "SSH server refused an interactive shell",
+                    )
                 };
                 return Err(session_error(ErrorCategory::Domain, code, stage, message));
             }
@@ -1410,6 +1545,7 @@ async fn run_exec(
     use_shell: bool,
     mut cancel: watch::Receiver<bool>,
     command_text: String,
+    password: Option<Zeroizing<String>>,
 ) {
     // Announce the job before it starts so the terminal can show a running tab.
     emit_job(&events, &connection_id, &operation_id, &command_text, false).await;
@@ -1421,6 +1557,7 @@ async fn run_exec(
     let mut timed_out = false;
     let mut cancelled = false;
     let mut error: Option<RuntimeError> = None;
+    let sudo = password.is_some();
     let mut channel = match handle.channel_open_session().await {
         Ok(channel) => Some(channel),
         Err(_) => {
@@ -1435,20 +1572,38 @@ async fn run_exec(
     };
     if let Some(channel) = channel.as_mut() {
         let exec_text = if use_shell {
-            format!("/bin/sh -c '{}'", shell_quote(&text))
+            format!("/bin/sh -c '{}'", shell_quote(EXEC_STDIN_SCRIPT))
         } else {
             text.clone()
         };
-        if channel.exec(true, exec_text.as_bytes()).await.is_err() {
+        let setup = start_channel(
+            channel,
+            &exec_text,
+            use_shell.then_some(text.as_bytes()),
+            password.as_ref().map(|password| password.as_str()),
+        );
+        let setup_result = tokio::select! {
+            result = timeout(CONNECT_TIMEOUT, setup) => result.is_ok_and(|result| result.is_ok()),
+            _ = cancel.changed() => { cancelled = true; false }
+        };
+        if !setup_result && !cancelled {
             error = Some(RuntimeError {
                 category: ErrorCategory::Transport,
                 code: "ssh_exec_failed".to_owned(),
-                message: "SSH could not start the command".to_owned(),
+                message:
+                    "SSH command/script delivery failed or timed out; remote result may be unknown"
+                        .to_owned(),
                 details: Some(json!({"stage":"exec"})),
             });
         }
     }
-    if let (None, Some(channel)) = (&error, channel.as_mut()) {
+    drop(password);
+    if (error.is_some() || cancelled) && channel.is_some() {
+        if let Some(channel) = channel.as_mut() {
+            let _ = channel.close().await;
+        }
+    }
+    if let (None, false, Some(channel)) = (&error, cancelled, channel.as_mut()) {
         let deadline = Instant::now() + EXEC_MAX_DURATION;
         loop {
             tokio::select! {
@@ -1524,6 +1679,7 @@ async fn run_exec(
         "stderr": stderr_preview,
         "durationMs": started.elapsed().as_millis() as u64,
         "outputOperationId": operation_id,
+        "executionContext": {"channel":"exec","inheritsPtyState":false,"sudo":sudo},
     });
     if cancelled {
         emit_job(&events, &connection_id, &operation_id, &command_text, true).await;
@@ -1639,8 +1795,36 @@ pub fn parse_fields(bytes: &[u8]) -> Map<String, Value> {
     let mut fields = Map::new();
     for line in text.lines() {
         if let Some((key, value)) = line.split_once('=') {
-            fields.insert(key.trim().to_owned(), Value::String(value.trim().to_owned()));
+            fields.insert(
+                key.trim().to_owned(),
+                Value::String(value.trim().to_owned()),
+            );
         }
     }
     fields
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn encoded_job_pages_advance_and_fit_the_host_record_budget() -> Result<()> {
+        let mut buffer = OutputBuffer::new(EXEC_OUTPUT_LIMIT);
+        let bytes = b"\x1b[0m".repeat(4096);
+        buffer.push(&bytes);
+        let first = buffer.read_encoded(0)?;
+        let cursor: u64 = first["cursor"].as_str().unwrap_or_default().parse()?;
+        assert!(cursor > 0);
+        assert_eq!(first["more"], true);
+        assert_eq!(
+            STANDARD.decode(first["data"].as_str().unwrap_or_default())?,
+            bytes[..EXEC_RESULT_LIMIT]
+        );
+        let next = buffer.read_encoded(cursor)?;
+        assert!(next["cursor"].as_str().unwrap_or_default().parse::<u64>()? > cursor);
+        let domain = json!({"exitCode":0,"stdout":first,"stderr":next});
+        assert!(serde_json::to_vec(&tool_result(&domain))?.len() <= 16 * 1024);
+        Ok(())
+    }
 }

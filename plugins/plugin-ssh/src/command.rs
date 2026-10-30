@@ -18,8 +18,8 @@ const MAX_PRE_MARKER: usize = 32 * 1024;
 /// prompt line, never command output.
 const ECHO_HINTS: &[&[u8]] = &[b"__coterm", b"coterm_src", b"coterm;"];
 
-/// Result encoding. Binary or control-heavy capture stays base64; readable text is
-/// returned as UTF-8 so clients do not have to decode every command result.
+/// Result encoding. UTF-8 terminal output preserves ANSI and common terminal controls;
+/// binary data stays base64 so clients can recover the exact bytes.
 pub const ENCODING_TEXT: &str = "utf-8";
 pub const ENCODING_BASE64: &str = "base64";
 
@@ -136,11 +136,9 @@ impl Command {
             return false;
         };
         let before: Vec<_> = self.pending.drain(..index).collect();
-        let echoed = ECHO_HINTS.iter().any(|hint| {
-            before
-                .windows(hint.len())
-                .any(|window| window == *hint)
-        });
+        let echoed = ECHO_HINTS
+            .iter()
+            .any(|hint| before.windows(hint.len()).any(|window| window == *hint));
         if !echoed {
             visible.extend_from_slice(&before);
         }
@@ -215,7 +213,14 @@ impl Command {
         result.insert("outputTruncated".into(), json!(self.truncated));
         result.insert("syntaxError".into(), json!(self.syntax_error));
         result.insert("cancelled".into(), json!(self.cancelled));
-        result.insert("durationMs".into(), json!(self.started_at.elapsed().as_millis() as u64));
+        result.insert(
+            "durationMs".into(),
+            json!(self.started_at.elapsed().as_millis() as u64),
+        );
+        result.insert(
+            "executionContext".into(),
+            json!({"channel":"pty","inheritsPtyState":true}),
+        );
         Value::Object(result)
     }
 
@@ -224,13 +229,16 @@ impl Command {
     }
 }
 
-/// Chooses a lossless representation: UTF-8 without NUL or C0 controls stays readable,
-/// everything else is base64 so callers never mistake binary bytes for text.
+/// Chooses a lossless representation. ANSI escape, bell and backspace are valid terminal
+/// text; NUL, other binary controls and invalid UTF-8 still require base64.
 pub fn encode_output(bytes: &[u8], _truncated: bool) -> (&'static str, &'static str, String) {
     let readable = std::str::from_utf8(bytes).ok().filter(|text| {
         !text
             .chars()
-            .any(|c| (c.is_control() && c != '\n' && c != '\r' && c != '\t') || c == '\u{7f}')
+            .any(|c| c.is_control() && !matches!(c, '\n' | '\r' | '\t' | '\x1b' | '\x07' | '\x08'))
+            // JSON escapes can multiply a control-heavy capture by six. Keep the
+            // lossless binary fallback rather than overflowing the host result budget.
+            && serde_json::to_string(text).is_ok_and(|json| json.len() <= bytes.len().div_ceil(3) * 4 + 128)
     });
     match readable {
         Some(text) => (ENCODING_TEXT, "text", text.to_owned()),
@@ -249,6 +257,78 @@ mod tests {
             echo.extend_from_slice(b"\r\n");
         }
         echo
+    }
+
+    #[test]
+    fn ansi_output_is_readable_without_decoding_and_keeps_control_characters() {
+        let bytes = b"\x1b[32mconfig.yaml\x1b[0m\r\n";
+        let (encoding, field, text) = encode_output(bytes, false);
+        assert_eq!(encoding, ENCODING_TEXT);
+        assert_eq!(field, "text");
+        assert_eq!(text.as_bytes(), bytes);
+    }
+
+    #[tokio::test]
+    async fn control_heavy_output_stays_lossless_within_the_host_record_limit() {
+        let payload = b"\x1b[0m".repeat(MAX_CAPTURE / 4);
+        let (mut command, _) = Command::new("op".into(), true, "printf output");
+        let bytes = [&command.begin[..], &payload, &command.end, b"0;\x07"].concat();
+        let result = command.feed(&bytes).1.expect("completion");
+        assert!(
+            serde_json::to_vec(&crate::result::tool_result(&result))
+                .expect("JSON")
+                .len()
+                <= 16 * 1024
+        );
+        assert_eq!(
+            STANDARD
+                .decode(result["data"].as_str().unwrap_or_default())
+                .expect("base64"),
+            payload
+        );
+        assert_eq!(result["truncated"], false);
+    }
+
+    #[tokio::test]
+    async fn compound_command_output_survives_prompt_changes_and_every_packet_split() {
+        let source = "cd /tmp && export PS1='changed> ' && ls -la";
+        let (template, wire) = Command::new("op".into(), true, source);
+        let output = b"total 4\r\n\x1b[34mconfig\x1b[0m\r\n";
+        let bytes = [
+            b"old$ ".as_slice(),
+            &echo_of(&wire),
+            &template.begin,
+            output.as_slice(),
+            &template.end,
+            b"0;\x07changed> ",
+        ]
+        .concat();
+        for split in 0..=bytes.len() {
+            let mut command = Command {
+                begin: template.begin.clone(),
+                end: template.end.clone(),
+                ..Command::new("op".into(), true, source).0
+            };
+            let (mut visible, first) = command.feed(&bytes[..split]);
+            let (rest, second) = if first.is_none() {
+                command.feed(&bytes[split..])
+            } else {
+                (bytes[split..].to_vec(), None)
+            };
+            visible.extend(rest);
+            let result = first.or(second).expect("completion marker");
+            assert_eq!(result["exitCode"], 0, "split={split}");
+            assert_eq!(
+                result["text"].as_str().map(str::as_bytes),
+                Some(output.as_slice()),
+                "split={split}"
+            );
+            assert_eq!(
+                visible,
+                [output.as_slice(), b"changed> "].concat(),
+                "split={split}"
+            );
+        }
     }
 
     #[tokio::test]
@@ -283,7 +363,13 @@ mod tests {
             assert_eq!(result["text"], "actual output\r\n", "split={split}");
             // The echoed region (prompt line plus wrapper redraws) is dropped;
             // command output and the next prompt stay visible.
-            assert_eq!(visible, &[97, 99, 116, 117, 97, 108, 32, 111, 117, 116, 112, 117, 116, 13, 10, 112, 114, 111, 109, 112, 116, 36, 32][..]);
+            assert_eq!(
+                visible,
+                &[
+                    97, 99, 116, 117, 97, 108, 32, 111, 117, 116, 112, 117, 116, 13, 10, 112, 114,
+                    111, 109, 112, 116, 36, 32
+                ][..]
+            );
         }
     }
 
@@ -314,7 +400,12 @@ mod tests {
         let mut end = command.end.clone();
         end.extend_from_slice(&[48, 59, 7]);
         let (_, result) = command.feed(&end);
-        assert_eq!(result.expect("completion")["text"].as_str().map(str::as_bytes), Some(&[104, 105, 13, 10][..]));
+        assert_eq!(
+            result.expect("completion")["text"]
+                .as_str()
+                .map(str::as_bytes),
+            Some(&[104, 105, 13, 10][..])
+        );
     }
 
     #[tokio::test]
@@ -344,7 +435,10 @@ mod tests {
         let result = result.expect("completion");
         assert_eq!(result["exitCode"], 2);
         assert_eq!(result["syntaxError"], true);
-        assert_eq!(result["text"], "bash: syntax error: unexpected end of file\r\n");
+        assert_eq!(
+            result["text"],
+            "bash: syntax error: unexpected end of file\r\n"
+        );
     }
 
     #[tokio::test]

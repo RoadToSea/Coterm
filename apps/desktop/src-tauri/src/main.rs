@@ -808,14 +808,14 @@ async fn summary(state: &AppState, manifest: PluginManifest) -> PluginSummary {
 }
 
 /// MCP 客户端以 `mcp stdio` 启动本程序；该模式不创建窗口或插件运行时，
-/// stdout 只承载 MCP 帧。只有参数完全匹配才进入，其他参数仍按桌面启动处理。
+/// stdout 只承载 MCP 帧。前缀匹配后由适配器校验选项，错误选项不会启动窗口。
 fn is_stdio_adapter(args: &[String]) -> bool {
-    args.iter().map(String::as_str).eq(["mcp", "stdio"])
+    coterm_mcp::stdio::is_adapter_command(args)
 }
 
 /// 适配器使用独立的单线程运行时，避免与桌面 UI 运行时共享线程池。
 /// 诊断只写 stderr：stdout 是 MCP 协议通道。
-fn run_stdio_adapter() -> i32 {
+fn run_stdio_adapter(args: &[String]) -> i32 {
     let runtime = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -826,7 +826,7 @@ fn run_stdio_adapter() -> i32 {
             return 1;
         }
     };
-    match runtime.block_on(coterm_mcp::stdio::run_from_env()) {
+    match runtime.block_on(coterm_mcp::stdio::run(args)) {
         Ok(()) => 0,
         Err(error) => {
             eprintln!("Coterm MCP adapter: {error:#}");
@@ -838,7 +838,7 @@ fn run_stdio_adapter() -> i32 {
 fn main() {
     let arguments: Vec<String> = std::env::args().skip(1).collect();
     if is_stdio_adapter(&arguments) {
-        std::process::exit(run_stdio_adapter());
+        std::process::exit(run_stdio_adapter(&arguments[2..]));
     }
     let runtime_limits = RuntimeLimits {
         max_control_bytes: 1024 * 1024,

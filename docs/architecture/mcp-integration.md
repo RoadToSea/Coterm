@@ -4,7 +4,7 @@
 
 MCP 只有一个对外入口：本地 Stdio 子进程。桌面前端通过 Tauri Host API 和插件事件工作，不经过 MCP；对外不提供 HTTP 端点。
 
-适配器是桌面可执行文件自身，以 `mcp stdio` 启动，把 stdin/stdout 的 MCP JSON-RPC 转发给桌面的私有本机 IPC Bridge。该模式不创建窗口、插件运行时或网络监听，stdout 只写 MCP 帧，诊断只写 stderr。参数必须完全匹配，其他启动方式仍是普通桌面。
+适配器是桌面可执行文件自身，以 `mcp stdio` 启动，把 stdin/stdout 的 MCP JSON-RPC 转发给桌面的私有本机 IPC Bridge。该模式不创建窗口、插件运行时或网络监听，stdout 只写 MCP 帧，诊断只写 stderr。`mcp stdio` 前缀确定适配器模式，其余选项在适配器中校验，错误选项只向 stderr 报错退出，不会意外启动窗口。
 
 桌面 MCP 面板负责交付配置：
 
@@ -22,7 +22,7 @@ MCP 只有一个对外入口：本地 Stdio 子进程。桌面前端通过 Tauri
 }
 ```
 
-`command` 取当前可执行文件的绝对路径，不搜索 PATH。适配器默认连接固定地址；开发测试可通过 `COTERM_MCP_ADDR` 指向临时回环端口。桥未启用或端口不可用时，适配器在 stderr 报错退出，stdout 保持为空，客户端可据此显示启动失败而不是空目录。
+`command` 取当前可执行文件的绝对路径，不搜索 PATH。适配器默认连接固定地址；开发测试可用 `mcp stdio --addr 127.0.0.1:12345` 指向临时回环端口，也保留可选 `COTERM_MCP_ADDR` 环境变量。优先级为 `--addr` → 环境变量 → 固定默认地址；参数不得重复，地址必须是回环地址且带非零端口。无需 Token，不提供 `--token`。桥未启用或端口不可用时，适配器在 stderr 报错退出，stdout 保持为空，客户端可据此显示启动失败而不是空目录。
 
 安全边界：桥只监听 IPv4 回环和固定端口，不接受局域网连接；MCP 调用统一标记为 Agent 来源，写操作仍经过基座审批/Bypass 规则、插件校验和协议认证。固定端口本身不承担身份认证，桌面必须保持运行，适配器不启动插件、不接触前端。内部交互和事件见 [运行时通信](runtime-communication.md)。
 

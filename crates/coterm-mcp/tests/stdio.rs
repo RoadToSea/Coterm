@@ -4,7 +4,7 @@ use coterm_mcp::{
     transport::{read_frame, write_frame},
 };
 use coterm_proto::runtime::{lifecycle::RuntimeLimits, stream::FlowWindow};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::{process::Stdio, sync::Arc, time::Duration};
 use tokio::{
     io::{AsyncWriteExt, BufReader},
@@ -29,7 +29,9 @@ async fn real_stdio_adapter_routes_to_desktop_runtime() -> anyhow::Result<()> {
     let info = server.connection_info();
 
     let mut child = Command::new(env!("CARGO_BIN_EXE_coterm-mcp-stdio"))
-        .env("COTERM_MCP_ADDR", &info.address)
+        .args(["--addr", &info.address])
+        .env("COTERM_MCP_ADDR", "invalid-address-overridden-by-cli")
+        .env_remove("COTERM_MCP_TOKEN")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -85,11 +87,9 @@ async fn real_stdio_adapter_routes_to_desktop_runtime() -> anyhow::Result<()> {
     );
     input.shutdown().await?;
     drop(input);
-    assert!(
-        timeout(Duration::from_secs(5), child.wait())
-            .await??
-            .success()
-    );
+    assert!(timeout(Duration::from_secs(5), child.wait())
+        .await??
+        .success());
     Ok(())
 }
 
@@ -99,4 +99,27 @@ async fn bounds_frames_even_without_a_newline() {
     let mut reader = BufReader::new(oversized.as_slice());
     assert!(read_frame(&mut reader).await.is_err());
     assert!(coterm_mcp::server::loopback_address("192.0.2.1:1234").is_err());
+}
+
+#[tokio::test]
+async fn invalid_adapter_options_fail_without_stdout_protocol_noise() -> anyhow::Result<()> {
+    for args in [
+        vec!["--addr"],
+        vec!["--addr", "192.0.2.1:1234"],
+        vec!["--token", "not-supported"],
+    ] {
+        let output = timeout(
+            Duration::from_secs(5),
+            Command::new(env!("CARGO_BIN_EXE_coterm-mcp-stdio"))
+                .args(&args)
+                .stdin(Stdio::null())
+                .kill_on_drop(true)
+                .output(),
+        )
+        .await??;
+        assert!(!output.status.success(), "{args:?}");
+        assert!(output.stdout.is_empty(), "{args:?}");
+        assert!(!output.stderr.is_empty(), "{args:?}");
+    }
+    Ok(())
 }

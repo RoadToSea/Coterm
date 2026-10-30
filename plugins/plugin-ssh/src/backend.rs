@@ -24,6 +24,7 @@ use crate::result::tool_result;
 use crate::session::{self, Config, Connection};
 
 pub const PLUGIN_ID: &str = "coterm-plugin-ssh";
+const MAX_EXEC_SOURCE: usize = 64 * 1024;
 
 struct Instance {
     config: Config,
@@ -31,10 +32,12 @@ struct Instance {
     secret: Option<(SecretHandle, Zeroizing<String>)>,
 }
 
-struct PendingConnection {
+struct PendingInteraction {
     instance_id: String,
     operation_id: String,
     args: Value,
+    operation: String,
+    connection_id: Option<String>,
     expires: chrono::DateTime<Utc>,
 }
 
@@ -49,7 +52,7 @@ pub struct Backend {
     notifications: Option<tokio::sync::mpsc::Receiver<PluginNotification>>,
     instances: HashMap<String, Instance>,
     proposals: HashMap<String, Proposal>,
-    interactions: HashMap<String, PendingConnection>,
+    interactions: HashMap<String, PendingInteraction>,
 }
 
 impl Default for Backend {
@@ -103,7 +106,7 @@ pub fn catalog() -> Vec<OperationDescriptor> {
             "ssh.exec",
             OperationEffect::Commit,
             false,
-            json!({"text":{"type":"string","minLength":1,"maxLength":4096},"useShell":{"type":"boolean","default":false}}),
+            json!({"text":{"type":"string","minLength":1,"maxLength":65536},"useShell":{"type":"boolean","default":false},"sudo":{"type":"boolean","default":false}}),
         ),
         (
             "ssh.output",
@@ -122,8 +125,18 @@ pub fn catalog() -> Vec<OperationDescriptor> {
             false,
             json!({"path":{"type":"string","minLength":1,"maxLength":4096}}),
         ),
-        ("ssh.read_file", OperationEffect::Read, false, json!({"path":{"type":"string","minLength":1,"maxLength":4096}})),
-        ("ssh.write_file", OperationEffect::Commit, true, json!({"path":{"type":"string","minLength":1,"maxLength":4096},"content":{"type":"string","maxLength":65536},"mode":{"type":"string","enum":["0600","0640","0644","0700","0750","0755"],"default":"0644"}})),
+        (
+            "ssh.read_file",
+            OperationEffect::Read,
+            false,
+            json!({"path":{"type":"string","minLength":1,"maxLength":4096},"sudo":{"type":"boolean","default":false}}),
+        ),
+        (
+            "ssh.write_file",
+            OperationEffect::Commit,
+            true,
+            json!({"path":{"type":"string","minLength":1,"maxLength":4096},"content":{"type":"string","maxLength":65536},"mode":{"type":"string","enum":["0600","0640","0644","0700","0750","0755"],"default":"0644"},"sudo":{"type":"boolean","default":false}}),
+        ),
         (
             "ssh.resize",
             OperationEffect::Draft,
@@ -163,6 +176,7 @@ pub fn catalog() -> Vec<OperationDescriptor> {
             operations.push(OperationDescriptor {
                 name: registration.operation,
                 sensitive_input: base.sensitive_input,
+                input_schema: registration.descriptor["inputSchema"].clone(),
                 ..base
             });
         }
@@ -178,8 +192,8 @@ pub fn mcp_tools() -> Vec<McpToolRegistration> {
         ("ssh.connect", "Connect the existing instance. Waits for host approval and a human password prompt; never supply a password.", json!({"fingerprint":{"type":"string"}}), vec!["fingerprint"]),
         ("ssh.disconnect", "Disconnect this instance. May return pending approval.", json!({}), vec![]),
         ("ssh.reset", "Replace the shared interactive shell after a stuck or malformed command. Running commands become unknown; exec jobs are unaffected.", json!({}), vec![]),
-        ("ssh.command", "Run commands in order in the shared POSIX shell, preserving cd/export. Execution stops at the first non-zero command. The plugin performs the sequencing so the Agent does not need to compose && or shell syntax. Returns text or base64 output plus exitCode and byte accounting. May return pending approval.", json!({"commands":{"type":"array","minItems":1,"maxItems":64,"items":{"type":"string","minLength":1,"maxLength":4096}}}), vec!["commands"]),
-        ("ssh.exec", "Run commands in order on isolated exec channels instead of the shared PTY. Execution stops at the first non-zero command. Output is separated into stdout/stderr, shell job notices cannot leak into it, and cancellation closes the channel. Each list entry is executed by /bin/sh, so pipelines and shell syntax work without Agent-side composition. May return pending approval; progress is available through ssh.output.", json!({"commands":{"type":"array","minItems":1,"maxItems":64,"items":{"type":"string","minLength":1,"maxLength":4096}}}), vec!["commands"]),
+        ("ssh.command", "Run short single-line commands in order in the shared POSIX PTY, preserving its cd/export and current user. Stops at the first non-zero exit. The escaped wrapper must fit the 4000-byte PTY line limit. For multiline scripts, long commands, file inspection or reliable separated output, prefer ssh.exec or ssh.read_file/write_file. Returns text (including terminal controls) or base64 plus byte accounting; may require approval.", json!({"commands":{"type":"array","minItems":1,"maxItems":64,"items":{"type":"string","minLength":1,"maxLength":4096}}}), vec!["commands"]),
+        ("ssh.exec", "Run 1-64 scripts sequentially in one isolated POSIX shell, stopping at the first non-zero exit. Multiline scripts, pipelines and redirects work automatically; no useShell parameter is needed. Source is limited to 65536 UTF-8 bytes total. Shares cd/export between list entries but does not inherit the interactive PTY's directory, environment or sudo/su user; starts as the SSH login user. Prefer this for non-interactive inspection and scripts. May require approval; output/progress is available through ssh.output.", json!({"commands":{"type":"array","minItems":1,"maxItems":64,"items":{"type":"string","minLength":1,"maxLength":65536}}}), vec!["commands"]),
         ("ssh.output", "Read bounded stdout/stderr of an ssh.exec operation with decimal cursors. Reports done, exitCode, gaps and remaining data.", json!({"operationId":{"type":"string","minLength":1,"maxLength":128},"stdoutCursor":{"type":"string","default":"0"},"stderrCursor":{"type":"string","default":"0"}}), vec!["operationId"]),
         ("ssh.system_info", "Read basic host, user, kernel and OS information with a fixed read-only query. No approval and no arbitrary shell.", json!({}), vec![]),
         ("ssh.file_info", "Read metadata for one existing path (type, size, mode, owner, mtime, symlink target). No file content and no arbitrary shell.", json!({"path":{"type":"string","minLength":1,"maxLength":4096}}), vec!["path"]),
@@ -187,6 +201,12 @@ pub fn mcp_tools() -> Vec<McpToolRegistration> {
         ("ssh.write_file", "Write a UTF-8 text file up to 65536 bytes to the remote host with an explicit mode. This is a commit and requires approval unless the user allowlists it. No sudo.", json!({"path":{"type":"string","minLength":1,"maxLength":4096},"content":{"type":"string","maxLength":65536},"mode":{"type":"string","enum":["0600","0640","0644","0700","0750","0755"],"default":"0644"}}), vec!["path","content"]),
         ("ssh.read", "Read bounded base64 terminal bytes using a decimal cursor; reports gaps.", json!({"cursor":{"type":"string","default":"0"}}), vec![]),
     ].into_iter().map(|(name, description, mut properties, required)| {
+        let mut description = description.to_owned();
+        if matches!(name, "ssh.exec" | "ssh.read_file" | "ssh.write_file") {
+            properties["sudo"] = json!({"type":"boolean","default":false,"description":"Explicitly run this operation with sudo. The desktop asks for a one-use password; never pass credentials in tool arguments."});
+            description = description.replace("No sudo or arbitrary shell.", "No arbitrary shell.").replace("No sudo.", "");
+            description.push_str(" Set sudo=true for explicit privilege elevation through the desktop password prompt; it never inherits PTY sudo/su state and never retries a write automatically.");
+        }
         properties["pluginInstanceId"] = json!({"type":"string","minLength":1});
         let mut required = required;
         required.push("pluginInstanceId");
@@ -215,15 +235,16 @@ fn validate_mcp_args(operation: &str, args: &Value) -> Result<()> {
         .as_object()
         .ok_or_else(|| anyhow!("Invalid MCP schema"))?;
     if object.iter().any(|(name, value)| {
-        let Some(property) = properties.get(name) else { return true };
+        let Some(property) = properties.get(name) else {
+            return true;
+        };
         match property["type"].as_str() {
             Some("string") => !value.is_string(),
             Some("boolean") => !value.is_boolean(),
             Some("array") => !value.is_array(),
             _ => true,
         }
-    })
-    {
+    }) {
         bail!("Unknown or invalid SSH MCP argument");
     }
     if schema["required"].as_array().is_some_and(|required| {
@@ -242,17 +263,19 @@ fn validate_mcp_args(operation: &str, args: &Value) -> Result<()> {
             || object
                 .get("mode")
                 .and_then(Value::as_str)
-                .is_some_and(|mode| !matches!(mode, "0600" | "0640" | "0644" | "0700" | "0750" | "0755")))
+                .is_some_and(|mode| {
+                    !matches!(mode, "0600" | "0640" | "0644" | "0700" | "0750" | "0755")
+                }))
     {
         bail!("SSH file content or mode is outside the supported limits");
     }
     if operation.ends_with("ssh.command") || operation.ends_with("ssh.exec") {
-        validate_commands(args)?;
+        validate_commands(args, operation.ends_with("ssh.exec"))?;
     }
     Ok(())
 }
 
-fn validate_commands(args: &Value) -> Result<Vec<&str>> {
+fn validate_commands(args: &Value, scripts: bool) -> Result<Vec<&str>> {
     let commands = args
         .get("commands")
         .and_then(Value::as_array)
@@ -266,16 +289,22 @@ fn validate_commands(args: &Value) -> Result<Vec<&str>> {
         let command = command
             .as_str()
             .ok_or_else(|| anyhow!("Each MCP command must be a string"))?;
+        let limit = if scripts { MAX_EXEC_SOURCE } else { 4096 };
         if command.trim().is_empty()
-            || command.len() > 4096
-            || command.chars().any(char::is_control)
+            || command.len() > limit
+            || command
+                .chars()
+                .any(|c| c.is_control() && !(scripts && matches!(c, '\n' | '\r' | '\t')))
         {
-            bail!("Each MCP command must be a nonempty single line of at most 4096 bytes");
+            if scripts {
+                bail!("Each exec script must contain 1 to 65536 UTF-8 bytes, with no controls except newline, CR and tab");
+            }
+            bail!("Each PTY command must be a nonempty single line of at most 4096 bytes; use ssh.exec for scripts or ssh.write_file for file content");
         }
         total = total.saturating_add(command.len());
         result.push(command);
     }
-    if total > 64 * 1024 {
+    if total > MAX_EXEC_SOURCE {
         bail!("MCP command list exceeds the 65536 byte total limit");
     }
     Ok(result)
@@ -335,9 +364,9 @@ impl Backend {
         mcp: bool,
     ) -> Result<Value> {
         let text = if mcp {
-            command_sequence(&validate_commands(args)?)
+            command_sequence(&validate_commands(args, false)?)
         } else {
-            command(args)?.to_owned()
+            command(args, false)?.to_owned()
         };
         let instance = self
             .instances
@@ -359,11 +388,13 @@ impl Backend {
         mcp: bool,
     ) -> Result<Value> {
         let (text, use_shell) = if mcp {
-            (command_sequence(&validate_commands(args)?), true)
+            (command_sequence(&validate_commands(args, true)?), true)
         } else {
             (
-                command(args)?.to_owned(),
-                args.get("useShell").and_then(Value::as_bool).unwrap_or(false),
+                command(args, true)?.to_owned(),
+                args.get("useShell")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
             )
         };
         let instance = self
@@ -459,9 +490,13 @@ impl Backend {
             }
             "provide_secret" => {
                 let delivery: SecretDelivery = decode(params)?;
-                if delivery.handle.purpose != "ssh.password"
-                    || delivery.handle.expires_at <= Utc::now()
+                if !matches!(
+                    delivery.handle.purpose.as_str(),
+                    "ssh.password" | "ssh.sudo"
+                ) || delivery.handle.expires_at <= Utc::now()
                     || delivery.value.len() > 16 * 1024
+                    || (delivery.handle.purpose == "ssh.sudo"
+                        && delivery.value.contains(['\r', '\n', '\0']))
                 {
                     bail!("Invalid SSH credential handle");
                 }
@@ -474,10 +509,13 @@ impl Backend {
             }
             "interaction_result" => {
                 let result: InteractionResult = decode(params)?;
-                let pending = self
-                    .interactions
-                    .get(&result.interaction_id)
-                    .ok_or_else(|| anyhow!("SSH interaction expired or cancelled"))?;
+                let pending = self.interactions.get(&result.interaction_id);
+                let Some(pending) = pending else {
+                    if let Some(instance) = self.instances.get_mut(&result.plugin_instance_id) {
+                        instance.secret = None;
+                    }
+                    bail!("SSH interaction expired or cancelled");
+                };
                 if result.plugin_instance_id != pending.instance_id {
                     bail!("SSH interaction target mismatch");
                 }
@@ -487,22 +525,32 @@ impl Backend {
                     .ok_or_else(|| anyhow!("SSH interaction unavailable"))?;
                 match result.outcome {
                     InteractionOutcome::Submitted(InteractionValue::Secret(handle)) => {
-                        pending.args["secret"] = serde_json::to_value(handle)?;
-                        let result = self
-                            .execute(
-                                &pending.instance_id,
-                                "ssh.connect",
-                                pending.args,
-                                &pending.operation_id,
-                            )
-                            .await?;
-                        Ok(mcp_result(result))
+                        if pending.expires <= Utc::now() {
+                            if let Some(instance) = self.instances.get_mut(&pending.instance_id) {
+                                instance.secret = None;
+                            }
+                            bail!("SSH interaction expired");
+                        }
+                        if pending.operation == "ssh.connect" {
+                            pending.args["secret"] = serde_json::to_value(handle)?;
+                            let result = self
+                                .execute(
+                                    &pending.instance_id,
+                                    "ssh.connect",
+                                    pending.args,
+                                    &pending.operation_id,
+                                )
+                                .await?;
+                            Ok(mcp_result(result))
+                        } else {
+                            self.resume_sudo(pending, handle).await
+                        }
                     }
                     _ => {
                         if let Some(instance) = self.instances.get_mut(&pending.instance_id) {
                             instance.secret = None;
                         }
-                        bail!("SSH password interaction cancelled or unavailable")
+                        bail!("SSH secret interaction cancelled or unavailable")
                     }
                 }
             }
@@ -619,13 +667,16 @@ impl Backend {
                 if request.operation.starts_with("mcp.") {
                     validate_mcp_args(&request.operation, &request.args)?;
                 } else {
-                    command(&request.args)?;
+                    command(&request.args, request.operation == "ssh.exec")?;
                 }
             }
             if request.operation == "ssh.file_info" || request.operation == "mcp.ssh.file_info" {
                 path(&request.args)?;
             }
-            if matches!(request.operation.as_str(), "ssh.read_file" | "mcp.ssh.read_file" | "ssh.write_file" | "mcp.ssh.write_file") {
+            if matches!(
+                request.operation.as_str(),
+                "ssh.read_file" | "mcp.ssh.read_file" | "ssh.write_file" | "mcp.ssh.write_file"
+            ) {
                 path(&request.args)?;
             }
             self.proposals.insert(
@@ -644,6 +695,140 @@ impl Backend {
             .await
     }
 
+    fn request_sudo(
+        &mut self,
+        id: &str,
+        operation: &str,
+        args: Value,
+        operation_id: &str,
+    ) -> Result<Value> {
+        if self.interactions.len() >= 32
+            || self
+                .interactions
+                .values()
+                .any(|pending| pending.instance_id == id)
+        {
+            bail!("SSH secret interaction already pending or capacity reached");
+        }
+        match operation.trim_start_matches("mcp.") {
+            "ssh.exec" if operation.starts_with("mcp.") => {
+                validate_commands(&args, true)?;
+            }
+            "ssh.exec" => {
+                command(&args, true)?;
+            }
+            "ssh.read_file" | "ssh.write_file" => {
+                path(&args)?;
+            }
+            _ => bail!("This SSH operation does not support sudo"),
+        }
+        let instance = self
+            .instances
+            .get(id)
+            .ok_or_else(|| anyhow!("SSH instance not found"))?;
+        let connection_id = connected(instance)?.id.clone();
+        let interaction_id = format!("ssh-sudo-{operation_id}");
+        let prompt = format!(
+            "sudo password for {}@{}:{} to run {operation}. This applies only to this operation. Leave empty for NOPASSWD; unsupported sudo policies must be handled in the terminal.",
+            instance.config.username, instance.config.host, instance.config.port
+        );
+        self.interactions.insert(
+            interaction_id.clone(),
+            PendingInteraction {
+                instance_id: id.to_owned(),
+                operation_id: operation_id.to_owned(),
+                args,
+                operation: operation.to_owned(),
+                connection_id: Some(connection_id),
+                expires: Utc::now() + chrono::Duration::seconds(60),
+            },
+        );
+        Ok(serde_json::to_value(DeferredInteraction {
+            request: InteractionRequest {
+                interaction_id,
+                plugin_instance_id: id.to_owned(),
+                operation_id: Some(operation_id.to_owned()),
+                kind: InteractionKind::Secret {
+                    purpose: "ssh.sudo".to_owned(),
+                },
+                title: "SSH sudo authorization".to_owned(),
+                prompt,
+                timeout_ms: Some(60_000),
+                allow_cancel: true,
+                deadline: None,
+            },
+        })?)
+    }
+
+    async fn resume_sudo(
+        &mut self,
+        pending: PendingInteraction,
+        handle: SecretHandle,
+    ) -> Result<Value> {
+        let instance = self
+            .instances
+            .get_mut(&pending.instance_id)
+            .ok_or_else(|| anyhow!("SSH instance not found"))?;
+        let valid = instance.secret.as_ref().is_some_and(|(stored, _)| {
+            stored.id == handle.id
+                && stored.plugin_instance_id == pending.instance_id
+                && handle.plugin_instance_id == pending.instance_id
+                && stored.purpose == "ssh.sudo"
+                && handle.purpose == stored.purpose
+                && stored.expires_at == handle.expires_at
+                && stored.expires_at > Utc::now()
+        });
+        let secret = instance.secret.take();
+        if !valid {
+            bail!("sudo secret is unavailable, expired or belongs to another operation");
+        }
+        let (_, password) = secret.ok_or_else(|| anyhow!("sudo secret unavailable"))?;
+        let connection = connected(instance)?;
+        if pending.connection_id.as_deref() != Some(&connection.id) {
+            bail!("SSH connection changed while waiting for sudo authorization; operation was not submitted");
+        }
+        let mcp = pending.operation.starts_with("mcp.");
+        let args = &pending.args;
+        let result = match pending.operation.trim_start_matches("mcp.") {
+            "ssh.exec" => {
+                let text = if mcp {
+                    command_sequence(&validate_commands(args, true)?)
+                } else {
+                    command(args, true)?.to_owned()
+                };
+                connection
+                    .exec_with_sudo(
+                        pending.operation_id.clone(),
+                        mcp,
+                        text,
+                        true,
+                        Some(password),
+                    )
+                    .await?;
+                return Ok(serde_json::to_value(DeferredOperation {
+                    operation_id: pending.operation_id,
+                })?);
+            }
+            "ssh.read_file" => {
+                connection
+                    .read_file_with_sudo(path(args)?, Some(&password))
+                    .await?
+            }
+            "ssh.write_file" => {
+                connection
+                    .write_file_with_sudo(
+                        path(args)?,
+                        string(args, "content")?,
+                        args.get("mode").and_then(Value::as_str).unwrap_or("0644"),
+                        Some(&password),
+                    )
+                    .await?
+            }
+            _ => bail!("Unknown sudo operation"),
+        };
+        Ok(if mcp { mcp_result(result) } else { result })
+    }
+
     async fn execute(
         &mut self,
         id: &str,
@@ -651,6 +836,18 @@ impl Backend {
         args: Value,
         operation_id: &str,
     ) -> Result<Value> {
+        let native = operation.trim_start_matches("mcp.");
+        if matches!(native, "ssh.exec" | "ssh.read_file" | "ssh.write_file")
+            && args.get("sudo").and_then(Value::as_bool) == Some(true)
+        {
+            if operation.starts_with("mcp.") {
+                validate_mcp_args(operation, &args)?;
+                if args.get("pluginInstanceId").and_then(Value::as_str) != Some(id) {
+                    bail!("MCP instance argument mismatch");
+                }
+            }
+            return self.request_sudo(id, operation, args, operation_id);
+        }
         if let Some(native) = operation.strip_prefix("mcp.") {
             validate_mcp_args(operation, &args)?;
             if args.get("pluginInstanceId").and_then(Value::as_str) != Some(id) {
@@ -676,10 +873,12 @@ impl Backend {
                 let interaction_id = format!("ssh-password-{operation_id}");
                 self.interactions.insert(
                     interaction_id.clone(),
-                    PendingConnection {
+                    PendingInteraction {
                         instance_id: id.to_owned(),
                         operation_id: operation_id.to_owned(),
                         args,
+                        operation: "ssh.connect".to_owned(),
+                        connection_id: None,
                         expires: Utc::now() + chrono::Duration::seconds(60),
                     },
                 );
@@ -934,10 +1133,16 @@ fn output_operation(args: &Value) -> Result<&str> {
     Ok(id)
 }
 
-fn command(args: &Value) -> Result<&str> {
+fn command(args: &Value, scripts: bool) -> Result<&str> {
     let text = string(args, "text")?;
-    if text.trim().is_empty() || text.len() > 4096 || text.chars().any(char::is_control) {
-        bail!("SSH command must be a nonempty single line of at most 4096 bytes");
+    let limit = if scripts { MAX_EXEC_SOURCE } else { 4096 };
+    if text.trim().is_empty()
+        || text.len() > limit
+        || text
+            .chars()
+            .any(|c| c.is_control() && !(scripts && matches!(c, '\n' | '\r' | '\t')))
+    {
+        bail!("SSH input is empty or exceeds its byte/control limits; PTY supports single lines, exec supports scripts up to 65536 bytes");
     }
     Ok(text)
 }
@@ -965,6 +1170,46 @@ mod tests {
     use super::{command_sequence, mcp_tools, session, validate_mcp_args};
 
     #[test]
+    fn mcp_exec_accepts_multiline_scripts_and_large_configurations() {
+        let script = format!("cat <<'EOF'\n{}\nEOF", "setting=value\n".repeat(400));
+        assert!(script.len() > 4096);
+        assert!(validate_mcp_args(
+            "mcp.ssh.exec",
+            &json!({"pluginInstanceId":"instance","commands":[script]})
+        )
+        .is_ok());
+        for commands in [
+            vec!["x".repeat(65_537)],
+            vec!["x".repeat(32_769), "x".repeat(32_769)],
+            vec!["echo\0bad".to_owned()],
+            vec![" ".to_owned()],
+            vec!["true".to_owned(); 65],
+            vec!["\u{4e2d}".repeat(22_000)],
+        ] {
+            assert!(validate_mcp_args(
+                "mcp.ssh.exec",
+                &json!({"pluginInstanceId":"instance","commands":commands})
+            )
+            .is_err());
+        }
+        assert!(validate_mcp_args(
+            "mcp.ssh.exec",
+            &json!({"pluginInstanceId":"instance","commands":["x".repeat(65_536)]})
+        )
+        .is_ok());
+        assert!(validate_mcp_args(
+            "mcp.ssh.command",
+            &json!({"pluginInstanceId":"instance","commands":["echo first\necho second"]})
+        )
+        .is_err());
+        for key in ["password", "secret", "useShell", "_meta"] {
+            let mut args = json!({"pluginInstanceId":"instance","commands":["true"],"sudo":true});
+            args[key] = json!(true);
+            assert!(validate_mcp_args("mcp.ssh.exec", &args).is_err(), "{key}");
+        }
+    }
+
+    #[test]
     fn mcp_command_tools_accept_bounded_ordered_lists() {
         for operation in ["mcp.ssh.command", "mcp.ssh.exec"] {
             assert!(validate_mcp_args(
@@ -990,7 +1235,9 @@ mod tests {
                 .find(|tool| tool.descriptor["name"] == name)
                 .expect("registered SSH command tool");
             assert_eq!(tool.descriptor["inputSchema"]["required"][0], "commands");
-            assert!(tool.descriptor["inputSchema"]["properties"].get("text").is_none());
+            assert!(tool.descriptor["inputSchema"]["properties"]
+                .get("text")
+                .is_none());
         }
     }
 
@@ -1004,9 +1251,7 @@ mod tests {
             .output()
         {
             Ok(output) => output,
-            Err(error)
-                if cfg!(windows) && error.kind() == std::io::ErrorKind::NotFound =>
-            {
+            Err(error) if cfg!(windows) && error.kind() == std::io::ErrorKind::NotFound => {
                 return Ok(())
             }
             Err(error) => return Err(error.into()),

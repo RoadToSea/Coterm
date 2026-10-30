@@ -817,6 +817,12 @@ impl ProcessPluginRuntime {
                         .await
                         .map_err(map_history_error);
                 }
+                // Resuming a deferred secret interaction may start an async job.
+                // The operation is already Running; acknowledge that continuation
+                // without attempting an invalid Running -> Running transition.
+                if record.status == OperationStatus::Running {
+                    return Ok(record);
+                }
                 return self
                     .history
                     .transition(operation_id, OperationStatus::Running, None, None)
