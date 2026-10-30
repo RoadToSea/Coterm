@@ -103,8 +103,8 @@ async fn backend_rejects_requests_that_break_the_runtime_contract() -> Result<()
         .await
         .expect_err("duplicate port must be rejected");
     assert!(duplicate.to_string().contains("already used"));
-    // 路径穿越和控制字符一律拒绝。
-    for port in ["", "/dev/ttyUSB0", "COM..6"] {
+    // 路径穿越、控制字符和包外路径一律拒绝；Unix 设备节点是合法端口名。
+    for port in ["", "/etc/passwd", "/dev/../etc/shadow", "COM..6"] {
         backend
             .request(
                 "create_instance",
@@ -114,6 +114,24 @@ async fn backend_rejects_requests_that_break_the_runtime_contract() -> Result<()
             )
             .await
             .expect_err("invalid port must be rejected");
+    }
+    // 设备节点与设备名都按平台规则接受，manifest 声明的平台因此保持一致。
+    for (index, port) in ["COM7", "/dev/ttyUSB0"].into_iter().enumerate() {
+        backend
+            .request(
+                "create_instance",
+                json!({"instance":{"pluginId":PLUGIN_ID,"pluginInstanceId":format!("ok{index}"),
+                                   "sessionId":"s","label":"Serial","status":"ready"},
+                       "config":{"port":port,"baudRate":115200}}),
+            )
+            .await
+            .unwrap_or_else(|error| panic!("{port} must be accepted: {error}"));
+        backend
+            .request(
+                "destroy_instance",
+                json!({"pluginInstanceId":format!("ok{index}")}),
+            )
+            .await?;
     }
     // 未知键暴露拼写错误而不是被静默忽略。
     backend
@@ -136,6 +154,11 @@ async fn backend_rejects_requests_that_break_the_runtime_contract() -> Result<()
         .await?;
     assert_eq!(status["connected"], false);
     assert_eq!(status["config"]["baudRate"], 115200);
+    // 状态同时给出信号电平与本次启动内的收发计数，供调试界面显示。
+    assert_eq!(status["signals"]["dtr"], true);
+    assert_eq!(status["signals"]["rts"], true);
+    assert_eq!(status["rxBytes"], 0);
+    assert_eq!(status["txBytes"], 0);
     // 未打开端口时写入与读取必须失败，而不是静默成功。
     backend
         .request(
@@ -146,6 +169,26 @@ async fn backend_rejects_requests_that_break_the_runtime_contract() -> Result<()
         )
         .await
         .expect_err("writing to a closed port must fail");
+    // 信号改动同样要连接；空请求在提案阶段就被拒绝。
+    backend
+        .request(
+            "invoke",
+            json!({"operationId":"op-2b","operation":"serial.signals","effect":"commit",
+                   "pluginInstanceId":"one","args":{"dtr":false},
+                   "source":"human","dispatch":{"mode":"execute"},"pluginId":PLUGIN_ID}),
+        )
+        .await
+        .expect_err("changing signals on a closed port must fail");
+    backend
+        .request(
+            "invoke",
+            json!({"operationId":"op-2c","operation":"serial.signals","effect":"commit",
+                   "pluginInstanceId":"one","args":{},
+                   "source":"agent","dispatch":{"mode":"prepare_proposal","proposalId":"p-signals"},
+                   "pluginId":PLUGIN_ID}),
+        )
+        .await
+        .expect_err("a signal proposal without a target level must fail");
     backend
         .request(
             "invoke",

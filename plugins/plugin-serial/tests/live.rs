@@ -111,11 +111,59 @@ async fn real_device_round_trips_bytes_at_the_configured_baud_rate() -> Result<(
     );
     let _ = received;
 
+    // 收发计数由插件维护，供调试台显示；真实链路必须能观察到发送字节。
+    let status = invoke(&mut backend, "serial.status", json!({}), "read").await?;
+    assert!(
+        status["txBytes"].as_u64().unwrap_or(0) >= 3,
+        "written bytes must be counted: {status}"
+    );
+    assert!(
+        status["rxBytes"].as_u64().unwrap_or(0) > 0,
+        "received bytes must be counted: {status}"
+    );
+
+    // 信号改动落到驱动：先拉低再恢复，状态必须跟着变化。
+    let lowered = invoke(
+        &mut backend,
+        "serial.signals",
+        json!({"dtr":false}),
+        "commit",
+    )
+    .await?;
+    assert_eq!(lowered["dtr"], false);
+    assert_eq!(lowered["rts"], true);
+    let raised = invoke(
+        &mut backend,
+        "serial.signals",
+        json!({"dtr":true,"rts":true}),
+        "commit",
+    )
+    .await?;
+    assert_eq!(raised["dtr"], true);
+    assert_eq!(raised["rts"], true);
+
     let disconnected = invoke(&mut backend, "serial.disconnect", json!({}), "commit").await?;
     assert_eq!(disconnected["connected"], false);
     // 断开后读取必须明确失败，而不是返回上一次的缓冲。
     let status = invoke(&mut backend, "serial.status", json!({}), "read").await?;
     assert_eq!(status["connected"], false);
     assert_eq!(status["connectionId"], Value::Null);
+    // 断开后信号改动与写入都必须失败，不能悄悄重连。
+    invoke(
+        &mut backend,
+        "serial.write",
+        json!({"data":STANDARD.encode(b"\r")}),
+        "commit",
+    )
+    .await
+    .expect_err("writing after disconnect must fail");
+    invoke(
+        &mut backend,
+        "serial.signals",
+        json!({"rts":false}),
+        "commit",
+    )
+    .await
+    .expect_err("changing signals after disconnect must fail");
     Ok(())
 }

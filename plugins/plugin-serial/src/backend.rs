@@ -14,7 +14,7 @@ use coterm_proto::runtime::{
 };
 use serde_json::{json, Value};
 
-use crate::session::{Config, Connection};
+use crate::session::{same_port, Config, Connection};
 
 pub const PLUGIN_ID: &str = "coterm-plugin-serial";
 
@@ -57,18 +57,30 @@ pub fn catalog() -> Vec<OperationDescriptor> {
         ("serial.status", OperationEffect::Read, false, json!({})),
         ("serial.probe", OperationEffect::Read, false, json!({})),
         ("serial.connect", OperationEffect::Commit, false, json!({})),
-        ("serial.disconnect", OperationEffect::Commit, false, json!({})),
+        (
+            "serial.disconnect",
+            OperationEffect::Commit,
+            false,
+            json!({}),
+        ),
         (
             "serial.read",
             OperationEffect::Read,
             false,
             json!({"cursor":{"type":"string","default":"0"}}),
         ),
+        // 人工输入可能是登录密码或密钥：账本只保留脱敏占位。
         (
             "serial.write",
             OperationEffect::Commit,
-            false,
+            true,
             json!({"data":{"type":"string","contentEncoding":"base64"},"lineEnding":{"type":"string","enum":["none","lf","cr","crlf"]}}),
+        ),
+        (
+            "serial.signals",
+            OperationEffect::Commit,
+            false,
+            json!({"dtr":{"type":"boolean"},"rts":{"type":"boolean"}}),
         ),
     ];
     let mut operations: Vec<_> = definitions
@@ -102,7 +114,8 @@ pub fn catalog() -> Vec<OperationDescriptor> {
         if let Some(base) = operations.iter().find(|item| item.name == native).cloned() {
             operations.push(OperationDescriptor {
                 name: registration.operation,
-                sensitive_input: false,
+                // MCP 参数也会进入 Agent 账本；镜像沿用领域操作本身的敏感标记。
+                sensitive_input: base.sensitive_input,
                 ..base
             });
         }
@@ -237,7 +250,7 @@ impl Backend {
                 if self
                     .instances
                     .values()
-                    .any(|instance| instance.config.port.eq_ignore_ascii_case(config.port.trim()))
+                    .any(|instance| same_port(instance.config.port.trim(), config.port.trim()))
                 {
                     bail!("This serial port is already used by another instance");
                 }
@@ -253,10 +266,10 @@ impl Backend {
             }
             "destroy_instance" => {
                 let id = string(&params, "pluginInstanceId")?;
-                let Some(instance) = self.instances.remove(id) else {
+                let Some(mut instance) = self.instances.remove(id) else {
                     bail!("Serial instance not found");
                 };
-                if let Some(connection) = &instance.connection {
+                if let Some(connection) = &mut instance.connection {
                     let _ = connection.disconnect().await;
                 }
                 self.proposals
@@ -279,8 +292,13 @@ impl Backend {
                 {
                     bail!("Serial proposal target mismatch");
                 }
-                self.execute(&proposal.instance_id, &proposal.operation, approve.args, &proposal.operation_id)
-                    .await
+                self.execute(
+                    &proposal.instance_id,
+                    &proposal.operation,
+                    approve.args,
+                    &proposal.operation_id,
+                )
+                .await
             }
             "reject" => {
                 let id = string(&params, "proposalId")?;
@@ -295,8 +313,8 @@ impl Backend {
                 Ok(json!({"ok":true}))
             }
             "shutdown" => {
-                for instance in self.instances.values() {
-                    if let Some(connection) = &instance.connection {
+                for instance in self.instances.values_mut() {
+                    if let Some(connection) = &mut instance.connection {
                         let _ = connection.disconnect().await;
                     }
                 }
@@ -344,8 +362,18 @@ impl Backend {
                 bail!("Too many pending serial proposals");
             }
             // 提案不触碰硬件；只校验参数形状。
-            if request.operation == "serial.write" {
-                write_payload(&request.args)?;
+            match request.operation.as_str() {
+                "serial.write" => {
+                    write_payload(&request.args)?;
+                }
+                "serial.signals" => {
+                    let has_dtr = optional_bool(&request.args, "dtr")?.is_some();
+                    let has_rts = optional_bool(&request.args, "rts")?.is_some();
+                    if !has_dtr && !has_rts {
+                        bail!("Provide dtr, rts, or both");
+                    }
+                }
+                _ => {}
             }
             self.proposals.insert(
                 proposal_id.clone(),
@@ -398,16 +426,12 @@ impl Backend {
             .get_mut(id)
             .ok_or_else(|| anyhow!("Serial instance not found"))?;
         match operation {
-            "serial.status" => Ok(json!({
-                "config": instance.config,
-                "connected": instance.connection.as_ref().is_some_and(|connection| !connection.is_closed()),
-                "connectionId": instance.connection.as_ref().map(|connection| &connection.id),
-            })),
-            "serial.probe" => Ok(json!({
-                "config": instance.config,
-                "connected": instance.connection.as_ref().is_some_and(|connection| !connection.is_closed()),
-                "ports": available_ports(),
-            })),
+            "serial.status" => Ok(status_of(instance)),
+            "serial.probe" => {
+                let mut status = status_of(instance);
+                status["ports"] = json!(available_ports());
+                Ok(status)
+            }
             "serial.connect" => {
                 if instance
                     .connection
@@ -423,7 +447,10 @@ impl Backend {
                     )
                     .await?,
                 );
-                let connection_id = instance.connection.as_ref().map(|connection| connection.id.clone());
+                let connection_id = instance
+                    .connection
+                    .as_ref()
+                    .map(|connection| connection.id.clone());
                 let _ = self
                     .events
                     .send(PluginNotification::Event {
@@ -435,7 +462,7 @@ impl Backend {
                 Ok(json!({"connected":true}))
             }
             "serial.disconnect" => {
-                if let Some(connection) = &instance.connection {
+                if let Some(connection) = &mut instance.connection {
                     let _ = connection.disconnect().await;
                 }
                 instance.connection = None;
@@ -462,9 +489,39 @@ impl Backend {
                 connection_of(instance)?.write(data).await?;
                 Ok(json!({"submitted":true,"bytes":submitted}))
             }
+            "serial.signals" => {
+                let dtr = optional_bool(&args, "dtr")?;
+                let rts = optional_bool(&args, "rts")?;
+                if dtr.is_none() && rts.is_none() {
+                    bail!("Provide dtr, rts, or both");
+                }
+                let connection = connection_of(instance)?;
+                let (dtr, rts) = connection.set_signals(dtr, rts).await?;
+                Ok(json!({"dtr":dtr,"rts":rts}))
+            }
             _ => bail!("Unknown serial operation"),
         }
     }
+}
+
+/// 连接状态与收发计数；断开后仍回报配置和上一次的字节数。
+fn status_of(instance: &Instance) -> Value {
+    let connection = instance
+        .connection
+        .as_ref()
+        .filter(|connection| !connection.is_closed());
+    let (dtr, rts) = connection.map_or((instance.config.dtr, instance.config.rts), |connection| {
+        connection.signals()
+    });
+    let (rx, tx) = connection.map_or((0, 0), |connection| connection.counters());
+    json!({
+        "config": instance.config,
+        "connected": connection.is_some(),
+        "connectionId": connection.map(|connection| &connection.id),
+        "signals": {"dtr": dtr, "rts": rts},
+        "rxBytes": rx,
+        "txBytes": tx,
+    })
 }
 
 /// 写入负载：base64 数据加上可选行结束符；行结束符由插件解释，不交给基座。
@@ -525,6 +582,15 @@ fn string<'a>(args: &'a Value, field: &str) -> Result<&'a str> {
         .ok_or_else(|| anyhow!("Missing or invalid {field}"))
 }
 
+/// 未提供的布尔字段返回 `None`；类型不对则报错，不静默当成 false。
+fn optional_bool(args: &Value, field: &str) -> Result<Option<bool>> {
+    match args.get(field) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Bool(value)) => Ok(Some(*value)),
+        Some(_) => bail!("Invalid {field}"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -557,11 +623,45 @@ mod tests {
         assert!(write_payload(&json!({})).is_err());
         // base64 解码后恰好 16384 字节是上限。
         let limit = STANDARD.encode(vec![b'x'; 16 * 1024]);
-        assert_eq!(write_payload(&json!({"data":limit})).unwrap().len(), 16 * 1024);
+        assert_eq!(
+            write_payload(&json!({"data":limit})).unwrap().len(),
+            16 * 1024
+        );
         // 同样的 16384 字节再加行结束符就超限了。
         assert!(write_payload(&json!({"data":limit,"lineEnding":"crlf"})).is_err());
         let over = STANDARD.encode(vec![b'x'; 16 * 1024 + 1]);
         assert!(write_payload(&json!({"data":over})).is_err());
+    }
+
+    #[test]
+    fn catalog_marks_human_input_as_sensitive_and_keeps_write_off_mcp() {
+        let operations = catalog();
+        let write = operations
+            .iter()
+            .find(|item| item.name == "serial.write")
+            .expect("serial.write must stay available to the UI");
+        // 人工输入可能是密码或密钥，账本只能保留脱敏占位。
+        assert!(write.sensitive_input);
+        // MCP 不暴露原始写入，也不暴露信号控制。
+        let mcp: Vec<_> = operations
+            .iter()
+            .filter(|item| item.name.starts_with("mcp."))
+            .map(|item| item.name.as_str())
+            .collect();
+        assert!(!mcp.iter().any(|name| name.ends_with("serial.write")));
+        assert!(!mcp.iter().any(|name| name.ends_with("serial.signals")));
+        // 镜像操作沿用领域操作的敏感标记，不能自报降级。
+        for operation in operations
+            .iter()
+            .filter(|item| item.name.starts_with("mcp."))
+        {
+            let native = operation.name.trim_start_matches("mcp.");
+            let base = operations
+                .iter()
+                .find(|item| item.name == native)
+                .expect("mirrors must have a native operation");
+            assert_eq!(operation.sensitive_input, base.sensitive_input);
+        }
     }
 
     #[test]
@@ -588,11 +688,7 @@ mod tests {
 
     #[test]
     fn mcp_arguments_require_an_explicit_instance() {
-        assert!(validate_mcp_args(
-            "mcp.serial.read",
-            &json!({"pluginInstanceId":"one"})
-        )
-        .is_ok());
+        assert!(validate_mcp_args("mcp.serial.read", &json!({"pluginInstanceId":"one"})).is_ok());
         assert!(validate_mcp_args("mcp.serial.read", &json!({})).is_err());
         assert!(validate_mcp_args(
             "mcp.serial.read",

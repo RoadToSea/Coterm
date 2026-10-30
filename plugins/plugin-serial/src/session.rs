@@ -2,7 +2,11 @@
 use std::{
     collections::VecDeque,
     io::{Read, Write},
-    sync::Arc,
+    sync::{
+        atomic::{AtomicBool, AtomicU64, Ordering},
+        Arc,
+    },
+    thread::JoinHandle as ThreadHandle,
     time::Duration,
 };
 
@@ -25,6 +29,8 @@ const IO_TIMEOUT: Duration = Duration::from_secs(2);
 const OPEN_TIMEOUT: Duration = Duration::from_secs(5);
 /// 读取线程单次阻塞等待；只影响断开延迟，不影响数据完整性。
 const READ_POLL: Duration = Duration::from_millis(20);
+/// 显式断开时等待读取线程回收的上限；超时后句柄分离，不阻塞断开。
+const READER_JOIN_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -45,6 +51,12 @@ pub struct Config {
     pub stop_bits: u8,
     #[serde(default = "default_parity")]
     pub parity: Parity,
+    /// 打开端口后立即设置的数据终端就绪电平；部分开发板会因 DTR 变化复位。
+    #[serde(default = "default_line_level")]
+    pub dtr: bool,
+    /// 打开端口后立即设置的请求发送电平。
+    #[serde(default = "default_line_level")]
+    pub rts: bool,
 }
 
 fn default_data_bits() -> u8 {
@@ -59,16 +71,13 @@ fn default_parity() -> Parity {
     Parity::None
 }
 
+fn default_line_level() -> bool {
+    true
+}
+
 impl Config {
     pub fn validate(&self) -> Result<()> {
-        let port = self.port.trim();
-        // 端口名交给操作系统解析，但必须先挡掉路径穿越和控制字符。
-        if port.is_empty()
-            || port.len() > 256
-            || port.chars().any(char::is_control)
-            || port.contains("..")
-            || port.contains(['/', '\\'])
-        {
+        if !valid_port_name(self.port.trim()) {
             bail!("Invalid serial port name");
         }
         if self.baud_rate == 0 {
@@ -86,6 +95,39 @@ impl Config {
     /// 稳定的实例标签，基座只做长度校验，不解析字段含义。
     pub fn label(&self) -> String {
         format!("{}@{}", self.port.trim(), self.baud_rate)
+    }
+}
+
+/// 端口名交给操作系统解析，但先挡掉路径穿越、控制字符和包外设备节点。
+///
+/// 接受 `COM6` 这类设备名，也接受 Unix 的 `/dev/...` 绝对路径；其余带分隔符的
+/// 名字一律拒绝，避免把配置变成任意文件打开入口。
+pub fn valid_port_name(port: &str) -> bool {
+    if port.is_empty() || port.len() > 256 || port.chars().any(char::is_control) {
+        return false;
+    }
+    if port.contains("..") || port.contains("//") || port.ends_with('/') {
+        return false;
+    }
+    if let Some(device) = port.strip_prefix("/dev/") {
+        return !device.is_empty()
+            && device
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '/'));
+    }
+    if port.contains(['/', '\\']) {
+        return false;
+    }
+    port.chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+}
+
+/// Windows 端口名不区分大小写，Unix 设备节点区分；用于判断两个配置是否指向同一端口。
+pub fn same_port(left: &str, right: &str) -> bool {
+    if cfg!(windows) {
+        left.eq_ignore_ascii_case(right)
+    } else {
+        left == right
     }
 }
 
@@ -145,6 +187,11 @@ impl OutputBuffer {
 
 enum Input {
     Write(Vec<u8>),
+    /// 只改请求的电平；未给出的信号保持不变。
+    Signals {
+        dtr: Option<bool>,
+        rts: Option<bool>,
+    },
     Close,
 }
 
@@ -156,19 +203,30 @@ struct Action {
 pub struct Connection {
     actions: mpsc::Sender<Action>,
     pub output: Arc<Mutex<OutputBuffer>>,
-    task: JoinHandle<()>,
+    task: Option<JoinHandle<()>>,
+    reader: Option<ThreadHandle<()>>,
+    stop: Arc<AtomicBool>,
+    dtr: Arc<AtomicBool>,
+    rts: Arc<AtomicBool>,
+    rx_bytes: Arc<AtomicU64>,
+    tx_bytes: Arc<AtomicU64>,
     pub id: String,
 }
 
 impl Drop for Connection {
     fn drop(&mut self) {
-        self.task.abort();
+        // 未显式断开时也要让读取线程退出；析构不能阻塞，句柄交给线程自身收尾。
+        self.stop.store(true, Ordering::SeqCst);
+        if let Some(task) = self.task.take() {
+            task.abort();
+        }
+        self.reader.take();
     }
 }
 
 impl Connection {
     pub fn is_closed(&self) -> bool {
-        self.task.is_finished()
+        self.task.as_ref().is_none_or(JoinHandle::is_finished)
     }
 
     pub async fn connect(config: &Config) -> Result<Self> {
@@ -181,34 +239,19 @@ impl Connection {
         events: Option<(String, mpsc::Sender<PluginNotification>)>,
     ) -> Result<Self> {
         config.validate()?;
-        let mut port = timeout(OPEN_TIMEOUT, async {
-            serialport::new(config.port.trim(), config.baud_rate)
-                .data_bits(match config.data_bits {
-                    5 => serialport::DataBits::Five,
-                    6 => serialport::DataBits::Six,
-                    7 => serialport::DataBits::Seven,
-                    _ => serialport::DataBits::Eight,
-                })
-                .stop_bits(if config.stop_bits == 2 {
-                    serialport::StopBits::Two
-                } else {
-                    serialport::StopBits::One
-                })
-                .parity(match config.parity {
-                    Parity::None => serialport::Parity::None,
-                    Parity::Odd => serialport::Parity::Odd,
-                    Parity::Even => serialport::Parity::Even,
-                })
-                .timeout(READ_POLL)
-                .open()
-        })
-        .await
-        .map_err(|_| anyhow!("Opening the serial port timed out"))?
-        .map_err(|error| anyhow!("Serial port could not be opened: {error}"))?;
-        let mut writer = Some(
-            port.try_clone()
-                .map_err(|error| anyhow!("Serial port write handle failed: {error}"))?,
-        );
+        // 打开端口是阻塞系统调用：放进阻塞线程池，超时后由闭包自己丢弃句柄关闭端口。
+        let (opened, opened_result) = oneshot::channel();
+        let open_config = config.clone();
+        tokio::task::spawn_blocking(move || {
+            let _ = opened.send(open_port(&open_config));
+        });
+        let (port, writer) = match timeout(OPEN_TIMEOUT, opened_result).await {
+            Ok(Ok(Ok(pair))) => pair,
+            Ok(Ok(Err(error))) => return Err(error),
+            Ok(Err(_)) => bail!("Serial port opening was abandoned"),
+            Err(_) => bail!("Opening the serial port timed out"),
+        };
+        let mut writer = Some(writer);
 
         let output = Arc::new(Mutex::new(OutputBuffer::default()));
         let (actions, mut receiver) = mpsc::channel::<Action>(64);
@@ -219,43 +262,34 @@ impl Connection {
         let (closed, mut reader_closed) = oneshot::channel::<()>();
         let reader_output = output.clone();
         let reader_connection_id = connection_id.clone();
+        let stop = Arc::new(AtomicBool::new(false));
+        let reader_stop = stop.clone();
+        let task_stop = stop.clone();
+        let dtr = Arc::new(AtomicBool::new(config.dtr));
+        let rts = Arc::new(AtomicBool::new(config.rts));
+        let task_dtr = dtr.clone();
+        let task_rts = rts.clone();
+        let rx_bytes = Arc::new(AtomicU64::new(0));
+        let reader_rx = rx_bytes.clone();
+        let tx_bytes = Arc::new(AtomicU64::new(0));
+        let task_tx = tx_bytes.clone();
 
         // 读取线程独占端口读端：阻塞式 IO 不能占用异步工作线程。
-        std::thread::spawn(move || {
-            let mut buffer = vec![0u8; OUTPUT_CHUNK_BYTES];
-            loop {
-                match port.read(&mut buffer) {
-                    Ok(0) => continue,
-                    Ok(count) => {
-                        let data = buffer[..count].to_vec();
-                        let pushed = {
-                            let mut output = reader_output.blocking_lock();
-                            output.push(&data);
-                            output.sequence
-                        };
-                        if let Some((instance, sender)) = &task_events {
-                            let notification = PluginNotification::Event {
-                                plugin_instance_id: instance.clone(),
-                                name: "serial.output".into(),
-                                payload: json!({
-                                    "connectionId": reader_connection_id,
-                                    "data": STANDARD.encode(&data),
-                                    "cursor": pushed.to_string(),
-                                }),
-                            };
-                            // 有界队列已满时丢弃推送：回放缓冲才是权威来源。
-                            if sender.try_send(notification).is_err() {
-                                continue;
-                            }
-                        }
-                    }
-                    Err(error) if error.kind() == std::io::ErrorKind::TimedOut => continue,
-                    Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
-                    Err(_) => break,
-                }
-            }
-            let _ = closed.send(());
-        });
+        let source = ReaderSource {
+            port,
+            output: reader_output,
+            stop: reader_stop,
+            events: task_events,
+            connection_id: reader_connection_id,
+            rx_bytes: reader_rx,
+        };
+        let reader = std::thread::Builder::new()
+            .name("coterm-serial-reader".to_owned())
+            .spawn(move || {
+                read_until_stopped(source);
+                let _ = closed.send(());
+            })
+            .map_err(|error| anyhow!("Serial reader thread could not start: {error}"))?;
 
         let task = tokio::spawn(async move {
             loop {
@@ -272,6 +306,7 @@ impl Connection {
                                     )));
                                     break;
                                 };
+                                let written = data.len() as u64;
                                 timeout(
                                     IO_TIMEOUT,
                                     tokio::task::spawn_blocking(move || {
@@ -291,6 +326,51 @@ impl Connection {
                                     writer = Some(returned);
                                     outcome.map_err(|error| anyhow!("Serial write failed: {error}"))
                                 })
+                                .inspect(|()| {
+                                    task_tx.fetch_add(written, Ordering::Relaxed);
+                                })
+                            }
+                            Input::Signals { dtr, rts } => {
+                                let Some(handle) = writer.take() else {
+                                    let _ = action.reply.send(Err(anyhow!(
+                                        "Serial connection is no longer writable"
+                                    )));
+                                    break;
+                                };
+                                let (dtr_state, rts_state) = (task_dtr.clone(), task_rts.clone());
+                                timeout(
+                                    IO_TIMEOUT,
+                                    tokio::task::spawn_blocking(move || {
+                                        let mut handle = handle;
+                                        let mut outcome = Ok(());
+                                        if let Some(level) = dtr {
+                                            if let Err(error) = handle.write_data_terminal_ready(level) {
+                                                outcome = Err(error);
+                                            } else {
+                                                dtr_state.store(level, Ordering::Relaxed);
+                                            }
+                                        }
+                                        if outcome.is_ok() {
+                                            if let Some(level) = rts {
+                                                if let Err(error) = handle.write_request_to_send(level) {
+                                                    outcome = Err(error);
+                                                } else {
+                                                    rts_state.store(level, Ordering::Relaxed);
+                                                }
+                                            }
+                                        }
+                                        (handle, outcome)
+                                    }),
+                                )
+                                .await
+                                .map_err(|_| anyhow!("Serial signal change timed out"))
+                                .and_then(|joined| {
+                                    joined.map_err(|error| anyhow!("Serial signal task failed: {error}"))
+                                })
+                                .and_then(|(returned, outcome)| {
+                                    writer = Some(returned);
+                                    outcome.map_err(|error| anyhow!("Serial signal change failed: {error}"))
+                                })
                             }
                             Input::Close => Ok(()),
                         };
@@ -303,6 +383,9 @@ impl Connection {
                     _ = &mut reader_closed => break,
                 }
             }
+            // 停止标志同时约束读取线程；断开或读写失败后都不能让它继续跑。
+            task_stop.store(true, Ordering::SeqCst);
+            drop(writer);
             task_output.lock().await.closed = true;
             if let Some((instance, sender)) = &events {
                 let cursor = task_output.lock().await.sequence.to_string();
@@ -318,7 +401,13 @@ impl Connection {
         Ok(Self {
             actions,
             output,
-            task,
+            task: Some(task),
+            reader: Some(reader),
+            stop,
+            dtr,
+            rts,
+            rx_bytes,
+            tx_bytes,
             id,
         })
     }
@@ -341,9 +430,132 @@ impl Connection {
         self.submit(Input::Write(data)).await
     }
 
-    pub async fn disconnect(&self) -> Result<()> {
-        self.submit(Input::Close).await
+    /// 当前 DTR/RTS 电平；只在驱动确认后更新，失败保留上一次的值。
+    pub fn signals(&self) -> (bool, bool) {
+        (
+            self.dtr.load(Ordering::Relaxed),
+            self.rts.load(Ordering::Relaxed),
+        )
     }
+
+    pub async fn set_signals(&self, dtr: Option<bool>, rts: Option<bool>) -> Result<(bool, bool)> {
+        if dtr.is_none() && rts.is_none() {
+            bail!("At least one serial signal must be requested");
+        }
+        self.submit(Input::Signals { dtr, rts }).await?;
+        Ok(self.signals())
+    }
+
+    /// 本连接累计收发字节数；断开后保留，供状态查询显示。
+    pub fn counters(&self) -> (u64, u64) {
+        (
+            self.rx_bytes.load(Ordering::Relaxed),
+            self.tx_bytes.load(Ordering::Relaxed),
+        )
+    }
+
+    /// 显式断开：先停写端，再等读取线程退出并回收句柄。
+    pub async fn disconnect(&mut self) -> Result<()> {
+        let result = self.submit(Input::Close).await;
+        self.stop.store(true, Ordering::SeqCst);
+        if let Some(task) = self.task.take() {
+            let _ = timeout(IO_TIMEOUT, task).await;
+        }
+        if let Some(reader) = self.reader.take() {
+            // join 会阻塞，放进阻塞线程池，避免占用异步工作线程。
+            let joined = tokio::task::spawn_blocking(move || {
+                let _ = reader.join();
+            });
+            let _ = timeout(READER_JOIN_TIMEOUT, joined).await;
+        }
+        self.output.lock().await.closed = true;
+        result
+    }
+}
+
+/// 读取线程独占的端口读端和推送目标。抽出来是为了让停止与回收逻辑可测。
+struct ReaderSource<R> {
+    port: R,
+    output: Arc<Mutex<OutputBuffer>>,
+    stop: Arc<AtomicBool>,
+    events: Option<(String, mpsc::Sender<PluginNotification>)>,
+    connection_id: String,
+    rx_bytes: Arc<AtomicU64>,
+}
+
+/// 循环读取直到停止标志置位或端口出错。停止标志只在一次阻塞读之后检查，
+/// 因此最坏退出延迟是 `READ_POLL`。
+fn read_until_stopped<R: Read>(mut source: ReaderSource<R>) {
+    let mut buffer = vec![0u8; OUTPUT_CHUNK_BYTES];
+    while !source.stop.load(Ordering::Relaxed) {
+        match source.port.read(&mut buffer) {
+            Ok(0) => continue,
+            Ok(count) => {
+                source.rx_bytes.fetch_add(count as u64, Ordering::Relaxed);
+                let data = buffer[..count].to_vec();
+                let pushed = {
+                    let mut output = source.output.blocking_lock();
+                    output.push(&data);
+                    output.sequence
+                };
+                if let Some((instance, sender)) = &source.events {
+                    let notification = PluginNotification::Event {
+                        plugin_instance_id: instance.clone(),
+                        name: "serial.output".into(),
+                        payload: json!({
+                            "connectionId": source.connection_id,
+                            "data": STANDARD.encode(&data),
+                            "cursor": pushed.to_string(),
+                        }),
+                    };
+                    // 有界队列已满时丢弃推送：回放缓冲才是权威来源。
+                    if sender.try_send(notification).is_err() {
+                        continue;
+                    }
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::TimedOut => continue,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(_) => break,
+        }
+    }
+}
+
+/// 阻塞打开端口并设置初始信号电平，返回读端和写端两个句柄。
+fn open_port(
+    config: &Config,
+) -> Result<(
+    Box<dyn serialport::SerialPort>,
+    Box<dyn serialport::SerialPort>,
+)> {
+    let mut port = serialport::new(config.port.trim(), config.baud_rate)
+        .data_bits(match config.data_bits {
+            5 => serialport::DataBits::Five,
+            6 => serialport::DataBits::Six,
+            7 => serialport::DataBits::Seven,
+            _ => serialport::DataBits::Eight,
+        })
+        .stop_bits(if config.stop_bits == 2 {
+            serialport::StopBits::Two
+        } else {
+            serialport::StopBits::One
+        })
+        .parity(match config.parity {
+            Parity::None => serialport::Parity::None,
+            Parity::Odd => serialport::Parity::Odd,
+            Parity::Even => serialport::Parity::Even,
+        })
+        .timeout(READ_POLL)
+        .open()
+        .map_err(|error| anyhow!("Serial port could not be opened: {error}"))?;
+    port.write_data_terminal_ready(config.dtr)
+        .map_err(|error| anyhow!("Serial DTR could not be set: {error}"))?;
+    port.write_request_to_send(config.rts)
+        .map_err(|error| anyhow!("Serial RTS could not be set: {error}"))?;
+    let writer = port
+        .try_clone()
+        .map_err(|error| anyhow!("Serial port write handle failed: {error}"))?;
+    Ok((port, writer))
 }
 
 /// 错误码与 `ErrorCategory` 的稳定映射，供后端在失败通知中使用。
@@ -360,29 +572,65 @@ pub fn domain_error(code: &str, message: impl Into<String>) -> RuntimeError {
 mod tests {
     use super::*;
 
-    #[test]
-    fn config_rejects_control_characters_and_paths() {
-        let valid = Config {
-            port: "COM6".into(),
+    fn config(port: &str) -> Config {
+        Config {
+            port: port.into(),
             baud_rate: 115200,
             data_bits: 8,
             stop_bits: 1,
             parity: Parity::None,
-        };
+            dtr: true,
+            rts: true,
+        }
+    }
+
+    #[test]
+    fn config_accepts_device_names_and_unix_nodes_only() {
+        let valid = config("COM6");
         assert!(valid.validate().is_ok());
         assert_eq!(valid.label(), "COM6@115200");
+        assert!(config("/dev/ttyUSB0").validate().is_ok());
+        assert!(config("/dev/serial/by-id/usb-CH340-if00")
+            .validate()
+            .is_ok());
+        assert!(config("tty.usbserial-1420").validate().is_ok());
 
-        for port in ["", "  ", "..", "COM\u{7}", "/dev/ttyUSB0", "COM\\6"] {
-            let mut config = valid.clone();
-            config.port = port.into();
-            assert!(config.validate().is_err(), "{port:?} must be rejected");
+        for port in [
+            "",
+            "  ",
+            "..",
+            "COM\u{7}",
+            "/etc/passwd",
+            "/dev/../etc/shadow",
+            "/dev/",
+            "/dev//ttyUSB0",
+            "COM\\6",
+            "COM..6",
+            "COM 6",
+        ] {
+            assert!(
+                config(port).validate().is_err(),
+                "{port:?} must be rejected"
+            );
         }
-        let mut config = valid.clone();
-        config.baud_rate = 0;
-        assert!(config.validate().is_err());
-        let mut config = valid;
-        config.data_bits = 9;
-        assert!(config.validate().is_err());
+        let mut invalid = config("COM6");
+        invalid.baud_rate = 0;
+        assert!(invalid.validate().is_err());
+        invalid.baud_rate = 115200;
+        invalid.data_bits = 9;
+        assert!(invalid.validate().is_err());
+        invalid.data_bits = 8;
+        invalid.stop_bits = 3;
+        assert!(invalid.validate().is_err());
+    }
+
+    #[test]
+    fn port_names_compare_per_platform() {
+        assert!(same_port("COM6", "COM6"));
+        #[cfg(windows)]
+        assert!(same_port("COM6", "com6"));
+        #[cfg(not(windows))]
+        assert!(!same_port("/dev/ttyUSB0", "/dev/ttyusb0"));
     }
 
     #[test]
@@ -392,7 +640,10 @@ mod tests {
         let read = output.read(0).unwrap();
         assert_eq!(read["cursor"], "1");
         assert_eq!(read["gap"], false);
-        assert_eq!(STANDARD.decode(read["data"].as_str().unwrap()).unwrap(), b"first");
+        assert_eq!(
+            STANDARD.decode(read["data"].as_str().unwrap()).unwrap(),
+            b"first"
+        );
 
         // 塞入超过上限的数据，最老的块被淘汰。
         for _ in 0..64 {
@@ -405,6 +656,60 @@ mod tests {
 
         // 超出末尾的游标必须被拒绝，而不是静默返回空。
         assert!(output.read(output.sequence + 1).is_err());
+    }
+
+    /// 不打开硬件的回收契约：停止标志必须让真实读取循环退出，数据也不会丢。
+    /// 这条用例防止「读取线程缺少停止信号与 join」的回归。
+    #[test]
+    fn read_loop_stops_on_the_flag_and_keeps_every_byte() {
+        /// 每次读返回一个字节，模拟持续的串口数据流。
+        struct Endless {
+            reads: Arc<AtomicU64>,
+        }
+        impl Read for Endless {
+            fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+                self.reads.fetch_add(1, Ordering::SeqCst);
+                buffer[0] = b'z';
+                Ok(1)
+            }
+        }
+
+        let reads = Arc::new(AtomicU64::new(0));
+        let stop = Arc::new(AtomicBool::new(false));
+        let output = Arc::new(Mutex::new(OutputBuffer::default()));
+        let rx_bytes = Arc::new(AtomicU64::new(0));
+        let source = ReaderSource {
+            port: Endless {
+                reads: reads.clone(),
+            },
+            output: output.clone(),
+            stop: stop.clone(),
+            events: None,
+            connection_id: "test".into(),
+            rx_bytes: rx_bytes.clone(),
+        };
+        let reader = std::thread::spawn(move || read_until_stopped(source));
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        while reads.load(Ordering::SeqCst) < 32 && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(reads.load(Ordering::SeqCst) >= 32, "the loop must read");
+
+        stop.store(true, Ordering::SeqCst);
+        reader
+            .join()
+            .expect("the stop flag must end the reader thread");
+        let after_stop = reads.load(Ordering::SeqCst);
+        std::thread::sleep(Duration::from_millis(20));
+        assert_eq!(
+            reads.load(Ordering::SeqCst),
+            after_stop,
+            "no reads may happen after the stop flag"
+        );
+        // 每个字节都进入回放缓冲并计入接收计数，退出不能丢数据。
+        assert_eq!(rx_bytes.load(Ordering::SeqCst), after_stop);
+        assert_eq!(output.blocking_lock().sequence, after_stop);
     }
 
     #[test]

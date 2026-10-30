@@ -90,7 +90,11 @@ async fn main() {
                    "dispatch":{"mode":"execute"},"pluginId":"coterm-plugin-serial"}),
         )
         .await;
-        println!("write {}: {}", String::from_utf8_lossy(payload).escape_debug(), written["bytes"]);
+        println!(
+            "write {}: {}",
+            String::from_utf8_lossy(payload).escape_debug(),
+            written["bytes"]
+        );
         tokio::time::sleep(Duration::from_millis(600)).await;
         for _ in 0..16 {
             let read = call(

@@ -2,34 +2,142 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import terminalCSS from "@xterm/xterm/css/xterm.css?inline";
 import type { PluginAPI, PluginConfigurationAPI, PluginFrontend, OperationReceipt } from "@coterm/plugin-sdk";
+import { createTranslator } from "./i18n";
 
 const css = `
-  :host { display:block; height:100%; min-height:0; color:#ccc; font:13px "Segoe UI",sans-serif; }
-  * { box-sizing:border-box; }
-  button,input,select,textarea { font:inherit; color:inherit; }
-  button { border:1px solid #454545; padding:5px 12px; background:#333; cursor:pointer; }
-  button:hover { background:#414141; } button:disabled { opacity:.5; cursor:default; }
-  button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible { outline:1px solid #007fd4; }
-  .primary { background:#0e639c; color:#fff; } .primary:hover { background:#1177bb; }
-  form { display:grid; gap:14px; margin-bottom:20px; }
-  label { display:grid; gap:6px; color:#aaa; }
-  input,select,textarea { width:100%; min-width:0; border:1px solid #454545; background:#1e1e1e; padding:7px 9px; }
-  textarea { resize:vertical; font-family:Consolas,monospace; min-height:34px; }
-  .pair { display:grid; grid-template-columns:minmax(0,1fr) 110px; gap:12px; }
-  .triple { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; }
-  .error { color:#f48771; overflow-wrap:anywhere; margin:0; }
-  .hint { color:#969696; font-size:11px; overflow-wrap:anywhere; margin:0; }
-  .layout { display:flex; flex-direction:column; height:100%; min-height:0; background:#1e1e1e; }
-  .bar { display:flex; flex-wrap:wrap; align-items:center; gap:12px; min-height:42px; border-bottom:1px solid #333; padding:6px 14px; }
-  .bar strong { font-weight:500; } .bar span { font-size:11px; color:#969696; }
-  .bar button { margin-left:auto; font-size:11px; }
-  .terminal { flex:1; min-height:0; overflow:hidden; padding:10px 4px 0 10px; }
-  .send { display:grid; grid-template-columns:minmax(0,1fr) auto auto; gap:8px; align-items:end;
-          border-top:1px solid #333; padding:8px 14px; }
-  .send label { gap:4px; }
-  .send .line-end { width:auto; }
-  .notice { padding:7px 14px; font-size:12px; color:#aaa; overflow-wrap:anywhere; }
-  .notice:empty { display:none; }
+  :host {
+    display: block;
+    height: 100%;
+    min-height: 0;
+    color: var(--coterm-text-primary, #cccccc);
+    font: 13px var(--coterm-font-sans, "Segoe UI", -apple-system, BlinkMacSystemFont, sans-serif);
+  }
+  * { box-sizing: border-box; }
+  button, input, select, textarea { font: inherit; color: inherit; }
+  button {
+    border: 1px solid var(--coterm-border-input, #454545);
+    padding: 5px 12px;
+    background: var(--coterm-surface-sidebar, #333333);
+    cursor: pointer;
+  }
+  button:hover { background: var(--coterm-surface-hover, #414141); }
+  button:disabled { opacity: .5; cursor: default; }
+  button[aria-pressed="true"] {
+    border-color: var(--coterm-focus, #007fd4);
+    background: var(--coterm-surface-active, #37373d);
+  }
+  button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible {
+    outline: 1px solid var(--coterm-focus, #007fd4);
+  }
+  .primary { background: var(--coterm-accent, #0e639c); color: var(--coterm-text-bright, #ffffff); }
+  .primary:hover { background: var(--coterm-accent-hover, #1177bb); }
+  form { display: grid; gap: 14px; margin-bottom: 20px; }
+  label { display: grid; gap: 6px; color: var(--coterm-text-subtle, #aaaaaa); }
+  input, select, textarea {
+    width: 100%;
+    min-width: 0;
+    border: 1px solid var(--coterm-border-input, #454545);
+    background: var(--coterm-surface, #1e1e1e);
+    color: var(--coterm-text-primary, #cccccc);
+    padding: 7px 9px;
+  }
+  textarea { resize: vertical; font-family: var(--coterm-font-mono, Consolas, monospace); min-height: 34px; }
+  .pair { display: grid; grid-template-columns: minmax(0, 1fr) 130px; gap: 12px; }
+  .triple { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+  .checks { display: flex; flex-wrap: wrap; gap: 16px; }
+  .checks label { display: flex; align-items: center; gap: 7px; color: var(--coterm-text-primary, #cccccc); }
+  .checks input { width: auto; }
+  .error { color: var(--coterm-danger, #f48771); overflow-wrap: anywhere; margin: 0; }
+  .hint { color: var(--coterm-text-muted, #969696); font-size: 11px; overflow-wrap: anywhere; margin: 0; }
+  .layout { display: flex; flex-direction: column; height: 100%; min-height: 0; background: var(--coterm-surface, #1e1e1e); }
+  .bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+    min-height: 42px;
+    border-bottom: 1px solid var(--coterm-border, #333333);
+    padding: 6px 14px;
+    background: var(--coterm-surface-raised, #252526);
+  }
+  .bar strong { font-weight: 500; }
+  .bar .state { font-size: 11px; color: var(--coterm-text-muted, #969696); }
+  .bar .spacer { margin-left: auto; }
+  .bar button { font-size: 11px; padding: 4px 10px; }
+  .modes { display: inline-flex; }
+  .modes button { border-radius: 0; }
+  .modes button:first-child { border-radius: 2px 0 0 2px; }
+  .modes button:last-child { border-radius: 0 2px 2px 0; border-left: 0; }
+  .panel { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+  .panel[hidden], .send[hidden] { display: none; }
+  .terminal { flex: 1; min-height: 0; overflow: hidden; padding: 10px 4px 0 10px; }
+  .uart { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+  .uart-bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 14px;
+    border-bottom: 1px solid var(--coterm-border, #333333);
+    font-size: 11px;
+    color: var(--coterm-text-subtle, #aaaaaa);
+  }
+  .uart-bar .stats { margin-left: auto; color: var(--coterm-text-muted, #969696); font-variant-numeric: tabular-nums; }
+  .uart-bar label { display: inline-flex; align-items: center; gap: 5px; color: var(--coterm-text-subtle, #aaaaaa); }
+  .uart-bar input { width: auto; }
+  .uart-bar button { font-size: 11px; padding: 3px 9px; }
+  .uart-output {
+    flex: 1;
+    min-height: 0;
+    margin: 0;
+    overflow: auto;
+    padding: 8px 14px;
+    background: var(--coterm-surface, #1e1e1e);
+    color: var(--coterm-text-primary, #cccccc);
+    font: 12px/1.45 var(--coterm-font-mono, Consolas, "Liberation Mono", monospace);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    tab-size: 4;
+  }
+  .uart-output:empty::before {
+    content: attr(data-empty);
+    color: var(--coterm-text-disabled, #6c6c6c);
+  }
+  .uart-send {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto auto auto auto;
+    gap: 8px;
+    align-items: end;
+    border-top: 1px solid var(--coterm-border, #333333);
+    padding: 8px 14px;
+  }
+  .uart-send label { gap: 4px; }
+  .uart-send .inline { display: inline-flex; align-items: center; gap: 6px; }
+  .uart-send .inline input { width: auto; }
+  .uart-send input[type="number"] { width: 82px; }
+  .send {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 110px auto auto;
+    gap: 8px;
+    align-items: end;
+    border-top: 1px solid var(--coterm-border, #333333);
+    padding: 8px 14px;
+  }
+  .send label { gap: 4px; }
+  .send .inline { display: inline-flex; align-items: center; gap: 6px; }
+  .send .inline input { width: auto; }
+  .signals {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 14px;
+    border-top: 1px solid var(--coterm-border, #333333);
+    font-size: 11px;
+    color: var(--coterm-text-muted, #969696);
+  }
+  .notice { padding: 7px 14px; font-size: 12px; color: var(--coterm-text-subtle, #aaaaaa); overflow-wrap: anywhere; }
+  .notice:empty { display: none; }
 `;
 
 function surface(container: HTMLElement, withTerminalStyle = false): ShadowRoot {
@@ -58,107 +166,148 @@ function option(value: string, label: string): HTMLOptionElement {
 
 function caption(text: string): HTMLLabelElement {
   const label = document.createElement("label");
-  label.textContent = text;
+  const span = document.createElement("span");
+  span.textContent = text;
+  label.append(span);
   return label;
 }
 
-function field(caption_text: string, value = "", type = "text"): { label: HTMLLabelElement; input: HTMLInputElement } {
-  const label = caption(caption_text);
-  const input = document.createElement("input");
-  input.type = type;
-  input.value = value;
-  label.append(input);
-  return { label, input };
+/** 只改标签里的文案节点，语言切换不重建控件。 */
+function retitle(label: HTMLLabelElement, text: string) {
+  const span = label.querySelector("span");
+  if (span) span.textContent = text;
+  else label.prepend(document.createTextNode(text));
 }
 
 interface PortEntry { portName: string; portType: { kind: string; product?: string | null } }
 interface Config {
   port: string; baudRate: number; dataBits: number; stopBits: number;
-  parity: "none" | "odd" | "even";
+  parity: "none" | "odd" | "even"; dtr: boolean; rts: boolean;
 }
-interface Status { config: Config; connected: boolean; connectionId: string | null }
+interface Status {
+  config: Config; connected: boolean; connectionId: string | null;
+  signals: { dtr: boolean; rts: boolean }; rxBytes: number; txBytes: number;
+}
 interface Probe { config: Config; connected: boolean; ports: PortEntry[] }
 interface Output { data: string; cursor: string; gap: boolean; closed: boolean; more: boolean; connectionId: string }
 interface PushedOutput { data: string; cursor: string; connectionId: string }
+interface Signals { dtr: boolean; rts: boolean }
 
-const BAUD_RATES = [9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600];
+const BAUD_RATES = [300, 1200, 2400, 4800, 9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600];
+/** 回放缓冲是 256 KiB；调试台保留同样大小的可读日志，超出后丢弃最老的块。 */
+const LOG_LIMIT = 256 * 1024;
+/** 单次渲染最多保留的字符数，避免 HEX 视图把整段缓冲塞进 DOM。 */
+const RENDER_LIMIT = 400_000;
+const REPEAT_MIN_MS = 20;
+const REPEAT_MAX_MS = 60_000;
 
 /** The plugin owns configuration fields; the base never learns UART field semantics. */
 export function configure(container: HTMLElement, api: PluginConfigurationAPI): PluginFrontend {
+  const t = createTranslator(api.i18n);
   const root = surface(container);
   const form = document.createElement("form");
-  const port = document.createElement("select");
-  const portLabel = caption("Port");
+
+  const portLabel = caption(t("Port"));
+  const port = document.createElement("input");
+  port.type = "text";
+  port.required = true;
+  port.placeholder = "COM6";
+  port.spellcheck = false;
   portLabel.append(port);
-  const refresh = document.createElement("button");
-  refresh.type = "button";
-  refresh.textContent = "Add another";
+
+  const baudLabel = caption(t("Baud rate"));
+  const baud = document.createElement("input");
+  baud.type = "number";
+  baud.value = "115200";
+  baud.min = "1";
+  const baudList = document.createElement("datalist");
+  baudList.id = `coterm-serial-baud-${Math.random().toString(36).slice(2, 9)}`;
+  for (const rate of BAUD_RATES) baudList.append(option(String(rate), String(rate)));
+  baud.setAttribute("list", baudList.id);
+  baudLabel.append(baud, baudList);
   const portRow = document.createElement("div");
   portRow.className = "pair";
-  portRow.append(portLabel, refresh);
-
-  const baud = document.createElement("select");
-  for (const rate of BAUD_RATES) baud.append(option(String(rate), String(rate)));
-  baud.value = "115200";
-  const baudLabel = caption("Baud rate");
-  baudLabel.append(baud);
+  portRow.append(portLabel, baudLabel);
 
   const dataBits = document.createElement("select");
   for (const bits of ["5", "6", "7", "8"]) dataBits.append(option(bits, bits));
   dataBits.value = "8";
-  const dataBitsLabel = caption("Data bits");
+  const dataBitsLabel = caption(t("Data bits"));
   dataBitsLabel.append(dataBits);
 
   const stopBits = document.createElement("select");
   stopBits.append(option("1", "1"), option("2", "2"));
-  const stopBitsLabel = caption("Stop bits");
+  const stopBitsLabel = caption(t("Stop bits"));
   stopBitsLabel.append(stopBits);
 
   const parity = document.createElement("select");
-  parity.append(option("none", "None"), option("odd", "Odd"), option("even", "Even"));
-  const parityLabel = caption("Parity");
+  parity.append(option("none", t("None")), option("odd", t("Odd")), option("even", t("Even")));
+  const parityLabel = caption(t("Parity"));
   parityLabel.append(parity);
-
   const framing = document.createElement("div");
   framing.className = "triple";
   framing.append(dataBitsLabel, stopBitsLabel, parityLabel);
 
+  const dtrLabel = document.createElement("label");
+  const dtr = document.createElement("input");
+  dtr.type = "checkbox";
+  dtr.checked = true;
+  const dtrLabelText = document.createElement("span");
+  dtrLabelText.textContent = t("DTR high on open");
+  dtrLabel.append(dtr, dtrLabelText);
+  const rtsLabel = document.createElement("label");
+  const rts = document.createElement("input");
+  rts.type = "checkbox";
+  rts.checked = true;
+  const rtsLabelText = document.createElement("span");
+  rtsLabelText.textContent = t("RTS high on open");
+  rtsLabel.append(rts, rtsLabelText);
+  const checks = document.createElement("div");
+  checks.className = "checks";
+  checks.append(dtrLabel, rtsLabel);
+
   const hint = document.createElement("p");
   hint.className = "hint";
-  hint.textContent = "Port names come from the operating system, e.g. COM6 or /dev/ttyUSB0. "
-    + "The connected list appears in the instance panel after the port is opened.";
+  hint.textContent = t("Port names come from the operating system, e.g. COM6 or /dev/ttyUSB0.");
+  const lineHint = document.createElement("p");
+  lineHint.className = "hint";
+  lineHint.textContent = t("Some boards reset when DTR changes; clear it if the device reboots unexpectedly.");
   const error = document.createElement("p");
   error.className = "error";
   error.setAttribute("role", "alert");
   const submit = document.createElement("button");
   submit.type = "submit";
   submit.className = "primary";
-  submit.textContent = "Open serial port";
-  form.append(portRow, baudLabel, framing, hint, error, submit);
+  submit.textContent = t("Open serial port");
+  form.append(portRow, framing, checks, hint, lineHint, error, submit);
   root.append(form);
+
+  const stopLocale = api.i18n?.subscribe(() => {
+    const next = createTranslator(api.i18n);
+    retitle(portLabel, next("Port"));
+    retitle(baudLabel, next("Baud rate"));
+    retitle(dataBitsLabel, next("Data bits"));
+    retitle(stopBitsLabel, next("Stop bits"));
+    retitle(parityLabel, next("Parity"));
+    parity.options[0].textContent = next("None");
+    parity.options[1].textContent = next("Odd");
+    parity.options[2].textContent = next("Even");
+    dtrLabelText.textContent = next("DTR high on open");
+    rtsLabelText.textContent = next("RTS high on open");
+    hint.textContent = next("Port names come from the operating system, e.g. COM6 or /dev/ttyUSB0.");
+    lineHint.textContent = next("Some boards reset when DTR changes; clear it if the device reboots unexpectedly.");
+    submit.textContent = next("Open serial port");
+  });
 
   let disposed = false;
   let busy = false;
   const controller = new AbortController();
 
-  // 配置阶段没有实例，插件级枚举需要实例作用域，所以这里只接受手输。
-  const addPort = (name: string) => {
-    if (!name || Array.from(port.options).some((item) => item.value === name)) return;
-    port.append(option(name, name));
-    port.value = name;
-  };
-  addPort("COM6");
-
-  refresh.addEventListener("click", () => {
-    const name = window.prompt("Serial port name (for example COM6 or /dev/ttyUSB0)");
-    if (name) addPort(name.trim());
-  }, { signal: controller.signal });
-
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     if (busy || disposed) return;
     const name = port.value.trim();
-    if (!name) { error.textContent = "A serial port name is required."; return; }
+    if (!name) { error.textContent = t("A serial port name is required."); return; }
     busy = true;
     submit.disabled = true;
     try {
@@ -168,6 +317,8 @@ export function configure(container: HTMLElement, api: PluginConfigurationAPI): 
         dataBits: Number(dataBits.value),
         stopBits: Number(stopBits.value),
         parity: parity.value,
+        dtr: dtr.checked,
+        rts: rts.checked,
       });
     } catch (reason) {
       if (!disposed) error.textContent = String(reason);
@@ -176,7 +327,7 @@ export function configure(container: HTMLElement, api: PluginConfigurationAPI): 
     }
   }, { signal: controller.signal });
 
-  return { unmount() { disposed = true; controller.abort(); container.replaceChildren(); } };
+  return { unmount() { disposed = true; stopLocale?.(); controller.abort(); container.replaceChildren(); } };
 }
 
 function output<T>(receipt: OperationReceipt<T>): T {
@@ -192,6 +343,13 @@ function base64(data: Uint8Array): string {
   return btoa(binary);
 }
 
+function decode(data: string): Uint8Array {
+  const binary = atob(data);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index++) bytes[index] = binary.charCodeAt(index);
+  return bytes;
+}
+
 /** HEX 输入是插件自己的便利功能；基座只见 base64。 */
 function fromHex(input: string): Uint8Array {
   const cleaned = input.replace(/\s+/g, "").replace(/^0x/i, "");
@@ -205,6 +363,25 @@ function fromHex(input: string): Uint8Array {
   return bytes;
 }
 
+function hexDump(bytes: Uint8Array, offset: number): string {
+  let text = "";
+  for (let start = 0; start < bytes.length; start += 16) {
+    const line = bytes.subarray(start, start + 16);
+    const hex = Array.from(line, (byte) => byte.toString(16).padStart(2, "0")).join(" ");
+    const ascii = Array.from(line, (byte) => (byte >= 0x20 && byte < 0x7f ? String.fromCharCode(byte) : ".")).join("");
+    text += `${(offset + start).toString(16).padStart(8, "0")}  ${hex.padEnd(47)}  ${ascii}\n`;
+  }
+  return text;
+}
+
+function stamp(time: number): string {
+  const date = new Date(time);
+  const pad = (value: number, width = 2) => String(value).padStart(width, "0");
+  return `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}.${pad(date.getMilliseconds(), 3)}`;
+}
+
+interface LogEntry { time: number; bytes: number; text: string; hex: string }
+
 export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
   const root = surface(container, true);
   const layout = document.createElement("div");
@@ -214,43 +391,150 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
   const label = document.createElement("strong");
   label.textContent = "Serial";
   const state = document.createElement("span");
-  state.textContent = "Loading…";
+  state.className = "state";
+  state.textContent = createTranslator(api.i18n)("Loading…");
+
+  const modes = document.createElement("div");
+  modes.className = "modes";
+  modes.setAttribute("role", "group");
+  const terminalMode = document.createElement("button");
+  terminalMode.type = "button";
+  const uartMode = document.createElement("button");
+  uartMode.type = "button";
+  modes.append(terminalMode, uartMode);
+
   const ports = document.createElement("button");
-  ports.textContent = "Ports";
+  ports.type = "button";
   ports.disabled = true;
   const connect = document.createElement("button");
-  connect.textContent = "Connect";
+  connect.type = "button";
   connect.disabled = true;
-  bar.append(label, state, ports, connect);
+  const spacer = document.createElement("span");
+  spacer.className = "spacer";
+  bar.append(label, state, modes, spacer, ports, connect);
+
+  // 终端模式：原始字节与远端回显，按键即发送。
+  const terminalPanel = document.createElement("div");
+  terminalPanel.className = "panel";
   const terminalContainer = document.createElement("div");
   terminalContainer.className = "terminal";
+  terminalPanel.append(terminalContainer);
 
+  // UART 调试模式：接收视图可切 ASCII/HEX，发送可定时重复。
+  const uartPanel = document.createElement("div");
+  uartPanel.className = "panel uart";
+  uartPanel.hidden = true;
+  const uartBar = document.createElement("div");
+  uartBar.className = "uart-bar";
+  const viewText = document.createElement("button");
+  viewText.type = "button";
+  const viewHex = document.createElement("button");
+  viewHex.type = "button";
+  const timestampsLabel = document.createElement("label");
+  const timestamps = document.createElement("input");
+  timestamps.type = "checkbox";
+  const timestampsText = document.createElement("span");
+  timestampsLabel.append(timestamps, timestampsText);
+  const autoscrollLabel = document.createElement("label");
+  const autoscroll = document.createElement("input");
+  autoscroll.type = "checkbox";
+  autoscroll.checked = true;
+  const autoscrollText = document.createElement("span");
+  autoscrollLabel.append(autoscroll, autoscrollText);
+  const pause = document.createElement("button");
+  pause.type = "button";
+  const clear = document.createElement("button");
+  clear.type = "button";
+  const stats = document.createElement("span");
+  stats.className = "stats";
+  uartBar.append(viewText, viewHex, timestampsLabel, autoscrollLabel, pause, clear, stats);
+
+  const uartOutput = document.createElement("pre");
+  uartOutput.className = "uart-output";
+  uartOutput.tabIndex = 0;
+
+  const uartSend = document.createElement("div");
+  uartSend.className = "uart-send";
+  const uartEntry = document.createElement("label");
+  const uartEntryText = document.createElement("span");
+  uartEntryText.textContent = createTranslator(api.i18n)("Send");
+  const uartText = document.createElement("textarea");
+  uartText.rows = 1;
+  uartEntry.append(uartEntryText, uartText);
+  const uartHexLabel = document.createElement("label");
+  uartHexLabel.className = "inline";
+  const uartHex = document.createElement("input");
+  uartHex.type = "checkbox";
+  const uartHexText = document.createElement("span");
+  uartHexLabel.append(uartHex, uartHexText);
+  const uartEndingLabel = caption(createTranslator(api.i18n)("Line ending"));
+  const uartEndingLabelText = uartEndingLabel.firstElementChild as HTMLSpanElement;
+  const uartEnding = document.createElement("select");
+  uartEnding.append(option("none", "None"), option("cr", "CR"), option("lf", "LF"), option("crlf", "CRLF"));
+  uartEnding.value = "crlf";
+  uartEndingLabel.append(uartEnding);
+  const uartSendButton = document.createElement("button");
+  uartSendButton.type = "button";
+  uartSendButton.className = "primary";
+  uartSendButton.disabled = true;
+  const repeatLabel = caption(createTranslator(api.i18n)("Repeat"));
+  const repeatLabelText = repeatLabel.firstElementChild as HTMLSpanElement;
+  const repeatRow = document.createElement("div");
+  repeatRow.className = "inline";
+  const repeatMs = document.createElement("input");
+  repeatMs.type = "number";
+  repeatMs.min = String(REPEAT_MIN_MS);
+  repeatMs.max = String(REPEAT_MAX_MS);
+  repeatMs.step = "10";
+  repeatMs.value = "1000";
+  const repeatButton = document.createElement("button");
+  repeatButton.type = "button";
+  repeatButton.disabled = true;
+  repeatRow.append(repeatMs, repeatButton);
+  repeatLabel.append(repeatRow);
+  uartSend.append(uartEntry, uartHexLabel, uartEndingLabel, uartSendButton, repeatLabel);
+
+  const signalsRow = document.createElement("div");
+  signalsRow.className = "signals";
+  const dtrButton = document.createElement("button");
+  dtrButton.type = "button";
+  dtrButton.disabled = true;
+  const rtsButton = document.createElement("button");
+  rtsButton.type = "button";
+  rtsButton.disabled = true;
+  signalsRow.append(dtrButton, rtsButton);
+
+  uartPanel.append(uartBar, uartOutput, uartSend, signalsRow);
+
+  // 终端模式的发送行：文本或 HEX，可附加行结束符。
   const send = document.createElement("div");
   send.className = "send";
-  const entry = caption("Send");
+  const entry = caption(createTranslator(api.i18n)("Send"));
+  const entryText = entry.firstElementChild as HTMLSpanElement;
   const text = document.createElement("textarea");
   text.rows = 1;
-  text.placeholder = "Type text, then Send (Enter sends, Shift+Enter adds a line)";
   entry.append(text);
   const ending = document.createElement("select");
-  ending.className = "line-end";
   ending.append(option("cr", "CR"), option("crlf", "CRLF"), option("lf", "LF"), option("none", "None"));
   ending.value = "cr";
-  const endingLabel = caption("Line ending");
+  const endingLabel = caption(createTranslator(api.i18n)("Line ending"));
+  const endingLabelText = endingLabel.firstElementChild as HTMLSpanElement;
   endingLabel.append(ending);
-  const hex = field("Input is HEX");
-  const hexInput = hex.input;
+  const hexLabel = document.createElement("label");
+  hexLabel.className = "inline";
+  const hexInput = document.createElement("input");
   hexInput.type = "checkbox";
-  hexInput.required = false;
+  const hexText = document.createElement("span");
+  hexLabel.append(hexInput, hexText);
   const sendButton = document.createElement("button");
-  sendButton.textContent = "Send";
+  sendButton.type = "button";
   sendButton.disabled = true;
-  send.append(entry, endingLabel, hex.label, sendButton);
+  send.append(entry, endingLabel, hexLabel, sendButton);
 
   const notice = document.createElement("div");
   notice.className = "notice";
   notice.setAttribute("role", "status");
-  layout.append(bar, terminalContainer, send, notice);
+  layout.append(bar, terminalPanel, uartPanel, send, notice);
   root.append(layout);
 
   const terminal = new Terminal({
@@ -272,27 +556,152 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
   let resizeTimer = 0;
   let queuedBytes = 0;
   let inputQueue = Promise.resolve();
+  let mode: "terminal" | "uart" = "terminal";
+  let uartView: "text" | "hex" = "text";
+  let paused = false;
+  let pendingWhilePaused = 0;
+  let renderTimer = 0;
+  let repeatTimer = 0;
+  let signals: Signals = { dtr: true, rts: true };
+  let statsRx = 0;
+  let statsTx = 0;
+  const entries: LogEntry[] = [];
+  let logBytes = 0;
+  let hexOffset = 0;
+  const decoder = new TextDecoder();
   const controller = new AbortController();
+  // 语言切换只替换翻译函数；已渲染的日志文本保持原文。
+  let t = createTranslator(api.i18n);
 
   const invoke = async <T = unknown>(operation: string, args: unknown): Promise<T> => output(await api.invoke<T>(operation, args));
   const showError = (reason: unknown) => { if (!disposed) notice.textContent = String(reason); };
+
+  /** 静态标签集中在这里刷新，语言切换不重建实例或连接。 */
+  const applyLocale = () => {
+    const tr = createTranslator(api.i18n);
+    t = tr;
+    label.textContent = tr("Serial");
+    terminalMode.textContent = tr("Terminal");
+    uartMode.textContent = tr("UART console");
+    ports.textContent = tr("Ports");
+    connect.textContent = connected ? tr("Disconnect") : tr("Connect");
+    state.textContent = connected ? tr("Connected") : tr("Disconnected");
+    viewText.textContent = tr("ASCII");
+    viewHex.textContent = tr("HEX");
+    timestampsText.textContent = tr("Show timestamps");
+    autoscrollText.textContent = tr("Auto-scroll");
+    pause.textContent = paused ? tr("Resume") : tr("Pause");
+    clear.textContent = tr("Clear");
+    uartEntryText.textContent = tr("Send");
+    uartText.placeholder = tr("Send text, then Send (Enter sends, Shift+Enter adds a line)");
+    uartHexText.textContent = tr("Input is HEX");
+    uartEndingLabelText.textContent = tr("Line ending");
+    uartSendButton.textContent = tr("Send");
+    repeatLabelText.textContent = tr("Repeat");
+    repeatButton.textContent = repeatTimer ? tr("Stop repeating") : tr("Start repeating");
+    entryText.textContent = tr("Send");
+    text.placeholder = tr("Send text, then Send (Enter sends, Shift+Enter adds a line)");
+    endingLabelText.textContent = tr("Line ending");
+    hexText.textContent = tr("Input is HEX");
+    sendButton.textContent = tr("Send");
+    uartOutput.dataset.empty = tr("Receive");
+    dtrButton.textContent = `${tr("DTR")} ${signals.dtr ? tr("High") : tr("Low")}`;
+    rtsButton.textContent = `${tr("RTS")} ${signals.rts ? tr("High") : tr("Low")}`;
+    dtrButton.setAttribute("aria-pressed", String(signals.dtr));
+    rtsButton.setAttribute("aria-pressed", String(signals.rts));
+    renderStats();
+    renderUart(true);
+  };
+
+  const renderStats = () => {
+    stats.textContent = t("RX {rx} B · TX {tx} B", { rx: statsRx, tx: statsTx });
+  };
+
+  const setSignals = (next: Signals) => {
+    signals = next;
+    dtrButton.textContent = `${t("DTR")} ${next.dtr ? t("High") : t("Low")}`;
+    rtsButton.textContent = `${t("RTS")} ${next.rts ? t("High") : t("Low")}`;
+    dtrButton.setAttribute("aria-pressed", String(next.dtr));
+    rtsButton.setAttribute("aria-pressed", String(next.rts));
+  };
+
   const setConnected = (next: boolean) => {
     connected = next;
-    state.textContent = next ? "Connected" : "Disconnected";
-    connect.textContent = next ? "Disconnect" : "Connect";
+    state.textContent = next ? t("Connected") : t("Disconnected");
+    connect.textContent = next ? t("Disconnect") : t("Connect");
     sendButton.disabled = !next || working;
+    uartSendButton.disabled = !next || working;
     ports.disabled = working;
+    dtrButton.disabled = !next || working;
+    rtsButton.disabled = !next || working;
+    if (!next) stopRepeat(t("Repeat stopped: the port is disconnected."));
+    else repeatButton.disabled = working;
   };
+
   const resize = () => {
-    if (disposed || terminalContainer.clientWidth === 0 || terminalContainer.clientHeight === 0) return;
+    if (disposed || terminalPanel.hidden) return;
+    if (terminalContainer.clientWidth === 0 || terminalContainer.clientHeight === 0) return;
     fit.fit();
+  };
+
+  const scheduleRender = () => {
+    if (renderTimer || paused || mode !== "uart") return;
+    renderTimer = window.setTimeout(() => {
+      renderTimer = 0;
+      renderUart(false);
+    }, 80);
+  };
+
+  /** 由缓存的块拼接接收视图；只有可见时才写入 DOM。 */
+  const renderUart = (force: boolean) => {
+    if (disposed || (!force && (paused || mode !== "uart"))) return;
+    let text = "";
+    for (const item of entries) {
+      const prefix = timestamps.checked ? `[${stamp(item.time)}] ` : "";
+      text += prefix + (uartView === "hex" ? item.hex : item.text);
+    }
+    if (uartView === "text") text = text.replace(/\r\n/g, "\n");
+    uartOutput.textContent = text.length > RENDER_LIMIT ? text.slice(-RENDER_LIMIT) : text;
+    if (autoscroll.checked) uartOutput.scrollTop = uartOutput.scrollHeight;
+  };
+
+  const clearLog = () => {
+    entries.length = 0;
+    logBytes = 0;
+    hexOffset = 0;
+    pendingWhilePaused = 0;
+    uartOutput.textContent = "";
+    terminal.reset();
+  };
+
+  const appendOutput = (data: string) => {
+    const bytes = decode(data);
+    if (!bytes.length) return;
+    const now = Date.now();
+    entries.push({
+      time: now,
+      bytes: bytes.length,
+      text: decoder.decode(bytes, { stream: true }),
+      hex: hexDump(bytes, hexOffset),
+    });
+    hexOffset += bytes.length;
+    logBytes += bytes.length;
+    statsRx += bytes.length;
+    while (logBytes > LOG_LIMIT && entries.length > 1) {
+      const dropped = entries.shift();
+      if (!dropped) break;
+      logBytes -= dropped.bytes;
+    }
+    if (paused) pendingWhilePaused += bytes.length;
+    renderStats();
+    scheduleRender();
   };
 
   const write = async (data: string) => {
     if (!data || disposed) return;
-    const decoded = atob(data);
-    await new Promise<void>((resolve) => terminal.write(Uint8Array.from(decoded, (char) => char.charCodeAt(0)), resolve));
+    await new Promise<void>((resolve) => terminal.write(decode(data), resolve));
   };
+
   const refreshSnapshot = async () => {
     const status = await invoke<Status>("serial.status", {});
     if (disposed) return;
@@ -300,8 +709,11 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
     if (connectionId !== status.connectionId) {
       connectionId = status.connectionId;
       cursor = "0";
-      if (connectionId) terminal.reset();
+      statsRx = 0;
+      statsTx = 0;
+      if (connectionId) clearLog();
     }
+    setSignals(status.signals ?? { dtr: status.config.dtr, rts: status.config.rts });
     setConnected(status.connected);
     connect.disabled = working;
     if (!connectionId) return;
@@ -311,36 +723,52 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
       if (disposed || data.connectionId !== connectionId) return;
       if (data.gap) {
         terminal.reset();
-        terminal.write("\r\n[Output gap: older data expired from replay buffer]\r\n");
+        terminal.write(`\r\n[${t("Output gap: older data expired from the replay buffer")}]\r\n`);
       }
       await write(data.data);
+      appendOutput(data.data);
       cursor = data.cursor;
       if (!data.more) break;
-      if (batch === 63) notice.textContent = "Replay limit reached; waiting for the next output event.";
+      if (batch === 63) notice.textContent = t("Replay limit reached; waiting for the next output event.");
     }
     if (connected) resize();
   };
+
   const enqueue = (action: () => Promise<void>) => {
     const next = updates.then(async () => { if (!disposed) await action(); });
     updates = next.catch(showError);
     return updates;
   };
+
   const sendBytes = (payload: Uint8Array, lineEnding: string) => {
     if (disposed || !connected || working) return;
     if (queuedBytes + payload.length > 16 * 1024) {
-      notice.textContent = "Input queue is full. Wait before sending more.";
+      notice.textContent = t("Input queue is full. Wait before sending more.");
       return;
     }
     queuedBytes += payload.length;
     inputQueue = inputQueue.then(async () => {
       if (!disposed && connected) {
-        await invoke("serial.write", { data: base64(payload), lineEnding });
+        // 插件可能补上行结束符，计数以插件回报的实际字节为准。
+        const written = await invoke<{ bytes: number }>("serial.write", { data: base64(payload), lineEnding });
+        statsTx += written.bytes;
+        renderStats();
       }
     }).catch(showError).finally(() => { queuedBytes -= payload.length; });
   };
+
+  const stopRepeat = (reason?: string) => {
+    if (!repeatTimer) return;
+    window.clearInterval(repeatTimer);
+    repeatTimer = 0;
+    repeatButton.textContent = t("Start repeating");
+    repeatButton.setAttribute("aria-pressed", "false");
+    if (reason && !disposed) notice.textContent = reason;
+  };
+
   const startEvents = async () => {
     const cancel = await api.subscribeEvents((event) => enqueue(async () => {
-      if (event.name === "runtime.closed") { setConnected(false); notice.textContent = "Plugin connection closed."; return; }
+      if (event.name === "runtime.closed") { setConnected(false); notice.textContent = t("Plugin connection closed."); return; }
       if (event.name === "runtime.gap" || event.name === "serial.status") { await refreshSnapshot(); return; }
       if (event.name !== "serial.output") return;
       const data = event.payload as PushedOutput;
@@ -351,6 +779,7 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
       if (data.connectionId !== connectionId || BigInt(data.cursor) <= BigInt(cursor)) return;
       if (BigInt(data.cursor) !== BigInt(cursor) + 1n) { await refreshSnapshot(); return; }
       await write(data.data);
+      appendOutput(data.data);
       cursor = data.cursor;
     }));
     if (disposed) { cancel(); return; }
@@ -358,11 +787,36 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
     await enqueue(refreshSnapshot);
   };
 
+  const setMode = (next: "terminal" | "uart") => {
+    mode = next;
+    terminalMode.setAttribute("aria-pressed", String(next === "terminal"));
+    uartMode.setAttribute("aria-pressed", String(next === "uart"));
+    terminalPanel.hidden = next !== "terminal";
+    uartPanel.hidden = next !== "uart";
+    send.hidden = next !== "terminal";
+    if (next === "uart") {
+      renderUart(true);
+      uartText.focus();
+    } else {
+      requestAnimationFrame(() => {
+        if (disposed) return;
+        resize();
+        terminal.refresh(0, terminal.rows - 1);
+        terminal.focus();
+      });
+    }
+  };
+
+  terminalMode.addEventListener("click", () => setMode("terminal"), { signal: controller.signal });
+  uartMode.addEventListener("click", () => setMode("uart"), { signal: controller.signal });
+
   connect.addEventListener("click", async () => {
     if (working || disposed) return;
     working = true;
     connect.disabled = true;
     sendButton.disabled = true;
+    uartSendButton.disabled = true;
+    repeatButton.disabled = true;
     notice.textContent = "";
     try {
       if (connected) {
@@ -372,18 +826,25 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
         await invoke("serial.connect", {});
         if (disposed) return;
         await enqueue(refreshSnapshot);
-        terminal.focus();
+        if (mode === "terminal") terminal.focus(); else uartText.focus();
       }
     } catch (reason) { showError(reason); }
-    finally { if (!disposed) { working = false; connect.disabled = false; sendButton.disabled = !connected; } }
+    finally { if (!disposed) { working = false; connect.disabled = false; setConnected(connected); } }
   }, { signal: controller.signal });
 
-  const sendText = () => {
-    if (!text.value) return;
-    let payload: Uint8Array;
+  const payloadOf = (source: HTMLTextAreaElement, asHex: boolean): Uint8Array | null => {
+    if (!source.value) return null;
     try {
-      payload = hexInput.checked ? fromHex(text.value) : new TextEncoder().encode(text.value);
-    } catch (reason) { showError(reason); return; }
+      return asHex ? fromHex(source.value) : new TextEncoder().encode(source.value);
+    } catch (reason) {
+      showError(reason);
+      return null;
+    }
+  };
+
+  const sendText = () => {
+    const payload = payloadOf(text, hexInput.checked);
+    if (!payload) return;
     sendBytes(payload, ending.value);
     text.value = "";
   };
@@ -391,6 +852,77 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
   text.addEventListener("keydown", (event) => {
     if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); sendText(); }
   }, { signal: controller.signal });
+
+  const sendUart = () => {
+    const payload = payloadOf(uartText, uartHex.checked);
+    if (!payload) return;
+    sendBytes(payload, uartEnding.value);
+  };
+  uartSendButton.addEventListener("click", sendUart, { signal: controller.signal });
+  uartText.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); sendUart(); }
+  }, { signal: controller.signal });
+
+  repeatButton.addEventListener("click", () => {
+    if (disposed) return;
+    if (repeatTimer) { stopRepeat(); return; }
+    const interval = Number(repeatMs.value);
+    if (!Number.isFinite(interval) || interval < REPEAT_MIN_MS || interval > REPEAT_MAX_MS) {
+      notice.textContent = t("Repeat interval must be between 20 and 60000 ms.");
+      return;
+    }
+    // 重复发送复用同一条输入队列，不绕过节流和连接检查。
+    const payload = payloadOf(uartText, uartHex.checked);
+    if (!payload) return;
+    notice.textContent = t("Repeat every {ms} ms", { ms: interval });
+    repeatTimer = window.setInterval(() => {
+      if (!connected) { stopRepeat(t("Repeat stopped: the port is disconnected.")); return; }
+      sendBytes(payload, uartEnding.value);
+    }, interval);
+    repeatButton.textContent = t("Stop repeating");
+    repeatButton.setAttribute("aria-pressed", "true");
+  }, { signal: controller.signal });
+
+  viewText.addEventListener("click", () => { uartView = "text"; updateViewButtons(); renderUart(true); }, { signal: controller.signal });
+  viewHex.addEventListener("click", () => { uartView = "hex"; updateViewButtons(); renderUart(true); }, { signal: controller.signal });
+  const updateViewButtons = () => {
+    viewText.setAttribute("aria-pressed", String(uartView === "text"));
+    viewHex.setAttribute("aria-pressed", String(uartView === "hex"));
+  };
+  timestamps.addEventListener("change", () => renderUart(true), { signal: controller.signal });
+  autoscroll.addEventListener("change", () => { if (autoscroll.checked) renderUart(true); }, { signal: controller.signal });
+  clear.addEventListener("click", () => {
+    clearLog();
+    if (paused) { paused = false; pause.textContent = t("Pause"); }
+    pendingWhilePaused = 0;
+    notice.textContent = "";
+  }, { signal: controller.signal });
+  pause.addEventListener("click", () => {
+    paused = !paused;
+    pause.textContent = paused ? t("Resume") : t("Pause");
+    pause.setAttribute("aria-pressed", String(paused));
+    if (paused) {
+      pendingWhilePaused = 0;
+    } else {
+      if (pendingWhilePaused > 0) notice.textContent = t("The device sent {bytes} bytes while paused.", { bytes: pendingWhilePaused });
+      pendingWhilePaused = 0;
+      renderUart(true);
+    }
+  }, { signal: controller.signal });
+
+  const toggleSignal = async (name: "dtr" | "rts") => {
+    if (!connected || working || disposed) return;
+    const next = { ...signals, [name]: !signals[name] };
+    dtrButton.disabled = true;
+    rtsButton.disabled = true;
+    try {
+      const result = await invoke<Signals>("serial.signals", { [name]: next[name] });
+      if (!disposed) setSignals(result);
+    } catch (reason) { showError(reason); }
+    finally { if (!disposed) { dtrButton.disabled = !connected; rtsButton.disabled = !connected; } }
+  };
+  dtrButton.addEventListener("click", () => void toggleSignal("dtr"), { signal: controller.signal });
+  rtsButton.addEventListener("click", () => void toggleSignal("rts"), { signal: controller.signal });
 
   // 端口枚举是只读探测，不触碰已经打开的连接。
   ports.addEventListener("click", async () => {
@@ -401,9 +933,9 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
       if (disposed) return;
       notice.textContent = probe.ports.length
         ? probe.ports.map((item) => `${item.portName} (${item.portType.kind}${item.portType.product ? `: ${item.portType.product}` : ""})`).join(", ")
-        : "No serial ports were reported by the operating system.";
+        : t("No serial ports were reported by the operating system.");
     } catch (reason) { showError(reason); }
-    finally { if (!disposed) ports.disabled = !connected; }
+    finally { if (!disposed) ports.disabled = !connected && working; }
   }, { signal: controller.signal });
 
   // 终端里的按键按原样发送，不附加行结束符：这里的输入是原始字节。
@@ -413,13 +945,19 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
     resizeTimer = window.setTimeout(resize, 100);
   });
   observer.observe(terminalContainer);
+  const stopLocale = api.i18n?.subscribe(() => applyLocale());
+  applyLocale();
+  setMode("terminal");
   void startEvents().catch(showError);
 
   return { unmount() {
     disposed = true;
+    stopRepeat();
     controller.abort();
+    stopLocale?.();
     unsubscribe?.();
     window.clearTimeout(resizeTimer);
+    window.clearTimeout(renderTimer);
     observer.disconnect();
     onData.dispose();
     terminal.dispose();
