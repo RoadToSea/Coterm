@@ -19,6 +19,7 @@ const zhCN: Readonly<Record<string, string>> = {
   "DTR and RTS default to high; clear them for boards that reset on open.": "DTR 与 RTS 默认置高；会在打开时复位的板子请取消勾选。",
 
   // 通用
+  "Could not copy terminal selection. Try copying again.": "无法复制终端选区，请重试复制。",
   "Serial": "串口",
   "Loading…": "加载中…",
   "Connected": "已连接",

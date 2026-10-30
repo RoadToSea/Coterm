@@ -3,6 +3,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import terminalCSS from "@xterm/xterm/css/xterm.css?inline";
 import type { PluginAPI, PluginConfigurationAPI, PluginFrontend, OperationReceipt } from "@coterm/plugin-sdk";
 import { createTranslator } from "./i18n";
+import { attachTerminalShortcuts } from "@coterm/plugin-sdk/components/terminal-shortcuts";
 
 const css = `
   :host {
@@ -295,6 +296,9 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
   let queuedBytes = 0;
   let inputQueue = Promise.resolve();
   const controller = new AbortController();
+  const stopShortcuts = attachTerminalShortcuts(terminal, () => {
+    if (!disposed) notice.textContent = t("Could not copy terminal selection. Try copying again.");
+  });
 
   const invoke = async <T = unknown>(operation: string, args: unknown): Promise<T> => output(await api.invoke<T>(operation, args));
   const showError = (reason: unknown) => { if (!disposed) notice.textContent = String(reason); };
@@ -571,6 +575,7 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
     window.clearTimeout(resizeTimer);
     observer.disconnect();
     onData.dispose();
+    stopShortcuts();
     terminal.dispose();
     container.replaceChildren();
   } };

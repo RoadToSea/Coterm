@@ -1,6 +1,7 @@
 import type { PluginI18n } from "@coterm/plugin-sdk";
 
 const zhCN: Readonly<Record<string, string>> = {
+  "Could not copy terminal selection. Try copying again.": "无法复制终端选区，请重试复制。",
   "Host": "主机",
   "Port": "端口",
   "Username": "用户名",
