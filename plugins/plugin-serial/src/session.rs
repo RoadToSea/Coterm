@@ -11,6 +11,7 @@ use std::{
 };
 
 use crate::command::{CommandHandle, CommandJob, CommandList};
+use crate::serial_io::SerialWriter;
 use anyhow::{anyhow, bail, Result};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use coterm_proto::runtime::{message::PluginNotification, ErrorCategory, RuntimeError};
@@ -352,7 +353,7 @@ impl Connection {
                                         let mut handle = handle;
                                         let mut outcome = Ok(());
                                         if let Some(level) = dtr {
-                                            if let Err(error) = handle.write_data_terminal_ready(level) {
+                                            if let Err(error) = handle.port.write_data_terminal_ready(level) {
                                                 outcome = Err(error);
                                             } else {
                                                 dtr_state.store(level, Ordering::Relaxed);
@@ -360,7 +361,7 @@ impl Connection {
                                         }
                                         if outcome.is_ok() {
                                             if let Some(level) = rts {
-                                                if let Err(error) = handle.write_request_to_send(level) {
+                                                if let Err(error) = handle.port.write_request_to_send(level) {
                                                     outcome = Err(error);
                                                 } else {
                                                     rts_state.store(level, Ordering::Relaxed);
@@ -614,12 +615,7 @@ fn read_until_stopped<R: Read>(mut source: ReaderSource<R>) {
 }
 
 /// 阻塞打开端口并设置初始信号电平，返回读端和写端两个句柄。
-fn open_port(
-    config: &Config,
-) -> Result<(
-    Box<dyn serialport::SerialPort>,
-    Box<dyn serialport::SerialPort>,
-)> {
+fn open_port(config: &Config) -> Result<(Box<dyn serialport::SerialPort>, SerialWriter)> {
     let mut port = serialport::new(config.port.trim(), config.baud_rate)
         .data_bits(match config.data_bits {
             5 => serialport::DataBits::Five,
@@ -647,7 +643,13 @@ fn open_port(
     let writer = port
         .try_clone()
         .map_err(|error| anyhow!("Serial port write handle failed: {error}"))?;
-    Ok((port, writer))
+    Ok((
+        port,
+        SerialWriter {
+            port: writer,
+            timeout: IO_TIMEOUT,
+        },
+    ))
 }
 
 /// 错误码与 `ErrorCategory` 的稳定映射，供后端在失败通知中使用。

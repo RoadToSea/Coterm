@@ -51,6 +51,7 @@ MCP 提供上述工具中的 status、probe、connect、disconnect、read、comm
 - `serial.output`/`serial.status` 使用连接 ID 和游标；通知队列有界，推送丢失后以回放缓冲恢复。
 - 读取使用独立线程，写入经 64 槽队列和阻塞任务提交；前端输入队列上限 16 KiB。
 - 命令列表共用写入 actor，每项单独写入和 flush；每项驱动等待上限 2 秒，间隔等待可取消。断开前先停止后续项，再回收连接；Windows、Linux、macOS 共用该实现，无新增依赖、权限或传输方式。
+- 部分虚拟串口驱动不实现 flush（Windows 错误码 1/50）。仅当驱动明确不支持该操作时，写端改为有界查询发送队列，确认排空后才计入发送成功；队列查询失败或排空超时仍为错误，不重发数据。原始写入和列表发送共用这一兼容逻辑。列表失败的结构化信息包含 IO 阶段、错误种类和 OS 错误码，不包含命令内容。
 - 读取线程有停止标志，显式断开时等待其退出并回收句柄（上限 2 秒）；析构也会置位该标志，避免线程泄漏。停止标志只在一次阻塞读之后检查，最坏退出延迟是一次读取轮询（20 ms）。
 - 打开端口是阻塞调用，放在阻塞线程池执行；5 秒超时后关闭端口并报错，不占用异步工作线程。
 - `serial.status` 回报 DTR/RTS 电平与本次连接累计收发字节数；前端 TX 计数取插件回报的实际写入字节，包含插件补上的行结束符。
@@ -86,6 +87,19 @@ cargo test -p coterm-plugin-serial --test live -- --ignored --nocapture
 ```
 
 该用例验证真实字节往返、收发计数与 DTR/RTS 落地，不验证设备业务语义；缺少设备配置会失败。手工诊断可用 `cargo run -p coterm-plugin-serial --example live -- COM6 115200`，不属于普通回归。
+
+### 虚拟串口配对
+
+无需登录设备 shell。先创建一对互联且未被占用的虚拟串口，再显式选择两端；测试会向这两个端口发送测试数据，默认 ignored，普通回归不会自动打开它们：
+
+```powershell
+$env:COTERM_SERIAL_PAIR_A = "COM1"
+$env:COTERM_SERIAL_PAIR_B = "COM2"
+$env:COTERM_SERIAL_PAIR_BAUD = "115200"
+cargo test -p coterm-plugin-serial --test virtual_pair -- --ignored --nocapture
+```
+
+测试启动真实插件进程，经宿主来源识别、审批、stdio 控制协议和 OS 串口驱动验证列表发送、反向二进制回传、取消、容量、断开不重放与重连。可交换 A/B 再测；它不验证设备命令执行、提示符识别或物理线路时序。Windows HHD COM1/COM2 验收结果及驱动兼容修复见[配对验收记录](../progress/2026-10-30-serial-virtual-pair.md)。
 
 界面验收在真实 Tauri 中运行，需要可枚举的串口（默认 `COM6`，可用 `COTERM_SERIAL_LIVE_PORT` 覆盖）：
 

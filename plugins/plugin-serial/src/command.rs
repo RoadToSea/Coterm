@@ -189,6 +189,7 @@ impl CommandJob {
             ..Progress::default()
         };
         let mut failure = None;
+        let mut io_failure = None;
         self.publish(&state, events, connection_id, tx.load(Ordering::Relaxed));
         for index in 0..self.list.payloads.len() {
             if *self.cancel.borrow() {
@@ -209,7 +210,10 @@ impl CommandJob {
                 Duration::from_secs(2),
                 tokio::task::spawn_blocking(move || {
                     let mut handle = handle;
-                    let result = handle.write_all(&payload).and_then(|()| handle.flush());
+                    let result = handle
+                        .write_all(&payload)
+                        .map_err(|error| ("write", error))
+                        .and_then(|()| handle.flush().map_err(|error| ("flush", error)));
                     (handle, result)
                 }),
             )
@@ -217,7 +221,10 @@ impl CommandJob {
             {
                 Ok(Ok((handle, result))) => {
                     writer = Some(handle);
-                    if result.is_err() {
+                    if let Err((stage, error)) = result {
+                        io_failure = Some(
+                            json!({"stage":stage,"kind":format!("{:?}",error.kind()),"osError":error.raw_os_error()}),
+                        );
                         failure =
                             Some("Serial write failed; delivery of the current entry is unknown");
                         break;
@@ -246,6 +253,10 @@ impl CommandJob {
         state.finished = true;
         self.publish(&state, events, connection_id, tx.load(Ordering::Relaxed));
         if let Some(message) = failure {
+            let mut details = self.summary(&state);
+            if let Some(error) = io_failure {
+                details["ioError"] = error;
+            }
             if let Some((_, sender)) = events {
                 let _ = sender
                     .send(PluginNotification::OperationFailed {
@@ -254,7 +265,7 @@ impl CommandJob {
                             category: ErrorCategory::Transport,
                             code: "serial_command_delivery_unknown".into(),
                             message: message.into(),
-                            details: Some(self.summary(&state)),
+                            details: Some(details),
                         },
                     })
                     .await;
