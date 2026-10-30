@@ -2,7 +2,7 @@
 
 人类与 Agent 共享连接实例的插件式通信工具。Tauri 基座负责运行时和公共交互，协议与领域界面由独立插件实现。
 
-当前目标为 Windows 上运行可信本地插件的基座首版；SSH、串口与跨平台发布独立迭代。完成情况和已知缺口统一维护在 [项目进度](docs/PROGRESS.md)。
+当前目标为 Windows 上运行可信本地插件的基座首版；SSH、串口与跨平台发布独立迭代。完成情况和已知缺口统一维护在 [项目进度](docs/progress/project.md)。
 
 ## 开发
 
@@ -26,7 +26,7 @@ pnpm plugin:ssh:build --release
 pnpm plugin:pack plugins/plugin-ssh/dist target/release/bundle/plugins/coterm-plugin-ssh.coterm
 ```
 
-`.coterm` 是 ZIP 格式，根目录须直接包含 `manifest.json`、`backend/` 和可选 `frontend/`。Alpha 暂不支持覆盖安装同 ID 插件；签名、更新、回滚和市场另行开发。发布步骤与边界见 [Alpha 交付说明](docs/alpha-release.md)。
+`.coterm` 是 ZIP 格式，根目录须直接包含 `manifest.json`、`backend/` 和可选 `frontend/`。Alpha 暂不支持覆盖安装同 ID 插件；签名、更新、回滚和市场另行开发。发布步骤与边界见 [Alpha 交付说明](docs/release/alpha-release.md)。
 
 Windows 工作区自动加密保存；下次启动点击 **Restore workspace** 重建实例，再主动连接。历史仅保留本次启动，Bypass 每次重置为关闭。
 
@@ -65,7 +65,11 @@ pnpm tauri:build --config ../../tests/fixtures/tauri-smoke.conf.json --bundles n
 | 文档 | 用途 |
 |---|---|
 | [SPEC](docs/SPEC.md) | 架构原则与模块边界 |
-| [项目进度](docs/PROGRESS.md) | 已完成、待办与最近验证 |
+| [项目进度](docs/progress/project.md) | 已完成、待办与最近验证 |
+| [Design](docs/design/README.md) | 复杂业务实现前的方案与验收条件 |
+| [Feedback](docs/feedback/README.md) | 外部使用反馈与现场观察 |
+| [Progress](docs/progress/README.md) | 按模块持续记录状态、限制和续作入口 |
+| [Release](docs/release/README.md) | 构建、发行与发布前验收 |
 | [插件开发](docs/architecture/plugin-development.md) | 插件接入与开发流程 |
 | [运行时通信](docs/architecture/runtime-communication.md) | 操作、审批、交互与事件契约 |
 | [MCP](docs/architecture/mcp-integration.md) | 客户端连接、工具和调用语义 |

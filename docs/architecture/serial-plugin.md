@@ -76,7 +76,7 @@ Base64 和 HEX 都是字节的表示方式，均不是加密。本插件接口�
 - 文本与 HEX 写入及列表均标记为敏感输入，账本只保留脱敏占位。
 - 尚无硬件流控（RTS/CTS 握手）、自动重连、热插拔监听和文件收发。
 
-公共交互、事件和账本规则见 [运行时通信](runtime-communication.md)，修复优先级见 [项目进度](../PROGRESS.md)。
+公共交互、事件和账本规则见 [运行时通信](runtime-communication.md)，修复优先级见 [项目进度](../progress/project.md)。
 
 ## 验证
 
@@ -116,7 +116,7 @@ $env:COTERM_SERIAL_PAIR_BAUD = "115200"
 cargo test -p coterm-plugin-serial --test virtual_pair -- --ignored --nocapture
 ```
 
-测试启动真实插件进程，经宿主来源识别、审批、stdio 控制协议和 OS 串口驱动验证列表发送、反向二进制回传、取消、容量、断开不重放与重连。可交换 A/B 再测；它不验证设备命令执行、提示符识别或物理线路时序。Windows HHD COM1/COM2 验收结果及驱动兼容修复见[配对验收记录](../progress/2026-10-30-serial-virtual-pair.md)。
+测试启动真实插件进程，经宿主来源识别、审批、stdio 控制协议和 OS 串口驱动验证列表发送、反向二进制回传、取消、容量、断开不重放与重连。可交换 A/B 再测；它不验证设备命令执行、提示符识别或物理线路时序。Windows HHD COM1/COM2 验收结果及驱动兼容修复见[串口开发记录](../progress/serial-plugin.md)。
 
 界面验收在真实 Tauri 中运行，需要可枚举的串口（默认 `COM6`，可用 `COTERM_SERIAL_LIVE_PORT` 覆盖）：
 

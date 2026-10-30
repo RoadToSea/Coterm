@@ -1,6 +1,6 @@
 # 插件开发
 
-后端 JSON 控制协议采用 [v1.0 基线](runtime-communication.md)，前端 SDK 采用 v1.0；二进制流仍在演进。字段以 [Rust 运行时类型](../../crates/coterm-proto/src/runtime) 和 [前端 SDK](../../packages/plugin-sdk/src/plugin-api.ts) 为准，未实现能力见 [项目进度](../PROGRESS.md)。
+后端 JSON 控制协议采用 [v1.0 基线](runtime-communication.md)，前端 SDK 采用 v1.0；二进制流仍在演进。字段以 [Rust 运行时类型](../../crates/coterm-proto/src/runtime) 和 [前端 SDK](../../packages/plugin-sdk/src/plugin-api.ts) 为准，未实现能力见 [项目进度](../progress/project.md)。
 
 ## 插件边界
 

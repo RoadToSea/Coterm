@@ -1,6 +1,6 @@
 # Coterm 架构规格
 
-Coterm 面向软硬一体与边缘计算场景，让用户与 Agent 在同一连接实例中观察、输入、审批和中止操作。当前实现状态见 [项目进度](PROGRESS.md)。
+Coterm 面向软硬一体与边缘计算场景，让用户与 Agent 在同一连接实例中观察、输入、审批和中止操作。当前实现状态见 [项目进度](progress/project.md)。
 
 ## 核心原则
 
@@ -42,4 +42,4 @@ Coterm 面向软硬一体与边缘计算场景，让用户与 Agent 在同一连
 
 路线：基础闭环 → 稳定插件运行时与跨平台交付 → 插件信任、更新和生态；协议按插件独立扩展。
 
-插件接入见 [开发指南](architecture/plugin-development.md)，消息与交互见 [运行时通信](architecture/runtime-communication.md)，Agent 接入见 [MCP](architecture/mcp-integration.md)。具体优先级和验收缺口只在 [项目进度](PROGRESS.md) 维护。
+插件接入见 [开发指南](architecture/plugin-development.md)，消息与交互见 [运行时通信](architecture/runtime-communication.md)，Agent 接入见 [MCP](architecture/mcp-integration.md)。具体优先级和验收缺口只在 [项目进度](progress/project.md) 维护。

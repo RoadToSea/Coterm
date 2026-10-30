@@ -32,7 +32,7 @@
 
 ### P0：插件可靠性
 
-三项串口 P0 已于 2026-10-30 完成，详见[串口硬件验收](progress/2026-10-30-serial-hardware.md)：
+三项串口 P0 已于 2026-10-30 完成，详见[串口开发记录](serial-plugin.md)：
 
 - ~~**串口资源回收**~~：读取线程有停止标志与 join（上限 2 秒），析构也置位；阻塞打开移入阻塞线程池，5 秒 timeout 可中断。12 轮连接/断开压力与销毁后重连通过。
 - ~~**串口输入脱敏**~~：`serial.write` 标记为敏感输入，MCP 镜像沿用该标记。
@@ -44,19 +44,19 @@
 - 扩展流接口时，用持续订阅型测试插件验证窗口信用、背压、取消与数据缺口。
 - 跨平台发布另补 CI、安装包和系统依赖验证；核验 macOS 图标，当前 `icon.icns` 仅 8 字节。
 - 插件验收另覆盖远程 SSH 和物理串口，不与基座验收混算。
-- 2026-10-26 已完成一次真实远程 SSH / MCP 运维验证：用户与组管理、Docker 安装、Mihomo 部署及 HTTP/SOCKS5 直连检查；会话名额、审批、结果解析和共享 PTY 的使用问题见 [实测记录](ssh-mihomo-field-test.md)。认证交互、长任务超时和物理串口见 2026-10-30 硬件验收记录。
-- 2026-10-26 第二轮真实 SSH 边界测试补充发现：顶层 Shell 语法错误会退出 PTY；取消未确认会长期阻塞连接，需断开重连；错误分类无法区分网络、握手、指纹和 Shell 阶段；命令包装会进入回放；输出在 8192 字节截断。详见 [实测记录](ssh-mihomo-field-test.md)。
-- 2026-10-27 使用真实 Tauri 程序回归修复：语法错误返回结构化结果且保持连接、取消后连接可继续执行、结果提供原始/丢弃字节数、操作收据去重、SSH 包装从回放隔离；详见 [实测记录](ssh-mihomo-field-test.md)。
+- 2026-10-26 已完成一次真实远程 SSH / MCP 运维验证：用户与组管理、Docker 安装、Mihomo 部署及 HTTP/SOCKS5 直连检查；会话名额、审批、结果解析和共享 PTY 的使用问题见 [实测记录](../feedback/ssh-mihomo-field-test.md)。认证交互、长任务超时和物理串口见串口开发记录。
+- 2026-10-26 第二轮真实 SSH 边界测试补充发现：顶层 Shell 语法错误会退出 PTY；取消未确认会长期阻塞连接，需断开重连；错误分类无法区分网络、握手、指纹和 Shell 阶段；命令包装会进入回放；输出在 8192 字节截断。详见 [实测记录](../feedback/ssh-mihomo-field-test.md)。
+- 2026-10-27 使用真实 Tauri 程序回归修复：语法错误返回结构化结果且保持连接、取消后连接可继续执行、结果提供原始/丢弃字节数、操作收据去重、SSH 包装从回放隔离；详见 [实测记录](../feedback/ssh-mihomo-field-test.md)。
 - 2026-10-27 已修复上述 SSH/MCP 边界问题：命令执行前先做静态语法检查，避免登录 Shell 因语法错误退出；取消未确认时自动重建 PTY 并新增 `ssh.reset`；连接错误改为稳定阶段码（`ssh_host_key_mismatch`、`ssh_remote_shell_exited` 等）；包装回显从回放中移除；结果新增 `text/base64` 双编码、原始/丢弃字节数与截断上限。新增 `ssh.exec` 独立通道、`ssh.output` 作业进度、`ssh.system_info`/`ssh.file_info` 只读工具；MCP 工具结果改为 `structuredContent` 加摘要文本，`_meta` 收据不再重复完整输出；MCP 面板可列出并按前缀关闭会话，429 附恢复指引与 `Retry-After`。SSH 与 MCP 新增 6 个回归测试，远端服务器真实验收仍需单独执行。
 - 2026-10-29 SSH Agent 易用性：共享 PTY 命令超时后自动重建 Shell；新增有界 UTF-8 `ssh.read_file`/`ssh.write_file`（写入走审批及原子替换、无 sudo）；MCP `ssh.command`/`ssh.exec` 接收有序 `commands` 列表并在首个失败时停止。MCP 首选 Stdio、前端使用 Tauri Host API；私有 Stdio Bridge 已由桌面面板按需启停并交付客户端配置，桌面可执行文件的 `mcp stdio` 子命令即适配器，无需单独分发 CLI。
-- 2026-10-30 串口插件真实硬件验收：在 COM6（RISC-V Linux 板卡）验证登录交互、`uname -a` 往返、HEX 渲染、收发计数与 DTR/RTS；修复 TX 计数漏算行结束符；界面验收脚本改为不依赖界面语言。三项 P0 关闭，详见[记录](progress/2026-10-30-serial-hardware.md)。
+- 2026-10-30 串口插件真实硬件验收：在 COM6（RISC-V Linux 板卡）验证登录交互、`uname -a` 往返、HEX 渲染、收发计数与 DTR/RTS；修复 TX 计数漏算行结束符；界面验收脚本改为不依赖界面语言。三项 P0 关闭，详见[记录](serial-plugin.md)。
 - 2026-10-29 MCP 只保留 Stdio：桌面 MCP 面板按需启停私有 Token 桥并交付可粘贴的 `mcpServers` 配置，`coterm-desktop mcp stdio` 即适配器，不创建窗口或运行时；Token 只经私有命令返回面板，停用或退出即失效。移除 Streamable HTTP 端点、`axum`/`reqwest`/`futures` 依赖及面板中的地址与会话列表，SSH 的 HTTP 回归改为第二个桥客户端。仓库内的 `coterm-mcp-stdio` 保留为开发回归入口。
 
 ### P2：功能与生态
 
 - 本地 PTY、SSH 密钥/MFA/SFTP/转发、串口流控/热插拔、MQTT/CAN/Modbus。
 - 命令块选择到 MCP 上下文的闭环；Resources、Prompts、订阅、进度和协议级取消。
-- 插件签名、权限与前端隔离、秘密物理通道、覆盖安装/卸载/更新、回滚和市场；离线首次安装已接入，发布流程见 [Alpha 交付说明](alpha-release.md)。
+- 插件签名、权限与前端隔离、秘密物理通道、覆盖安装/卸载/更新、回滚和市场；离线首次安装已接入，发布流程见 [Alpha 交付说明](../release/alpha-release.md)。
 
 ## 最近代码验证
 
@@ -97,4 +97,4 @@ Windows x86_64：新增语言切换与离线安装，尚未创建 Alpha 发布�
 | 真实 Tauri / WebView2 | 多实例、SDK 公共交互、无 UI 秘密交互、慢消费者/缺口、崩溃/重建、加密恢复、Bypass 重置及退出回收通过 |
 | Windows NSIS | 隔离标识安装、启动与卸载；产品安装包构建及安装/卸载通过 |
 
-浏览器测试使用 IPC 替身；真实 Tauri 验收使用独立 `com.coterm.smoke` 工作区和无硬件测试插件。CI 流程已加入，云端结果以 Actions 为准。以上基座回归未覆盖远程 SSH、物理串口、macOS/Linux 安装包；另有同日真实远程 SSH 运维验证，范围见 [实测记录](ssh-mihomo-field-test.md)。普通回归不打开或写入物理串口。
+浏览器测试使用 IPC 替身；真实 Tauri 验收使用独立 `com.coterm.smoke` 工作区和无硬件测试插件。CI 流程已加入，云端结果以 Actions 为准。以上基座回归未覆盖远程 SSH、物理串口、macOS/Linux 安装包；另有同日真实远程 SSH 运维验证，范围见 [实测记录](../feedback/ssh-mihomo-field-test.md)。普通回归不打开或写入物理串口。

@@ -10,7 +10,7 @@
 4. 点击左侧 **安装插件 / Install plugin**，选择包并核对名称、ID、版本和平台；仅确认安装来自可信作者的包。
 5. 选择左侧 SSH 插件，填写主机、端口和用户名创建实例，再连接并确认服务器指纹、输入密码。
 
-安装不会执行插件。语言切换不影响现有 SSH 连接、终端内容和审批草稿；已安装插件无需重启应用即可列出。压缩包格式、限额与 SDK 语言 API 见 [插件开发](architecture/plugin-development.md)。
+安装不会执行插件。语言切换不影响现有 SSH 连接、终端内容和审批草稿；已安装插件无需重启应用即可列出。压缩包格式、限额与 SDK 语言 API 见 [插件开发](../architecture/plugin-development.md)。
 
 ## 构建与检查
 
@@ -36,7 +36,7 @@ pnpm plugin:pack plugins/plugin-ssh/dist target/release/bundle/plugins/coterm-pl
 - 安装：取消文件选择、坏 ZIP、入口缺失、不支持的平台、同 ID 冲突、暂存取消/清理、重启后发现已安装包。
 - 安全：选择和预览阶段不运行包；确认前有可信来源提示；错误不暴露绝对路径；不授予任意文件访问或 shell 代理。
 - Windows 实例创建：GUI 宿主启动插件不弹出黑色控制台；SSH 配置提交后显示未连接终端，点击连接后才发起远端连接。
-- 已有回归：审批、公共交互、多实例、工作区加密恢复、MCP 和退出回收；远程 SSH 实机验收按 [实测记录](ssh-mihomo-field-test.md) 单独记录，串口按 [硬件验收](progress/2026-10-30-serial-hardware.md)。
+- 已有回归：审批、公共交互、多实例、工作区加密恢复、MCP 和退出回收；远程 SSH 实机验收按 [实测记录](../feedback/ssh-mihomo-field-test.md) 单独记录，串口按 [硬件验收](../progress/serial-plugin.md)。
 - MCP：面板启用后复制配置，用真实 MCP 客户端（`coterm-desktop mcp stdio`）完成初始化与工具调用；停用或重启后旧 Token 失效，未启用时面板不显示配置；确认没有任何 HTTP 端口被监听。
 
 ## 本轮边界
@@ -44,7 +44,7 @@ pnpm plugin:pack plugins/plugin-ssh/dist target/release/bundle/plugins/coterm-pl
 - 只增加宿主与 SSH 前端的简体中文/English；第三方插件可渐进接入，远端输出和领域诊断不进行自动翻译。
 - 暂不支持覆盖安装、卸载、更新、回滚、签名、权限沙箱或云端市场。
 - 首发仅承诺 Windows x64；macOS/Linux 已考虑包路径、执行权限及依赖差异，但仍需独立安装验收。
-- 串口、本地 PTY 和 SSH 密钥/MFA/SFTP 等既有缺口继续按 [项目进度](PROGRESS.md) 跟踪。
+- 串口、本地 PTY 和 SSH 密钥/MFA/SFTP 等既有缺口继续按 [项目进度](../progress/project.md) 跟踪。
 
 ## 2026-10-28 验收结果
 
