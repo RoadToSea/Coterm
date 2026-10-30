@@ -1511,17 +1511,24 @@ impl PluginRuntime for ProcessPluginRuntime {
                     config,
                 }))
                 .await?;
+            let requested_label = created
+                .get("label")
+                .and_then(Value::as_str)
+                .filter(|label| {
+                    !label.trim().is_empty()
+                        && label.len() <= 256
+                        && !label.chars().any(char::is_control)
+                })
+                .map(str::to_owned)
+                .unwrap_or(instance.label);
+            let mut label = requested_label.clone();
+            let mut suffix = 2;
+            while state.instances.values().any(|item| item.label == label) {
+                label = format!("{requested_label} ({suffix})");
+                suffix += 1;
+            }
             let ready = InstanceInfo {
-                label: created
-                    .get("label")
-                    .and_then(Value::as_str)
-                    .filter(|label| {
-                        !label.trim().is_empty()
-                            && label.len() <= 256
-                            && !label.chars().any(char::is_control)
-                    })
-                    .map(str::to_owned)
-                    .unwrap_or(instance.label),
+                label,
                 status: InstanceStatus::Ready,
                 ..instance
             };

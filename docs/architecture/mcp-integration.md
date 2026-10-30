@@ -34,16 +34,16 @@ MCP 只有一个对外入口：本地 Stdio 子进程。桌面前端通过 Tauri
 
 | 工具 | 用途 |
 |---|---|
-| `coterm.list_instances` | 获取桌面已创建的实例及 ID |
+| `coterm.list_instances` | 获取桌面已创建的实例名称、插件和状态；内部 UUID 不对 MCP 暴露 |
 | `coterm.get_operation` | 查询审批、交互和执行结果 |
 | `coterm.cancel_operation` | 请求取消，结果依赖插件确认 |
 | `<pluginId>__<toolName>` | 插件显式注册的原生 Tool，例如 `coterm-plugin-ssh__ssh.command` |
 
 Bridge 保留插件参数和原生 `CallToolResult`，仅处理命名空间、目标路由及操作元信息。不会自动把整个内部操作目录公开为 MCP。
 
-- 实例级工具的 schema 必须要求字符串 `pluginInstanceId`，与桌面共享同一连接。
+- 实例级工具的 schema 要求字符串 `name`。它对应 `coterm.list_instances` 返回的唯一实例名称；Bridge 在内部解析为 UUID 后再路由，插件不会跨实例搜索。
 - 插件级工具不绑定实例；插件授权域由已注册工具名称确定。
-- 查询/取消公共工具使用 `pluginInstanceId` 或 `pluginId` 定位记录授权域。
+- 查询/取消公共工具使用 `name` 或 `pluginId` 定位记录授权域；UUID 只存在于 Bridge 和运行时内部。
 - 所有外部调用固定为 Agent 来源；Agent 不能自行批准、伪造来源或开启 Bypass。
 - 工具结果的机器可读副本是 `structuredContent`；`content[].text` 是简短摘要，不再完整重复负载。`_meta["coterm/operation"]` 只含操作收据，`output` 已替换为大小标记，避免同一结果在响应里出现两次。
 - Agent commit 默认经过人工审批。Bypass 只跳过提交审批，仍需协议认证及秘密输入。
@@ -56,12 +56,12 @@ SSH 认证步骤和工具边界见 [SSH](ssh-plugin.md)，串口可用工具见 
 
 默认最多等待 60 秒，覆盖审批、秘密交互及执行。调用完成直接返回插件结果，`_meta["coterm/operation"]` 附操作收据。立即返回或等待到期时返回 pending，最终结果可通过查询记录的 `output` 获取。
 
-通过调用元信息设置等待上限，不把它混入领域参数：
+通过调用元信息设置等待上限，不把它混入领域参数。`_meta` 位于 JSON-RPC `tools/call` 的 `params` 顶层，与 `name`、`arguments` 同级：
 
 ```json
 {
   "name": "coterm-plugin-ssh__ssh.command",
-  "arguments": {"pluginInstanceId": "instance-id", "text": "pwd"},
+  "arguments": {"name": "user@example.com:22", "commands": ["pwd"]},
   "_meta": {"coterm/waitTimeoutMs": 0}
 }
 ```

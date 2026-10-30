@@ -6,6 +6,7 @@ use coterm_core::{
     plugin_runtime::{CallerContext, Operations, PluginRuntime, SubmitOperation},
 };
 use coterm_proto::runtime::{
+    lifecycle::InstanceInfo,
     operation::{OperationReceipt, OperationSource, OperationStatus},
     RuntimeError,
 };
@@ -223,9 +224,12 @@ pub(crate) fn initialize_result(params: &Value) -> Result<Value, (i32, String)> 
     } else {
         "2025-06-18"
     };
-    Ok(
-        json!({"protocolVersion":version,"capabilities":{"tools":{"listChanged":true}},"serverInfo":{"name":"Coterm","version":env!("CARGO_PKG_VERSION")},"instructions":"Use explicit pluginInstanceId. Tools wait up to 60s including approval and human interaction. Set params._meta['coterm/waitTimeoutMs'] to 0 for an immediate receipt, or 1..300000 to bound waiting. Only query coterm.get_operation after a pending/expired receipt; never pass credentials or replay writes automatically."}),
-    )
+    Ok(json!({
+        "protocolVersion": version,
+        "capabilities": {"tools": {"listChanged": true}},
+        "serverInfo": {"name": "Coterm", "version": env!("CARGO_PKG_VERSION")},
+        "instructions": "Instance-scoped tools use the public instance name from coterm.list_instances; UUIDs are internal and must not be supplied. Tools wait up to 60s including approval and human interaction. Set tools/call.params._meta['coterm/waitTimeoutMs'] to 0 for an immediate receipt, or 1..300000 to bound waiting. Only query coterm.get_operation after a pending/expired receipt; never pass credentials or replay writes automatically. Agent commit operations require approval unless the user has enabled Bypass or an explicit allowlist entry."
+    }))
 }
 
 pub(crate) async fn ready_request(
@@ -260,18 +264,88 @@ pub(crate) fn rpc_error(id: Value, code: i32, message: &str) -> Value {
 
 pub async fn tools_list(runtime: &ProcessPluginRuntime) -> Result<Value, RuntimeError> {
     let mut tools = vec![
-        json!({"name":"coterm.list_instances","description":"List existing shared plugin instances. Create and configure instances in Coterm.","inputSchema":{"type":"object","properties":{},"additionalProperties":false}}),
-        json!({"name":"coterm.get_operation","description":"Query an operation using its explicit pluginInstanceId or pluginId scope.","inputSchema":{"type":"object","properties":{"pluginInstanceId":{"type":"string"},"pluginId":{"type":"string"},"operationId":{"type":"string"}},"required":["operationId"],"oneOf":[{"required":["pluginInstanceId"],"not":{"required":["pluginId"]}},{"required":["pluginId"],"not":{"required":["pluginInstanceId"]}}],"additionalProperties":false}}),
-        json!({"name":"coterm.cancel_operation","description":"Request cancellation. The result can be cancelled, unknown, or unsupported depending on protocol confirmation.","inputSchema":{"type":"object","properties":{"pluginInstanceId":{"type":"string"},"pluginId":{"type":"string"},"operationId":{"type":"string"}},"required":["operationId"],"oneOf":[{"required":["pluginInstanceId"],"not":{"required":["pluginId"]}},{"required":["pluginId"],"not":{"required":["pluginInstanceId"]}}],"additionalProperties":false}}),
+        json!({"name":"coterm.list_instances","description":"List existing shared plugin instances. Each instance has a unique public name; internal UUIDs are not exposed.","inputSchema":{"type":"object","properties":{},"additionalProperties":false}}),
+        json!({"name":"coterm.get_operation","description":"Query an operation using its instance name or plugin scope.","inputSchema":{"type":"object","properties":{"name":{"type":"string","minLength":1},"pluginId":{"type":"string","minLength":1},"operationId":{"type":"string","minLength":1}},"required":["operationId"],"oneOf":[{"required":["name"],"not":{"required":["pluginId"]}},{"required":["pluginId"],"not":{"required":["name"]}}],"additionalProperties":false}}),
+        json!({"name":"coterm.cancel_operation","description":"Request cancellation using an instance name or plugin scope. The result can be cancelled, unknown, or unsupported depending on protocol confirmation.","inputSchema":{"type":"object","properties":{"name":{"type":"string","minLength":1},"pluginId":{"type":"string","minLength":1},"operationId":{"type":"string","minLength":1}},"required":["operationId"],"oneOf":[{"required":["name"],"not":{"required":["pluginId"]}},{"required":["pluginId"],"not":{"required":["name"]}}],"additionalProperties":false}}),
     ];
     for (plugin, registration) in runtime.native_mcp_tools().await {
-        let mut descriptor = registration.descriptor;
+        let mut descriptor = public_tool_descriptor(registration.descriptor);
         if let Some(name) = descriptor["name"].as_str() {
             descriptor["name"] = json!(format!("{plugin}__{name}"));
         }
         tools.push(descriptor);
     }
     Ok(json!({"tools":tools}))
+}
+
+/// Hide the runtime routing key from the MCP contract. The bridge resolves `name`
+/// before forwarding the request, while plugins continue to receive their internal ID.
+fn public_tool_descriptor(mut descriptor: Value) -> Value {
+    let Some(schema) = descriptor.get_mut("inputSchema") else {
+        return descriptor;
+    };
+    let Some(properties) = schema.get_mut("properties").and_then(Value::as_object_mut) else {
+        return descriptor;
+    };
+    if properties.remove("pluginInstanceId").is_none() {
+        return descriptor;
+    }
+    properties.insert("name".to_owned(), json!({"type":"string","minLength":1}));
+    if let Some(required) = schema.get_mut("required").and_then(Value::as_array_mut) {
+        for entry in required {
+            if entry.as_str() == Some("pluginInstanceId") {
+                *entry = json!("name");
+            }
+        }
+    }
+    descriptor
+}
+
+fn public_instance(instance: &InstanceInfo) -> Value {
+    json!({
+        "name": instance.label,
+        "pluginId": instance.plugin_id,
+        "status": instance.status,
+    })
+}
+
+fn hide_internal_instance_ids(value: &mut Value) {
+    match value {
+        Value::Object(object) => {
+            object.remove("pluginInstanceId");
+            for child in object.values_mut() {
+                hide_internal_instance_ids(child);
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                hide_internal_instance_ids(item);
+            }
+        }
+        _ => {}
+    }
+}
+
+async fn resolve_instance_name(
+    runtime: &ProcessPluginRuntime,
+    plugin_id: Option<&str>,
+    name: &str,
+) -> anyhow::Result<InstanceInfo> {
+    let name = name.trim();
+    if name.is_empty() {
+        anyhow::bail!("Instance name must not be empty");
+    }
+    let matches: Vec<_> = runtime
+        .list_instances(plugin_id)
+        .await?
+        .into_iter()
+        .filter(|instance| instance.label == name)
+        .collect();
+    match matches.as_slice() {
+        [instance] => Ok(instance.clone()),
+        [] => anyhow::bail!("Instance name not found: {name}"),
+        _ => anyhow::bail!("Instance name is not unique: {name}"),
+    }
 }
 
 /// Structured content is the machine-readable copy. The text block is a bounded digest,
@@ -340,7 +414,7 @@ pub async fn call_tool(runtime: &ProcessPluginRuntime, params: &Value) -> anyhow
     let name = params["name"]
         .as_str()
         .ok_or_else(|| anyhow::anyhow!("Tool name required"))?;
-    let args = params
+    let mut args = params
         .get("arguments")
         .cloned()
         .unwrap_or_else(|| json!({}));
@@ -348,25 +422,35 @@ pub async fn call_tool(runtime: &ProcessPluginRuntime, params: &Value) -> anyhow
         anyhow::bail!("Tool arguments must be an object");
     }
     if name == "coterm.list_instances" {
-        return Ok(text_result(
-            json!({"instances":runtime.list_instances(None).await?}),
-        ));
+        let instances = runtime
+            .list_instances(None)
+            .await?
+            .iter()
+            .map(public_instance)
+            .collect::<Vec<_>>();
+        return Ok(text_result(json!({"instances":instances})));
     }
     if name == "coterm.get_operation" || name == "coterm.cancel_operation" {
-        let instance_id = args["pluginInstanceId"].as_str();
+        let instance_name = args["name"].as_str();
         let plugin_id = args["pluginId"].as_str();
-        if instance_id.is_some() == plugin_id.is_some() {
-            anyhow::bail!("Specify exactly one pluginInstanceId or pluginId");
+        if instance_name.is_some() == plugin_id.is_some() {
+            anyhow::bail!("Specify exactly one name or pluginId");
         }
-        let (authorized_plugin, session_id) = if let Some(instance_id) = instance_id {
-            let instance = runtime
-                .get_instance(instance_id)
-                .await
-                .ok_or_else(|| anyhow::anyhow!("Instance not found"))?;
-            (instance.plugin_id, instance.session_id)
-        } else {
-            (plugin_id.unwrap_or_default().to_owned(), String::new())
-        };
+        let (authorized_plugin, session_id, instance_id) =
+            if let Some(instance_name) = instance_name {
+                let instance = resolve_instance_name(runtime, None, instance_name).await?;
+                (
+                    instance.plugin_id,
+                    instance.session_id,
+                    Some(instance.plugin_instance_id),
+                )
+            } else {
+                (
+                    plugin_id.unwrap_or_default().to_owned(),
+                    String::new(),
+                    None,
+                )
+            };
         let id = args["operationId"]
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("operationId required"))?;
@@ -376,15 +460,17 @@ pub async fn call_tool(runtime: &ProcessPluginRuntime, params: &Value) -> anyhow
             plugin_id: Some(authorized_plugin),
         };
         let record = runtime.get(caller.clone(), id).await?;
-        if record.plugin_instance_id.as_deref() != instance_id {
+        if record.plugin_instance_id.as_deref() != instance_id.as_deref() {
             anyhow::bail!("Operation target mismatch");
         }
         return if name == "coterm.get_operation" {
-            Ok(text_result(serde_json::to_value(record)?))
+            let mut value = serde_json::to_value(record)?;
+            hide_internal_instance_ids(&mut value);
+            Ok(text_result(value))
         } else {
-            Ok(text_result(serde_json::to_value(
-                runtime.cancel(caller, id).await?,
-            )?))
+            let mut value = serde_json::to_value(runtime.cancel(caller, id).await?)?;
+            hide_internal_instance_ids(&mut value);
+            Ok(text_result(value))
         };
     }
     let native = runtime.native_mcp_tools().await;
@@ -404,12 +490,17 @@ pub async fn call_tool(runtime: &ProcessPluginRuntime, params: &Value) -> anyhow
         .ok_or_else(|| anyhow::anyhow!("Operation descriptor not found"))?;
     let instance_id =
         if descriptor.scope == coterm_proto::runtime::operation::OperationScope::Instance {
-            Some(
-                args["pluginInstanceId"]
-                    .as_str()
-                    .ok_or_else(|| anyhow::anyhow!("Explicit pluginInstanceId required"))?
-                    .to_owned(),
-            )
+            let public_name = args["name"]
+                .as_str()
+                .ok_or_else(|| anyhow::anyhow!("Instance name required"))?;
+            let instance = resolve_instance_name(runtime, Some(&plugin), public_name).await?;
+            let instance_id = instance.plugin_instance_id.clone();
+            let object = args
+                .as_object_mut()
+                .ok_or_else(|| anyhow::anyhow!("Tool arguments must be an object"))?;
+            object.remove("name");
+            object.insert("pluginInstanceId".to_owned(), json!(&instance_id));
+            Some(instance_id)
         } else {
             None
         };
@@ -517,5 +608,32 @@ mod tests {
     fn small_values_keep_their_full_structured_form_in_text() {
         let value = json!({"instances": []});
         assert_eq!(digest(&value), value.to_string());
+    }
+
+    #[test]
+    fn public_values_do_not_expose_internal_instance_ids() {
+        let mut value = json!({
+            "pluginInstanceId": "private",
+            "output": {"pluginInstanceId": "also-private", "text": "ok"},
+        });
+        hide_internal_instance_ids(&mut value);
+        assert_eq!(value, json!({"output": {"text": "ok"}}));
+    }
+
+    #[test]
+    fn public_tool_schema_uses_name_for_instance_routing() {
+        let descriptor = public_tool_descriptor(json!({
+            "name": "serial.status",
+            "inputSchema": {
+                "type": "object",
+                "properties": {"pluginInstanceId": {"type": "string"}},
+                "required": ["pluginInstanceId"],
+            }
+        }));
+        assert!(descriptor["inputSchema"]["properties"]
+            .get("pluginInstanceId")
+            .is_none());
+        assert_eq!(descriptor["inputSchema"]["required"], json!(["name"]));
+        assert_eq!(descriptor["inputSchema"]["properties"]["name"]["type"], "string");
     }
 }

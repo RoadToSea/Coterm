@@ -20,19 +20,19 @@ UART 调试模式使用发送框，保留原始文本、HEX、none/lf/cr/crlf �
 |---|---|---|
 | `serial.status/probe` | read | 状态与系统端口枚举 |
 | `serial.connect/disconnect` | commit | 打开或关闭端口，清理该实例旧提案 |
-| `serial.read` | read | 游标回放 base64 字节，报告 gap/closed/more |
+| `serial.read` | read | 游标回放文本，报告 gap/closed/more；MCP 结果不暴露二进制 Base64 |
 | `serial.write` | commit | 人工字节写入；标记为敏感输入 |
 | `serial.command` | commit | 面向 MCP 的单行命令列表，插件有界队列逐项发送；标记为敏感输入 |
 | `serial.signals` | commit | 设置 DTR/RTS 电平 |
 | `serial.plugin_info` | read | 插件级信息 |
 
-MCP 提供上述工具中的 status、probe、connect、disconnect、read、command、plugin_info，**不开放原始字节 write 与 signals**。除 plugin_info 外必须明确实例 ID。`serial.command` 用于通过串口操作设备 Shell，原生接口与 MCP 使用同一列表契约；MCP 额外要求 `pluginInstanceId`。人工前端的 Shell 与 UART 输入均调用 `serial.write`，不调用 `serial.command`。Agent 来源的提交经过基座审批，除非用户主动开启 Bypass 或明确放行；列表整体为审批快照，输入在普通账本中脱敏，普通进度事件不包含命令内容。
+MCP 提供上述工具中的 status、probe、connect、disconnect、read、command、plugin_info，**不开放原始字节 write 与 signals**。除 plugin_info 外使用 `name` 指定 `coterm.list_instances` 返回的唯一实例名称，UUID 只由基座内部保存和路由。`serial.command` 用于通过串口操作设备 Shell，原生接口与 MCP 使用同一列表契约；MCP 额外经过基座名称解析。人工前端的 Shell 与 UART 输入均调用 `serial.write`，不调用 `serial.command`。MCP 的 `serial.read` 返回 `text`、游标和状态字段；非 UTF-8 字节使用替换字符，不返回 Base64。Agent 来源的提交经过基座审批，除非用户主动开启 Bypass 或明确放行；列表整体为审批快照，输入在普通账本中脱敏，普通进度事件不包含命令内容。
 
 例如调用 MCP `serial.command`：
 
 ```json
 {
-  "pluginInstanceId": "serial-instance-id",
+  "name": "COM1@115200",
   "commands": ["cd /tmp", "pwd", "ls -la"],
   "lineEnding": "cr",
   "intervalMs": 100

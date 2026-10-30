@@ -143,7 +143,7 @@ pub fn mcp_tools() -> Vec<McpToolRegistration> {
         ("serial.probe", "List serial ports visible to the operating system together with this instance's configuration.", json!({}), vec![]),
         ("serial.connect", "Open the configured serial port.", json!({}), vec![]),
         ("serial.disconnect", "Close the serial port and release it.", json!({}), vec![]),
-        ("serial.read", "Read bounded base64 bytes from the device using a decimal cursor; reports gaps.", json!({"cursor":{"type":"string","default":"0"}}), vec![]),
+        ("serial.read", "Read bounded text from the device using a decimal cursor; reports gaps. Non-text bytes are represented with replacement characters.", json!({"cursor":{"type":"string","default":"0"}}), vec![]),
         ("serial.command", "Queue 1-64 single-line commands for sequential serial writes. Each entry receives a line ending (default CR); intervalMs is the delay between writes, not a device completion check. Requires approval unless explicitly allowed. Returns sent/remaining byte accounting; device execution and exit codes are unknown. Never replays after disconnect or uncertain delivery.", command::properties(), vec!["commands"]),
     ]
     .into_iter()
@@ -220,6 +220,19 @@ fn command_args(args: &Value) -> Value {
 
 fn mcp_result(value: Value) -> Value {
     json!({"content":[{"type":"text","text":value.to_string()}],"isError":false})
+}
+
+fn mcp_read_result(mut value: Value) -> Value {
+    if let Some(object) = value.as_object_mut() {
+        let text = object
+            .remove("data")
+            .and_then(|encoded| encoded.as_str().map(str::to_owned))
+            .and_then(|encoded| STANDARD.decode(encoded).ok())
+            .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+            .unwrap_or_default();
+        object.insert("text".to_owned(), json!(text));
+    }
+    mcp_result(value)
 }
 
 impl coterm_proto::runtime::backend::PluginBackend for Backend {
@@ -464,7 +477,11 @@ impl Backend {
                 return self.queue_commands(id, command_args(&args), operation_id, true);
             }
             let result = self.execute_domain(id, native, args, operation_id).await?;
-            return Ok(mcp_result(result));
+            return Ok(if native == "serial.read" {
+                mcp_read_result(result)
+            } else {
+                mcp_result(result)
+            });
         }
         if operation == "serial.command" {
             return self.queue_commands(id, args, operation_id, false);
@@ -714,6 +731,23 @@ mod tests {
         assert!(write_payload(&json!({"data":limit,"lineEnding":"crlf"})).is_err());
         let over = STANDARD.encode(vec![b'x'; 16 * 1024 + 1]);
         assert!(write_payload(&json!({"data":over})).is_err());
+    }
+
+    #[test]
+    fn mcp_read_returns_text_without_binary_payload() {
+        let value = json!({
+            "data": STANDARD.encode("COM2_OK\r\n"),
+            "cursor": "7",
+            "gap": false,
+            "closed": false,
+            "more": false,
+        });
+        let result = mcp_read_result(value);
+        let text: Value =
+            serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(text["text"], "COM2_OK\r\n");
+        assert!(text.get("data").is_none());
+        assert_eq!(text["cursor"], "7");
     }
 
     #[test]
