@@ -1,5 +1,15 @@
 /** Source phrases are keys, so diagnostics and third-party text fall back to English. */
 export const zhCN: Readonly<Record<string, string>> = {
+  "Open instances": "已打开的实例",
+  "Close view {name}": "关闭视图 {name}",
+  "Close view; connection stays open": "关闭视图，连接保持打开",
+  "Instance settings": "实例设置",
+  "starting": "正在启动",
+  "ready": "就绪",
+  "stopping": "正在停止",
+  "stopped": "已停止",
+  "failed": "已失败",
+  "This plugin does not provide a connection configuration screen.": "此插件暂未提供连接配置界面。",
   "Default workspace": "默认工作区",
   "New workspace": "新建工作区",
   "Workspace name (up to 64 characters)": "工作区名称（最多 64 个字符）",

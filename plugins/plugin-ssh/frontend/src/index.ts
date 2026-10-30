@@ -18,6 +18,7 @@ const css = `
   }
   * { box-sizing: border-box; }
   button, input, textarea { font: inherit; color: inherit; }
+  form input, form button { border-radius: var(--radius, 8px); }
   button {
     border: 1px solid var(--coterm-border-input, #454545);
     padding: 5px 12px;

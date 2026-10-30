@@ -94,7 +94,7 @@ test("workspace groups manage and move live/saved instances without reconnecting
 
     await run(`__cotermTest.setFailure('move_workspace_entry',true,[1])`);
     await move('[data-instance-id="inst-1"]', lab);
-    await wait(`document.querySelector('#instances-sidebar [role=alert]')?.textContent.includes('move_workspace_entry')`, "failed move displayed");
+    await wait(`document.querySelector('main [role=alert]')?.textContent.includes('move_workspace_entry')`, "failed move displayed");
     assert.equal(await run(`document.querySelector('[data-instance-id="inst-1"]').closest('[data-workspace-id]').dataset.workspaceId`), "default", "failed move leaves membership intact");
     assert.equal(await run(`document.querySelector('button[aria-label="New workspace"]').disabled`), false);
     await run(`document.querySelector('button[aria-label="Delete workspace Lab"]').click()`);

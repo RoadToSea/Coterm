@@ -18,6 +18,9 @@ const sshFrontendBundlePath = path.join(rootDir, "plugins/plugin-ssh/dist/fronte
 const sshFrontendSource = fs.existsSync(sshFrontendBundlePath)
   ? fs.readFileSync(sshFrontendBundlePath, "utf8")
   : null;
+const serialFrontendBundlePath = path.join(rootDir, "plugins/plugin-serial/dist/frontend/index.js");
+const serialFrontendSource = fs.existsSync(serialFrontendBundlePath)
+  ? fs.readFileSync(serialFrontendBundlePath, "utf8") : null;
 
 /**
  * 真实 Plugin SDK 模块的 ES 源码，供页面以动态 import 加载。
@@ -47,6 +50,7 @@ export function makeHostMockSource(initial) {
       layout:{...defaultLayout,...scenario.workspace?.layout},
     };
     let nextInstance = 0;
+    let nextSubscription = 0;
     if (!localStorage.getItem("coterm.locale")) localStorage.setItem("coterm.locale", "en");
     const callbacks = new Map();
     const listeners = new Map();
@@ -71,6 +75,7 @@ export function makeHostMockSource(initial) {
       pendingSecrets,
       invocations,
       workspace: () => structuredClone(scenario.workspace),
+      replaceInstances: next => { scenario.instances = structuredClone(next); },
       setAttention(next, { emit = true } = {}) {
         attention = next;
         attentionVersion = next.version;
@@ -231,6 +236,20 @@ export function makeHostMockSource(initial) {
         scenario.workspace.entries = scenario.workspace.entries.filter(entry => entry.instanceId !== pluginInstanceId);
         return null;
       },
+      create_instance: ({pluginId,config,workspaceId}) => {
+        const plugin = scenario.catalog.plugins.find(item => item.id === pluginId);
+        if (!plugin?.running) throw new Error("plugin_not_running");
+        const instance = {pluginId,pluginInstanceId:"created-" + ++nextInstance,sessionId:"session-" + nextInstance,
+          label:config.host ? config.username + "@" + config.host : config.port ?? plugin.name,status:"ready"};
+        scenario.instances = [...scenario.instances,instance];
+        scenario.workspace.entries = [...scenario.workspace.entries,{configRef:"created-ref-" + nextInstance,
+          pluginId,instanceId:instance.pluginInstanceId,label:instance.label,workspaceId:workspaceId ?? "default"}];
+        return instance;
+      },
+      start_plugin: ({pluginId}) => {
+        scenario.catalog.plugins = scenario.catalog.plugins.map(plugin => plugin.id === pluginId ? {...plugin,running:true} : plugin);
+        return null;
+      },
       provide_secret: ({ pluginInstanceId, purpose }) => ({ id: "secret-test", pluginInstanceId, purpose, expiresAt: "2099-01-01T00:00:00Z" }),
       list_plugins: () => scenario.catalog,
       prepare_plugin_install: () => scenario.installPreview ?? null,
@@ -249,7 +268,7 @@ export function makeHostMockSource(initial) {
       recent_operations: () => scenario.history ?? [],
       recent_plugin_operations: () => scenario.history ?? [],
       host_attention: () => attention,
-      plugin_frontend_source: ({ pluginId }) => (pluginId === "ssh" ? scenario.sshFrontendSource : null),
+      plugin_frontend_source: ({ pluginId }) => pluginId === "ssh" ? scenario.sshFrontendSource : pluginId === "serial" ? scenario.serialFrontendSource : null,
       invoke_operation: ({ operation, args }) => {
         if (operation === "ssh.status") {
           return {
@@ -273,9 +292,12 @@ export function makeHostMockSource(initial) {
             },
           };
         }
+        if (operation === "serial.status") return {status:"completed",output:{config:{port:"COM1",baudRate:115200,dtr:true,rts:true},
+          connected:true,connectionId:"serial-conn",signals:{dtr:true,rts:true},rxBytes:0,txBytes:0,commandQueue:0}};
+        if (operation === "serial.read") return {status:"completed",output:{text:"serial ready\\r\\n",bytes:14,cursor:"14",gap:false,closed:false,more:false,connectionId:"serial-conn"}};
         return { status: "completed", output: {} };
       },
-      subscribe_plugin_events: () => "sub-1",
+      subscribe_plugin_events: () => "sub-" + ++nextSubscription,
       ack_plugin_event: () => null,
       unsubscribe_plugin_events: () => null,
       get_operation: ({ pluginInstanceId, operationId }) =>
@@ -354,6 +376,7 @@ export const defaultScenario = {
   attention: { version: 1, approvals: [], interactions: [] },
   failures: {},
   sshFrontendSource,
+  serialFrontendSource,
 };
 
 /** 构造一条基座会路由的 secret 交互（kind=secret）。 */

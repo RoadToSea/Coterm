@@ -74,7 +74,11 @@ MCP Tools 需单独注册 descriptor 与内部 operation 的映射；不会自�
 
 ## 前端
 
-导出 `mount(container, api)` 并返回 `{ unmount() }`。可额外导出 `configure(container, api)`，通过 `api.submit(config)` 创建实例；缺省时基座使用 JSON 配置。
+导出 `mount(container, api)` 并返回 `{ unmount() }`。可额外导出 `configure(container, api)`，通过 `api.submit(config)` 创建实例。点击插件时，基座在主工作区内联挂载此配置前端，仅展示插件负责的通信协议配置，不再提供操作调用器或原始 JSON 编辑器；缺少配置前端时显示说明。需要人工创建实例的插件应提供 `configure`。
+
+每个打开的实例对应主区域上方一个标签页。切换标签或进入配置页只隐藏面板，不调用 `unmount()`，不得依赖焦点或可见性来维持后端连接；终端应通过尺寸观察器在重新显示后适配。关闭标签、实例退出或失败时释放前端资源；关闭标签不销毁后端实例，仍可从左侧重新打开。实际销毁入口属于实例生命周期管理，须确认；标签与侧栏使用稳定实例 ID 路由，用户界面只展示名称。
+
+SSH/串口配置前端在自己的 Shadow DOM 中为输入框、选择框及提交按钮设置圆角并继承主题变量，不能依赖宿主的 Tailwind 样式穿透。配置提交期间基座禁用表单交互，插件还应在提交处理器中抑制重复请求。
 
 当前前端入口是无相对依赖的单文件 ES bundle，最大 2 MiB，经 Blob URL 加载。使用 `@coterm/plugin-sdk` 类型，不能导入桌面源码、直接调用 Tauri 内部接口或访问其他实例。
 

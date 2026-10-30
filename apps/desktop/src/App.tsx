@@ -1,7 +1,9 @@
 import { t } from "./i18n";
 import { useI18n } from "./use-i18n";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { CircleStop, PanelLeftClose, PanelLeftOpen, Plus, PlugZap, ShieldAlert, ShieldCheck, SlidersHorizontal, TerminalSquare, Trash2 } from "lucide-react";
+import { useInstanceViews } from "./use-instance-views";
+import { InstanceTabs, instanceTabId, instancePanelId } from "./components/InstanceTabs";
+import { PanelLeftClose, PanelLeftOpen, Plus, PlugZap, ShieldAlert, ShieldCheck, SlidersHorizontal, TerminalSquare, Trash2 } from "lucide-react";
 import { WorkspaceInstances, workspaceName } from "./components/WorkspaceInstances";
 import { ThemeSwitcher } from "./components/ThemeSwitcher";
 import { Button } from "./components/ui/button";
@@ -27,7 +29,6 @@ import {
   type WorkspaceGroup,
 } from "./host-api";
 import { promptForConfirmation, promptForText } from "./secret-input";
-import type { OperationDescriptor, OperationRecord, OperationReceipt } from "@coterm/plugin-sdk";
 
 const EMPTY_WORKSPACE: SavedWorkspace = {
   entries: [], groups: [{ id: "default", name: "Default workspace" }],
@@ -64,24 +65,19 @@ export default function App() {
   const [plugins, setPlugins] = useState<PluginSummary[]>([]);
   const [pluginIssues, setPluginIssues] = useState<PluginLoadIssue[]>([]);
   const [instances, setInstances] = useState<InstanceInfo[]>([]);
-  const [activeInstanceId, setActiveInstanceId] = useState<string | null>(null);
-  const [selectedPluginId, setSelectedPluginId] = useState<string | null>(null);
-  const [instanceToolsOpen, setInstanceToolsOpen] = useState(false);
-  const [configText, setConfigText] = useState("{}");
+  const [managedInstanceId, setManagedInstanceId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [bypass, setBypass] = useState(false);
-  const [operations, setOperations] = useState<OperationDescriptor[]>([]);
-  const [pluginOperations, setPluginOperations] = useState<OperationDescriptor[]>([]);
-  const [operationHistory, setOperationHistory] = useState<OperationRecord[]>([]);
-  const [selectedOperation, setSelectedOperation] = useState("");
-  const [selectedPluginOperation, setSelectedPluginOperation] = useState("");
-  const [operationArgs, setOperationArgs] = useState("{}");
-  const [operationResult, setOperationResult] = useState<OperationReceipt | null>(null);
   const [workspace, setWorkspace] = useState<SavedWorkspace | null>(null);
   const [activeWorkspaceId, setActiveWorkspaceId] = useState("default");
   const [workspaceError, setWorkspaceError] = useState<string | null>(null);
+  const views = useInstanceViews(instances, loading);
+  const activeInstanceId = views.activeId;
+  const selectedPluginId = views.pluginId;
+  const managedInstance = instances.find(instance => instance.pluginInstanceId === managedInstanceId) ?? null;
+  const openInstances = views.ids.flatMap(id => instances.find(instance => instance.pluginInstanceId === id) ?? []);
   const formatError = (reason: unknown) => typeof reason === "object" && reason !== null && "code" in reason
     ? String((reason as { code: unknown }).code) : String(reason);
 
@@ -108,11 +104,6 @@ export default function App() {
   }, [refreshWorkspace]);
 
 
-  const activeInstance = useMemo(
-    () => instances.find((instance) => instance.pluginInstanceId === activeInstanceId) ?? null,
-    [instances, activeInstanceId],
-  );
-
   const orderedInstances = useMemo(() => [...instances].sort((left, right) => {
     const rank = (id: string) => {
       const index = workspace?.entries.findIndex((entry) => entry.instanceId === id) ?? -1;
@@ -131,29 +122,6 @@ export default function App() {
   }, [activeInstanceId, instancesCollapsed, orderedInstances, workspace, workspaceError, activeWorkspaceId, busyId]);
 
   const selectedPlugin = plugins.find((plugin) => plugin.id === selectedPluginId) ?? null;
-  const selectedOperationDescriptor = operations.find((item) => item.name === selectedOperation) ?? null;
-
-  const updateOperationArgument = (name: string, value: unknown) => {
-    let current: Record<string, unknown> = {};
-    try {
-      const parsed: unknown = JSON.parse(operationArgs);
-      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-        current = parsed as Record<string, unknown>;
-      }
-    } catch {
-      current = {};
-    }
-    setOperationArgs(JSON.stringify({ ...current, [name]: value }, null, 2));
-  };
-
-  const operationSchema = selectedOperationDescriptor?.inputSchema;
-  const schemaProperties = operationSchema && typeof operationSchema === "object"
-    ? (operationSchema as { properties?: Record<string, { type?: string; title?: string; description?: string; enum?: unknown[]; minimum?: number; maximum?: number }> }).properties
-    : undefined;
-  const schemaRequired = operationSchema && typeof operationSchema === "object"
-    ? (operationSchema as { required?: string[] }).required ?? []
-    : [];
-
   const refresh = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -168,11 +136,6 @@ export default function App() {
       setPluginIssues(catalog.issues);
       setInstances(nextInstances);
       setBypass(nextBypass);
-      setActiveInstanceId((current) =>
-        nextInstances.some((instance) => instance.pluginInstanceId === current)
-          ? current
-          : nextInstances[0]?.pluginInstanceId ?? null,
-      );
     } catch (reason) {
       setError(String(reason));
     } finally {
@@ -208,7 +171,7 @@ export default function App() {
       const instance = await hostAPI.restoreInstance(configRef);
       await refresh();
       await refreshWorkspace();
-      setActiveInstanceId(instance.pluginInstanceId);
+      views.open(instance.pluginInstanceId);
       const entry = workspace?.entries.find(item => item.configRef === configRef);
       if (entry) setActiveWorkspaceId(entry.workspaceId);
     } catch (reason) { setError(formatError(reason)); }
@@ -220,66 +183,25 @@ export default function App() {
     setBusyId("restore-workspace");
     setError(null);
     const failures: string[] = [];
+    const restored: string[] = [];
     let active: string | null = null;
     for (const entry of workspace.entries) {
       if (entry.workspaceId !== workspaceId) continue;
       if (instances.some((item) => item.pluginInstanceId === entry.instanceId)) continue;
       try {
         const instance = await hostAPI.restoreInstance(entry.configRef);
+        restored.push(instance.pluginInstanceId);
         if (!active || entry.configRef === workspace.layout.activeConfigRef) active = instance.pluginInstanceId;
       } catch (reason) { failures.push(`${entry.label}: ${formatError(reason)}`); }
     }
     await refresh();
     await refreshWorkspace();
-    if (active) setActiveInstanceId(active);
+    for (const id of restored) views.open(id);
+    if (active) views.open(active);
     setActiveWorkspaceId(workspaceId);
     if (failures.length) setError(failures.join("; "));
     setBusyId(null);
   };
-
-  useEffect(() => {
-    if (!activeInstance) {
-      setOperations([]);
-      setOperationHistory([]);
-      setSelectedOperation("");
-      return;
-    }
-    let current = true;
-    Promise.all([
-      hostAPI.listOperations(activeInstance.pluginId),
-      hostAPI.recentOperations(activeInstance.pluginInstanceId, 20),
-    ])
-      .then(([catalog, history]) => {
-        if (!current) return;
-        const instanceOperations = catalog.filter((item) => item.scope === "instance");
-        setOperations(instanceOperations);
-        setSelectedOperation((selected) =>
-          instanceOperations.some((item) => item.name === selected)
-            ? selected
-            : instanceOperations[0]?.name ?? "",
-        );
-        setOperationHistory(history);
-      })
-      .catch((reason) => {
-        if (current) setError(String(reason));
-      });
-    return () => {
-      current = false;
-    };
-  }, [activeInstance]);
-
-  useEffect(() => {
-    if (!selectedPlugin) { setPluginOperations([]); return; }
-    let current = true;
-    void hostAPI.listOperations(selectedPlugin.id).then((catalog) => {
-      if (current) {
-        const scoped = catalog.filter((item) => item.scope === "plugin");
-        setPluginOperations(scoped);
-        setSelectedPluginOperation((selected) => scoped.some((item) => item.name === selected) ? selected : scoped[0]?.name ?? "");
-      }
-    }).catch((reason) => { if (current) setError(String(reason)); });
-    return () => { current = false; };
-  }, [selectedPlugin]);
 
   const runPluginAction = async (pluginId: string, action: () => Promise<void>) => {
     setBusyId(pluginId);
@@ -305,59 +227,12 @@ export default function App() {
       const instance = await hostAPI.createInstance(pluginId, config, activeWorkspaceId);
       await refresh();
       await refreshWorkspace();
-      setActiveInstanceId(instance.pluginInstanceId);
-      setSelectedPluginId(null);
+      views.open(instance.pluginInstanceId);
     } catch (reason) {
       setError(String(reason));
       throw reason;
     } finally {
       setBusyId(null);
-    }
-  };
-
-  const createInstance = async (pluginId: string) => {
-    try {
-      const config: unknown = JSON.parse(configText);
-      await createConfiguredInstance(pluginId, config);
-    } catch (reason) {
-      setError(String(reason));
-    }
-  };
-
-  const submitOperation = async () => {
-    if (!activeInstance || !selectedOperation) return;
-    setError(null);
-    setOperationResult(null);
-    try {
-      const args: unknown = JSON.parse(operationArgs);
-      const receipt = await hostAPI.invokeOperation(
-        activeInstance.pluginInstanceId,
-        selectedOperation,
-        args,
-      );
-      setOperationResult(receipt);
-      setOperationHistory(await hostAPI.recentOperations(activeInstance.pluginInstanceId, 20));
-    } catch (reason) {
-      setError(String(reason));
-    }
-  };
-
-  const respondToProposal = async (record: OperationRecord, approve: boolean) => {
-    if (!activeInstance || !record.proposalId) return;
-    try {
-      if (approve) {
-        const args: unknown = JSON.parse(operationArgs);
-        await hostAPI.approveProposal(
-          activeInstance.pluginInstanceId,
-          record.proposalId,
-          args,
-        );
-      } else {
-        await hostAPI.rejectProposal(activeInstance.pluginInstanceId, record.proposalId);
-      }
-      setOperationHistory(await hostAPI.recentOperations(activeInstance.pluginInstanceId, 20));
-    } catch (reason) {
-      setError(String(reason));
     }
   };
 
@@ -422,7 +297,7 @@ export default function App() {
     });
     if (result.outcome !== "submitted") return;
     await runPluginAction(instance.pluginInstanceId, () => hostAPI.destroyInstance(instance.pluginInstanceId));
-    setInstanceToolsOpen(false);
+    setManagedInstanceId(null);
   };
 
   const errorNotice = error && (
@@ -503,9 +378,9 @@ export default function App() {
                 type="button"
                 title={`${plugin.name} · ${plugin.version} · ${plugin.running ? t("Running") : t("Stopped")}`}
                 aria-label={t("Manage {name}", { name: plugin.name })}
-                aria-haspopup="dialog"
+                aria-controls="plugin-configuration"
                 aria-pressed={selectedPluginId === plugin.id}
-                onClick={() => setSelectedPluginId(plugin.id)}
+                onClick={() => views.configure(plugin.id)}
                 className={cn("group relative flex min-h-16 w-full flex-col items-center justify-center gap-1.5 border-l-2 px-1 py-3 transition-colors hover:bg-accent", selectedPluginId === plugin.id ? "border-primary bg-accent" : "border-transparent")}
               >
                 <span className="relative grid h-7 w-8 place-items-center">
@@ -572,9 +447,9 @@ export default function App() {
                 {["w-3/4", "w-1/2"].map((width) => <Skeleton key={width} className={cn("h-3", width)} />)}
               </div>
             ) : <WorkspaceInstances workspace={workspace ?? EMPTY_WORKSPACE} instances={orderedInstances}
-              activeInstanceId={activeInstanceId} activeWorkspaceId={activeWorkspaceId} busy={busyId !== null}
-              onSelect={(instance, groupId) => { setActiveInstanceId(instance.pluginInstanceId); setActiveWorkspaceId(groupId); }}
-              onSelectWorkspace={setActiveWorkspaceId} onManage={instance => { setActiveInstanceId(instance.pluginInstanceId); setInstanceToolsOpen(true); }}
+              activeInstanceId={selectedPluginId ? null : activeInstanceId} activeWorkspaceId={activeWorkspaceId} busy={busyId !== null}
+              onSelect={(instance, groupId) => { views.open(instance.pluginInstanceId); setActiveWorkspaceId(groupId); }}
+              onSelectWorkspace={setActiveWorkspaceId} onManage={instance => setManagedInstanceId(instance.pluginInstanceId)}
               onDestroy={instance => void destroyInstance(instance)} onDeleteWorkspace={group => void deleteWorkspace(group)}
               onMove={(ref, groupId) => void moveWorkspaceEntry(ref, groupId)} onRestore={ref => void restoreSavedInstance(ref)}
               onRestoreWorkspace={groupId => void restoreWorkspace(groupId)}
@@ -586,11 +461,33 @@ export default function App() {
               </div>
             )}
           </nav>
-          {errorNotice}
         </aside>
 
-        <main aria-label={t("Plugin workspace")} className="relative isolate min-w-0 flex-1 overflow-hidden flex flex-col bg-coterm-surface">
-          {!activeInstance && !loading && <Empty>
+        <main aria-label={t("Plugin workspace")} className="relative isolate min-w-0 flex-1 overflow-hidden flex flex-col bg-coterm-surface" tabIndex={-1}>
+          <InstanceTabs instances={openInstances} activeId={selectedPluginId ? null : activeInstanceId}
+            onSelect={id => {
+              views.open(id);
+              const entry = workspace?.entries.find(item => item.instanceId === id);
+              if (entry) setActiveWorkspaceId(entry.workspaceId);
+            }} onClose={views.close} />
+          {errorNotice}
+          {selectedPlugin && <section id="plugin-configuration" aria-label={t("New instance")}
+            className="min-h-0 flex-1 overflow-y-auto p-5 sm:p-8">
+            <div className="mx-auto max-w-xl rounded-xl border border-border bg-card p-5 sm:p-6">
+              <div className="mb-6 flex items-center gap-3">
+                <PlugZap className="size-6 shrink-0 text-primary" />
+                <div className="min-w-0">
+                  <h1 className="text-lg font-medium">{selectedPlugin.name} · {t("New instance")}</h1>
+                  <p className="mt-1 text-xs text-muted-foreground">{t("Workspace:")} {workspaceName((workspace ?? EMPTY_WORKSPACE).groups.find(group => group.id === activeWorkspaceId) ?? EMPTY_WORKSPACE.groups[0])}</p>
+                </div>
+              </div>
+              {selectedPlugin.hasFrontend
+                ? <PluginConfiguration key={selectedPlugin.id} pluginId={selectedPlugin.id}
+                    disabled={busyId !== null} onSubmit={config => createConfiguredInstance(selectedPlugin.id, config)} />
+                : <p role="status" className="text-sm text-muted-foreground">{t("This plugin does not provide a connection configuration screen.")}</p>}
+            </div>
+          </section>}
+          {!selectedPlugin && !activeInstanceId && !loading && <Empty>
             <EmptyHeader>
               <EmptyMedia variant="icon"><TerminalSquare /></EmptyMedia>
               <EmptyTitle>{t("Ready when you are")}</EmptyTitle>
@@ -598,12 +495,19 @@ export default function App() {
             </EmptyHeader>
             <EmptyContent><Button variant="outline" onClick={() => setInstallerOpen(true)}><Plus data-icon="inline-start" />{t("Install plugin")}</Button></EmptyContent>
           </Empty>}
-          {activeInstance?.status === "ready" && <PluginWorkspace key={activeInstance.pluginInstanceId} instance={activeInstance} />}
-          {activeInstance?.status === "failed" && <div role="alert" className="p-5 text-sm text-destructive">
-            <p>{t("Plugin stopped unexpectedly. In-flight results are unknown. Operations will not be replayed.")}</p>
-            {workspace?.entries.filter((entry) => entry.instanceId === activeInstance.pluginInstanceId).map((entry) =>
-              <button key={entry.configRef} disabled={busyId !== null} className="mt-3 underline" onClick={() => void restoreSavedInstance(entry.configRef)}>{t("Restart instance")}</button>)}
-          </div>}
+          {openInstances.map(instance => <section key={instance.pluginInstanceId} role="tabpanel"
+            id={instancePanelId(instance.pluginInstanceId)} aria-labelledby={instanceTabId(instance.pluginInstanceId)}
+            hidden={!!selectedPluginId || instance.pluginInstanceId !== activeInstanceId} tabIndex={0}
+            className="min-h-0 flex-1 overflow-hidden">
+            {instance.status === "ready" && <PluginWorkspace instance={instance} />}
+            {instance.status !== "ready" && instance.status !== "failed" && <p role="status" className="p-5 text-sm text-muted-foreground">{t(instance.status)}</p>}
+            {instance.status === "failed" && <div role="alert" className="p-5 text-sm text-destructive">
+              <p>{t("Plugin stopped unexpectedly. In-flight results are unknown. Operations will not be replayed.")}</p>
+              {workspace?.entries.filter(entry => entry.instanceId === instance.pluginInstanceId).map(entry =>
+                <Button key={entry.configRef} variant="outline" size="sm" disabled={busyId !== null}
+                  className="mt-3" onClick={() => void restoreSavedInstance(entry.configRef)}>{t("Restart instance")}</Button>)}
+            </div>}
+          </section>)}
           <HostApprovals />
         </main>
       </div>
@@ -618,226 +522,30 @@ export default function App() {
         <span className={bypass ? "text-warning" : ""}>{bypass ? t("Bypass on") : t("Agent approval on")}</span>
       </footer>
 
-      {selectedPlugin && (
-        <Modal title={selectedPlugin.name} onClose={() => setSelectedPluginId(null)}>
-          <div className="mb-5 flex items-start gap-3">
-            <PlugZap size={28} strokeWidth={1.5} className="mt-1 text-coterm-accent-glow" />
-            <div className="min-w-0">
-              <h3 className="text-sm font-medium">{selectedPlugin.name}</h3>
-              <p className="mt-1 break-all text-xs text-coterm-text-muted">{selectedPlugin.id} · {selectedPlugin.version}</p>
-              <Badge variant={selectedPlugin.running ? "secondary" : "outline"} className="mt-2">{selectedPlugin.running ? t("Running") : t("Stopped")}</Badge>
+      {managedInstance && (
+        <Modal title={t("Instance settings")} onClose={() => setManagedInstanceId(null)}>
+          <div className="flex flex-col gap-5">
+            {errorNotice}
+            <div className="flex items-center justify-between gap-3">
+              <h2 className="min-w-0 truncate text-lg font-medium">{managedInstance.label}</h2>
+              <Badge variant="secondary">{t(managedInstance.status)}</Badge>
             </div>
-          </div>
-          <div className="mb-5 flex gap-2">
-            <button
-              type="button"
-              disabled={busyId !== null || loading}
-              onClick={() => void runPluginAction(selectedPlugin.id, () => selectedPlugin.running ? hostAPI.stopPlugin(selectedPlugin.id) : hostAPI.startPlugin(selectedPlugin.id))}
-              className="flex h-8 items-center gap-2 border border-coterm-border-input px-3 text-xs hover:bg-coterm-border-subtle disabled:opacity-50"
-            >
-              {selectedPlugin.running ? <CircleStop size={14} /> : <PlugZap size={14} />}
-              {selectedPlugin.running ? t("Stop plugin") : t("Start plugin")}
-            </button>
-          </div>
-          {pluginOperations.length > 0 && (
-            <section className="mb-5 border-t border-coterm-border-subtle pt-4">
-              <h3 className="mb-3 text-xs font-semibold uppercase text-coterm-text">{t("Plugin operations")}</h3>
-              <select aria-label={t("Plugin operation")} value={selectedPluginOperation} onChange={(event) => setSelectedPluginOperation(event.target.value)} className="mb-2 h-8 w-full border border-coterm-border-input bg-coterm-surface-raised px-2 text-xs">
-                {pluginOperations.map((item) => <option key={item.name} value={item.name}>{item.name} · {item.effect}</option>)}
-              </select>
-              <textarea aria-label={t("Plugin operation arguments JSON")} value={operationArgs} onChange={(event) => setOperationArgs(event.target.value)} spellCheck={false} className="h-24 w-full border border-coterm-border-input bg-coterm-surface p-2 font-mono text-xs" />
-              <button type="button" onClick={() => {
-                try {
-                  const args: unknown = JSON.parse(operationArgs);
-                  void hostAPI.invokePluginOperation(selectedPlugin.id, selectedPluginOperation, args).then(setOperationResult).catch((reason) => setError(String(reason)));
-                } catch (reason) { setError(String(reason)); }
-              }} className="mt-2 h-8 bg-primary px-3 text-xs text-primary-foreground hover:bg-primary/90">{t("Invoke plugin operation")}</button>
-              {operationResult && <pre className="mt-2 max-h-32 overflow-auto border border-coterm-border-subtle bg-coterm-surface p-2 font-mono text-xs">{JSON.stringify(operationResult, null, 2)}</pre>}
-            </section>
-          )}
-          {selectedPlugin.hasFrontend && (
-            <PluginConfiguration key={selectedPlugin.id} pluginId={selectedPlugin.id} onSubmit={(config) => createConfiguredInstance(selectedPlugin.id, config)} />
-          )}
-          <details className="border-t border-coterm-border-subtle pt-4" open={!selectedPlugin.hasFrontend}>
-            <summary className="mb-3 cursor-pointer text-xs text-coterm-text-muted">{t("Advanced JSON configuration")}</summary>
-            <h3 className="mb-4 flex items-center gap-2 text-xs font-medium"><SlidersHorizontal size={14} /> {t("New instance")}</h3>
-            <label htmlFor="instance-config" className="mb-2 block text-xs text-coterm-text-subtle">{t("Configuration (JSON)")}</label>
-            <textarea
-              id="instance-config"
-              value={configText}
-              onChange={(event) => setConfigText(event.target.value)}
-              spellCheck={false}
-              className="h-24 w-full resize-y border border-coterm-border-input bg-coterm-surface p-2 font-mono text-xs outline-none focus:border-ring"
-            />
-            <button
-              type="button"
-              disabled={busyId !== null || loading}
-              onClick={() => void createInstance(selectedPlugin.id)}
-              className="mt-3 inline-flex h-8 items-center gap-1.5 bg-primary px-3 text-xs text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
-            >
-              <Plus size={14} /> {t("Create instance")}
-            </button>
-          </details>
-          <div className="mt-4">{errorNotice}</div>
-        </Modal>
-      )}
-      {instanceToolsOpen && activeInstance && (
-        <Modal title={t("Instance tools")} onClose={() => setInstanceToolsOpen(false)}>
-          {errorNotice}
-          <div className="max-w-3xl">
-            <div className="flex items-start justify-between gap-4 border-b border-coterm-border-subtle pb-4">
-              <div className="min-w-0">
-                <h2 className="truncate text-lg font-medium">{activeInstance.label}</h2>
-                <p className="mt-1 break-all font-mono text-xs text-coterm-text-muted">
-                  {activeInstance.pluginInstanceId}
-                </p>
-              </div>
-              <button
-                type="button"
-                title={t("Destroy instance")}
-                disabled={busyId !== null}
-                onClick={() => void destroyInstance(activeInstance)}
-                className="grid h-8 w-8 shrink-0 place-items-center text-coterm-text hover:bg-coterm-surface-hover"
-              >
-                <Trash2 className="h-4 w-4" />
-              </button>
-            </div>
-            {workspace && <label className="mt-4 flex items-center gap-3 text-xs">
+            <p className="text-xs text-muted-foreground">{t("Plugin")}: {plugins.find(plugin => plugin.id === managedInstance.pluginId)?.name ?? managedInstance.pluginId}</p>
+            {workspace && <label className="flex items-center gap-3 text-xs">
               {t("Move to workspace")}
-              <select aria-label={t("Move to workspace")} disabled={busyId !== null || !workspace.entries.some(entry => entry.instanceId === activeInstance.pluginInstanceId)}
-                value={workspace.entries.find(entry => entry.instanceId === activeInstance.pluginInstanceId)?.workspaceId ?? workspace.groups[0]?.id}
-                className="h-8 min-w-0 flex-1 rounded-md border border-input bg-background px-2"
+              <select aria-label={t("Move to workspace")} disabled={busyId !== null || !workspace.entries.some(entry => entry.instanceId === managedInstance.pluginInstanceId)}
+                value={workspace.entries.find(entry => entry.instanceId === managedInstance.pluginInstanceId)?.workspaceId ?? workspace.groups[0]?.id}
+                className="h-9 min-w-0 flex-1 rounded-md border border-input bg-background px-2"
                 onChange={event => {
-                  const entry = workspace.entries.find(item => item.instanceId === activeInstance.pluginInstanceId);
+                  const entry = workspace.entries.find(item => item.instanceId === managedInstance.pluginInstanceId);
                   if (entry) void moveWorkspaceEntry(entry.configRef, event.target.value);
                 }}>
                 {workspace.groups.map(group => <option key={group.id} value={group.id}>{workspaceName(group)}</option>)}
               </select>
             </label>}
-            <dl className="grid grid-cols-[140px_1fr] gap-y-3 py-4 text-sm">
-              <dt className="text-coterm-text-muted">{t("Plugin")}</dt>
-              <dd>{activeInstance.pluginId}</dd>
-              <dt className="text-coterm-text-muted">{t("Session")}</dt>
-              <dd className="break-all font-mono text-xs">{activeInstance.sessionId}</dd>
-              <dt className="text-coterm-text-muted">{t("Status")}</dt>
-              <dd>{activeInstance.status}</dd>
-            </dl>
-            <div className="border-t border-coterm-border-subtle py-4 text-sm text-coterm-text-subtle">
-              <div className="mb-3 flex items-center justify-between">
-                <h3 className="text-xs font-semibold uppercase text-coterm-text">{t("Operations")}</h3>
-                <span className="text-xs text-coterm-text-muted">{operations.length} {t("registered")}</span>
-              </div>
-              {operations.length > 0 ? (
-                <>
-                  <label className="mb-1 block text-xs text-coterm-text-subtle" htmlFor="operation-name">
-                    {t("Operation")}
-                  </label>
-                  <select
-                    id="operation-name"
-                    value={selectedOperation}
-                    onChange={(event) => setSelectedOperation(event.target.value)}
-                    className="mb-3 h-9 w-full border border-coterm-border-input bg-coterm-surface-raised px-2 text-sm text-coterm-text"
-                  >
-                    {operations.map((operation) => (
-                      <option key={operation.name} value={operation.name}>
-                        {operation.name} · {operation.effect}
-                      </option>
-                    ))}
-                  </select>
-                  {schemaProperties && Object.keys(schemaProperties).length > 0 && (
-                    <fieldset className="mb-3 flex flex-col gap-3 border border-coterm-border-subtle p-3">
-                      <legend className="px-1 text-xs text-coterm-text-muted">{t("Operation arguments")}</legend>
-                      {Object.entries(schemaProperties).map(([name, property]) => {
-                        let current: Record<string, unknown> = {};
-                        try {
-                          const parsed: unknown = JSON.parse(operationArgs);
-                          if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) current = parsed as Record<string, unknown>;
-                        } catch { current = {}; }
-                        const value = current[name];
-                        const required = schemaRequired.includes(name);
-                        return (
-                          <label key={name} className="block text-xs text-coterm-text-subtle">
-                            <span className="mb-1 flex items-center gap-1">
-                              <span>{property.title ?? name}</span>
-                              {required && <span className="text-destructive">*</span>}
-                            </span>
-                            {property.description && <span className="mb-1 block text-[11px] text-coterm-text-muted">{property.description}</span>}
-                            {property.enum ? (
-                              <select value={value === undefined ? "" : JSON.stringify(value)} onChange={(event) => updateOperationArgument(name, event.target.value ? JSON.parse(event.target.value) : undefined)} className="h-8 w-full border border-coterm-border-input bg-coterm-surface px-2 text-xs text-coterm-text">
-                                <option value="">{t("Select…")}</option>
-                                {property.enum.map((option) => <option key={JSON.stringify(option)} value={JSON.stringify(option)}>{String(option)}</option>)}
-                              </select>
-                            ) : property.type === "boolean" ? (
-                              <input type="checkbox" checked={value === true} onChange={(event) => updateOperationArgument(name, event.target.checked)} className="accent-primary" />
-                            ) : property.type === "object" || property.type === "array" ? (
-                              <textarea aria-label={name} value={value === undefined ? "" : JSON.stringify(value, null, 2)} onChange={(event) => { try { updateOperationArgument(name, JSON.parse(event.target.value)); } catch { /* Keep the last valid structured value. */ } }} spellCheck={false} className="h-20 w-full border border-coterm-border-input bg-coterm-surface p-2 font-mono text-xs text-coterm-text outline-none focus:border-coterm-accent-glow" />
-                            ) : (
-                              <input type={property.type === "integer" || property.type === "number" ? "number" : "text"} required={required} min={property.minimum} max={property.maximum} value={value === undefined ? "" : String(value)} onChange={(event) => updateOperationArgument(name, event.target.value === "" ? undefined : property.type === "integer" ? Number.parseInt(event.target.value, 10) : property.type === "number" ? Number(event.target.value) : event.target.value)} className="h-8 w-full border border-coterm-border-input bg-coterm-surface px-2 text-xs text-coterm-text outline-none focus:border-coterm-accent-glow" />
-                            )}
-                          </label>
-                        );
-                      })}
-                    </fieldset>
-                  )}
-                  <details>
-                    <summary className="mb-2 cursor-pointer text-xs text-coterm-text-muted">{t("Advanced JSON")}</summary>
-                    <label className="mb-1 block text-xs text-coterm-text-subtle" htmlFor="operation-args">{t("Arguments (JSON)")}</label>
-                    <textarea id="operation-args" value={operationArgs} onChange={(event) => setOperationArgs(event.target.value)} spellCheck={false} className="h-28 w-full resize-y border border-coterm-border-input bg-coterm-surface p-2 font-mono text-xs text-coterm-text outline-none focus:border-coterm-accent-glow" />
-                  </details>
-                  <button
-                    type="button"
-                    onClick={() => void submitOperation()}
-                    className="mt-2 h-8 bg-primary px-3 text-xs text-primary-foreground hover:bg-primary/90"
-                  >
-                    {t("Invoke as human")}
-                  </button>
-                </>
-              ) : (
-                <p className="text-xs text-coterm-text-muted">{t("This plugin has no instance operations.")}</p>
-              )}
-              {operationResult && (
-                <pre className="mt-3 max-h-48 overflow-auto border border-coterm-border-subtle bg-coterm-surface p-3 font-mono text-xs text-coterm-text">
-                  {JSON.stringify(operationResult, null, 2)}
-                </pre>
-              )}
-              <div className="mt-5 border-t border-coterm-border-subtle pt-4">
-                <h3 className="mb-2 text-xs font-semibold uppercase text-coterm-text">{t("Recent operations")}</h3>
-                <div className="divide-y divide-coterm-border-subtle">
-                  {operationHistory.map((record) => (
-                    <article key={record.operationId} className="py-2.5">
-                      <div className="flex items-center justify-between gap-3">
-                        <span className="truncate text-xs text-coterm-text">{record.operation}</span>
-                        <span className="shrink-0 text-[11px] text-coterm-text-muted">{record.status}</span>
-                      </div>
-                      <div className="mt-1 break-all font-mono text-[10px] text-coterm-text-muted">
-                        {record.operationId}
-                      </div>
-                      {record.status === "awaiting_approval" && record.proposalId && (
-                        <div className="mt-2 flex gap-2">
-                          <button
-                            type="button"
-                            onClick={() => void respondToProposal(record, true)}
-                            className="h-7 bg-primary px-2 text-xs text-primary-foreground hover:bg-primary/90"
-                          >
-                            {t("Approve current JSON")}
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => void respondToProposal(record, false)}
-                            className="h-7 border border-coterm-border-input px-2 text-xs text-coterm-text hover:bg-coterm-border-subtle"
-                          >
-                            {t("Reject")}
-                          </button>
-                        </div>
-                      )}
-                    </article>
-                  ))}
-                  {operationHistory.length === 0 && (
-                    <p className="py-3 text-xs text-coterm-text-muted">{t("No operations recorded.")}</p>
-                  )}
-                </div>
-              </div>
-            </div>
+            <Button variant="destructive" disabled={busyId !== null} onClick={() => void destroyInstance(managedInstance)}>
+              <Trash2 data-icon="inline-start" />{t("Destroy instance")}
+            </Button>
           </div>
         </Modal>
       )}
