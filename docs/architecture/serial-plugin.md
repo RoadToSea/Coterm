@@ -10,9 +10,9 @@
 
 端口名按平台规则校验：Windows 接受 `COM6` 这类设备名（不区分大小写），Unix 接受 `/dev/...` 设备节点；其余带分隔符的名字一律拒绝，避免把配置变成任意文件打开入口。部分开发板会因 DTR 变化复位，可为这类板子取消「打开时置高 DTR」。
 
-终端按键发送原始字节。Shell 发送框改为命令列表，每行一条；Enter 换行，Ctrl+Enter（macOS 也支持 Cmd+Enter）或「发送列表」提交，空白行忽略。插件逐项写入，每项附加 CR（默认）、LF 或 CRLF；可设置 0～1000 ms 的发送间隔，默认 100 ms。「停止队列」只停止该列表尚未发送的项，不撤回已发送内容，也不向设备注入 Ctrl+C。列表发送期间禁止原始字节写入，以免终端输入、UART 定时发送与命令混写。
+人工 Shell 模式与 SSH 一样直接在终端中交互：按键、Enter、Tab、方向键、Ctrl+C 和粘贴按原始字节发送，由设备负责回显与编辑，不另设命令发送框或列表编辑器。切换视图不重建连接，也不发送命令。命令列表是 MCP 面向 Agent 的批量接口，不改变人工交互方式。
 
-UART 调试发送框保留原始文本、HEX 与 none/lf/cr/crlf 行结束符。原始写入总量为 1～16384 字节，HEX 必须为偶数位有效十六进制字符。
+UART 调试模式使用发送框，保留原始文本、HEX、none/lf/cr/crlf 行结束符及定时重复发送；Enter 发送，Shift+Enter 换行。原始写入总量为 1～16384 字节，HEX 必须为偶数位有效十六进制字符。MCP 列表发送期间禁止人工原始字节写入及信号修改，以免终端输入、UART 定时发送与命令混写；队列完成后可继续人工输入。
 
 ## 操作与 MCP
 
@@ -22,11 +22,11 @@ UART 调试发送框保留原始文本、HEX 与 none/lf/cr/crlf 行结束符。
 | `serial.connect/disconnect` | commit | 打开或关闭端口，清理该实例旧提案 |
 | `serial.read` | read | 游标回放 base64 字节，报告 gap/closed/more |
 | `serial.write` | commit | 人工字节写入；标记为敏感输入 |
-| `serial.command` | commit | 单行命令列表，插件有界队列逐项发送；标记为敏感输入 |
+| `serial.command` | commit | 面向 MCP 的单行命令列表，插件有界队列逐项发送；标记为敏感输入 |
 | `serial.signals` | commit | 设置 DTR/RTS 电平 |
 | `serial.plugin_info` | read | 插件级信息 |
 
-MCP 提供上述工具中的 status、probe、connect、disconnect、read、command、plugin_info，**不开放原始字节 write 与 signals**。除 plugin_info 外必须明确实例 ID。`serial.command` 原生接口与 MCP 使用同一列表契约；MCP 额外要求 `pluginInstanceId`。Agent 来源的提交经过基座审批，除非用户主动开启 Bypass 或明确放行；列表整体为审批快照，输入在普通账本中脱敏，普通进度事件不包含命令内容。
+MCP 提供上述工具中的 status、probe、connect、disconnect、read、command、plugin_info，**不开放原始字节 write 与 signals**。除 plugin_info 外必须明确实例 ID。`serial.command` 用于通过串口操作设备 Shell，原生接口与 MCP 使用同一列表契约；MCP 额外要求 `pluginInstanceId`。人工前端的 Shell 与 UART 输入均调用 `serial.write`，不调用 `serial.command`。Agent 来源的提交经过基座审批，除非用户主动开启 Bypass 或明确放行；列表整体为审批快照，输入在普通账本中脱敏，普通进度事件不包含命令内容。
 
 例如调用 MCP `serial.command`：
 
@@ -66,16 +66,15 @@ MCP 提供上述工具中的 status、probe、connect、disconnect、read、comm
 
 ```bash
 cargo test -p coterm-plugin-serial
-node --import ./scripts/test-ts-loader.mjs --test tests/serial-command-list.test.mjs
 ```
 
-列表回归使用内存写端验证顺序、独立写入、取消、故障后停止和字节计数；契约测试验证审批前整批校验及 MCP 实例绑定，不向物理端口写入。Shell 列表在真实设备上的发送节奏仍需按设备接收能力验收。
+MCP 列表回归使用内存写端验证顺序、独立写入、取消、故障后停止和字节计数；契约测试验证审批前整批校验及 MCP 实例绑定，不向物理端口写入。MCP 列表在真实设备上的发送节奏仍需按设备接收能力验收。
 
-无需硬件的 Shell 列表浏览器验收（需要 Chrome/Edge/Chromium，使用实际前端构建和宿主 API 替身）：
+无需硬件的人工交互浏览器验收（需要 Chrome/Edge/Chromium，使用实际前端构建和宿主 API 替身，验证 Shell 按键直发、UART 发送框及 MCP 队列占用期间的输入隔离）：
 
 ```bash
 pnpm --filter coterm-plugin-serial-ui build
-node --import ./scripts/test-ts-loader.mjs --test tests/serial-command-browser.test.mjs
+node --import ./scripts/test-ts-loader.mjs --test tests/serial-terminal-browser.test.mjs
 ```
 
 硬件用例默认 ignored。确认目标设备可接收写入后显式执行，将示例端口替换为实际端口：
