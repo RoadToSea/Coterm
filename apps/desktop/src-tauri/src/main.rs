@@ -446,6 +446,7 @@ async fn set_mcp_stdio_enabled(
 async fn create_instance(
     plugin_id: String,
     config: Value,
+    workspace_id: Option<String>,
     state: tauri::State<'_, AppState>,
 ) -> Result<InstanceInfo, String> {
     let _guard = state.workspace_actions.lock().await;
@@ -457,7 +458,7 @@ async fn create_instance(
     let id = instance.plugin_instance_id.clone();
     let label = instance.label.clone();
     if let Err(error) = workspace_commands::access(&state, move |store| {
-        store.insert(plugin_id, id, label, config)
+        store.insert(plugin_id, id, label, config, workspace_id)
     })
     .await
     {
@@ -912,6 +913,9 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             workspace_commands::workspace_snapshot,
             workspace_commands::save_workspace_layout,
+            workspace_commands::create_workspace_group,
+            workspace_commands::delete_workspace_group,
+            workspace_commands::move_workspace_entry,
             workspace_commands::restore_saved_instance,
             workspace_commands::forget_saved_instance,
             workspace_commands::reset_saved_workspace,

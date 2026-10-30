@@ -1,5 +1,10 @@
 /** Stable host error codes get readable text; third-party diagnostics keep their source text. */
 export const en: Readonly<Record<string, string>> = {
+  workspace_group_name_invalid: "Use a workspace name of 1–64 characters without control characters.",
+  workspace_group_name_exists: "A workspace with this name already exists.",
+  workspace_group_capacity: "The limit of 32 workspaces has been reached.",
+  workspace_group_not_found: "This workspace no longer exists. Refresh and try again.",
+  workspace_last_group: "Keep at least one workspace.",
   plugin_install_conflict: "A plugin with this ID already exists. The alpha installer does not support replacing it.",
   plugin_archive_invalid: "The plugin archive is invalid or damaged.",
   plugin_archive_unsafe: "The package contains an unsafe path or file type.",

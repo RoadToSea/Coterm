@@ -37,6 +37,16 @@ export function sdkModuleSource() {
 export function makeHostMockSource(initial) {
   return `(() => {
     const scenario = ${JSON.stringify(initial)};
+    const defaultLayout = { activeConfigRef:null, instancesCollapsed:innerWidth < 900, activeWorkspaceId:"default" };
+    scenario.workspace = {
+      groups:[{id:"default",name:"Default workspace"}], allowedOperations:[], historyPolicy:"session_only", persistence:"windows_dpapi",
+      ...scenario.workspace,
+      entries:(scenario.workspace?.entries ?? scenario.instances.map(instance => ({
+        configRef:"ref-" + instance.pluginInstanceId, pluginId:instance.pluginId,label:instance.label,instanceId:instance.pluginInstanceId,
+      }))).map(entry => ({workspaceId:"default",...entry})),
+      layout:{...defaultLayout,...scenario.workspace?.layout},
+    };
+    let nextInstance = 0;
     if (!localStorage.getItem("coterm.locale")) localStorage.setItem("coterm.locale", "en");
     const callbacks = new Map();
     const listeners = new Map();
@@ -60,6 +70,7 @@ export function makeHostMockSource(initial) {
       rejectCalls,
       pendingSecrets,
       invocations,
+      workspace: () => structuredClone(scenario.workspace),
       setAttention(next, { emit = true } = {}) {
         attention = next;
         attentionVersion = next.version;
@@ -175,8 +186,51 @@ export function makeHostMockSource(initial) {
 
     const handlers = {
       runtime_snapshot: () => ({ instances: scenario.instances, runningPlugins: scenario.catalog.plugins.filter((plugin) => plugin.running).map((plugin) => plugin.id) }),
-      workspace_snapshot: () => scenario.workspace ?? { entries: [], layout: { activeConfigRef: null, instancesCollapsed: innerWidth < 900 }, historyPolicy: "session_only" },
-      save_workspace_layout: () => null,
+      workspace_snapshot: () => structuredClone(scenario.workspace),
+      save_workspace_layout: ({activeInstanceId,instancesCollapsed,activeWorkspaceId}) => {
+        scenario.workspace.layout = {activeConfigRef:scenario.workspace.entries.find(entry => entry.instanceId === activeInstanceId)?.configRef ?? null,
+          instancesCollapsed, activeWorkspaceId:activeWorkspaceId ?? scenario.workspace.layout.activeWorkspaceId};
+        return null;
+      },
+      create_workspace_group: ({name}) => {
+        name = name.trim();
+        if (!name || [...name].length > 64) throw new Error("workspace_group_name_invalid");
+        if (scenario.workspace.groups.some(group => group.name.toLowerCase() === name.toLowerCase())) throw new Error("workspace_group_name_exists");
+        const group = {id:"group-" + ++nextInstance,name};
+        scenario.workspace.groups = [...scenario.workspace.groups,group];
+        scenario.workspace.layout.activeWorkspaceId = group.id;
+        return group;
+      },
+      delete_workspace_group: ({workspaceId}) => {
+        const groups = scenario.workspace.groups.filter(group => group.id !== workspaceId);
+        if (!groups.length) throw new Error("workspace_last_group");
+        scenario.workspace.groups = groups;
+        scenario.workspace.entries = scenario.workspace.entries.map(entry => entry.workspaceId === workspaceId ? {...entry,workspaceId:groups[0].id} : entry);
+        if (scenario.workspace.layout.activeWorkspaceId === workspaceId) scenario.workspace.layout.activeWorkspaceId = groups[0].id;
+        return null;
+      },
+      move_workspace_entry: ({configRef,workspaceId}) => {
+        if (!scenario.workspace.groups.some(group => group.id === workspaceId)) throw new Error("workspace_group_not_found");
+        scenario.workspace.entries = scenario.workspace.entries.map(entry => entry.configRef === configRef ? {...entry,workspaceId} : entry);
+        return null;
+      },
+      forget_saved_instance: ({configRef}) => {
+        scenario.workspace.entries = scenario.workspace.entries.filter(entry => entry.configRef !== configRef);
+        return null;
+      },
+      restore_saved_instance: ({configRef}) => {
+        const entry = scenario.workspace.entries.find(item => item.configRef === configRef);
+        if (!entry) throw new Error("workspace_entry_not_found");
+        const instance = {pluginId:entry.pluginId,pluginInstanceId:"restored-" + ++nextInstance,sessionId:"session-" + nextInstance,label:entry.label,status:"ready"};
+        scenario.instances = [...scenario.instances,instance];
+        scenario.workspace.entries = scenario.workspace.entries.map(item => item.configRef === configRef ? {...item,instanceId:instance.pluginInstanceId} : item);
+        return instance;
+      },
+      destroy_instance: ({pluginInstanceId}) => {
+        scenario.instances = scenario.instances.filter(instance => instance.pluginInstanceId !== pluginInstanceId);
+        scenario.workspace.entries = scenario.workspace.entries.filter(entry => entry.instanceId !== pluginInstanceId);
+        return null;
+      },
       provide_secret: ({ pluginInstanceId, purpose }) => ({ id: "secret-test", pluginInstanceId, purpose, expiresAt: "2099-01-01T00:00:00Z" }),
       list_plugins: () => scenario.catalog,
       prepare_plugin_install: () => scenario.installPreview ?? null,

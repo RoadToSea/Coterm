@@ -94,9 +94,12 @@ export interface InstanceInfo {
   status: "starting" | "ready" | "stopping" | "stopped" | "failed";
 }
 
+export interface WorkspaceGroup { id: string; name: string }
+
 export interface SavedWorkspace {
-  entries: { configRef: string; pluginId: string; label: string; instanceId: string | null }[];
-  layout: { activeConfigRef: string | null; instancesCollapsed: boolean };
+  entries: { configRef: string; pluginId: string; label: string; instanceId: string | null; workspaceId: string }[];
+  groups: WorkspaceGroup[];
+  layout: { activeConfigRef: string | null; instancesCollapsed: boolean; activeWorkspaceId: string };
   /** Agent 审批放行的操作名；持久化在加密工作区内。 */
   allowedOperations: string[];
   historyPolicy: "session_only";
@@ -125,7 +128,10 @@ export interface McpStdioStatus {
 export interface HostAPI {
   runtimeStatus(): Promise<{ instances: InstanceInfo[]; runningPlugins: string[] }>;
   workspace(): Promise<SavedWorkspace>;
-  saveLayout(activeInstanceId: string | null, instancesCollapsed: boolean, order: string[]): Promise<void>;
+  saveLayout(activeInstanceId: string | null, instancesCollapsed: boolean, order: string[], activeWorkspaceId?: string): Promise<void>;
+  createWorkspace(name: string): Promise<WorkspaceGroup>;
+  deleteWorkspace(workspaceId: string): Promise<void>;
+  moveWorkspaceEntry(configRef: string, workspaceId: string): Promise<void>;
   restoreInstance(configRef: string): Promise<InstanceInfo>;
   forgetInstance(configRef: string): Promise<void>;
   resetWorkspace(): Promise<void>;
@@ -140,7 +146,7 @@ export interface HostAPI {
   startPlugin(pluginId: string): Promise<void>;
   stopPlugin(pluginId: string): Promise<void>;
   listInstances(pluginId?: string): Promise<InstanceInfo[]>;
-  createInstance(pluginId: string, config: unknown): Promise<InstanceInfo>;
+  createInstance(pluginId: string, config: unknown, workspaceId?: string): Promise<InstanceInfo>;
   destroyInstance(pluginInstanceId: string): Promise<void>;
   listOperations(pluginId: string): Promise<OperationDescriptor[]>;
   invokeOperation<T = unknown>(
@@ -349,7 +355,10 @@ export interface PluginFrontendLoader {
 export const hostAPI: HostAPI = {
   runtimeStatus: () => invoke("runtime_snapshot"),
   workspace: () => invoke<SavedWorkspace>("workspace_snapshot"),
-  saveLayout: (activeInstanceId, instancesCollapsed, order) => invoke<void>("save_workspace_layout", { activeInstanceId, instancesCollapsed, order }),
+  saveLayout: (activeInstanceId, instancesCollapsed, order, activeWorkspaceId) => invoke<void>("save_workspace_layout", { activeInstanceId, instancesCollapsed, order, activeWorkspaceId }),
+  createWorkspace: (name) => invoke<WorkspaceGroup>("create_workspace_group", { name }),
+  deleteWorkspace: (workspaceId) => invoke<void>("delete_workspace_group", { workspaceId }),
+  moveWorkspaceEntry: (configRef, workspaceId) => invoke<void>("move_workspace_entry", { configRef, workspaceId }),
   restoreInstance: (configRef) => invoke<InstanceInfo>("restore_saved_instance", { configRef }),
   forgetInstance: (configRef) => invoke<void>("forget_saved_instance", { configRef }),
   resetWorkspace: () => invoke<void>("reset_saved_workspace"),
@@ -367,8 +376,8 @@ export const hostAPI: HostAPI = {
   startPlugin: (pluginId) => invoke<void>("start_plugin", { pluginId }),
   stopPlugin: (pluginId) => invoke<void>("stop_plugin", { pluginId }),
   listInstances: (pluginId) => invoke<InstanceInfo[]>("list_instances", { pluginId }),
-  createInstance: (pluginId, config) =>
-    invoke<InstanceInfo>("create_instance", { pluginId, config }),
+  createInstance: (pluginId, config, workspaceId) =>
+    invoke<InstanceInfo>("create_instance", { pluginId, config, workspaceId }),
   destroyInstance: (pluginInstanceId) =>
     invoke<void>("destroy_instance", { pluginInstanceId }),
   listOperations: (pluginId) => invoke<OperationDescriptor[]>("list_operations", { pluginId }),

@@ -1,5 +1,5 @@
 use crate::{
-    workspace::{self, Snapshot, WorkspaceStore},
+    workspace::{self, Snapshot, WorkspaceGroup, WorkspaceStore},
     AppState,
 };
 use coterm_core::plugin_runtime::PluginRuntime;
@@ -45,13 +45,50 @@ pub async fn save_workspace_layout(
     active_instance_id: Option<String>,
     instances_collapsed: bool,
     order: Vec<String>,
+    active_workspace_id: Option<String>,
     state: tauri::State<'_, AppState>,
 ) -> Result<(), RuntimeError> {
     if order.len() > 128 {
         return Err(workspace::error("workspace_capacity"));
     }
     access(&state, move |store| {
-        store.save_layout(active_instance_id, instances_collapsed, order)
+        store.save_layout(
+            active_instance_id,
+            instances_collapsed,
+            order,
+            active_workspace_id,
+        )
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn create_workspace_group(
+    name: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<WorkspaceGroup, RuntimeError> {
+    let _guard = state.workspace_actions.lock().await;
+    access(&state, move |store| store.create_group(name)).await
+}
+
+#[tauri::command]
+pub async fn delete_workspace_group(
+    workspace_id: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), RuntimeError> {
+    let _guard = state.workspace_actions.lock().await;
+    access(&state, move |store| store.delete_group(&workspace_id)).await
+}
+
+#[tauri::command]
+pub async fn move_workspace_entry(
+    config_ref: String,
+    workspace_id: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), RuntimeError> {
+    let _guard = state.workspace_actions.lock().await;
+    access(&state, move |store| {
+        store.move_entry(&config_ref, &workspace_id)
     })
     .await
 }
@@ -121,7 +158,7 @@ pub async fn reset_saved_workspace(state: tauri::State<'_, AppState>) -> Result<
             .lock()
             .map_err(|_| workspace::error("workspace_lock_failed"))?;
         let mut empty = WorkspaceStore::empty(path);
-        empty.save_layout(None, false, Vec::new())?;
+        empty.save_layout(None, false, Vec::new(), None)?;
         *guard = Ok(empty);
         Ok(())
     })

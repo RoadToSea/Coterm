@@ -1,7 +1,8 @@
 import { t } from "./i18n";
 import { useI18n } from "./use-i18n";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Box, ChevronDown, CircleStop, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Plus, PlugZap, ShieldAlert, ShieldCheck, SlidersHorizontal, TerminalSquare, Trash2 } from "lucide-react";
+import { CircleStop, PanelLeftClose, PanelLeftOpen, Plus, PlugZap, ShieldAlert, ShieldCheck, SlidersHorizontal, TerminalSquare, Trash2 } from "lucide-react";
+import { WorkspaceInstances, workspaceName } from "./components/WorkspaceInstances";
 import { ThemeSwitcher } from "./components/ThemeSwitcher";
 import { Button } from "./components/ui/button";
 import { Badge } from "./components/ui/badge";
@@ -12,7 +13,6 @@ import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTi
 import { cn } from "./lib/utils";
 import { HostInteractions } from "./components/host/HostInteractions";
 import { HostApprovals } from "./components/host/HostApprovals";
-import { McpConfiguration } from "./components/mcp/McpConfiguration";
 import { ApprovalSettings } from "./components/host/ApprovalSettings";
 import { Modal } from "./components/ui/Modal";
 import { PluginWorkspace } from "./components/plugins/PluginWorkspace";
@@ -24,9 +24,16 @@ import {
   type PluginLoadIssue,
   type PluginSummary,
   type SavedWorkspace,
+  type WorkspaceGroup,
 } from "./host-api";
-import { promptForConfirmation } from "./secret-input";
+import { promptForConfirmation, promptForText } from "./secret-input";
 import type { OperationDescriptor, OperationRecord, OperationReceipt } from "@coterm/plugin-sdk";
+
+const EMPTY_WORKSPACE: SavedWorkspace = {
+  entries: [], groups: [{ id: "default", name: "Default workspace" }],
+  layout: { activeConfigRef: null, instancesCollapsed: false, activeWorkspaceId: "default" },
+  allowedOperations: [], historyPolicy: "session_only", persistence: "memory_only",
+};
 
 export default function App() {
   const { locale, setLocale } = useI18n();
@@ -52,7 +59,6 @@ export default function App() {
     }
   }, []);
 
-  const [mcpOpen, setMcpOpen] = useState(false);
   const [approvalOpen, setApprovalOpen] = useState(false);
   const [installerOpen, setInstallerOpen] = useState(false);
   const [plugins, setPlugins] = useState<PluginSummary[]>([]);
@@ -74,6 +80,7 @@ export default function App() {
   const [operationArgs, setOperationArgs] = useState("{}");
   const [operationResult, setOperationResult] = useState<OperationReceipt | null>(null);
   const [workspace, setWorkspace] = useState<SavedWorkspace | null>(null);
+  const [activeWorkspaceId, setActiveWorkspaceId] = useState("default");
   const [workspaceError, setWorkspaceError] = useState<string | null>(null);
   const formatError = (reason: unknown) => typeof reason === "object" && reason !== null && "code" in reason
     ? String((reason as { code: unknown }).code) : String(reason);
@@ -82,6 +89,7 @@ export default function App() {
     try {
       const saved = await hostAPI.workspace();
       setWorkspace(saved);
+      setActiveWorkspaceId(current => saved.groups.some(group => group.id === current) ? current : saved.layout.activeWorkspaceId);
       setWorkspaceError(null);
       return saved;
     } catch (reason) {
@@ -92,7 +100,10 @@ export default function App() {
 
   useEffect(() => {
     void refreshWorkspace().then((saved) => {
-      if (saved) setInstancesCollapsed(saved.layout.instancesCollapsed);
+      if (saved) {
+        setInstancesCollapsed(saved.layout.instancesCollapsed);
+        setActiveWorkspaceId(saved.layout.activeWorkspaceId);
+      }
     });
   }, [refreshWorkspace]);
 
@@ -111,13 +122,13 @@ export default function App() {
   }), [instances, workspace]);
 
   useEffect(() => {
-    if (!workspace || workspaceError) return;
+    if (!workspace || workspaceError || busyId !== null) return;
     const timer = window.setTimeout(() => {
-      void hostAPI.saveLayout(activeInstanceId, instancesCollapsed, orderedInstances.map((item) => item.pluginInstanceId))
+      void hostAPI.saveLayout(activeInstanceId, instancesCollapsed, orderedInstances.map((item) => item.pluginInstanceId), activeWorkspaceId)
         .catch((reason) => setWorkspaceError(formatError(reason)));
     }, 250);
     return () => window.clearTimeout(timer);
-  }, [activeInstanceId, instancesCollapsed, orderedInstances, workspace, workspaceError]);
+  }, [activeInstanceId, instancesCollapsed, orderedInstances, workspace, workspaceError, activeWorkspaceId, busyId]);
 
   const selectedPlugin = plugins.find((plugin) => plugin.id === selectedPluginId) ?? null;
   const selectedOperationDescriptor = operations.find((item) => item.name === selectedOperation) ?? null;
@@ -198,17 +209,20 @@ export default function App() {
       await refresh();
       await refreshWorkspace();
       setActiveInstanceId(instance.pluginInstanceId);
+      const entry = workspace?.entries.find(item => item.configRef === configRef);
+      if (entry) setActiveWorkspaceId(entry.workspaceId);
     } catch (reason) { setError(formatError(reason)); }
     finally { setBusyId(null); }
   };
 
-  const restoreWorkspace = async () => {
+  const restoreWorkspace = async (workspaceId: string) => {
     if (!workspace) return;
     setBusyId("restore-workspace");
     setError(null);
     const failures: string[] = [];
     let active: string | null = null;
     for (const entry of workspace.entries) {
+      if (entry.workspaceId !== workspaceId) continue;
       if (instances.some((item) => item.pluginInstanceId === entry.instanceId)) continue;
       try {
         const instance = await hostAPI.restoreInstance(entry.configRef);
@@ -218,6 +232,7 @@ export default function App() {
     await refresh();
     await refreshWorkspace();
     if (active) setActiveInstanceId(active);
+    setActiveWorkspaceId(workspaceId);
     if (failures.length) setError(failures.join("; "));
     setBusyId(null);
   };
@@ -287,7 +302,7 @@ export default function App() {
       if (!plugins.find((plugin) => plugin.id === pluginId)?.running) {
         await hostAPI.startPlugin(pluginId);
       }
-      const instance = await hostAPI.createInstance(pluginId, config);
+      const instance = await hostAPI.createInstance(pluginId, config, activeWorkspaceId);
       await refresh();
       await refreshWorkspace();
       setActiveInstanceId(instance.pluginInstanceId);
@@ -358,6 +373,58 @@ export default function App() {
     }
   };
 
+  const createWorkspace = async () => {
+    const result = await promptForText("create-workspace", { title: t("New workspace"), prompt: t("Workspace name (up to 64 characters)"), allowCancel: true });
+    if (result.outcome !== "submitted") return;
+    setBusyId("workspace-create");
+    setError(null);
+    try {
+      const group = await hostAPI.createWorkspace(result.value);
+      setActiveWorkspaceId(group.id);
+      await refreshWorkspace();
+    } catch (reason) { setError(t(formatError(reason))); }
+    finally { setBusyId(null); }
+  };
+
+  const deleteWorkspace = async (group: WorkspaceGroup) => {
+    const target = workspace?.groups.find(item => item.id !== group.id);
+    if (!target) return;
+    const result = await promptForConfirmation("delete-workspace", {
+      title: t("Delete workspace {name}", { name: workspaceName(group) }),
+      prompt: t("Instances move to {name}. Connections remain open.", { name: workspaceName(target) }), allowCancel: true,
+    });
+    if (result.outcome !== "submitted") return;
+    setBusyId(group.id);
+    setError(null);
+    try {
+      await hostAPI.deleteWorkspace(group.id);
+      if (activeWorkspaceId === group.id) setActiveWorkspaceId(target.id);
+      await refreshWorkspace();
+    } catch (reason) { setError(t(formatError(reason))); }
+    finally { setBusyId(null); }
+  };
+
+  const moveWorkspaceEntry = async (configRef: string, workspaceId: string) => {
+    setBusyId(configRef);
+    setError(null);
+    try {
+      await hostAPI.moveWorkspaceEntry(configRef, workspaceId);
+      setActiveWorkspaceId(workspaceId);
+      await refreshWorkspace();
+    } catch (reason) { setError(t(formatError(reason))); }
+    finally { setBusyId(null); }
+  };
+
+  const destroyInstance = async (instance: InstanceInfo) => {
+    const result = await promptForConfirmation(`destroy-${instance.pluginInstanceId}`, {
+      title: t("Delete instance {name}", { name: instance.label }),
+      prompt: t("This closes the connection and removes its saved restore entry."), allowCancel: true,
+    });
+    if (result.outcome !== "submitted") return;
+    await runPluginAction(instance.pluginInstanceId, () => hostAPI.destroyInstance(instance.pluginInstanceId));
+    setInstanceToolsOpen(false);
+  };
+
   const errorNotice = error && (
     <Alert variant="destructive" className="break-words"><AlertDescription>{error}</AlertDescription></Alert>
   );
@@ -375,37 +442,19 @@ export default function App() {
   );
 
   return (
-    <div className="flex h-dvh flex-col overflow-hidden bg-coterm-surface text-coterm-text">
+    <div className="flex h-dvh flex-col overflow-hidden bg-coterm-surface text-coterm-text"
+      onDragOver={event => { if (event.dataTransfer.types.includes("Files")) event.preventDefault(); }}
+      onDrop={event => { if (event.dataTransfer.types.includes("Files")) event.preventDefault(); }}>
       <div
         role="toolbar"
         aria-label={t("Workspace tools")}
         className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-border bg-card px-3"
       >
         <div className="flex items-center gap-2">
-          <Button variant="ghost" size="icon"
-            type="button"
-            id="toggle-instances-button"
-            aria-controls="instances-sidebar"
-            aria-expanded={!instancesCollapsed}
-            aria-label={instancesCollapsed ? t("Expand instances panel") : t("Collapse instances panel")}
-            title={instancesCollapsed ? t("Expand instances panel") : t("Collapse instances panel")}
-            onClick={() => setInstancesCollapsed((prev) => !prev)}
-          >
-            {instancesCollapsed ? <PanelLeftOpen data-icon="inline-start" /> : <PanelLeftClose data-icon="inline-start" />}
-          </Button>
-          <Separator orientation="vertical" className="h-5" />
           <div className="flex items-center gap-2 px-1">
             <TerminalSquare className="size-5 text-primary" />
             <span className="text-sm font-semibold tracking-tight">Coterm</span>
-            <span className="hidden max-w-56 truncate pl-2 text-xs text-muted-foreground min-[900px]:inline">{activeInstance?.label ?? t("WORKSPACE")}</span>
           </div>
-          <Button variant="ghost" size="sm"
-            type="button"
-            aria-haspopup="dialog"
-            onClick={() => setMcpOpen(true)}
-          >
-            MCP
-          </Button>
         </div>
         <div className="flex items-center gap-3">
         <ThemeSwitcher />
@@ -434,16 +483,16 @@ export default function App() {
         }}>{t("Reset saved workspace")}</button>}
       </div>}
       {pluginIssueNotice}
-      {mcpOpen && <McpConfiguration onClose={() => setMcpOpen(false)} />}
       {approvalOpen && <ApprovalSettings plugins={plugins} onClose={() => setApprovalOpen(false)} />}
       {installerOpen && <PluginInstaller onClose={() => setInstallerOpen(false)} onInstalled={refresh} />}
 
       <div className="flex min-h-0 flex-1">
         <aside aria-label={t("Installed plugins")} className="flex w-[64px] shrink-0 flex-col border-r border-coterm-border bg-coterm-surface-sidebar sm:w-[72px]">
-          <h1 className="px-1 pb-3 pt-5 text-center text-[9px] font-semibold leading-[14px] tracking-[0.08em] text-muted-foreground">
-            {t("INSTALLED")}<br />{t("PLUGINS")}
-          </h1>
-          <nav aria-label={t("Plugin list")} aria-busy={loading} className="min-h-0 flex-1 overflow-y-auto">
+          {instancesCollapsed && <Button variant="ghost" size="icon" type="button" id="toggle-instances-button"
+            className="mx-auto mt-3 shrink-0" aria-controls="instances-sidebar" aria-expanded={false}
+            aria-label={t("Expand instances panel")} title={t("Expand instances panel")}
+            onClick={() => setInstancesCollapsed(false)}><PanelLeftOpen data-icon="inline-start" /></Button>}
+          <nav aria-label={t("Plugin list")} aria-busy={loading} className="min-h-0 flex-1 overflow-y-auto pt-3">
             {loading && plugins.length === 0 ? (
               <div aria-label={t("Loading plugins")} className="flex flex-col items-center gap-4 py-2">
                 {[0, 1, 2].map((item) => <Skeleton key={item} className="size-8" />)}
@@ -460,7 +509,7 @@ export default function App() {
                 className={cn("group relative flex min-h-16 w-full flex-col items-center justify-center gap-1.5 border-l-2 px-1 py-3 transition-colors hover:bg-accent", selectedPluginId === plugin.id ? "border-primary bg-accent" : "border-transparent")}
               >
                 <span className="relative grid h-7 w-8 place-items-center">
-                  <PlugZap size={25} strokeWidth={1.5} className={plugin.running ? "text-primary" : "text-muted-foreground"} />
+                  <PlugZap size={25} strokeWidth={1.5} className={plugin.running ? "text-primary" : "text-muted-foreground"} data-plugin-icon />
                   <span className={cn("absolute bottom-0 right-0 size-2 rounded-full ring-2 ring-card", plugin.running ? "bg-success" : "bg-muted-foreground")} />
                 </span>
                 <span className="w-full truncate text-center text-[10px] text-coterm-text-subtle">{plugin.name}</span>
@@ -501,8 +550,14 @@ export default function App() {
         >
           <div className="flex h-14 shrink-0 items-center justify-between px-4">
             <h2 className="text-[11px] font-medium tracking-[0.06em]">{t("INSTANCES")}</h2>
+            <Button variant="ghost" size="icon" type="button" className="ml-auto mr-1 size-7"
+              disabled={busyId !== null || !workspace} aria-label={t("New workspace")} title={t("New workspace")}
+              onClick={() => void createWorkspace()}><Plus data-icon="inline-start" /></Button>
             <button
               type="button"
+              id={instancesCollapsed ? undefined : "toggle-instances-button"}
+              aria-controls="instances-sidebar"
+              aria-expanded={true}
               aria-label={t("Collapse instances panel")}
               title={t("Collapse instances panel")}
               onClick={() => setInstancesCollapsed(true)}
@@ -511,55 +566,20 @@ export default function App() {
               <PanelLeftClose size={15} />
             </button>
           </div>
-          <div className="mx-3 mb-2 flex h-8 shrink-0 items-center gap-1.5 text-[10px] font-semibold tracking-wider text-muted-foreground">
-            <ChevronDown size={14} className="text-coterm-text-subtle" />
-            <span>{t("WORKSPACE")}</span>
-            <Badge variant="secondary" className="ml-auto">{instances.length}</Badge>
-          </div>
           <nav aria-label={t("Instance list")} aria-busy={loading} className="min-h-0 flex-1 overflow-y-auto py-1">
-            {workspace?.entries.some((entry) => !instances.some((item) => item.pluginInstanceId === entry.instanceId)) &&
-              <button disabled={busyId !== null} className="px-3 py-2 text-xs text-coterm-accent-glow" onClick={() => void restoreWorkspace()}>{t("Restore workspace")}</button>}
-            {workspace?.entries.filter((entry) => !instances.some((item) => item.pluginInstanceId === entry.instanceId)).map((entry) => (
-              <div key={entry.configRef} className="px-3 py-2 text-xs text-coterm-text-subtle">
-                <p className="truncate">{entry.label}</p>
-                <button disabled={busyId !== null} className="mr-3 text-coterm-accent-glow disabled:opacity-50" onClick={() => void restoreSavedInstance(entry.configRef)}>{t("Restore instance")}</button>
-                <button disabled={busyId !== null} onClick={() => {
-                  void hostAPI.forgetInstance(entry.configRef).then(refreshWorkspace).catch((reason) => setError(formatError(reason)));
-                }}>{t("Forget")}</button>
-              </div>
-            ))}
             {loading && instances.length === 0 ? (
               <div aria-label={t("Loading instances")} className="flex flex-col gap-3 px-5 py-3">
                 {["w-3/4", "w-1/2"].map((width) => <Skeleton key={width} className={cn("h-3", width)} />)}
               </div>
-            ) : orderedInstances.map((instance) => (
-              <div key={instance.pluginInstanceId} className={cn("group mx-2 mb-1 flex h-10 items-center rounded-lg border transition-colors", activeInstanceId === instance.pluginInstanceId ? "border-primary/20 bg-accent text-accent-foreground" : "border-transparent hover:bg-muted")}>
-                <button
-                  type="button"
-                  title={`${instance.pluginId} · ${instance.status}`}
-                  aria-current={activeInstanceId === instance.pluginInstanceId ? "true" : undefined}
-                  onClick={() => setActiveInstanceId(instance.pluginInstanceId)}
-                  className="flex h-full min-w-0 flex-1 items-center gap-2.5 pl-3 pr-1 text-left text-xs"
-                >
-                  <Box size={15} strokeWidth={1.5} className="shrink-0 text-coterm-accent-glow" />
-                  <span className="truncate">{instance.label}</span>
-                </button>
-                <button
-                  type="button"
-                  title={t("Manage {name}", { name: instance.label })}
-                  aria-label={t("Manage {name}", { name: instance.label })}
-                  aria-haspopup="dialog"
-                  onClick={() => {
-                    setActiveInstanceId(instance.pluginInstanceId);
-                    setInstanceToolsOpen(true);
-                  }}
-                  className="icon-button mr-1 opacity-0 focus:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100"
-                >
-                  <MoreHorizontal size={16} />
-                </button>
-              </div>
-            ))}
-            {!loading && instances.length === 0 && (
+            ) : <WorkspaceInstances workspace={workspace ?? EMPTY_WORKSPACE} instances={orderedInstances}
+              activeInstanceId={activeInstanceId} activeWorkspaceId={activeWorkspaceId} busy={busyId !== null}
+              onSelect={(instance, groupId) => { setActiveInstanceId(instance.pluginInstanceId); setActiveWorkspaceId(groupId); }}
+              onSelectWorkspace={setActiveWorkspaceId} onManage={instance => { setActiveInstanceId(instance.pluginInstanceId); setInstanceToolsOpen(true); }}
+              onDestroy={instance => void destroyInstance(instance)} onDeleteWorkspace={group => void deleteWorkspace(group)}
+              onMove={(ref, groupId) => void moveWorkspaceEntry(ref, groupId)} onRestore={ref => void restoreSavedInstance(ref)}
+              onRestoreWorkspace={groupId => void restoreWorkspace(groupId)}
+              onForget={ref => { void runPluginAction(ref, () => hostAPI.forgetInstance(ref)); }} />}
+            {!loading && instances.length === 0 && (workspace?.entries.length ?? 0) === 0 && (
               <div className="px-5 py-5 text-xs leading-5 text-coterm-text-muted">
                 <p>{t("No instances yet.")}</p>
                 <p className="mt-1">{t("Select a plugin on the left to create one.")}</p>
@@ -676,14 +696,24 @@ export default function App() {
                 type="button"
                 title={t("Destroy instance")}
                 disabled={busyId !== null}
-                onClick={() => void runPluginAction(activeInstance.pluginInstanceId, async () => {
-                  await hostAPI.destroyInstance(activeInstance.pluginInstanceId);
-                })}
+                onClick={() => void destroyInstance(activeInstance)}
                 className="grid h-8 w-8 shrink-0 place-items-center text-coterm-text hover:bg-coterm-surface-hover"
               >
                 <Trash2 className="h-4 w-4" />
               </button>
             </div>
+            {workspace && <label className="mt-4 flex items-center gap-3 text-xs">
+              {t("Move to workspace")}
+              <select aria-label={t("Move to workspace")} disabled={busyId !== null || !workspace.entries.some(entry => entry.instanceId === activeInstance.pluginInstanceId)}
+                value={workspace.entries.find(entry => entry.instanceId === activeInstance.pluginInstanceId)?.workspaceId ?? workspace.groups[0]?.id}
+                className="h-8 min-w-0 flex-1 rounded-md border border-input bg-background px-2"
+                onChange={event => {
+                  const entry = workspace.entries.find(item => item.instanceId === activeInstance.pluginInstanceId);
+                  if (entry) void moveWorkspaceEntry(entry.configRef, event.target.value);
+                }}>
+                {workspace.groups.map(group => <option key={group.id} value={group.id}>{workspaceName(group)}</option>)}
+              </select>
+            </label>}
             <dl className="grid grid-cols-[140px_1fr] gap-y-3 py-4 text-sm">
               <dt className="text-coterm-text-muted">{t("Plugin")}</dt>
               <dd>{activeInstance.pluginId}</dd>

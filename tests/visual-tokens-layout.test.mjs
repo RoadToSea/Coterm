@@ -108,21 +108,21 @@ test("App.tsx implements responsive navigation collapse and accessible controls"
   assert.ok(appContent.includes("instancesCollapsed"), "App must manage instancesCollapsed state");
   assert.ok(appContent.includes("899px") || appContent.includes("900"), "App must check 900px breakpoint");
 
-  // 2. Check for accessible toggle button in toolbar
+  // 2. One accessible toggle lives in navigation, without a duplicate toolbar action.
   assert.ok(
     appContent.includes('id="toggle-instances-button"'),
-    "Toolbar must have toggle-instances-button"
+    "Navigation must provide toggle-instances-button"
   );
   assert.ok(
     appContent.includes('aria-controls="instances-sidebar"'),
     "Toggle button must connect to instances-sidebar via aria-controls"
   );
   assert.ok(
-    appContent.includes("aria-expanded={!instancesCollapsed}"),
+    appContent.includes("aria-expanded={false}") && appContent.includes("aria-expanded={true}"),
     "Toggle button must indicate expanded/collapsed state via aria-expanded"
   );
   assert.ok(
-    appContent.includes('aria-label={instancesCollapsed ? t("Expand instances panel") : t("Collapse instances panel")}'),
+    appContent.includes('aria-label={t("Expand instances panel")}') && appContent.includes('aria-label={t("Collapse instances panel")}'),
     "Toggle button must have accessible name"
   );
 
