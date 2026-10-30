@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { hostAPI, type PluginInstallPreview } from "../../host-api";
 import { useI18n } from "../../use-i18n";
 import { Modal } from "../ui/Modal";
+import { Button } from "../ui/button";
+import { Alert, AlertDescription } from "../ui/alert";
 
 export function PluginInstaller({ onClose, onInstalled }: { onClose(): void; onInstalled(): Promise<void> }) {
   const { locale, t } = useI18n();
@@ -65,27 +67,25 @@ export function PluginInstaller({ onClose, onInstalled }: { onClose(): void; onI
 
   return (
     <Modal title={t("Install offline plugin")} onClose={() => { if (!working.current) onClose(); }}>
-      <div aria-busy={busy !== null} className="space-y-4 text-xs">
+      <div aria-busy={busy !== null} className="flex flex-col gap-4 text-xs">
         <p className="text-coterm-text-muted">{t("Choose a .coterm or .zip package built for this platform.")}</p>
-        <p className="border-l-2 border-[#d7ba7d] bg-[#3a3224] px-3 py-2 leading-relaxed text-[#e8d5a9]">
+        <Alert variant="warning" role="note"><AlertDescription>
           {t("Plugins run native code with your user permissions. Only install packages from authors you trust.")}
-        </p>
-        {error && <p role="alert" className="break-words text-[#f48771]">{t(error)}</p>}
-        {installed && <p role="status" className="text-[#89d185]">{t("Plugin installed. Select it on the left to create an instance.")}</p>}
+        </AlertDescription></Alert>
+        {error && <p role="alert" className="break-words text-destructive">{t(error)}</p>}
+        {installed && <p role="status" className="text-success">{t("Plugin installed. Select it on the left to create an instance.")}</p>}
         {preview && <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-5 gap-y-2 border-y border-coterm-border py-3">
           <dt>{t("Package")}</dt><dd className="break-all">{preview.name} ({preview.id})</dd>
           <dt>{t("Version")}</dt><dd>{preview.version}</dd>
           <dt>{t("Platform")}</dt><dd>{preview.platform}</dd>
         </dl>}
         <div className="flex flex-wrap justify-end gap-2">
-          <button type="button" disabled={busy !== null} onClick={() => void choose()}
-            className="h-8 border border-coterm-border-input px-3 hover:bg-coterm-surface-hover disabled:opacity-50">
+          <Button variant="outline" size="sm" type="button" disabled={busy !== null} onClick={() => void choose()}>
             {t(busy === "select" ? "Selecting and validating…" : preview ? "Choose another package" : "Choose plugin package")}
-          </button>
-          {preview && <button type="button" disabled={busy !== null} onClick={() => void install()}
-            className="h-8 bg-[#0e639c] px-3 text-white hover:bg-[#1177bb] disabled:opacity-50">
+          </Button>
+          {preview && <Button size="sm" type="button" disabled={busy !== null} onClick={() => void install()}>
             {t(busy === "install" ? "Installing…" : "Install trusted package")}
-          </button>}
+          </Button>}
         </div>
       </div>
     </Modal>

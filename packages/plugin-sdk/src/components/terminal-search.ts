@@ -94,16 +94,20 @@ export function mountTerminalSearch(anchor: HTMLElement, terminal: SearchTermina
       render();
       return;
     }
+    const style = document.defaultView?.getComputedStyle(panel);
+    const color = (token: string, fallback: string) => style?.getPropertyValue(token).trim() || fallback;
     const options: SearchOptions = {
       caseSensitive: false, regex: false, incremental,
       decorations: {
-        matchBackground: "#515C6A", matchOverviewRuler: "#969696",
-        activeMatchBackground: "#9D5D00", activeMatchColorOverviewRuler: "#CCA700",
+        matchBackground: color("--terminal-search", "#515C6A"), matchOverviewRuler: color("--terminal-yellow", "#969696"),
+        activeMatchBackground: color("--terminal-search-active", "#9D5D00"), activeMatchColorOverviewRuler: color("--terminal-yellow", "#CCA700"),
       },
     };
     if (backwards) search.findPrevious(input.value, options);
     else search.findNext(input.value, options);
   };
+  const themeObserver = new MutationObserver(() => { if (!panel.hidden && input.value) run(false, true); });
+  themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ["class", "data-theme", "style"] });
   const refreshLocale = () => {
     panel.setAttribute("aria-label", t("Find in terminal"));
     input.setAttribute("aria-label", t("Find in terminal"));
@@ -159,6 +163,7 @@ export function mountTerminalSearch(anchor: HTMLElement, terminal: SearchTermina
       if (disposed) return;
       close(false);
       disposed = true;
+      themeObserver.disconnect();
       controller.abort();
       subscription.dispose();
       panel.remove();

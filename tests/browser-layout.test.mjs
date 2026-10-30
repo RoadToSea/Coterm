@@ -68,6 +68,100 @@ async function openPage(session, scenario = defaultScenario, viewport = { width:
 let serverUrl;
 let server;
 
+test("appearance switches live SSH and serial renderers, persists, and follows system changes", async (t) => {
+  if (!browserPath) { t.skip("No Chrome/Edge binary; live theme verification did not run"); return; }
+  assertFreshBuild();
+  const staticServer = await startStaticServer();
+  serverUrl = staticServer.url;
+  const session = await openSession({ browserPath, totalTimeoutMs: 120_000 });
+  let page;
+  try {
+    page = await openPage(session);
+    await waitForValue({ send: page.send }, `(() => {
+      const host = [...document.querySelectorAll('main div')].find(node => node.shadowRoot?.querySelector('.xterm'));
+      if (!host || !host.shadowRoot.querySelector('.bar span')?.textContent.includes('Connected')) return false;
+      window.themeSsh = host; window.themeTerminal = host.shadowRoot.querySelector('.xterm');
+      window.themeSubscriptions = window.__cotermTest.calls.filter(c => c === 'subscribe_plugin_events').length;
+      window.themeConnectionCalls = window.__cotermTest.invocations.filter(c => c.command === 'invoke_plugin_operation' && ['ssh.connect','ssh.disconnect','ssh.write'].includes(c.args.operation)).length;
+      return true;
+    })()`, { label: "SSH ready for live appearance switch" });
+    const choose = async (mode) => {
+      await page.evaluate(`document.querySelector('#theme-switcher button[data-state][aria-label=${JSON.stringify({ light: 'Light mode', dark: 'Dark mode', system: 'System theme' }[mode])}]').click()`);
+      await waitForValue({ send: page.send }, `document.querySelector('#theme-switcher button[aria-label=${JSON.stringify({ light: 'Light mode', dark: 'Dark mode', system: 'System theme' }[mode])}]')?.getAttribute('data-state') === 'on'`);
+    };
+    const screenshot = async (name) => {
+      await page.evaluate(`Promise.allSettled(document.getAnimations().filter(animation => animation.effect?.getTiming().iterations !== Infinity).map(animation => animation.finished))`);
+      const result = await page.send("Page.captureScreenshot", { format: "png" });
+      fs.mkdirSync(path.join(rootDir, "target"), { recursive: true });
+      fs.writeFileSync(path.join(rootDir, "target", name), Buffer.from(result.data, "base64"));
+    };
+    const terminalBackground = (host) => page.evaluate(`getComputedStyle(${host}.shadowRoot.querySelector('.xterm-viewport')).backgroundColor`);
+    await choose("dark");
+    await waitForValue({ send: page.send }, `document.documentElement.dataset.theme === 'dark'`);
+    assert.equal(await terminalBackground("themeSsh"), "rgb(21, 26, 35)");
+    await screenshot("desktop-theme-dark.png");
+    await choose("light");
+    await waitForValue({ send: page.send }, `document.documentElement.dataset.theme === 'light'`);
+    assert.equal(await terminalBackground("themeSsh"), "rgb(255, 255, 255)");
+    assert.equal(await page.evaluate(`themeTerminal === themeSsh.shadowRoot.querySelector('.xterm')`), true);
+    assert.equal(await page.evaluate(`window.__cotermTest.calls.filter(c => c === 'subscribe_plugin_events').length === themeSubscriptions`), true, "theme changes do not remount the SSH plugin");
+    assert.equal(await page.evaluate(`window.__cotermTest.invocations.filter(c => c.command === 'invoke_plugin_operation' && ['ssh.connect','ssh.disconnect','ssh.write'].includes(c.args.operation)).length === themeConnectionCalls`), true);
+    for (const [width, height] of [[1280, 800], [1024, 768], [768, 800]]) {
+      await page.resize(width, height);
+      assert.equal(await page.evaluate(`document.documentElement.scrollWidth <= innerWidth`), true);
+      assert.equal(await page.evaluate(`(() => { const r = document.getElementById('theme-switcher').getBoundingClientRect(); return r.left >= 0 && r.right <= innerWidth; })()`), true);
+      await screenshot(`desktop-theme-light-${width}.png`);
+    }
+    await page.resize(1280, 800);
+
+    // Mount the actual serial bundle in the same themed document, with a typed-contract mock only.
+    const artifact = path.join(rootDir, "plugins/plugin-serial/dist/frontend/index.js");
+    assert.ok(fs.statSync(artifact).mtimeMs >= fs.statSync(path.join(rootDir, "packages/plugin-sdk/src/components/terminal-theme.ts")).mtimeMs);
+    const serialURL = `data:text/javascript;base64,${fs.readFileSync(artifact).toString("base64")}`;
+    await page.evaluate(`(async () => {
+      const container = document.createElement('div'); container.style.cssText = 'position:fixed;inset:80px 24px 50px 330px'; document.body.append(container);
+      window.themeSerialCalls = []; window.themeSerialSubscriptions = 0;
+      const receipt = output => ({ operationId:'theme',status:'completed',output,error:null,proposalId:null,waitExpired:false });
+      const api = { pluginInstanceId:'theme-serial', async invoke(operation,args) {
+        themeSerialCalls.push({operation,args});
+        if (operation === 'serial.status') return receipt({config:{port:'COM1',baudRate:115200,dtr:true,rts:true},connected:true,connectionId:'theme-conn',signals:{dtr:true,rts:true},rxBytes:0,txBytes:0,commandQueue:0});
+        if (operation === 'serial.read') return receipt({data:btoa('Theme probe\\r\\n'),cursor:'1',gap:false,closed:false,more:false,connectionId:'theme-conn'});
+        throw new Error('Unexpected operation: ' + operation);
+      }, async subscribeEvents() { themeSerialSubscriptions++; return () => {}; } };
+      window.themeSerialFrontend = (await import(${JSON.stringify(serialURL)})).mount(container, api);
+      window.themeSerial = container.firstElementChild;
+      window.themeSerialTerminal = themeSerial.shadowRoot.querySelector('.xterm');
+    })()`);
+    await waitForValue({ send: page.send }, `themeSerial.shadowRoot.querySelector('.state')?.textContent === 'Connected'`);
+    assert.equal(await terminalBackground("themeSerial"), "rgb(255, 255, 255)");
+    await choose("dark");
+    await waitForValue({ send: page.send }, `getComputedStyle(themeSerial.shadowRoot.querySelector('.xterm-viewport')).backgroundColor === 'rgb(21, 26, 35)'`);
+    assert.equal(await terminalBackground("themeSsh"), "rgb(21, 26, 35)");
+    assert.equal(await page.evaluate(`themeSerialTerminal === themeSerial.shadowRoot.querySelector('.xterm') && themeSerialSubscriptions === 1`), true);
+    assert.equal(await page.evaluate(`themeSerialCalls.every(c => ['serial.status','serial.read'].includes(c.operation))`), true, "palette changes never send serial bytes or reconnect");
+    assert.equal(await page.evaluate(`themeSerial.shadowRoot.querySelector('.xterm-screen').textContent.includes('Theme probe')`), true, "existing terminal output survives");
+    await screenshot("desktop-theme-serial-dark.png");
+    await page.evaluate(`(() => { const container = themeSerial.parentElement; themeSerialFrontend.unmount(); container.remove(); })()`);
+
+    // Explicit modes override OS changes; system mode responds immediately.
+    await page.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-color-scheme", value: "light" }] });
+    assert.equal(await page.evaluate(`document.documentElement.dataset.theme`), "dark");
+    await page.send("Page.reload");
+    await waitForValue({ send: page.send }, `document.getElementById('theme-switcher') && document.documentElement.dataset.theme === 'dark'`);
+    assert.equal(await page.evaluate(`localStorage.getItem('coterm.theme')`), "dark");
+    await choose("system");
+    await waitForValue({ send: page.send }, `document.documentElement.dataset.theme === 'light'`);
+    await page.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-color-scheme", value: "dark" }] });
+    await waitForValue({ send: page.send }, `document.documentElement.dataset.theme === 'dark'`);
+    await page.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-color-scheme", value: "light" }] });
+    await waitForValue({ send: page.send }, `document.documentElement.dataset.theme === 'light'`);
+  } finally {
+    await page?.close();
+    await session.close();
+    await new Promise(resolve => staticServer.server.close(resolve));
+  }
+});
+
 test("Alpha language switching and offline installation preserve live SSH state", async (t) => {
   if (!browserPath) { t.skip("No Chrome/Edge binary found; alpha browser verification did not run"); return; }
   assertFreshBuild();
@@ -346,6 +440,12 @@ test("Browser layout, catalog diagnostics, and keyboard collapse on the current 
       assert.deepEqual(diagnostics.pluginButtons, ["Manage SSH"], "valid plugin stays listable alongside broken packages");
 
       // --- 真实 SSH 前端 Shadow DOM：计算样式与 token 继承 ---
+      const palette = await page.evaluate(`(() => {
+        const probe = document.createElement('span'); document.body.append(probe);
+        const color = (token) => { probe.style.color = 'var(' + token + ')'; return getComputedStyle(probe).color; };
+        const result = { text: color('--coterm-text-primary'), surface: color('--coterm-surface'), raised: color('--coterm-surface-raised'), accent: color('--coterm-accent-glow') };
+        probe.remove(); return result;
+      })()`);
       const sshStyles = await page.evaluate(`(() => {
         const workspace = document.querySelector('main[aria-label="Plugin workspace"]');
         const host = workspace ? Array.from(workspace.querySelectorAll('div')).find((d) => d.shadowRoot) : null;
@@ -361,10 +461,10 @@ test("Browser layout, catalog diagnostics, and keyboard collapse on the current 
           hasTerminal: !!(root && root.querySelector('.terminal')),
         };
       })()`);
-      assert.equal(sshStyles.hostColor, "rgb(204, 204, 204)", "SSH :host inherits --coterm-text-primary");
-      assert.equal(sshStyles.layoutBg, "rgb(30, 30, 30)", "SSH .layout background inherits --coterm-surface");
-      assert.equal(sshStyles.barBg, "rgb(37, 37, 38)", "SSH .bar background inherits --coterm-surface-raised");
-      assert.equal(sshStyles.strongColor, "rgb(204, 204, 204)", "SSH .bar strong color inherits --coterm-text-primary");
+      assert.equal(sshStyles.hostColor, palette.text, "SSH :host inherits --coterm-text-primary");
+      assert.equal(sshStyles.layoutBg, palette.surface, "SSH .layout background inherits --coterm-surface");
+      assert.equal(sshStyles.barBg, palette.raised, "SSH .bar background inherits --coterm-surface-raised");
+      assert.equal(sshStyles.strongColor, palette.text, "SSH .bar strong color inherits --coterm-text-primary");
       assert.equal(sshStyles.hasTerminal, true, "SSH terminal container exists in real frontend");
 
       // --- 真实 SSH 前端自己的 fallback ---
@@ -475,9 +575,9 @@ test("Browser layout, catalog diagnostics, and keyboard collapse on the current 
       assert.deepEqual(blockStyles.rowTagNames, ["BUTTON", "BUTTON", "BUTTON"], "real SDK rows are buttons, not divs");
       assert.equal(blockStyles.rootRole, "list", "real SDK root carries role=list");
       assert.equal(blockStyles.rootLabel, "Command blocks", "real SDK root is labelled");
-      assert.equal(blockStyles.rootColor, "rgb(204, 204, 204)", "SDK block-list inherits --coterm-text-primary");
-      assert.equal(blockStyles.rootBg, "rgb(30, 30, 30)", "SDK block-list inherits --coterm-surface");
-      assert.equal(blockStyles.robotColor, "rgb(117, 190, 255)", "SDK robot actor inherits --coterm-accent-glow");
+      assert.equal(blockStyles.rootColor, palette.text, "SDK block-list inherits --coterm-text-primary");
+      assert.equal(blockStyles.rootBg, palette.surface, "SDK block-list inherits --coterm-surface");
+      assert.equal(blockStyles.robotColor, palette.accent, "SDK robot actor inherits --coterm-accent-glow");
       assert.equal(blockStyles.robotText, "Robot", "SDK renders the actor label, not the raw enum");
       assert.equal(blockStyles.humanText, "Human", "SDK renders the human actor label");
       assert.equal(blockStyles.failureMark, "!", "SDK marks a non-zero exit");

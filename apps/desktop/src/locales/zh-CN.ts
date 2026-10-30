@@ -1,5 +1,11 @@
 /** Source phrases are keys, so diagnostics and third-party text fall back to English. */
 export const zhCN: Readonly<Record<string, string>> = {
+  "Appearance": "外观",
+  "Light mode": "浅色模式",
+  "Dark mode": "深色模式",
+  "System theme": "跟随系统",
+  "Ready when you are": "从一个连接开始",
+  "Open an instance from the sidebar, or select a plugin to create a connection.": "从侧栏打开实例，或选择插件来创建连接。",
   "Language": "语言",
   "Install plugin": "安装插件",
   "Install offline plugin": "离线安装插件",

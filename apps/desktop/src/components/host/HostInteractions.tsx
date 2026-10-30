@@ -112,5 +112,5 @@ export function HostInteractions() {
       if (active) cancelSecretInput(`backend:${active.id}`);
     };
   }, []);
-  return error ? <p role="alert" className="px-3 text-xs text-[#f48771]">{error}</p> : null;
+  return error ? <p role="alert" className="px-3 text-xs text-destructive">{error}</p> : null;
 }

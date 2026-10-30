@@ -2,7 +2,7 @@ import { useEffect, useRef, useCallback } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebglAddon } from "@xterm/addon-webgl";
-import { cotermDarkTheme } from "./terminalTheme";
+import { attachTerminalTheme, readTerminalTheme } from "@coterm/plugin-sdk/components/terminal-theme";
 
 interface UseTerminalOptions {
   onData?: (data: string) => void;
@@ -28,7 +28,7 @@ export function useTerminal(options: UseTerminalOptions = {}) {
 
     // 1. 创建 Terminal 实例
     const term = new Terminal({
-      theme: cotermDarkTheme,
+      theme: readTerminalTheme(containerRef.current),
       fontSize,
       fontFamily,
       cursorBlink: true,
@@ -46,6 +46,7 @@ export function useTerminal(options: UseTerminalOptions = {}) {
 
     // 3. 打开至 DOM 容器
     term.open(containerRef.current);
+    const stopTheme = attachTerminalTheme(containerRef.current, (theme) => { term.options.theme = theme; });
 
     // 4. 尝试挂载 WebglAddon 加速渲染 (降级容错)
     try {
@@ -93,6 +94,7 @@ export function useTerminal(options: UseTerminalOptions = {}) {
 
     return () => {
       disposableData.dispose();
+      stopTheme();
       resizeObserver.disconnect();
       term.dispose();
       terminalRef.current = null;

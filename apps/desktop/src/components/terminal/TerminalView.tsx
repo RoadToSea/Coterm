@@ -36,7 +36,7 @@ export function TerminalView({
   };
 
   return (
-    <div className="relative flex h-full w-full overflow-hidden rounded border border-slate-800 bg-slate-950">
+    <div className="relative flex h-full w-full overflow-hidden rounded border border-border bg-card">
       {/* 左侧可折叠的命令块 Gutter */}
       {showGutter && (
         <TerminalGutter
@@ -49,11 +49,11 @@ export function TerminalView({
       {/* 终端主体区 */}
       <div className="relative flex flex-1 flex-col overflow-hidden">
         {/* 终端工具栏 */}
-        <div className="flex h-7 items-center justify-between border-b border-slate-800/80 bg-slate-900/60 px-3 text-[11px] text-slate-400">
-          <div className="flex items-center space-x-2">
+        <div className="flex h-7 items-center justify-between border-b border-border bg-card px-3 text-[11px] text-muted-foreground">
+          <div className="flex items-center gap-2">
             <button
               onClick={() => setShowGutter(!showGutter)}
-              className="flex items-center space-x-1 rounded px-1.5 py-0.5 hover:bg-slate-800 hover:text-slate-200"
+              className="flex items-center gap-1 rounded px-1.5 py-0.5 hover:bg-card hover:text-foreground"
               title="切换命令块侧栏"
             >
               <Sidebar className="h-3 w-3" />
@@ -61,13 +61,13 @@ export function TerminalView({
             </button>
           </div>
 
-          <div className="flex items-center space-x-2">
+          <div className="flex items-center gap-2">
             <button
               onClick={() => {
                 clear();
                 focus();
               }}
-              className="rounded px-1.5 py-0.5 hover:bg-slate-800 hover:text-slate-200"
+              className="rounded px-1.5 py-0.5 hover:bg-card hover:text-foreground"
             >
               清屏
             </button>
@@ -84,34 +84,34 @@ export function TerminalView({
 
         {/* 拟真行内 Ghost Text 审批悬浮条 (Decision 7) */}
         {ghostProposal && (
-          <div className="absolute bottom-3 left-3 right-3 rounded-lg border border-purple-500/40 bg-slate-900/95 p-2.5 shadow-2xl backdrop-blur">
+          <div className="absolute bottom-3 left-3 right-3 rounded-lg border border-primary/30 bg-card p-2.5 shadow-2xl backdrop-blur">
             <div className="flex items-center justify-between">
-              <div className="flex items-center space-x-2 text-xs">
-                <span className="flex items-center space-x-1 text-purple-400 font-semibold">
+              <div className="flex items-center gap-2 text-xs">
+                <span className="flex items-center gap-1 text-primary font-semibold">
                   <Sparkles className="h-3.5 w-3.5" />
                   <span>Agent 待发指令:</span>
                 </span>
                 {ghostProposal.isRisky && (
-                  <span className="flex items-center space-x-1 rounded bg-rose-500/20 px-1.5 py-0.5 text-[10px] text-rose-300">
+                  <span className="flex items-center gap-1 rounded bg-coterm-danger-surface px-1.5 py-0.5 text-[10px] text-destructive">
                     <ShieldAlert className="h-3 w-3" />
                     <span>高危警告: {ghostProposal.riskReason}</span>
                   </span>
                 )}
               </div>
 
-              <div className="flex items-center space-x-1.5">
+              <div className="flex items-center gap-1.5">
                 <button
                   onClick={() =>
                     onApproveGhost?.(editedGhostCmd || ghostProposal.command)
                   }
-                  className="flex items-center space-x-1 rounded bg-emerald-600 px-2 py-0.5 text-xs font-medium text-white transition hover:bg-emerald-500"
+                  className="flex items-center gap-1 rounded bg-primary px-2 py-0.5 text-xs font-medium text-primary-foreground transition hover:bg-primary"
                 >
                   <Check className="h-3 w-3" />
                   <span>回车放行 (Enter)</span>
                 </button>
                 <button
                   onClick={onRejectGhost}
-                  className="flex items-center space-x-1 rounded bg-slate-800 px-2 py-0.5 text-xs text-slate-300 transition hover:bg-slate-700"
+                  className="flex items-center gap-1 rounded bg-card px-2 py-0.5 text-xs text-foreground transition hover:bg-card"
                 >
                   <X className="h-3 w-3" />
                   <span>拦截 (Esc)</span>
@@ -120,8 +120,8 @@ export function TerminalView({
             </div>
 
             {/* 可原地键盘纠偏的输入行 */}
-            <div className="mt-1.5 flex items-center rounded bg-black/60 px-2 py-1 font-mono text-xs">
-              <span className="text-slate-500 mr-2">$</span>
+            <div className="mt-1.5 flex items-center rounded bg-background px-2 py-1 font-mono text-xs">
+              <span className="text-muted-foreground mr-2">$</span>
               <input
                 type="text"
                 defaultValue={ghostProposal.command}
@@ -133,7 +133,7 @@ export function TerminalView({
                     onRejectGhost?.();
                   }
                 }}
-                className="flex-1 bg-transparent text-purple-200 outline-none placeholder-purple-400/50"
+                className="flex-1 bg-transparent text-primary outline-none placeholder-purple-400/50"
                 placeholder="直接在此编辑修改该命令以就地纠偏..."
               />
             </div>

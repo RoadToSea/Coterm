@@ -46,7 +46,7 @@ export function McpConfiguration({ onClose }: { onClose: () => void }) {
     return (
       <Modal title={t("MCP connection")} onClose={onClose}>
         {error && <p role="alert">{error}</p>}
-        <p className="text-xs text-[#888888]">
+        <p className="text-xs text-coterm-text-muted">
           {t("This build cannot start the local Stdio adapter because its executable path is unavailable.")}
         </p>
       </Modal>
@@ -55,7 +55,7 @@ export function McpConfiguration({ onClose }: { onClose: () => void }) {
 
   return (
     <Modal title={t("MCP connection")} onClose={onClose}>
-      <p className="mb-3 text-xs text-[#aaaaaa]">
+      <p className="mb-3 text-xs text-coterm-text-subtle">
         {t("Agents connect through the adapter below. Keep Coterm running; the adapter routes to this desktop and never starts plugins on its own.")}
       </p>
       {error && <p role="alert">{error}</p>}
@@ -67,17 +67,17 @@ export function McpConfiguration({ onClose }: { onClose: () => void }) {
           aria-checked={Boolean(status?.enabled)}
           disabled={busy}
           onClick={() => void toggle()}
-          className="border border-[#454545] px-2 py-1 text-[11px] disabled:opacity-50"
+          className="border border-coterm-border-input px-2 py-1 text-[11px] disabled:opacity-50"
         >
           {status?.enabled ? t("Disable") : t("Enable")}
         </button>
       </div>
-      <p className="mb-2 text-[11px] text-[#888888]">
+      <p className="mb-2 text-[11px] text-coterm-text-muted">
         {t("Enabling opens a private loopback bridge protected by a token issued at startup. Disabling, or closing Coterm, revokes it.")}
       </p>
       {status?.clientConfig && (
         <>
-          <p className="mb-1 text-[11px] text-[#888888]">
+          <p className="mb-1 text-[11px] text-coterm-text-muted">
             {t("Paste this into the agent's MCP settings. The token below is a secret: do not share the configuration.")}
           </p>
           <textarea
@@ -86,7 +86,7 @@ export function McpConfiguration({ onClose }: { onClose: () => void }) {
             rows={10}
             value={status.clientConfig}
             spellCheck={false}
-            className="w-full border border-[#454545] bg-[#1e1e1e] p-3 font-mono text-xs"
+            className="w-full border border-coterm-border-input bg-coterm-surface p-3 font-mono text-xs"
             onFocus={(event) => event.target.select()}
           />
           <button
@@ -99,7 +99,7 @@ export function McpConfiguration({ onClose }: { onClose: () => void }) {
                   setError(t("Could not copy. Select the configuration and copy it manually.")),
                 );
             }}
-            className="mt-2 border border-[#454545] px-2 py-1 text-[11px]"
+            className="mt-2 border border-coterm-border-input px-2 py-1 text-[11px]"
           >
             {copied ? t("Copied") : t("Copy configuration")}
           </button>

@@ -5,45 +5,118 @@
 @tailwind utilities;
 
 :root {
-  /* Surface */
-  --coterm-surface: #1e1e1e;
-  --coterm-surface-raised: #252526;
-  --coterm-surface-panel: #2d2d2d;
-  --coterm-surface-sidebar: #333333;
-  --coterm-surface-toolbar: #323233;
-  --coterm-surface-hover: #2a2d2e;
-  --coterm-surface-active: #37373d;
+  color-scheme: light;
+  --background: 220 33% 98%;
+  --foreground: 222 25% 17%;
+  --card: 0 0% 100%;
+  --card-foreground: var(--foreground);
+  --popover: var(--card);
+  --popover-foreground: var(--foreground);
+  --primary: 214 78% 43%;
+  --primary-foreground: 0 0% 100%;
+  --secondary: 220 20% 94%;
+  --secondary-foreground: var(--foreground);
+  --muted: 220 18% 94%;
+  --muted-foreground: 220 10% 43%;
+  --accent: 214 80% 94%;
+  --accent-foreground: 214 78% 33%;
+  --destructive: 4 70% 42%;
+  --destructive-foreground: 0 0% 100%;
+  --border: 220 16% 87%;
+  --input: 220 16% 79%;
+  --ring: 214 78% 43%;
+  --radius: 0.625rem;
+  --warning: 35 83% 30%;
+  --warning-surface: 42 90% 95%;
+  --warning-border: 39 60% 78%;
+  --success: 149 68% 29%;
+  --danger-surface: 4 70% 97%;
+  --danger-border: 4 60% 82%;
+  --terminal-background: #ffffff;
+  --terminal-foreground: #273449;
+  --terminal-selection: #c4daf5;
+  --terminal-black: #273449;
+  --terminal-bright-black: #59677c;
+  --terminal-red: #b42318;
+  --terminal-green: #147d45;
+  --terminal-yellow: #8d6500;
+  --terminal-blue: #205ec7;
+  --terminal-magenta: #8436a8;
+  --terminal-cyan: #006c80;
+  --terminal-search: #e8cc76;
+  --terminal-search-active: #d99b38;
 
-  /* Border */
-  --coterm-border: #2b2b2b;
-  --coterm-border-subtle: #383838;
-  --coterm-border-input: #454545;
-
-  /* Text */
-  --coterm-text-primary: #cccccc;
-  --coterm-text-muted: #969696;
-  --coterm-text-subtle: #aaaaaa;
-  --coterm-text-disabled: #6c6c6c;
-  --coterm-text-bright: #ffffff;
-
-  /* Accent */
-  --coterm-accent: #0e639c;
-  --coterm-accent-hover: #1177bb;
-  --coterm-accent-active: #094771;
-  --coterm-accent-glow: #75beff;
-
-  /* Danger */
-  --coterm-danger: #f48771;
-  --coterm-danger-surface: #332626;
-  --coterm-danger-border: #65433d;
-
-  /* Focus */
-  --coterm-focus: #007fd4;
-  --coterm-focus-offset: -1px;
-
-  /* Font Families */
+  /* Stable plugin tokens: inherited through Shadow DOM, no IPC required. */
+  --coterm-surface: hsl(var(--background));
+  --coterm-surface-raised: hsl(var(--card));
+  --coterm-surface-panel: hsl(var(--secondary));
+  --coterm-surface-sidebar: hsl(var(--card));
+  --coterm-surface-toolbar: hsl(var(--card));
+  --coterm-surface-hover: hsl(var(--muted));
+  --coterm-surface-active: hsl(var(--accent));
+  --coterm-border: hsl(var(--border));
+  --coterm-border-subtle: hsl(var(--border));
+  --coterm-border-input: hsl(var(--input));
+  --coterm-text-primary: hsl(var(--foreground));
+  --coterm-text-muted: hsl(var(--muted-foreground));
+  --coterm-text-subtle: hsl(var(--muted-foreground));
+  --coterm-text-disabled: hsl(var(--muted-foreground));
+  --coterm-text-bright: hsl(var(--foreground));
+  --coterm-accent: hsl(var(--primary));
+  --coterm-accent-foreground: hsl(var(--primary-foreground));
+  --coterm-accent-hover: hsl(var(--primary) / 0.9);
+  --coterm-accent-active: hsl(var(--accent));
+  --coterm-accent-glow: hsl(var(--primary));
+  --coterm-danger: hsl(var(--destructive));
+  --coterm-danger-surface: hsl(var(--danger-surface));
+  --coterm-danger-border: hsl(var(--danger-border));
+  --coterm-focus: hsl(var(--ring));
+  --coterm-focus-offset: 2px;
   --coterm-font-sans: "Segoe UI", -apple-system, BlinkMacSystemFont, sans-serif;
   --coterm-font-mono: Consolas, "Liberation Mono", Menlo, Courier, monospace;
+}
+
+.dark {
+  color-scheme: dark;
+  --background: 220 22% 9%;
+  --foreground: 216 20% 86%;
+  --card: 220 19% 12%;
+  --primary: 212 91% 69%;
+  --primary-foreground: 221 42% 12%;
+  --secondary: 220 16% 16%;
+  --muted: 220 16% 17%;
+  --muted-foreground: 216 12% 63%;
+  --accent: 215 33% 21%;
+  --accent-foreground: 212 91% 79%;
+  --destructive: 4 88% 74%;
+  --destructive-foreground: 0 50% 12%;
+  --border: 220 15% 21%;
+  --input: 220 13% 30%;
+  --ring: 212 91% 69%;
+  --warning: 39 85% 71%;
+  --warning-surface: 35 28% 15%;
+  --warning-border: 35 30% 30%;
+  --success: 151 53% 65%;
+  --danger-surface: 4 28% 16%;
+  --danger-border: 4 30% 32%;
+  --terminal-background: #151a23;
+  --terminal-foreground: #d4deed;
+  --terminal-selection: #334e70;
+  --terminal-black: #171d27;
+  --terminal-bright-black: #8996a8;
+  --terminal-red: #f58c86;
+  --terminal-green: #85d6a1;
+  --terminal-yellow: #e5c477;
+  --terminal-blue: #80b7ff;
+  --terminal-magenta: #c79ae8;
+  --terminal-cyan: #77cedb;
+  --terminal-search: #65512c;
+  --terminal-search-active: #a56c21;
+}
+
+@layer base {
+  * { @apply border-border; }
+  ::selection { background: hsl(var(--primary) / 0.24); }
 }
 
 html, body, #root {
@@ -73,7 +146,7 @@ button:disabled {
 
 @layer components {
   .icon-button {
-    @apply inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-sm text-[#bcbcbc] hover:bg-white/10 hover:text-white active:bg-white/15 disabled:opacity-40;
+    @apply inline-flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground active:bg-muted disabled:opacity-40;
   }
 }
 
@@ -85,6 +158,8 @@ button:disabled {
   background: var(--coterm-surface-raised);
   color: var(--coterm-text-primary);
   font-size: 13px;
+  border-radius: var(--radius);
+  box-shadow: 0 24px 70px rgb(0 0 0 / 20%);
 }
 
 .host-secret-dialog::backdrop { background: rgb(0 0 0 / 55%); }
@@ -93,7 +168,7 @@ button:disabled {
 .host-secret-dialog input, .host-secret-dialog select { padding: 8px; border: 1px solid var(--coterm-border-input); background: var(--coterm-surface); color: var(--coterm-text-primary); }
 .host-secret-dialog form > div { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
 .host-secret-dialog button { padding: 6px 12px; background: var(--coterm-border-subtle); color: var(--coterm-text-primary); }
-.host-secret-dialog button[type="submit"] { background: var(--coterm-accent); color: var(--coterm-text-bright); }
+.host-secret-dialog button[type="submit"] { background: var(--coterm-accent); color: var(--coterm-accent-foreground); }
 .host-secret-dialog p { color: var(--coterm-danger); margin-top: 8px; }
 
 .approval-tray-shell {
@@ -129,4 +204,15 @@ button:disabled {
 
 @media (prefers-reduced-motion: reduce) {
   .approval-tray-shell, .approval-card { animation: none; }
+}
+
+/* Compact desktop controls retain native focus and dialog behavior. */
+@layer base {
+  input:not([type="checkbox"]):not([type="radio"]), select, textarea { border-radius: calc(var(--radius) - 4px); }
+  button:not(:disabled), select:not(:disabled), summary { cursor: pointer; }
+  :focus-visible { outline: 2px solid var(--coterm-focus); outline-offset: 2px; }
+  * { scrollbar-width: thin; scrollbar-color: var(--coterm-border-input) transparent; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
 }

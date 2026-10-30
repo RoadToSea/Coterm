@@ -1,7 +1,15 @@
 import { t } from "./i18n";
 import { useI18n } from "./use-i18n";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Box, ChevronDown, CircleStop, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Plus, PlugZap, ShieldAlert, ShieldCheck, SlidersHorizontal, Trash2 } from "lucide-react";
+import { Box, ChevronDown, CircleStop, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Plus, PlugZap, ShieldAlert, ShieldCheck, SlidersHorizontal, TerminalSquare, Trash2 } from "lucide-react";
+import { ThemeSwitcher } from "./components/ThemeSwitcher";
+import { Button } from "./components/ui/button";
+import { Badge } from "./components/ui/badge";
+import { Separator } from "./components/ui/separator";
+import { Skeleton } from "./components/ui/skeleton";
+import { Alert, AlertDescription } from "./components/ui/alert";
+import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "./components/ui/empty";
+import { cn } from "./lib/utils";
 import { HostInteractions } from "./components/host/HostInteractions";
 import { HostApprovals } from "./components/host/HostApprovals";
 import { McpConfiguration } from "./components/mcp/McpConfiguration";
@@ -351,13 +359,11 @@ export default function App() {
   };
 
   const errorNotice = error && (
-    <div role="alert" className="break-words border-l-2 border-[#f48771] bg-[#332626] px-3 py-2 text-xs leading-relaxed text-[#f4b8aa]">
-      {error}
-    </div>
+    <Alert variant="destructive" className="break-words"><AlertDescription>{error}</AlertDescription></Alert>
   );
 
   const pluginIssueNotice = pluginIssues.length > 0 && (
-    <ul role="status" aria-label={t("Plugin package issues")} className="max-h-32 overflow-y-auto break-words border-l-2 border-[#d7ba7d] bg-[#3a3224] px-3 py-2 text-xs leading-relaxed text-[#e8d5a9]">
+    <ul role="status" aria-label={t("Plugin package issues")} className="max-h-32 overflow-y-auto break-words border-l-2 border-warning bg-warning-surface px-3 py-2 text-xs leading-relaxed text-warning">
       {pluginIssues.map((issue) => (
         <li key={`${issue.directory}:${issue.code}`} title={issue.code}>
           <span className="font-medium">{issue.pluginId ? `${issue.pluginId} (${issue.directory})` : issue.directory}</span>
@@ -369,14 +375,14 @@ export default function App() {
   );
 
   return (
-    <div className="flex h-dvh flex-col overflow-hidden bg-[#1e1e1e] text-[#cccccc]">
+    <div className="flex h-dvh flex-col overflow-hidden bg-coterm-surface text-coterm-text">
       <div
         role="toolbar"
         aria-label={t("Workspace tools")}
-        className="flex h-8 shrink-0 items-center justify-between border-b border-coterm-border bg-coterm-surface-toolbar px-3"
+        className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-border bg-card px-3"
       >
         <div className="flex items-center gap-2">
-          <button
+          <Button variant="ghost" size="icon"
             type="button"
             id="toggle-instances-button"
             aria-controls="instances-sidebar"
@@ -384,33 +390,39 @@ export default function App() {
             aria-label={instancesCollapsed ? t("Expand instances panel") : t("Collapse instances panel")}
             title={instancesCollapsed ? t("Expand instances panel") : t("Collapse instances panel")}
             onClick={() => setInstancesCollapsed((prev) => !prev)}
-            className="icon-button text-coterm-text-muted hover:text-coterm-text-bright"
           >
-            {instancesCollapsed ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}
-          </button>
-          <div className="h-3.5 w-px bg-coterm-border-subtle" />
-          <button
+            {instancesCollapsed ? <PanelLeftOpen data-icon="inline-start" /> : <PanelLeftClose data-icon="inline-start" />}
+          </Button>
+          <Separator orientation="vertical" className="h-5" />
+          <div className="flex items-center gap-2 px-1">
+            <TerminalSquare className="size-5 text-primary" />
+            <span className="text-sm font-semibold tracking-tight">Coterm</span>
+            <span className="hidden max-w-56 truncate pl-2 text-xs text-muted-foreground min-[900px]:inline">{activeInstance?.label ?? t("WORKSPACE")}</span>
+          </div>
+          <Button variant="ghost" size="sm"
             type="button"
             aria-haspopup="dialog"
             onClick={() => setMcpOpen(true)}
-            className="rounded-sm px-2 text-[11px] text-coterm-text hover:bg-white/10"
           >
             MCP
-          </button>
+          </Button>
         </div>
+        <div className="flex items-center gap-3">
+        <ThemeSwitcher />
         <label className="flex items-center gap-2 text-[11px] text-coterm-text-muted">
-          <span>{t("Language")}</span>
+          <span className="hidden sm:inline">{t("Language")}</span>
           <select id="locale-select" aria-label={t("Language")} value={locale}
             onChange={(event) => setLocale(event.target.value as "en" | "zh-CN")}
-            className="h-6 rounded-sm border border-coterm-border bg-coterm-surface-raised px-1 text-coterm-text">
+            className="h-8 border border-input bg-background px-2 text-foreground">
             <option value="zh-CN">简体中文</option>
             <option value="en">English</option>
           </select>
         </label>
+        </div>
       </div>
       <HostInteractions />
-      {workspace?.persistence === "memory_only" && <p role="status" className="px-3 py-2 text-xs text-[#d7ba7d]">{t("Workspace is session-only on this platform; secure disk storage is not available.")}</p>}
-      {workspaceError && <div role="alert" className="px-3 py-2 text-xs text-[#f48771]">
+      {workspace?.persistence === "memory_only" && <p role="status" className="px-3 py-2 text-xs text-warning">{t("Workspace is session-only on this platform; secure disk storage is not available.")}</p>}
+      {workspaceError && <div role="alert" className="px-3 py-2 text-xs text-destructive">
         {t("Workspace:")} {workspaceError}{t(". Saved state is preserved.")}
         {instances.length === 0 && <button className="ml-3 underline" onClick={() => {
           void promptForConfirmation("workspace-reset", { title: t("Reset saved workspace?"), prompt: t("This removes saved configuration references and layout. Plugin data is unaffected.") })
@@ -428,13 +440,13 @@ export default function App() {
 
       <div className="flex min-h-0 flex-1">
         <aside aria-label={t("Installed plugins")} className="flex w-[64px] shrink-0 flex-col border-r border-coterm-border bg-coterm-surface-sidebar sm:w-[72px]">
-          <h1 className="px-1 pb-3 pt-4 text-center text-[9px] font-medium leading-[14px] tracking-[0.04em] text-[#b7b7b7]">
+          <h1 className="px-1 pb-3 pt-5 text-center text-[9px] font-semibold leading-[14px] tracking-[0.08em] text-muted-foreground">
             {t("INSTALLED")}<br />{t("PLUGINS")}
           </h1>
           <nav aria-label={t("Plugin list")} aria-busy={loading} className="min-h-0 flex-1 overflow-y-auto">
             {loading && plugins.length === 0 ? (
               <div aria-label={t("Loading plugins")} className="flex flex-col items-center gap-4 py-2">
-                {[0, 1, 2].map((item) => <div key={item} className="h-8 w-8 rounded bg-[#484848]" />)}
+                {[0, 1, 2].map((item) => <Skeleton key={item} className="size-8" />)}
               </div>
             ) : plugins.map((plugin) => (
               <button
@@ -445,50 +457,49 @@ export default function App() {
                 aria-haspopup="dialog"
                 aria-pressed={selectedPluginId === plugin.id}
                 onClick={() => setSelectedPluginId(plugin.id)}
-                className={`group relative flex min-h-16 w-full flex-col items-center justify-center gap-1 border-l-2 px-1 py-2 hover:bg-[#3e3e3e] ${selectedPluginId === plugin.id ? "border-[#75beff] bg-[#3e3e3e]" : "border-transparent"}`}
+                className={cn("group relative flex min-h-16 w-full flex-col items-center justify-center gap-1.5 border-l-2 px-1 py-3 transition-colors hover:bg-accent", selectedPluginId === plugin.id ? "border-primary bg-accent" : "border-transparent")}
               >
                 <span className="relative grid h-7 w-8 place-items-center">
-                  <PlugZap size={25} strokeWidth={1.5} className={plugin.running ? "text-[#eeeeee]" : "text-[#aaaaaa]"} />
-                  <span className={`absolute bottom-0 right-0 h-2 w-2 rounded-full border-2 border-[#333333] ${plugin.running ? "bg-[#75beff]" : "bg-[#969696]"}`} />
+                  <PlugZap size={25} strokeWidth={1.5} className={plugin.running ? "text-primary" : "text-muted-foreground"} />
+                  <span className={cn("absolute bottom-0 right-0 size-2 rounded-full ring-2 ring-card", plugin.running ? "bg-success" : "bg-muted-foreground")} />
                 </span>
-                <span className="w-full truncate text-center text-[10px] text-[#bcbcbc]">{plugin.name}</span>
+                <span className="w-full truncate text-center text-[10px] text-coterm-text-subtle">{plugin.name}</span>
               </button>
             ))}
-            {!loading && plugins.length === 0 && <p className="px-1 py-3 text-center text-[10px] leading-relaxed text-[#aaaaaa]">{t("No plugins")}</p>}
+            {!loading && plugins.length === 0 && <p className="px-1 py-3 text-center text-[10px] leading-relaxed text-coterm-text-subtle">{t("No plugins")}</p>}
           </nav>
-          <div className="flex flex-col items-center gap-2 border-t border-[#414141] py-3">
-            <button type="button" id="install-plugin-button" title={t("Install plugin")} aria-label={t("Install plugin")}
-              aria-haspopup="dialog" onClick={() => setInstallerOpen(true)} className="icon-button h-9 w-9">
-              <Plus size={22} />
-            </button>
-            <button
+          <Separator />
+          <div className="flex flex-col items-center gap-2 py-3">
+            <Button variant="outline" size="icon" type="button" id="install-plugin-button" title={t("Install plugin")} aria-label={t("Install plugin")}
+              aria-haspopup="dialog" onClick={() => setInstallerOpen(true)}>
+              <Plus data-icon="inline-start" />
+            </Button>
+            <Button variant="ghost" size="icon"
               type="button"
               title={t(bypass ? "Bypass on — click to require approval" : "Agent approval on — click to enable bypass")}
               aria-label={t(bypass ? "Disable approval bypass" : "Enable approval bypass")}
               aria-pressed={bypass}
               onClick={() => void toggleBypass()}
-              className="icon-button h-9 w-9"
             >
-              {bypass ? <ShieldAlert size={22} className="text-[#cca770]" /> : <ShieldCheck size={22} />}
-            </button>
-            <button
+              {bypass ? <ShieldAlert data-icon="inline-start" className="text-warning" /> : <ShieldCheck data-icon="inline-start" />}
+            </Button>
+            <Button variant="ghost" size="icon"
               type="button"
               title={t("Choose which Agent operations skip approval")}
               aria-label={t("Open approval settings")}
               onClick={() => setApprovalOpen(true)}
-              className="icon-button h-9 w-9"
             >
-              <SlidersHorizontal size={20} />
-            </button>
+              <SlidersHorizontal data-icon="inline-start" />
+            </Button>
           </div>
         </aside>
 
         <aside
           id="instances-sidebar"
           aria-label={t("Instances")}
-          className={`flex w-[240px] min-w-0 shrink-0 flex-col border-r border-coterm-border bg-coterm-surface-raised max-[1024px]:w-[200px] transition-[width] duration-200 ${instancesCollapsed ? "hidden" : ""}`}
+          className={cn("flex w-[240px] min-w-0 shrink-0 flex-col border-r border-coterm-border bg-coterm-surface-raised max-[1024px]:w-[200px]", instancesCollapsed && "hidden")}
         >
-          <div className="flex h-10 shrink-0 items-center justify-between px-4">
+          <div className="flex h-14 shrink-0 items-center justify-between px-4">
             <h2 className="text-[11px] font-medium tracking-[0.06em]">{t("INSTANCES")}</h2>
             <button
               type="button"
@@ -500,37 +511,37 @@ export default function App() {
               <PanelLeftClose size={15} />
             </button>
           </div>
-          <div className="flex h-7 shrink-0 items-center gap-1 border-y border-coterm-border bg-coterm-surface-panel px-2 text-[11px] font-semibold">
-            <ChevronDown size={14} className="text-[#b7b7b7]" />
+          <div className="mx-3 mb-2 flex h-8 shrink-0 items-center gap-1.5 text-[10px] font-semibold tracking-wider text-muted-foreground">
+            <ChevronDown size={14} className="text-coterm-text-subtle" />
             <span>{t("WORKSPACE")}</span>
-            <span className="ml-auto pr-1 font-mono text-[10px] font-normal text-[#969696]">{instances.length}</span>
+            <Badge variant="secondary" className="ml-auto">{instances.length}</Badge>
           </div>
           <nav aria-label={t("Instance list")} aria-busy={loading} className="min-h-0 flex-1 overflow-y-auto py-1">
             {workspace?.entries.some((entry) => !instances.some((item) => item.pluginInstanceId === entry.instanceId)) &&
-              <button disabled={busyId !== null} className="px-3 py-2 text-xs text-[#75beff]" onClick={() => void restoreWorkspace()}>{t("Restore workspace")}</button>}
+              <button disabled={busyId !== null} className="px-3 py-2 text-xs text-coterm-accent-glow" onClick={() => void restoreWorkspace()}>{t("Restore workspace")}</button>}
             {workspace?.entries.filter((entry) => !instances.some((item) => item.pluginInstanceId === entry.instanceId)).map((entry) => (
-              <div key={entry.configRef} className="px-3 py-2 text-xs text-[#b7b7b7]">
+              <div key={entry.configRef} className="px-3 py-2 text-xs text-coterm-text-subtle">
                 <p className="truncate">{entry.label}</p>
-                <button disabled={busyId !== null} className="mr-3 text-[#75beff] disabled:opacity-50" onClick={() => void restoreSavedInstance(entry.configRef)}>{t("Restore instance")}</button>
+                <button disabled={busyId !== null} className="mr-3 text-coterm-accent-glow disabled:opacity-50" onClick={() => void restoreSavedInstance(entry.configRef)}>{t("Restore instance")}</button>
                 <button disabled={busyId !== null} onClick={() => {
                   void hostAPI.forgetInstance(entry.configRef).then(refreshWorkspace).catch((reason) => setError(formatError(reason)));
                 }}>{t("Forget")}</button>
               </div>
             ))}
             {loading && instances.length === 0 ? (
-              <div aria-label={t("Loading instances")} className="space-y-3 px-5 py-3">
-                {["w-3/4", "w-1/2"].map((width) => <div key={width} className={`h-3 bg-[#333333] ${width}`} />)}
+              <div aria-label={t("Loading instances")} className="flex flex-col gap-3 px-5 py-3">
+                {["w-3/4", "w-1/2"].map((width) => <Skeleton key={width} className={cn("h-3", width)} />)}
               </div>
             ) : orderedInstances.map((instance) => (
-              <div key={instance.pluginInstanceId} className={`group flex h-8 items-center ${activeInstanceId === instance.pluginInstanceId ? "bg-coterm-surface-active" : "hover:bg-coterm-surface-hover"}`}>
+              <div key={instance.pluginInstanceId} className={cn("group mx-2 mb-1 flex h-10 items-center rounded-lg border transition-colors", activeInstanceId === instance.pluginInstanceId ? "border-primary/20 bg-accent text-accent-foreground" : "border-transparent hover:bg-muted")}>
                 <button
                   type="button"
                   title={`${instance.pluginId} · ${instance.status}`}
                   aria-current={activeInstanceId === instance.pluginInstanceId ? "true" : undefined}
                   onClick={() => setActiveInstanceId(instance.pluginInstanceId)}
-                  className="flex h-full min-w-0 flex-1 items-center gap-2 pl-5 pr-1 text-left text-xs"
+                  className="flex h-full min-w-0 flex-1 items-center gap-2.5 pl-3 pr-1 text-left text-xs"
                 >
-                  <Box size={15} strokeWidth={1.5} className="shrink-0 text-[#75beff]" />
+                  <Box size={15} strokeWidth={1.5} className="shrink-0 text-coterm-accent-glow" />
                   <span className="truncate">{instance.label}</span>
                 </button>
                 <button
@@ -549,7 +560,7 @@ export default function App() {
               </div>
             ))}
             {!loading && instances.length === 0 && (
-              <div className="px-5 py-5 text-xs leading-5 text-[#969696]">
+              <div className="px-5 py-5 text-xs leading-5 text-coterm-text-muted">
                 <p>{t("No instances yet.")}</p>
                 <p className="mt-1">{t("Select a plugin on the left to create one.")}</p>
               </div>
@@ -559,8 +570,16 @@ export default function App() {
         </aside>
 
         <main aria-label={t("Plugin workspace")} className="relative isolate min-w-0 flex-1 overflow-hidden flex flex-col bg-coterm-surface">
+          {!activeInstance && !loading && <Empty>
+            <EmptyHeader>
+              <EmptyMedia variant="icon"><TerminalSquare /></EmptyMedia>
+              <EmptyTitle>{t("Ready when you are")}</EmptyTitle>
+              <EmptyDescription>{t("Open an instance from the sidebar, or select a plugin to create a connection.")}</EmptyDescription>
+            </EmptyHeader>
+            <EmptyContent><Button variant="outline" onClick={() => setInstallerOpen(true)}><Plus data-icon="inline-start" />{t("Install plugin")}</Button></EmptyContent>
+          </Empty>}
           {activeInstance?.status === "ready" && <PluginWorkspace key={activeInstance.pluginInstanceId} instance={activeInstance} />}
-          {activeInstance?.status === "failed" && <div role="alert" className="p-5 text-sm text-[#f48771]">
+          {activeInstance?.status === "failed" && <div role="alert" className="p-5 text-sm text-destructive">
             <p>{t("Plugin stopped unexpectedly. In-flight results are unknown. Operations will not be replayed.")}</p>
             {workspace?.entries.filter((entry) => entry.instanceId === activeInstance.pluginInstanceId).map((entry) =>
               <button key={entry.configRef} disabled={busyId !== null} className="mt-3 underline" onClick={() => void restoreSavedInstance(entry.configRef)}>{t("Restart instance")}</button>)}
@@ -569,24 +588,24 @@ export default function App() {
         </main>
       </div>
 
-      <footer className="flex h-[22px] shrink-0 items-center justify-between border-t border-coterm-border bg-coterm-surface-raised px-3 text-[11px] text-coterm-text-muted">
+      <footer className="flex h-8 shrink-0 items-center justify-between gap-3 border-t border-coterm-border bg-coterm-surface-raised px-3 text-[10px] text-coterm-text-muted">
         <div className="flex items-center gap-4">
           <span>{plugins.length} {t("plugins")}</span>
           <span>{instances.length} {t("instances")}</span>
-          <span title={t("Bounded operation history is cleared on application exit")}>{t("History: this session")}</span>
+          <span className="hidden sm:inline" title={t("Bounded operation history is cleared on application exit")}>{t("History: this session")}</span>
           {busyId && <span role="status">{t("Updating…")}</span>}
         </div>
-        <span className={bypass ? "text-[#cca770]" : ""}>{bypass ? t("Bypass on") : t("Agent approval on")}</span>
+        <span className={bypass ? "text-warning" : ""}>{bypass ? t("Bypass on") : t("Agent approval on")}</span>
       </footer>
 
       {selectedPlugin && (
         <Modal title={selectedPlugin.name} onClose={() => setSelectedPluginId(null)}>
           <div className="mb-5 flex items-start gap-3">
-            <PlugZap size={28} strokeWidth={1.5} className="mt-1 text-[#75beff]" />
+            <PlugZap size={28} strokeWidth={1.5} className="mt-1 text-coterm-accent-glow" />
             <div className="min-w-0">
               <h3 className="text-sm font-medium">{selectedPlugin.name}</h3>
-              <p className="mt-1 break-all text-xs text-[#969696]">{selectedPlugin.id} · {selectedPlugin.version}</p>
-              <p className="mt-2 text-xs">{selectedPlugin.running ? t("Running") : t("Stopped")}</p>
+              <p className="mt-1 break-all text-xs text-coterm-text-muted">{selectedPlugin.id} · {selectedPlugin.version}</p>
+              <Badge variant={selectedPlugin.running ? "secondary" : "outline"} className="mt-2">{selectedPlugin.running ? t("Running") : t("Stopped")}</Badge>
             </div>
           </div>
           <div className="mb-5 flex gap-2">
@@ -594,47 +613,47 @@ export default function App() {
               type="button"
               disabled={busyId !== null || loading}
               onClick={() => void runPluginAction(selectedPlugin.id, () => selectedPlugin.running ? hostAPI.stopPlugin(selectedPlugin.id) : hostAPI.startPlugin(selectedPlugin.id))}
-              className="flex h-8 items-center gap-2 border border-[#454545] px-3 text-xs hover:bg-[#383838] disabled:opacity-50"
+              className="flex h-8 items-center gap-2 border border-coterm-border-input px-3 text-xs hover:bg-coterm-border-subtle disabled:opacity-50"
             >
               {selectedPlugin.running ? <CircleStop size={14} /> : <PlugZap size={14} />}
               {selectedPlugin.running ? t("Stop plugin") : t("Start plugin")}
             </button>
           </div>
           {pluginOperations.length > 0 && (
-            <section className="mb-5 border-t border-[#383838] pt-4">
-              <h3 className="mb-3 text-xs font-semibold uppercase text-[#cccccc]">{t("Plugin operations")}</h3>
-              <select aria-label={t("Plugin operation")} value={selectedPluginOperation} onChange={(event) => setSelectedPluginOperation(event.target.value)} className="mb-2 h-8 w-full border border-[#454545] bg-[#252526] px-2 text-xs">
+            <section className="mb-5 border-t border-coterm-border-subtle pt-4">
+              <h3 className="mb-3 text-xs font-semibold uppercase text-coterm-text">{t("Plugin operations")}</h3>
+              <select aria-label={t("Plugin operation")} value={selectedPluginOperation} onChange={(event) => setSelectedPluginOperation(event.target.value)} className="mb-2 h-8 w-full border border-coterm-border-input bg-coterm-surface-raised px-2 text-xs">
                 {pluginOperations.map((item) => <option key={item.name} value={item.name}>{item.name} · {item.effect}</option>)}
               </select>
-              <textarea aria-label={t("Plugin operation arguments JSON")} value={operationArgs} onChange={(event) => setOperationArgs(event.target.value)} spellCheck={false} className="h-24 w-full border border-[#454545] bg-[#1e1e1e] p-2 font-mono text-xs" />
+              <textarea aria-label={t("Plugin operation arguments JSON")} value={operationArgs} onChange={(event) => setOperationArgs(event.target.value)} spellCheck={false} className="h-24 w-full border border-coterm-border-input bg-coterm-surface p-2 font-mono text-xs" />
               <button type="button" onClick={() => {
                 try {
                   const args: unknown = JSON.parse(operationArgs);
                   void hostAPI.invokePluginOperation(selectedPlugin.id, selectedPluginOperation, args).then(setOperationResult).catch((reason) => setError(String(reason)));
                 } catch (reason) { setError(String(reason)); }
-              }} className="mt-2 h-8 bg-[#0e639c] px-3 text-xs text-white hover:bg-[#1177bb]">{t("Invoke plugin operation")}</button>
-              {operationResult && <pre className="mt-2 max-h-32 overflow-auto border border-[#383838] bg-[#1e1e1e] p-2 font-mono text-xs">{JSON.stringify(operationResult, null, 2)}</pre>}
+              }} className="mt-2 h-8 bg-primary px-3 text-xs text-primary-foreground hover:bg-primary/90">{t("Invoke plugin operation")}</button>
+              {operationResult && <pre className="mt-2 max-h-32 overflow-auto border border-coterm-border-subtle bg-coterm-surface p-2 font-mono text-xs">{JSON.stringify(operationResult, null, 2)}</pre>}
             </section>
           )}
           {selectedPlugin.hasFrontend && (
             <PluginConfiguration key={selectedPlugin.id} pluginId={selectedPlugin.id} onSubmit={(config) => createConfiguredInstance(selectedPlugin.id, config)} />
           )}
-          <details className="border-t border-[#383838] pt-4" open={!selectedPlugin.hasFrontend}>
-            <summary className="mb-3 cursor-pointer text-xs text-[#969696]">{t("Advanced JSON configuration")}</summary>
+          <details className="border-t border-coterm-border-subtle pt-4" open={!selectedPlugin.hasFrontend}>
+            <summary className="mb-3 cursor-pointer text-xs text-coterm-text-muted">{t("Advanced JSON configuration")}</summary>
             <h3 className="mb-4 flex items-center gap-2 text-xs font-medium"><SlidersHorizontal size={14} /> {t("New instance")}</h3>
-            <label htmlFor="instance-config" className="mb-2 block text-xs text-[#aaaaaa]">{t("Configuration (JSON)")}</label>
+            <label htmlFor="instance-config" className="mb-2 block text-xs text-coterm-text-subtle">{t("Configuration (JSON)")}</label>
             <textarea
               id="instance-config"
               value={configText}
               onChange={(event) => setConfigText(event.target.value)}
               spellCheck={false}
-              className="h-24 w-full resize-y border border-[#454545] bg-[#1e1e1e] p-2 font-mono text-xs outline-none focus:border-[#007fd4]"
+              className="h-24 w-full resize-y border border-coterm-border-input bg-coterm-surface p-2 font-mono text-xs outline-none focus:border-ring"
             />
             <button
               type="button"
               disabled={busyId !== null || loading}
               onClick={() => void createInstance(selectedPlugin.id)}
-              className="mt-3 inline-flex h-8 items-center gap-1.5 bg-[#0e639c] px-3 text-xs text-white hover:bg-[#1177bb] disabled:opacity-50"
+              className="mt-3 inline-flex h-8 items-center gap-1.5 bg-primary px-3 text-xs text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
             >
               <Plus size={14} /> {t("Create instance")}
             </button>
@@ -646,10 +665,10 @@ export default function App() {
         <Modal title={t("Instance tools")} onClose={() => setInstanceToolsOpen(false)}>
           {errorNotice}
           <div className="max-w-3xl">
-            <div className="flex items-start justify-between gap-4 border-b border-[#383838] pb-4">
+            <div className="flex items-start justify-between gap-4 border-b border-coterm-border-subtle pb-4">
               <div className="min-w-0">
                 <h2 className="truncate text-lg font-medium">{activeInstance.label}</h2>
-                <p className="mt-1 break-all font-mono text-xs text-[#969696]">
+                <p className="mt-1 break-all font-mono text-xs text-coterm-text-muted">
                   {activeInstance.pluginInstanceId}
                 </p>
               </div>
@@ -660,34 +679,34 @@ export default function App() {
                 onClick={() => void runPluginAction(activeInstance.pluginInstanceId, async () => {
                   await hostAPI.destroyInstance(activeInstance.pluginInstanceId);
                 })}
-                className="grid h-8 w-8 shrink-0 place-items-center text-[#cccccc] hover:bg-[#3c3c3c]"
+                className="grid h-8 w-8 shrink-0 place-items-center text-coterm-text hover:bg-coterm-surface-hover"
               >
                 <Trash2 className="h-4 w-4" />
               </button>
             </div>
             <dl className="grid grid-cols-[140px_1fr] gap-y-3 py-4 text-sm">
-              <dt className="text-[#969696]">{t("Plugin")}</dt>
+              <dt className="text-coterm-text-muted">{t("Plugin")}</dt>
               <dd>{activeInstance.pluginId}</dd>
-              <dt className="text-[#969696]">{t("Session")}</dt>
+              <dt className="text-coterm-text-muted">{t("Session")}</dt>
               <dd className="break-all font-mono text-xs">{activeInstance.sessionId}</dd>
-              <dt className="text-[#969696]">{t("Status")}</dt>
+              <dt className="text-coterm-text-muted">{t("Status")}</dt>
               <dd>{activeInstance.status}</dd>
             </dl>
-            <div className="border-t border-[#383838] py-4 text-sm text-[#aaaaaa]">
+            <div className="border-t border-coterm-border-subtle py-4 text-sm text-coterm-text-subtle">
               <div className="mb-3 flex items-center justify-between">
-                <h3 className="text-xs font-semibold uppercase text-[#cccccc]">{t("Operations")}</h3>
-                <span className="text-xs text-[#969696]">{operations.length} {t("registered")}</span>
+                <h3 className="text-xs font-semibold uppercase text-coterm-text">{t("Operations")}</h3>
+                <span className="text-xs text-coterm-text-muted">{operations.length} {t("registered")}</span>
               </div>
               {operations.length > 0 ? (
                 <>
-                  <label className="mb-1 block text-xs text-[#aaaaaa]" htmlFor="operation-name">
+                  <label className="mb-1 block text-xs text-coterm-text-subtle" htmlFor="operation-name">
                     {t("Operation")}
                   </label>
                   <select
                     id="operation-name"
                     value={selectedOperation}
                     onChange={(event) => setSelectedOperation(event.target.value)}
-                    className="mb-3 h-9 w-full border border-[#454545] bg-[#252526] px-2 text-sm text-[#cccccc]"
+                    className="mb-3 h-9 w-full border border-coterm-border-input bg-coterm-surface-raised px-2 text-sm text-coterm-text"
                   >
                     {operations.map((operation) => (
                       <option key={operation.name} value={operation.name}>
@@ -696,8 +715,8 @@ export default function App() {
                     ))}
                   </select>
                   {schemaProperties && Object.keys(schemaProperties).length > 0 && (
-                    <fieldset className="mb-3 space-y-3 border border-[#383838] p-3">
-                      <legend className="px-1 text-xs text-[#969696]">{t("Operation arguments")}</legend>
+                    <fieldset className="mb-3 flex flex-col gap-3 border border-coterm-border-subtle p-3">
+                      <legend className="px-1 text-xs text-coterm-text-muted">{t("Operation arguments")}</legend>
                       {Object.entries(schemaProperties).map(([name, property]) => {
                         let current: Record<string, unknown> = {};
                         try {
@@ -707,23 +726,23 @@ export default function App() {
                         const value = current[name];
                         const required = schemaRequired.includes(name);
                         return (
-                          <label key={name} className="block text-xs text-[#aaaaaa]">
+                          <label key={name} className="block text-xs text-coterm-text-subtle">
                             <span className="mb-1 flex items-center gap-1">
                               <span>{property.title ?? name}</span>
-                              {required && <span className="text-[#f48771]">*</span>}
+                              {required && <span className="text-destructive">*</span>}
                             </span>
-                            {property.description && <span className="mb-1 block text-[11px] text-[#888888]">{property.description}</span>}
+                            {property.description && <span className="mb-1 block text-[11px] text-coterm-text-muted">{property.description}</span>}
                             {property.enum ? (
-                              <select value={value === undefined ? "" : JSON.stringify(value)} onChange={(event) => updateOperationArgument(name, event.target.value ? JSON.parse(event.target.value) : undefined)} className="h-8 w-full border border-[#454545] bg-[#1e1e1e] px-2 text-xs text-[#cccccc]">
+                              <select value={value === undefined ? "" : JSON.stringify(value)} onChange={(event) => updateOperationArgument(name, event.target.value ? JSON.parse(event.target.value) : undefined)} className="h-8 w-full border border-coterm-border-input bg-coterm-surface px-2 text-xs text-coterm-text">
                                 <option value="">{t("Select…")}</option>
                                 {property.enum.map((option) => <option key={JSON.stringify(option)} value={JSON.stringify(option)}>{String(option)}</option>)}
                               </select>
                             ) : property.type === "boolean" ? (
-                              <input type="checkbox" checked={value === true} onChange={(event) => updateOperationArgument(name, event.target.checked)} className="accent-[#0e639c]" />
+                              <input type="checkbox" checked={value === true} onChange={(event) => updateOperationArgument(name, event.target.checked)} className="accent-primary" />
                             ) : property.type === "object" || property.type === "array" ? (
-                              <textarea aria-label={name} value={value === undefined ? "" : JSON.stringify(value, null, 2)} onChange={(event) => { try { updateOperationArgument(name, JSON.parse(event.target.value)); } catch { /* Keep the last valid structured value. */ } }} spellCheck={false} className="h-20 w-full border border-[#454545] bg-[#1e1e1e] p-2 font-mono text-xs text-[#cccccc] outline-none focus:border-[#75beff]" />
+                              <textarea aria-label={name} value={value === undefined ? "" : JSON.stringify(value, null, 2)} onChange={(event) => { try { updateOperationArgument(name, JSON.parse(event.target.value)); } catch { /* Keep the last valid structured value. */ } }} spellCheck={false} className="h-20 w-full border border-coterm-border-input bg-coterm-surface p-2 font-mono text-xs text-coterm-text outline-none focus:border-coterm-accent-glow" />
                             ) : (
-                              <input type={property.type === "integer" || property.type === "number" ? "number" : "text"} required={required} min={property.minimum} max={property.maximum} value={value === undefined ? "" : String(value)} onChange={(event) => updateOperationArgument(name, event.target.value === "" ? undefined : property.type === "integer" ? Number.parseInt(event.target.value, 10) : property.type === "number" ? Number(event.target.value) : event.target.value)} className="h-8 w-full border border-[#454545] bg-[#1e1e1e] px-2 text-xs text-[#cccccc] outline-none focus:border-[#75beff]" />
+                              <input type={property.type === "integer" || property.type === "number" ? "number" : "text"} required={required} min={property.minimum} max={property.maximum} value={value === undefined ? "" : String(value)} onChange={(event) => updateOperationArgument(name, event.target.value === "" ? undefined : property.type === "integer" ? Number.parseInt(event.target.value, 10) : property.type === "number" ? Number(event.target.value) : event.target.value)} className="h-8 w-full border border-coterm-border-input bg-coterm-surface px-2 text-xs text-coterm-text outline-none focus:border-coterm-accent-glow" />
                             )}
                           </label>
                         );
@@ -731,36 +750,36 @@ export default function App() {
                     </fieldset>
                   )}
                   <details>
-                    <summary className="mb-2 cursor-pointer text-xs text-[#969696]">{t("Advanced JSON")}</summary>
-                    <label className="mb-1 block text-xs text-[#aaaaaa]" htmlFor="operation-args">{t("Arguments (JSON)")}</label>
-                    <textarea id="operation-args" value={operationArgs} onChange={(event) => setOperationArgs(event.target.value)} spellCheck={false} className="h-28 w-full resize-y border border-[#454545] bg-[#1e1e1e] p-2 font-mono text-xs text-[#cccccc] outline-none focus:border-[#75beff]" />
+                    <summary className="mb-2 cursor-pointer text-xs text-coterm-text-muted">{t("Advanced JSON")}</summary>
+                    <label className="mb-1 block text-xs text-coterm-text-subtle" htmlFor="operation-args">{t("Arguments (JSON)")}</label>
+                    <textarea id="operation-args" value={operationArgs} onChange={(event) => setOperationArgs(event.target.value)} spellCheck={false} className="h-28 w-full resize-y border border-coterm-border-input bg-coterm-surface p-2 font-mono text-xs text-coterm-text outline-none focus:border-coterm-accent-glow" />
                   </details>
                   <button
                     type="button"
                     onClick={() => void submitOperation()}
-                    className="mt-2 h-8 bg-[#0e639c] px-3 text-xs text-white hover:bg-[#1177bb]"
+                    className="mt-2 h-8 bg-primary px-3 text-xs text-primary-foreground hover:bg-primary/90"
                   >
                     {t("Invoke as human")}
                   </button>
                 </>
               ) : (
-                <p className="text-xs text-[#969696]">{t("This plugin has no instance operations.")}</p>
+                <p className="text-xs text-coterm-text-muted">{t("This plugin has no instance operations.")}</p>
               )}
               {operationResult && (
-                <pre className="mt-3 max-h-48 overflow-auto border border-[#383838] bg-[#1e1e1e] p-3 font-mono text-xs text-[#cccccc]">
+                <pre className="mt-3 max-h-48 overflow-auto border border-coterm-border-subtle bg-coterm-surface p-3 font-mono text-xs text-coterm-text">
                   {JSON.stringify(operationResult, null, 2)}
                 </pre>
               )}
-              <div className="mt-5 border-t border-[#383838] pt-4">
-                <h3 className="mb-2 text-xs font-semibold uppercase text-[#cccccc]">{t("Recent operations")}</h3>
-                <div className="divide-y divide-[#383838]">
+              <div className="mt-5 border-t border-coterm-border-subtle pt-4">
+                <h3 className="mb-2 text-xs font-semibold uppercase text-coterm-text">{t("Recent operations")}</h3>
+                <div className="divide-y divide-coterm-border-subtle">
                   {operationHistory.map((record) => (
                     <article key={record.operationId} className="py-2.5">
                       <div className="flex items-center justify-between gap-3">
-                        <span className="truncate text-xs text-[#cccccc]">{record.operation}</span>
-                        <span className="shrink-0 text-[11px] text-[#969696]">{record.status}</span>
+                        <span className="truncate text-xs text-coterm-text">{record.operation}</span>
+                        <span className="shrink-0 text-[11px] text-coterm-text-muted">{record.status}</span>
                       </div>
-                      <div className="mt-1 break-all font-mono text-[10px] text-[#969696]">
+                      <div className="mt-1 break-all font-mono text-[10px] text-coterm-text-muted">
                         {record.operationId}
                       </div>
                       {record.status === "awaiting_approval" && record.proposalId && (
@@ -768,14 +787,14 @@ export default function App() {
                           <button
                             type="button"
                             onClick={() => void respondToProposal(record, true)}
-                            className="h-7 bg-[#0e639c] px-2 text-xs text-white hover:bg-[#1177bb]"
+                            className="h-7 bg-primary px-2 text-xs text-primary-foreground hover:bg-primary/90"
                           >
                             {t("Approve current JSON")}
                           </button>
                           <button
                             type="button"
                             onClick={() => void respondToProposal(record, false)}
-                            className="h-7 border border-[#454545] px-2 text-xs text-[#cccccc] hover:bg-[#383838]"
+                            className="h-7 border border-coterm-border-input px-2 text-xs text-coterm-text hover:bg-coterm-border-subtle"
                           >
                             {t("Reject")}
                           </button>
@@ -784,7 +803,7 @@ export default function App() {
                     </article>
                   ))}
                   {operationHistory.length === 0 && (
-                    <p className="py-3 text-xs text-[#969696]">{t("No operations recorded.")}</p>
+                    <p className="py-3 text-xs text-coterm-text-muted">{t("No operations recorded.")}</p>
                   )}
                 </div>
               </div>

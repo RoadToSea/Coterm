@@ -1,3 +1,4 @@
+import { attachTerminalTheme, readTerminalTheme } from "@coterm/plugin-sdk/components/terminal-theme";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { SearchAddon } from "@xterm/addon-search";
@@ -32,7 +33,7 @@ const css = `
   button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible {
     outline: 1px solid var(--coterm-focus, #007fd4);
   }
-  .primary { background: var(--coterm-accent, #0e639c); color: var(--coterm-text-bright, #ffffff); }
+  .primary { background: var(--coterm-accent, #0e639c); color: var(--coterm-accent-foreground, #ffffff); }
   .primary:hover { background: var(--coterm-accent-hover, #1177bb); }
   form { display: grid; gap: 14px; margin-bottom: 20px; }
   label { display: grid; gap: 6px; color: var(--coterm-text-subtle, #aaaaaa); }
@@ -509,13 +510,14 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
     allowProposedApi: true,
     cursorBlink: true, scrollback: 3000, fontSize: 13,
     fontFamily: 'Consolas, "Liberation Mono", monospace',
-    theme: { background: "#1e1e1e", foreground: "#cccccc", cursor: "#cccccc" },
+    theme: readTerminalTheme(terminalContainer),
   });
   const fit = new FitAddon();
   terminal.loadAddon(fit);
   const searchAddon = new SearchAddon({ highlightLimit: TERMINAL_SEARCH_HIGHLIGHT_LIMIT });
   terminal.loadAddon(searchAddon);
   terminal.open(terminalContainer);
+  const stopTheme = attachTerminalTheme(terminalContainer, (theme) => { terminal.options.theme = theme; });
 
   let disposed = false;
   let connected = false;
@@ -937,6 +939,7 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
     onData.dispose();
     stopShortcuts();
     searchView.dispose();
+    stopTheme();
     terminal.dispose();
     container.replaceChildren();
   } };

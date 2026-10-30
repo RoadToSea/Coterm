@@ -82,6 +82,8 @@ MCP Tools 需单独注册 descriptor 与内部 operation 的映射；不会自�
 
 ### 界面语言
 
+桌面与插件的浅色/深色适配见[桌面界面与主题](desktop-appearance.md)。优先复用继承的 `--coterm-*` 颜色变量；xterm 等独立渲染器可使用 SDK 的 `components/terminal-theme` 原地更新配色，卸载时注销观察器。
+
 基座提供简体中文与 English，首次优先读取保存的语言，否则按系统首选语言选择（中文变体使用简体中文，其余使用 English）。语言选择保存在本地 UI 偏好 `coterm.locale` 中，不包含工作区配置或秘密。切换时原地更新 UI，不卸载插件前端，不重建实例或连接。
 
 `PluginAPI` 与 `PluginConfigurationAPI` 新增可选 `i18n` 能力：`i18n.locale` 为 `"en" | "zh-CN"`，`i18n.subscribe(listener)` 返回注销函数。它是 SDK v1.0 的可选增量，插件须检测存在性；旧宿主可回退 English。监听器只通知 UI 语言变化，不携带协议事件；插件卸载时应注销，基座也会按挂载作用域回收。SSH 的配置、连接状态和前端认证对话框已接入；未接入的插件、后端领域诊断、工具描述及远端输出保留原文。

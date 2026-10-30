@@ -58,7 +58,7 @@ export function ApprovalCard({ record, targetLabel, idPrefix = "approval-command
     <form
       aria-label={t("Agent operation approval")}
       aria-busy={busy}
-      className="approval-card pointer-events-auto w-full rounded-t-[32px] border border-b-0 border-[#4c4c4c] bg-[#252526] px-5 pb-4 pt-4 text-[#cccccc] shadow-[0_-6px_24px_rgb(0_0_0/18%)]"
+      className="approval-card pointer-events-auto w-full rounded-t-[32px] border border-b-0 border-coterm-border-input bg-coterm-surface-raised px-5 pb-4 pt-4 text-coterm-text shadow-[0_-6px_24px_rgb(0_0_0/18%)]"
       onSubmit={(event) => { event.preventDefault(); void decide(true); }}
       onKeyDown={(event) => {
         if (event.key === "Enter" && (event.repeat || event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229)) {
@@ -82,20 +82,20 @@ export function ApprovalCard({ record, targetLabel, idPrefix = "approval-command
         aria-invalid={!!error}
         aria-describedby={error ? `${targetId} ${errorId}` : targetId}
         onChange={(event) => { setDraft(event.target.value); setError(""); }}
-        className="h-10 w-full min-w-0 rounded-md border border-[#454545] bg-[#1e1e1e] px-3 font-mono text-[13px] outline-none focus:border-[#007fd4]"
+        className="h-10 w-full min-w-0 rounded-md border border-coterm-border-input bg-coterm-surface px-3 font-mono text-[13px] outline-none focus:border-ring"
       />
       <div className="mt-3 flex min-w-0 flex-wrap items-center justify-end gap-2">
-        <span id={targetId} title={`${targetLabel} · ${record.operation}`} className="mr-auto min-w-0 flex-1 truncate text-[11px] text-[#a8a8a8]">
+        <span id={targetId} title={`${targetLabel} · ${record.operation}`} className="mr-auto min-w-0 flex-1 truncate text-[11px] text-coterm-text-subtle">
           {targetLabel} · {record.operation}
         </span>
-        <button type="submit" disabled={busy} className="inline-flex h-8 items-center gap-3 rounded-md bg-[#0e639c] px-4 text-xs text-white transition-colors hover:bg-[#1177bb] active:bg-[#094f80] disabled:opacity-50">
+        <button type="submit" disabled={busy} className="inline-flex h-8 items-center gap-3 rounded-md bg-primary px-4 text-xs text-primary-foreground transition-colors hover:bg-primary/90 active:bg-primary/90 disabled:opacity-50">
           {busy ? t("Working…") : t("Approve")}<kbd className="font-sans text-[10px] opacity-70">Enter</kbd>
         </button>
-        <button type="button" disabled={busy} onClick={() => void decide(false)} className="inline-flex h-8 items-center gap-3 rounded-md border border-[#4c4c4c] px-4 text-xs transition-colors hover:bg-[#383838] active:bg-[#454545] disabled:opacity-50">
-          {t("Reject")}<kbd className="font-sans text-[10px] text-[#969696]">Esc</kbd>
+        <button type="button" disabled={busy} onClick={() => void decide(false)} className="inline-flex h-8 items-center gap-3 rounded-md border border-coterm-border-input px-4 text-xs transition-colors hover:bg-coterm-border-subtle active:bg-coterm-border-input disabled:opacity-50">
+          {t("Reject")}<kbd className="font-sans text-[10px] text-coterm-text-muted">Esc</kbd>
         </button>
       </div>
-      {error && <p id={errorId} role="alert" className="mt-2 break-words text-xs text-[#f48771]">{error}</p>}
+      {error && <p id={errorId} role="alert" className="mt-2 break-words text-xs text-destructive">{error}</p>}
     </form>
   );
 }

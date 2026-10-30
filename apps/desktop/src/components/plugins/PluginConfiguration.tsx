@@ -36,5 +36,5 @@ export function PluginConfiguration({ pluginId, onSubmit }: { pluginId: string; 
     }).catch((reason) => { if (!disposed) setError(String(reason)); });
     return () => { disposed = true; for (const stop of subscriptions) stop(); frontend?.unmount(); container.replaceChildren(); };
   }, [pluginId]);
-  return <>{error && <p role="alert" className="mb-3 text-xs text-[#f48771]">{error}</p>}<div ref={containerRef} /></>;
+  return <>{error && <p role="alert" className="mb-3 text-xs text-destructive">{error}</p>}<div ref={containerRef} /></>;
 }

@@ -1,3 +1,4 @@
+import { attachTerminalTheme, readTerminalTheme } from "@coterm/plugin-sdk/components/terminal-theme";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { SearchAddon } from "@xterm/addon-search";
@@ -30,7 +31,7 @@ const css = `
   }
   .primary {
     background: var(--coterm-accent, #0e639c);
-    color: var(--coterm-text-bright, #ffffff);
+    color: var(--coterm-accent-foreground, #ffffff);
   }
   .primary:hover { background: var(--coterm-accent-hover, #1177bb); }
   form { display: grid; gap: 14px; margin-bottom: 20px; }
@@ -94,7 +95,7 @@ const css = `
   .job .bad { color: var(--coterm-danger, #f48771); }
   .job .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 150px; }
   .job .dismiss { border: 0; background: transparent; padding: 0 2px; color: var(--coterm-text-muted, #969696); }
-  .job .dismiss:hover { color: var(--coterm-text-bright, #ffffff); background: transparent; }
+  .job .dismiss:hover { color: var(--coterm-accent-foreground, #ffffff); background: transparent; }
   .job-view {
     flex: 0 0 auto;
     height: 45%;
@@ -283,13 +284,14 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
     allowProposedApi: true,
     cursorBlink: true, scrollback: 3000, fontSize: 13,
     fontFamily: 'Consolas, "Liberation Mono", monospace',
-    theme: { background: "#1e1e1e", foreground: "#cccccc", cursor: "#cccccc" },
+    theme: readTerminalTheme(terminalContainer),
   });
   const fit = new FitAddon();
   terminal.loadAddon(fit);
   const searchAddon = new SearchAddon({ highlightLimit: TERMINAL_SEARCH_HIGHLIGHT_LIMIT });
   terminal.loadAddon(searchAddon);
   terminal.open(terminalContainer);
+  const stopTheme = attachTerminalTheme(terminalContainer, (theme) => { terminal.options.theme = theme; });
   let disposed = false;
   let connected = false;
   let working = false;
@@ -584,6 +586,7 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
     onData.dispose();
     stopShortcuts();
     searchView.dispose();
+    stopTheme();
     terminal.dispose();
     container.replaceChildren();
   } };
