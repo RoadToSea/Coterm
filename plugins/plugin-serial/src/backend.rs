@@ -1,8 +1,7 @@
-//! 串口插件的领域后端。只暴露 UART 语义：原始字节进、原始字节出。
+//! Generic serial text and HEX I/O; device-specific protocols belong to other plugins.
 use std::collections::HashMap;
 
 use anyhow::{anyhow, bail, Result};
-use base64::{engine::general_purpose::STANDARD, Engine};
 use coterm_proto::runtime::{
     lifecycle::{CreateInstance, HelloResult, McpToolRegistration, RuntimeHello},
     message::{CancelTarget, DeferredOperation, HostCommand, PluginNotification},
@@ -15,6 +14,7 @@ use coterm_proto::runtime::{
 use serde_json::{json, Value};
 
 use crate::command::{self, CommandList};
+use crate::payload::{hex_payload, text_payload};
 use crate::session::{same_port, Config, Connection};
 
 pub const PLUGIN_ID: &str = "coterm-plugin-serial";
@@ -75,13 +75,31 @@ pub fn catalog() -> Vec<OperationDescriptor> {
             "serial.write",
             OperationEffect::Commit,
             true,
-            json!({"data":{"type":"string","contentEncoding":"base64"},"lineEnding":{"type":"string","enum":["none","lf","cr","crlf"]}}),
+            json!({"text":{"type":"string","maxLength":16384},"lineEnding":{"type":"string","enum":["none","lf","cr","crlf"],"default":"none"}}),
+        ),
+        (
+            "serial.read_hex",
+            OperationEffect::Read,
+            false,
+            json!({"cursor":{"type":"string","default":"0"}}),
+        ),
+        (
+            "serial.write_hex",
+            OperationEffect::Commit,
+            true,
+            json!({"hex":{"type":"string","minLength":2,"maxLength":49154}}),
         ),
         (
             "serial.command",
             OperationEffect::Commit,
             true,
             command::properties(),
+        ),
+        (
+            "serial.command_hex",
+            OperationEffect::Commit,
+            true,
+            command::hex_properties(),
         ),
         (
             "serial.signals",
@@ -102,7 +120,7 @@ pub fn catalog() -> Vec<OperationDescriptor> {
                 sensitive_input,
                 transient: matches!(
                     name,
-                    "serial.read" | "serial.status" | "serial.probe" | "serial.write"
+                    "serial.read" | "serial.read_hex" | "serial.status" | "serial.probe" | "serial.write" | "serial.write_hex"
                 ),
             },
         )
@@ -116,11 +134,15 @@ pub fn catalog() -> Vec<OperationDescriptor> {
         sensitive_input: false,
         transient: false,
     });
-    if let Some(operation) = operations
-        .iter_mut()
-        .find(|item| item.name == "serial.command")
-    {
-        operation.input_schema["required"] = json!(["commands"]);
+    for operation in &mut operations {
+        match operation.name.as_str() {
+            "serial.command" | "serial.command_hex" => {
+                operation.input_schema["required"] = json!(["commands"])
+            }
+            "serial.write" => operation.input_schema["required"] = json!(["text"]),
+            "serial.write_hex" => operation.input_schema["required"] = json!(["hex"]),
+            _ => {}
+        }
     }
     for registration in mcp_tools() {
         let native = registration.operation.trim_start_matches("mcp.");
@@ -136,7 +158,7 @@ pub fn catalog() -> Vec<OperationDescriptor> {
     operations
 }
 
-/// MCP 只开放经审批的单行命令列表，不暴露任意原始字节与信号控制。
+/// Text and HEX are separate MCP tools; both use bounded, approved FIFO lists.
 pub fn mcp_tools() -> Vec<McpToolRegistration> {
     let mut tools: Vec<_> = [
         ("serial.status", "Read the serial port configuration and connection state.", json!({}), vec![]),
@@ -144,7 +166,9 @@ pub fn mcp_tools() -> Vec<McpToolRegistration> {
         ("serial.connect", "Open the configured serial port.", json!({}), vec![]),
         ("serial.disconnect", "Close the serial port and release it.", json!({}), vec![]),
         ("serial.read", "Read bounded text from the device using a decimal cursor; reports gaps. Non-text bytes are represented with replacement characters.", json!({"cursor":{"type":"string","default":"0"}}), vec![]),
-        ("serial.command", "Queue 1-64 single-line commands for sequential serial writes. Each entry receives a line ending (default CR); intervalMs is the delay between writes, not a device completion check. Requires approval unless explicitly allowed. Returns sent/remaining byte accounting; device execution and exit codes are unknown. Never replays after disconnect or uncertain delivery.", command::properties(), vec!["commands"]),
+        ("serial.read_hex", "Read bounded serial bytes as a HEX string using a decimal cursor. Explicit HEX mode only; no Base64 or device protocol parsing.", json!({"cursor":{"type":"string","default":"0"}}), vec![]),
+        ("serial.command", "Queue 1-64 text inputs in order, exactly like human Shell input. Preserves all control characters, newlines and escape sequences. lineEnding defaults to none; include CR in the text or select an ending explicitly. intervalMs is a sending delay, not a device completion check. Requires approval unless Bypass or allowlist permits. Never replays after uncertain delivery.", command::properties(), vec!["commands"]),
+        ("serial.command_hex", "Queue 1-64 HEX byte strings in order (for example 00 80 FF). Explicit HEX mode only. No Base64, automatic line endings, Modbus interpretation or firmware flashing. Requires approval unless Bypass or allowlist permits; device completion is unknown.", command::hex_properties(), vec!["commands"]),
     ]
     .into_iter()
     .map(|(name, description, mut properties, required)| {
@@ -204,8 +228,8 @@ fn validate_mcp_args(operation: &str, args: &Value) -> Result<()> {
     {
         bail!("An explicit serial instance is required");
     }
-    if operation == "mcp.serial.command" {
-        CommandList::parse(&command_args(args))?;
+    if matches!(operation, "mcp.serial.command" | "mcp.serial.command_hex") {
+        parse_commands(operation, &command_args(args))?;
     }
     Ok(())
 }
@@ -222,17 +246,12 @@ fn mcp_result(value: Value) -> Value {
     json!({"content":[{"type":"text","text":value.to_string()}],"isError":false})
 }
 
-fn mcp_read_result(mut value: Value) -> Value {
-    if let Some(object) = value.as_object_mut() {
-        let text = object
-            .remove("data")
-            .and_then(|encoded| encoded.as_str().map(str::to_owned))
-            .and_then(|encoded| STANDARD.decode(encoded).ok())
-            .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
-            .unwrap_or_default();
-        object.insert("text".to_owned(), json!(text));
+fn parse_commands(operation: &str, args: &Value) -> Result<CommandList> {
+    if operation.ends_with("serial.command_hex") {
+        CommandList::parse_hex(args)
+    } else {
+        CommandList::parse(args)
     }
-    mcp_result(value)
 }
 
 impl coterm_proto::runtime::backend::PluginBackend for Backend {
@@ -426,15 +445,21 @@ impl Backend {
             // 提案不触碰硬件；只校验参数形状。
             match request.operation.as_str() {
                 "serial.write" => {
-                    write_payload(&request.args)?;
+                    text_payload(&request.args)?;
                 }
-                "serial.command" | "mcp.serial.command" => {
+                "serial.write_hex" => {
+                    hex_payload(&request.args)?;
+                }
+                "serial.command"
+                | "mcp.serial.command"
+                | "serial.command_hex"
+                | "mcp.serial.command_hex" => {
                     let args = if request.operation.starts_with("mcp.") {
                         command_args(&request.args)
                     } else {
                         request.args.clone()
                     };
-                    CommandList::parse(&args)?;
+                    parse_commands(&request.operation, &args)?;
                 }
                 "serial.signals" => {
                     let has_dtr = optional_bool(&request.args, "dtr")?.is_some();
@@ -473,18 +498,14 @@ impl Backend {
             if args.get("pluginInstanceId").and_then(Value::as_str) != Some(id) {
                 bail!("MCP instance argument mismatch");
             }
-            if native == "serial.command" {
-                return self.queue_commands(id, command_args(&args), operation_id, true);
+            if matches!(native, "serial.command" | "serial.command_hex") {
+                return self.queue_commands(id, native, command_args(&args), operation_id, true);
             }
             let result = self.execute_domain(id, native, args, operation_id).await?;
-            return Ok(if native == "serial.read" {
-                mcp_read_result(result)
-            } else {
-                mcp_result(result)
-            });
+            return Ok(mcp_result(result));
         }
-        if operation == "serial.command" {
-            return self.queue_commands(id, args, operation_id, false);
+        if matches!(operation, "serial.command" | "serial.command_hex") {
+            return self.queue_commands(id, operation, args, operation_id, false);
         }
         self.execute_domain(id, operation, args, operation_id).await
     }
@@ -492,11 +513,12 @@ impl Backend {
     fn queue_commands(
         &mut self,
         id: &str,
+        operation: &str,
         args: Value,
         operation_id: &str,
         mcp: bool,
     ) -> Result<Value> {
-        let list = CommandList::parse(&args)?;
+        let list = parse_commands(operation, &args)?;
         let connection = self
             .instances
             .get_mut(id)
@@ -567,7 +589,7 @@ impl Backend {
                 instance.connection = None;
                 Ok(json!({"connected":false}))
             }
-            "serial.read" => {
+            "serial.read" | "serial.read_hex" => {
                 let cursor = args
                     .get("cursor")
                     .and_then(Value::as_str)
@@ -578,12 +600,23 @@ impl Backend {
                     .connection
                     .as_ref()
                     .ok_or_else(|| anyhow!("Serial port is not open"))?;
-                let mut result = connection.output.lock().await.read(cursor)?;
+                let output = connection.output.lock().await;
+                let mut result = if operation == "serial.read_hex" {
+                    output.read_hex(cursor)?
+                } else {
+                    output.read(cursor)?
+                };
                 result["connectionId"] = json!(connection.id);
                 Ok(result)
             }
             "serial.write" => {
-                let data = write_payload(&args)?;
+                let data = text_payload(&args)?;
+                let submitted = data.len();
+                connection_of(instance)?.write(data).await?;
+                Ok(json!({"submitted":true,"bytes":submitted}))
+            }
+            "serial.write_hex" => {
+                let data = hex_payload(&args)?;
                 let submitted = data.len();
                 connection_of(instance)?.write(data).await?;
                 Ok(json!({"submitted":true,"bytes":submitted}))
@@ -622,27 +655,6 @@ fn status_of(instance: &Instance) -> Value {
         "txBytes": tx,
         "commandQueue": connection.map_or(0, Connection::pending_commands),
     })
-}
-
-/// 写入负载：base64 数据加上可选行结束符；行结束符由插件解释，不交给基座。
-fn write_payload(args: &Value) -> Result<Vec<u8>> {
-    let encoded = string(args, "data")?;
-    let data = STANDARD
-        .decode(encoded)
-        .map_err(|_| anyhow!("Serial data must use base64 encoding"))?;
-    let ending: &[u8] = match args.get("lineEnding").and_then(Value::as_str) {
-        None | Some("none") => b"",
-        Some("lf") => b"\n",
-        Some("cr") => b"\r",
-        Some("crlf") => b"\r\n",
-        Some(_) => bail!("Invalid serial line ending"),
-    };
-    let mut payload = data;
-    payload.extend_from_slice(ending);
-    if payload.is_empty() || payload.len() > 16 * 1024 {
-        bail!("Serial input must contain 1 to 16384 bytes");
-    }
-    Ok(payload)
 }
 
 fn available_ports() -> Vec<Value> {
@@ -696,11 +708,11 @@ mod tests {
     use super::*;
 
     fn payload(data: &[u8], ending: Option<&str>) -> Result<Vec<u8>> {
-        let mut args = json!({"data": STANDARD.encode(data)});
+        let mut args = json!({"text": std::str::from_utf8(data)?});
         if let Some(ending) = ending {
             args["lineEnding"] = json!(ending);
         }
-        write_payload(&args)
+        text_payload(&args)
     }
 
     #[test]
@@ -718,31 +730,29 @@ mod tests {
     }
 
     #[test]
-    fn write_payload_rejects_bad_base64_and_oversized_input() {
-        assert!(write_payload(&json!({"data":"not base64!"})).is_err());
-        assert!(write_payload(&json!({})).is_err());
-        // base64 解码后恰好 16384 字节是上限。
-        let limit = STANDARD.encode(vec![b'x'; 16 * 1024]);
+    fn text_write_rejects_binary_arguments_and_oversized_input() {
+        assert!(text_payload(&json!({"data":"AA=="})).is_err());
+        assert!(text_payload(&json!({})).is_err());
+        let limit = "x".repeat(16 * 1024);
         assert_eq!(
-            write_payload(&json!({"data":limit})).unwrap().len(),
+            text_payload(&json!({"text":limit})).unwrap().len(),
             16 * 1024
         );
         // 同样的 16384 字节再加行结束符就超限了。
-        assert!(write_payload(&json!({"data":limit,"lineEnding":"crlf"})).is_err());
-        let over = STANDARD.encode(vec![b'x'; 16 * 1024 + 1]);
-        assert!(write_payload(&json!({"data":over})).is_err());
+        assert!(text_payload(&json!({"text":limit,"lineEnding":"crlf"})).is_err());
+        assert!(text_payload(&json!({"text":"x".repeat(16 * 1024 + 1)})).is_err());
     }
 
     #[test]
     fn mcp_read_returns_text_without_binary_payload() {
         let value = json!({
-            "data": STANDARD.encode("COM2_OK\r\n"),
+            "text": "COM2_OK\r\n",
             "cursor": "7",
             "gap": false,
             "closed": false,
             "more": false,
         });
-        let result = mcp_read_result(value);
+        let result = mcp_result(value);
         let text: Value =
             serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
         assert_eq!(text["text"], "COM2_OK\r\n");
@@ -836,7 +846,7 @@ mod tests {
             json!({"commands":["pwd"]}),
             json!({"pluginInstanceId":"","commands":["pwd"]}),
             json!({"pluginInstanceId":"one","commands":[]}),
-            json!({"pluginInstanceId":"one","commands":["pwd", "bad\nline"]}),
+            json!({"pluginInstanceId":"one","commands":["pwd", ""]}),
             json!({"pluginInstanceId":"one","commands":["pwd"],"intervalMs":true}),
             json!({"pluginInstanceId":"one","commands":["pwd"],"extra":true}),
             json!({"pluginInstanceId":"one","text":"pwd"}),
@@ -845,6 +855,40 @@ mod tests {
                 validate_mcp_args("mcp.serial.command", &args).is_err(),
                 "{args}"
             );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn mcp_text_and_hex_are_separate_approved_list_contracts() -> Result<()> {
+        let controls = "\u{3}\t\u{1b}[A\u{7f}\r\n中文";
+        let text = CommandList::parse(&json!({"commands":[controls]}))?;
+        assert_eq!(text.payloads[0], text_payload(&json!({"text":controls}))?);
+        assert!(validate_mcp_args(
+            "mcp.serial.command",
+            &json!({"pluginInstanceId":"one","commands":[controls]})
+        )
+        .is_ok());
+        assert!(validate_mcp_args(
+            "mcp.serial.command_hex",
+            &json!({"pluginInstanceId":"one","commands":["00 80 FF"]})
+        )
+        .is_ok());
+        for args in [
+            json!({"pluginInstanceId":"one","commands":["AID/"]}),
+            json!({"pluginInstanceId":"one","commands":["00"],"lineEnding":"cr"}),
+            json!({"pluginInstanceId":"one","data":"AA=="}),
+        ] {
+            assert!(validate_mcp_args("mcp.serial.command_hex", &args).is_err());
+        }
+        for name in ["serial.command_hex", "mcp.serial.command_hex"] {
+            let descriptor = catalog()
+                .into_iter()
+                .find(|op| op.name == name)
+                .ok_or_else(|| anyhow!("Missing HEX operation"))?;
+            assert!(descriptor.sensitive_input);
+            assert_eq!(descriptor.effect, OperationEffect::Commit);
+            assert!(!descriptor.transient);
         }
         Ok(())
     }

@@ -1,4 +1,5 @@
-//! Shell 列表只定义发送顺序；不解析提示符，也不宣称设备已执行完成。
+//! Text / HEX lists define send order, not device completion or protocol semantics.
+use crate::payload::{decode_hex, encode_text};
 use anyhow::{anyhow, bail, Result};
 use coterm_proto::runtime::{message::PluginNotification, ErrorCategory, RuntimeError};
 use serde::Deserialize;
@@ -28,7 +29,7 @@ struct CommandArgs {
 }
 
 fn default_ending() -> String {
-    "cr".into()
+    "none".into()
 }
 fn default_interval() -> u64 {
     100
@@ -43,29 +44,42 @@ impl CommandList {
     pub fn parse(args: &Value) -> Result<Self> {
         let args: CommandArgs = serde_json::from_value(args.clone())
             .map_err(|_| anyhow!("Invalid serial command list parameters"))?;
-        if args.commands.is_empty() || args.commands.len() > MAX_COMMANDS {
+        Self::from_entries(args.commands, args.interval_ms, |entry| {
+            encode_text(entry, &args.line_ending)
+        })
+    }
+
+    pub fn parse_hex(args: &Value) -> Result<Self> {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase", deny_unknown_fields)]
+        struct HexListArgs {
+            commands: Vec<String>,
+            #[serde(default = "default_interval")]
+            interval_ms: u64,
+        }
+        let args: HexListArgs = serde_json::from_value(args.clone())
+            .map_err(|_| anyhow!("Invalid serial HEX list parameters"))?;
+        Self::from_entries(args.commands, args.interval_ms, decode_hex)
+    }
+
+    fn from_entries(
+        commands: Vec<String>,
+        interval_ms: u64,
+        encode: impl Fn(&str) -> Result<Vec<u8>>,
+    ) -> Result<Self> {
+        if commands.is_empty() || commands.len() > MAX_COMMANDS {
             bail!("Serial commands must contain 1 to 64 entries");
         }
-        let ending: &[u8] = match args.line_ending.as_str() {
-            "cr" => b"\r",
-            "lf" => b"\n",
-            "crlf" => b"\r\n",
-            _ => bail!("Serial commands require a cr, lf, or crlf line ending"),
-        };
-        if args.interval_ms > 1000 {
+        if interval_ms > 1000 {
             bail!("Serial command interval must be between 0 and 1000 ms");
         }
         let mut bytes = 0;
-        let mut payloads = Vec::with_capacity(args.commands.len());
-        for command in args.commands {
-            if command.trim().is_empty()
-                || command.len() > MAX_COMMAND_BYTES
-                || command.chars().any(|ch| ch.is_control() && ch != '\t')
-            {
-                bail!("Each serial command must be a nonempty single line up to 4096 UTF-8 bytes");
+        let mut payloads = Vec::with_capacity(commands.len());
+        for command in commands {
+            let payload = encode(&command)?;
+            if command.is_empty() || payload.len() > MAX_COMMAND_BYTES {
+                bail!("Each serial entry must contain 1 to 4096 bytes including optional line endings");
             }
-            let mut payload = command.into_bytes();
-            payload.extend_from_slice(ending);
             bytes += payload.len();
             if bytes > MAX_BATCH_BYTES {
                 bail!("Serial command list must not exceed 16384 bytes including line endings");
@@ -74,7 +88,7 @@ impl CommandList {
         }
         Ok(Self {
             payloads,
-            interval: Duration::from_millis(args.interval_ms),
+            interval: Duration::from_millis(interval_ms),
         })
     }
 }
@@ -83,7 +97,15 @@ pub fn properties() -> Value {
     json!({
         "commands":{"type":"array","minItems":1,"maxItems":64,
             "items":{"type":"string","minLength":1,"maxLength":4096}},
-        "lineEnding":{"type":"string","enum":["cr","lf","crlf"],"default":"cr"},
+        "lineEnding":{"type":"string","enum":["none","cr","lf","crlf"],"default":"none"},
+        "intervalMs":{"type":"integer","minimum":0,"maximum":1000,"default":100}
+    })
+}
+
+pub fn hex_properties() -> Value {
+    json!({
+        "commands":{"type":"array","minItems":1,"maxItems":64,
+            "items":{"type":"string","minLength":1,"maxLength":12290}},
         "intervalMs":{"type":"integer","minimum":0,"maximum":1000,"default":100}
     })
 }
@@ -329,7 +351,7 @@ mod tests {
             "op-list".into(),
             false,
             CommandList::parse(
-                &json!({"commands":["first", "second", "third"],"intervalMs":interval}),
+                &json!({"commands":["first", "second", "third"],"lineEnding":"cr","intervalMs":interval}),
             )?,
         ))
     }
@@ -377,6 +399,33 @@ mod tests {
         assert_eq!(domain["deviceCompletion"], "unknown");
         assert_eq!(domain["remaining"], 0);
         assert!(domain.get("exitCode").is_none());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn hex_and_shell_controls_reach_writer_as_exact_separate_payloads() -> Result<()> {
+        let controls = "\u{3}\t\u{1b}[A\u{7f}\r\n中文\0";
+        for list in [
+            CommandList::parse(&json!({"commands":[controls,"next\r"],"intervalMs":0}))?,
+            CommandList::parse_hex(&json!({"commands":["00 80 FF","0d0a"],"intervalMs":0}))?,
+        ] {
+            let expected = list.payloads.clone();
+            let (job, handle) = CommandJob::new("exact-input".into(), true, list);
+            let writer = RecordingWriter::default();
+            let writes = writer.writes.clone();
+            let (_, failed) = job
+                .run(
+                    Some(writer),
+                    &AtomicBool::new(false),
+                    &AtomicU64::new(0),
+                    &None,
+                    "conn",
+                )
+                .await;
+            assert!(!failed);
+            assert_eq!(*writes.lock().map_err(|_| anyhow!("poisoned"))?, expected);
+            assert_eq!(handle.progress.borrow().sent, 2);
+        }
         Ok(())
     }
 
@@ -579,9 +628,9 @@ mod tests {
         assert_eq!(
             list.payloads,
             [
-                b"cd /tmp\r".to_vec(),
-                b"printf 'a && b'\r".to_vec(),
-                "echo 中文\r".as_bytes().to_vec()
+                b"cd /tmp".to_vec(),
+                b"printf 'a && b'".to_vec(),
+                "echo 中文".as_bytes().to_vec()
             ]
         );
         assert_eq!(list.interval, Duration::from_millis(100));
@@ -598,15 +647,12 @@ mod tests {
     fn validates_the_entire_list_before_any_sending() {
         for args in [
             json!({"commands":[]}),
-            json!({"commands":["ok", " "]}),
-            json!({"commands":["ok\nreboot"]}),
-            json!({"commands":["ok\rreboot"]}),
-            json!({"commands":["\u{1b}[A"]}),
+            json!({"commands":["ok", ""]}),
             json!({"commands":[7]}),
             json!({"commands":["x".repeat(4097)]}),
             json!({"commands":vec!["x";65]}),
-            json!({"commands":vec!["x".repeat(4096);4]}),
-            json!({"commands":["pwd"],"lineEnding":"none"}),
+            json!({"commands":vec!["x".repeat(4096);5]}),
+            json!({"commands":["pwd"],"lineEnding":"invalid"}),
             json!({"commands":["pwd"],"intervalMs":1001}),
             json!({"commands":["pwd"],"intervalMs":-1}),
             json!({"commands":["pwd"],"intervalMs":1.5}),
@@ -616,5 +662,20 @@ mod tests {
             assert!(CommandList::parse(&args).is_err(), "{args}");
         }
         assert!(CommandList::parse(&json!({"commands":vec!["x".repeat(4095);4]})).is_ok());
+    }
+
+    #[test]
+    fn hex_lists_preserve_order_and_validate_every_entry() -> Result<()> {
+        let list =
+            CommandList::parse_hex(&json!({"commands":["00 80 FF", "0d0a"],"intervalMs":0}))?;
+        assert_eq!(list.payloads, [vec![0, 128, 255], vec![13, 10]]);
+        for args in [
+            json!({"commands":["00", "GG"]}),
+            json!({"commands":["00"],"lineEnding":"cr"}),
+            json!({"commands":["ff".repeat(4097)]}),
+        ] {
+            assert!(CommandList::parse_hex(&args).is_err());
+        }
+        Ok(())
     }
 }

@@ -46,10 +46,12 @@ test("human Shell uses terminal keys, UART uses its sender, and MCP queues stay 
             connectionId:window.connected ? 'conn' : null, signals:{dtr:true,rts:true},
             rxBytes:0, txBytes:window.txBytes, commandQueue:window.commandQueue,
           });
-          if (operation === 'serial.read') return window.receipt({data:'',cursor:window.cursor,
+          if (operation === 'serial.read') return window.receipt({text:'',bytes:0,cursor:window.cursor,
             gap:false,closed:false,more:false,connectionId:'conn'});
-          if (operation === 'serial.write') {
-            const bytes = atob(args.data).length + ({none:0,cr:1,lf:1,crlf:2}[args.lineEnding]);
+          if (operation === 'serial.read_hex') return window.receipt({hex:window.hexOutput ?? '',bytes:(window.hexOutput ?? '').length/2,cursor:window.cursor,
+            gap:false,closed:false,more:false,connectionId:'conn'});
+          if (operation === 'serial.write' || operation === 'serial.write_hex') {
+            const bytes = operation === 'serial.write_hex' ? args.hex.length/2 : new TextEncoder().encode(args.text).length + ({none:0,cr:1,lf:1,crlf:2}[args.lineEnding]);
             window.txBytes += bytes;
             return window.receipt({bytes});
           }
@@ -61,8 +63,8 @@ test("human Shell uses terminal keys, UART uses its sender, and MCP queues stay 
       const module = await import(${JSON.stringify(moduleURL)});
       window.frontend = module.mount(document.body, window.api);
       window.root = document.body.firstElementChild.shadowRoot;
-      window.writes = () => window.calls.filter(c => c.operation === 'serial.write');
-      window.raw = () => window.writes().map(c => atob(c.args.data)).join('');
+      window.writes = () => window.calls.filter(c => c.operation === 'serial.write' || c.operation === 'serial.write_hex');
+      window.raw = () => window.writes().map(c => c.args.text ?? '').join('');
     })()`);
     await waitForValue(client, `root.querySelector('.state').textContent === 'Connected' && root.activeElement?.classList.contains('xterm-helper-textarea')`);
     assert.equal(await run(`root.querySelector('.send') === null`), true, "Shell has no list editor or send toolbar");
@@ -80,11 +82,12 @@ test("human Shell uses terminal keys, UART uses its sender, and MCP queues stay 
     assert.equal(await run(`window.writes().every(c => c.args.lineEnding === 'none')`), true,
       "terminal Enter and controls are raw bytes without an extra line ending");
     await client.send("Input.insertText", { text: "echo 中文" });
-    await waitForValue(client, `new TextDecoder().decode(Uint8Array.from(window.raw(), c => c.charCodeAt(0))).endsWith('echo 中文')`);
+    await waitForValue(client, `window.raw().endsWith('echo 中文')`);
+    assert.equal(await run(`window.calls.some(c => c.operation.endsWith('_hex'))`), false, "Shell never uses HEX interfaces");
 
     await run(`(async () => {
       window.cursor = '1';
-      await window.event({name:'serial.output',payload:{connectionId:'conn',cursor:'1',data:btoa(${JSON.stringify("device echo\r\n")})}});
+      await window.event({name:'serial.output',payload:{connectionId:'conn',cursor:'1',text:${JSON.stringify("device echo\r\n")},bytes:13}});
     })()`);
     await waitForValue(client, `root.querySelector('.xterm-screen').textContent.includes('device echo')`);
 
@@ -94,17 +97,21 @@ test("human Shell uses terminal keys, UART uses its sender, and MCP queues stay 
       root.querySelector('.uart-send textarea').value = ${JSON.stringify("first\nsecond")};
       root.querySelector('.uart-send .primary').click();
     })()`);
-    await waitForValue(client, `window.writes().some(c => c.args.data === btoa(${JSON.stringify("first\nsecond")}))`);
+    await waitForValue(client, `window.writes().some(c => c.args.text === ${JSON.stringify("first\nsecond")})`);
     assert.deepEqual(await run(`window.writes().at(-1).args`),
-      { data: Buffer.from("first\nsecond").toString("base64"), lineEnding: "crlf" });
+      { text: "first\nsecond", lineEnding: "crlf" });
     await run(`(() => {
       root.querySelector('.uart-send input[type=checkbox]').checked = true;
       root.querySelector('.uart-send select').value = 'none';
       root.querySelector('.uart-send textarea').value = '00 80 FF';
       root.querySelector('.uart-send textarea').dispatchEvent(new KeyboardEvent('keydown', {key:'Enter',bubbles:true}));
     })()`);
-    await waitForValue(client, `window.writes().at(-1)?.args.data === 'AID/'`);
-    assert.equal(await run(`window.writes().at(-1).args.lineEnding`), "none");
+    await waitForValue(client, `window.writes().at(-1)?.args.hex === '0080ff'`);
+    assert.deepEqual(await run(`window.writes().at(-1)`), { operation:"serial.write_hex", args:{hex:"0080ff"} });
+    await run(`window.hexOutput = '0080ff'; root.querySelectorAll('.uart-bar button')[1].click()`);
+    await waitForValue(client, `window.calls.some(c => c.operation === 'serial.read_hex')`);
+    await waitForValue(client, `root.querySelector('.uart-output').textContent.includes('00 80 ff')`);
+    await run(`root.querySelectorAll('.uart-bar button')[0].click()`);
     const count = await run(`window.writes().length`);
     assert.equal(await run(`(() => {
       const event = new KeyboardEvent('keydown', {key:'Enter',shiftKey:true,bubbles:true,cancelable:true});
@@ -133,7 +140,7 @@ test("human Shell uses terminal keys, UART uses its sender, and MCP queues stay 
     })()`);
     await client.send("Input.insertText", { text: "ok" });
     await waitForValue(client, `window.writes().length > ${count}`);
-    assert.equal(await run(`window.writes().at(-1).args.data`), "b2s=", "human input resumes after MCP finishes");
+    assert.equal(await run(`window.writes().at(-1).args.text`), "ok", "human input resumes after MCP finishes");
 
     await run(`window.locale = 'zh-CN'; window.translate()`);
     assert.equal(await run(`root.querySelector('.modes button').textContent`), "终端");

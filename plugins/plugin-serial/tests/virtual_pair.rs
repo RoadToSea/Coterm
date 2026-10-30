@@ -3,11 +3,11 @@
 use std::{env, path::PathBuf, time::Duration};
 
 use anyhow::{anyhow, ensure, Context, Result};
-use base64::{engine::general_purpose::STANDARD, Engine};
 use coterm_core::{
     plugin_manager::ProcessPluginRuntime,
     plugin_runtime::{CallerContext, Operations, PluginRuntime, SubmitOperation},
 };
+use coterm_plugin_serial::payload::{decode_hex, encode_hex};
 use coterm_proto::runtime::{
     lifecycle::{InstanceInfo, RuntimeLimits},
     operation::{ApproveProposal, OperationRecord, OperationSource, OperationStatus},
@@ -17,6 +17,14 @@ use serde_json::{json, Value};
 use tokio::time::{sleep, timeout, Instant};
 
 const PLUGIN: &str = "coterm-plugin-serial";
+
+fn decode_hex_page(hex: &str) -> Result<Vec<u8>> {
+    if hex.is_empty() {
+        Ok(Vec::new())
+    } else {
+        decode_hex(hex)
+    }
+}
 
 struct Endpoint {
     instance: InstanceInfo,
@@ -62,7 +70,17 @@ impl Endpoint {
         let receipt = runtime
             .submit(
                 self.caller(OperationSource::Human),
-                self.request("serial.command", args, 0),
+                self.request(
+                    "serial.command",
+                    {
+                        let mut args = args;
+                        if args.get("lineEnding").is_none() {
+                            args["lineEnding"] = json!("cr");
+                        }
+                        args
+                    },
+                    0,
+                ),
             )
             .await?;
         ensure!(receipt.error.is_none(), "queue rejected: {receipt:?}");
@@ -101,7 +119,7 @@ impl Endpoint {
 
     async fn read(&mut self, runtime: &ProcessPluginRuntime) -> Result<Vec<u8>> {
         let output = self
-            .call(runtime, "serial.read", json!({"cursor":self.cursor}))
+            .call(runtime, "serial.read_hex", json!({"cursor":self.cursor}))
             .await?;
         ensure!(
             output["gap"] == false && output["closed"] == false,
@@ -111,11 +129,11 @@ impl Endpoint {
             .as_str()
             .ok_or_else(|| anyhow!("missing cursor"))?
             .into();
-        Ok(STANDARD.decode(
-            output["data"]
+        decode_hex_page(
+            output["hex"]
                 .as_str()
                 .ok_or_else(|| anyhow!("missing bytes"))?,
-        )?)
+        )
     }
 
     async fn expect_bytes(
@@ -215,6 +233,35 @@ async fn exercise(runtime: &ProcessPluginRuntime, a: &str, b: &str, baud: u32) -
     let mut peer = endpoints.pop().ok_or_else(|| anyhow!("missing peer"))?;
     let mut sender = endpoints.pop().ok_or_else(|| anyhow!("missing sender"))?;
 
+    // The user-controlled Bypass still passes through source attribution and validation.
+    runtime.set_bypass(true).await;
+    let controls = "\u{3}\t\u{1b}[A\u{7f}\r\n中文\0";
+    for (tool, commands, expected) in [
+        (
+            "serial.command",
+            json!([controls, "next\r"]),
+            format!("{controls}next\r").into_bytes(),
+        ),
+        (
+            "serial.command_hex",
+            json!(["00 80 FF", "0d0a"]),
+            vec![0, 128, 255, 13, 10],
+        ),
+    ] {
+        let result = coterm_mcp::server::call_tool(
+            runtime,
+            &json!({
+                "name":format!("{PLUGIN}__{tool}"),
+                "arguments":{"name":sender.instance.label,"commands":commands,"intervalMs":0}
+            }),
+        )
+        .await?;
+        ensure!(result["isError"] == false, "{result}");
+        peer.expect_bytes(runtime, &expected).await?;
+    }
+    runtime.set_bypass(false).await;
+    println!("PASS public MCP name routing, exact Shell controls, HEX lists, and Bypass");
+
     // A -> B 的每条命令分别写入；shell 符号和 UTF-8 按字节保留。
     let started = Instant::now();
     let op = sender.queue(runtime, json!({"commands":["first 中文", "second && literal", "third"],"lineEnding":"crlf","intervalMs":100})).await?;
@@ -251,8 +298,8 @@ async fn exercise(runtime: &ProcessPluginRuntime, a: &str, b: &str, baud: u32) -
     let binary = [0, 1, 2, 3, 0x7f, 0x80, 0xff, b'\r', b'\n'];
     peer.call(
         runtime,
-        "serial.write",
-        json!({"data":STANDARD.encode(binary)}),
+        "serial.write_hex",
+        json!({"hex":encode_hex(&binary)}),
     )
     .await?;
     sender.expect_bytes(runtime, &binary).await?;
@@ -273,10 +320,7 @@ async fn exercise(runtime: &ProcessPluginRuntime, a: &str, b: &str, baud: u32) -
         .state(runtime, &queued, OperationStatus::Running)
         .await?;
     for (name, args) in [
-        (
-            "serial.write",
-            json!({"data":STANDARD.encode(b"raw-never")}),
-        ),
+        ("serial.write", json!({"text":"raw-never"})),
         ("serial.signals", json!({"dtr":false})),
     ] {
         let rejected = runtime
@@ -410,7 +454,7 @@ async fn exercise(runtime: &ProcessPluginRuntime, a: &str, b: &str, baud: u32) -
             sender.caller(OperationSource::Human),
             sender.request(
                 "serial.command",
-                json!({"commands":["invalid-first-never", "bad\nline"]}),
+                json!({"commands":["invalid-first-never", ""]}),
                 3000,
             ),
         )

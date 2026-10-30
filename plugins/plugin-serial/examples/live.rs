@@ -2,7 +2,6 @@
 //! 只做一次「连上、发回车、读回显」的往返，用于 115200 板卡验证。
 use std::{env, process::exit, time::Duration};
 
-use base64::{engine::general_purpose::STANDARD, Engine};
 use coterm_plugin_serial::backend::Backend;
 use serde_json::{json, Value};
 
@@ -86,7 +85,7 @@ async fn main() {
             &mut backend,
             "invoke",
             json!({"operationId":format!("live-{index}"),"operation":"serial.write","effect":"commit",
-                   "pluginInstanceId":"live","args":{"data":STANDARD.encode(payload)},"source":"human",
+                   "pluginInstanceId":"live","args":{"text":String::from_utf8_lossy(payload)},"source":"human",
                    "dispatch":{"mode":"execute"},"pluginId":"coterm-plugin-serial"}),
         )
         .await;
@@ -105,11 +104,9 @@ async fn main() {
                        "dispatch":{"mode":"execute"},"pluginId":"coterm-plugin-serial"}),
             )
             .await;
-            let bytes = STANDARD
-                .decode(read["data"].as_str().unwrap_or_default())
-                .unwrap_or_default();
+            let bytes = read["text"].as_str().unwrap_or_default().as_bytes();
             if !bytes.is_empty() {
-                print!("{}", String::from_utf8_lossy(&bytes));
+                print!("{}", String::from_utf8_lossy(bytes));
             }
             cursor = read["cursor"].as_str().unwrap_or(&cursor).to_owned();
             if read["gap"].as_bool().unwrap_or(false) {

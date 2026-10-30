@@ -10,7 +10,6 @@
 use std::{env, time::Duration};
 
 use anyhow::Result;
-use base64::{engine::general_purpose::STANDARD, Engine};
 use coterm_plugin_serial::backend::Backend;
 use serde_json::{json, Value};
 use tokio::time::{sleep, timeout};
@@ -71,7 +70,7 @@ async fn real_device_round_trips_bytes_at_the_configured_baud_rate() -> Result<(
         invoke(
             &mut backend,
             "serial.write",
-            json!({"data":STANDARD.encode(payload)}),
+            json!({"text":String::from_utf8_lossy(payload)}),
             "commit",
         )
         .await?;
@@ -88,11 +87,7 @@ async fn real_device_round_trips_bytes_at_the_configured_baud_rate() -> Result<(
                 "read",
             )
             .await?;
-            received.extend(
-                STANDARD
-                    .decode(read["data"].as_str().unwrap_or_default())
-                    .unwrap_or_default(),
-            );
+            received.extend_from_slice(read["text"].as_str().unwrap_or_default().as_bytes());
             cursor = read["cursor"].as_str().unwrap_or(&cursor).to_owned();
             assert_eq!(
                 read["gap"], false,
@@ -149,14 +144,9 @@ async fn real_device_round_trips_bytes_at_the_configured_baud_rate() -> Result<(
     assert_eq!(status["connected"], false);
     assert_eq!(status["connectionId"], Value::Null);
     // 断开后信号改动与写入都必须失败，不能悄悄重连。
-    invoke(
-        &mut backend,
-        "serial.write",
-        json!({"data":STANDARD.encode(b"\r")}),
-        "commit",
-    )
-    .await
-    .expect_err("writing after disconnect must fail");
+    invoke(&mut backend, "serial.write", json!({"text":"\r"}), "commit")
+        .await
+        .expect_err("writing after disconnect must fail");
     invoke(
         &mut backend,
         "serial.signals",

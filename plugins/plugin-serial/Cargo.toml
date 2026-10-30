@@ -13,7 +13,7 @@ anyhow.workspace = true
 chrono.workspace = true
 uuid.workspace = true
 serialport = "4.6"
-base64 = "0.22"
 
 [dev-dependencies]
 coterm-core.workspace = true
+coterm-mcp = { path = "../../crates/coterm-mcp" }

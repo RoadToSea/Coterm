@@ -800,9 +800,9 @@ name = "coterm-plugin-serial"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "base64 0.22.1",
  "chrono",
  "coterm-core",
+ "coterm-mcp",
  "coterm-proto",
  "serde",
  "serde_json",

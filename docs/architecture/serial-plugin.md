@@ -1,6 +1,6 @@
 # 串口插件
 
-实现位于 [plugin-serial](../../plugins/plugin-serial)。插件只处理原始字节，不解析设备提示符、不推断命令完成或退出码。
+实现位于 [plugin-serial](../../plugins/plugin-serial)。插件提供分离的通用文本与 HEX 收发，不解析设备提示符、不推断命令完成或退出码。Modbus 等设备协议与固件烧录由独立插件实现，本插件不组协议帧、不计算 CRC、不实现下载握手。
 
 ## 使用
 
@@ -12,7 +12,7 @@
 
 人工 Shell 模式与 SSH 一样直接在终端中交互，由设备负责回显与编辑，不另设命令发送框或列表编辑器。两者采用同一套[终端快捷键](terminal-shortcuts.md)：Ctrl+C 有选区时复制、无选区时发送中断；Ctrl+F 搜索当前终端输出，Enter/Shift+Enter 跳转、Esc 关闭；粘贴、终端全选和清除选区在本地处理，其余 Shell 按键沿用终端语义。切换视图不重建连接，也不发送命令。命令列表是 MCP 面向 Agent 的批量接口，不改变人工交互方式。
 
-UART 调试模式使用发送框，保留原始文本、HEX、none/lf/cr/crlf 行结束符及定时重复发送；Enter 发送，Shift+Enter 换行。原始写入总量为 1～16384 字节，HEX 必须为偶数位有效十六进制字符。MCP 列表发送期间禁止人工原始字节写入及信号修改，以免终端输入、UART 定时发送与命令混写；队列完成后可继续人工输入。
+UART 调试模式使用发送框；Enter 发送，Shift+Enter 换行。文本模式使用 `text` 和可选 none/lf/cr/crlf 行结束符；勾选「按 HEX 输入」后仅使用 `hex`，禁用行结束符，不隐式附加字节。HEX 接收视图才调用二进制读取接口，文本视图和 Shell 使用文本读取与事件。两种模式保留有界定时重复发送。单次写入总量为 1～16384 字节，HEX 必须为偶数位有效十六进制字符，可包含 ASCII 空白和一个开头 `0x`。MCP 列表发送期间禁止人工写入及信号修改，避免混写。
 
 ## 操作与 MCP
 
@@ -20,13 +20,18 @@ UART 调试模式使用发送框，保留原始文本、HEX、none/lf/cr/crlf �
 |---|---|---|
 | `serial.status/probe` | read | 状态与系统端口枚举 |
 | `serial.connect/disconnect` | commit | 打开或关闭端口，清理该实例旧提案 |
-| `serial.read` | read | 游标回放文本，报告 gap/closed/more；MCP 结果不暴露二进制 Base64 |
-| `serial.write` | commit | 人工字节写入；标记为敏感输入 |
-| `serial.command` | commit | 面向 MCP 的单行命令列表，插件有界队列逐项发送；标记为敏感输入 |
+| `serial.read` | read | `text` 游标回放，报告 bytes/cursor/gap/closed/more |
+| `serial.write` | commit | 人工文本输入 `text`，保留控制字符；标记为敏感输入 |
+| `serial.command` | commit | Agent 文本输入列表 `commands`，与人工 Shell 同样按 UTF-8 原样发送 |
+| `serial.read_hex` | read | 显式 HEX 读取，返回 `hex` 与相同游标、状态和原始字节计数 |
+| `serial.write_hex` | commit | 人工 HEX 输入 `hex`，没有行结束符或文本参数 |
+| `serial.command_hex` | commit | Agent HEX 字符串列表 `commands`，共用有界 FIFO 和审批 |
 | `serial.signals` | commit | 设置 DTR/RTS 电平 |
 | `serial.plugin_info` | read | 插件级信息 |
 
-MCP 提供上述工具中的 status、probe、connect、disconnect、read、command、plugin_info，**不开放原始字节 write 与 signals**。除 plugin_info 外使用 `name` 指定 `coterm.list_instances` 返回的唯一实例名称，UUID 只由基座内部保存和路由。`serial.command` 用于通过串口操作设备 Shell，原生接口与 MCP 使用同一列表契约；MCP 额外经过基座名称解析。人工前端的 Shell 与 UART 输入均调用 `serial.write`，不调用 `serial.command`。MCP 的 `serial.read` 返回 `text`、游标和状态字段；非 UTF-8 字节使用替换字符，不返回 Base64。Agent 来源的提交经过基座审批，除非用户主动开启 Bypass 或明确放行；列表整体为审批快照，输入在普通账本中脱敏，普通进度事件不包含命令内容。
+MCP 提供 status、probe、connect、disconnect、read、read_hex、command、command_hex、plugin_info，不开放人工单次 write/write_hex 与 signals。除 plugin_info 外使用 `name` 指定 `coterm.list_instances` 返回的唯一实例名称，UUID 由基座内部路由。文本接口和 HEX 接口互不接受对方参数。`serial.command` 与人工 Shell 共用文本编码逻辑，允许 Ctrl+C (`\u0003`)、Tab、方向键 ESC 序列、换行、DEL、NUL 等所有控制字符；默认 `lineEnding:"none"`，不擅自补回车。列表只是顺序发送的输入片段，无单行或可打印字符限制。人工输入不用列表。Agent 来源的提交经过基座审批，除非用户主动开启 Bypass 或明确放行；列表整体为审批快照，输入在普通账本中脱敏，进度事件不包含输入内容。
+
+Base64 和 HEX 都是字节的表示方式，均不是加密。本插件接口、事件与前端已移除 Base64；文本直接使用 JSON 字符串，二进制通过显式 HEX 工具收发。本次变更不改变基座私有 Bridge 的认证或传输机制。
 
 例如调用 MCP `serial.command`：
 
@@ -39,7 +44,19 @@ MCP 提供上述工具中的 status、probe、connect、disconnect、read、comm
 }
 ```
 
-每个列表为 1～64 项，每项为非空单行文本、最多 4096 UTF-8 字节；允许制表符，拒绝换行及其他控制字符。列表含所有行结束符合计最多 16 KiB，每实例最多 16 个在途列表。插件整批校验后入队，按 FIFO 发送，一个列表的项不会与其他列表交叉；有在途列表时，新的原始字节写入或 DTR/RTS 修改直接拒绝，避免排队超时后迟到执行。不会拼接 `&&`、`eval` 或 shell 包装脚本。
+原样输入和 HEX 输入示例（以下为各自工具的 arguments，不混用）：
+
+```json
+{"name":"COM1@115200","commands":["\u0003","pwd\r","\u001b[A\r"],"intervalMs":100}
+```
+
+```json
+{"name":"COM1@115200","commands":["00 80 FF","0d0a"],"intervalMs":100}
+```
+
+第二个示例调用 `coterm-plugin-serial__serial.command_hex`，返回读取使用 `coterm-plugin-serial__serial.read_hex`，其载荷形如 `{"hex":"0080ff0d0a","bytes":5,"cursor":"2","gap":false,"closed":false,"more":false}`。不自动追加换行，也不把 `0d0a` 当四个文本字符发送。
+
+每个列表为 1～64 项，每项实际发送 1～4096 字节（包含显式选择的行结束符），整批最多 16 KiB，每实例最多 16 个在途列表。文本与 HEX 列表共用同一 FIFO，一个列表的项不会与其他列表交叉；整批校验失败时不会发送任何项。有在途列表时人工文本、HEX 写入和 DTR/RTS 修改均拒绝。不会拼接 `&&`、`eval` 或 shell 包装脚本。
 
 请求入队后通过运行时 DeferredOperation 和通知完成，控制通道保持可响应读取、状态与取消。结果包含 `total/sent/remaining/bytes`、`deviceCompletion:"unknown"`；`serial.command` 进度事件额外携带操作 ID、连接 ID、累计发送字节数，`serial.status.commandQueue` 可恢复在途列表数。**完成只表示所有字节写入并 flush 成功，不代表设备执行完成**：不会猜测提示符、退出码，不因设备命令失败而自动停止。发送间隔也不是等待设备响应；登录密码、交互式程序和长命令应人工确认设备状态后再分批发送。
 
@@ -47,15 +64,16 @@ MCP 提供上述工具中的 status、probe、connect、disconnect、read、comm
 
 ## 数据与已知限制
 
-- 每连接缓存 256 KiB，每块及单次读取最多 8 KiB；游标过期报告 gap，超出末尾报错。
-- `serial.output`/`serial.status` 使用连接 ID 和游标；通知队列有界，推送丢失后以回放缓冲恢复。
+- 每连接缓存 256 KiB 原始数据及有界文本副本，每块及单次读取最多 1 KiB 原始数据；为 JSON 控制字符转义和 MCP 信封预留空间。游标过期报告 gap，超出末尾报错。
+- 文本/HEX 读取共用连接 ID 和块游标，消费者独立保存游标。文本增量解码保留跨读取的 UTF-8 尾字节，非法编码用替换字符表示，连接关闭时结束解码；HEX 始终精确保留原字节。
+- `serial.output` 事件只含 `text/bytes/cursor/connectionId`，不携带 Base64 或 HEX 副本；通知队列有界，推送丢失后以回放缓冲恢复。HEX 视图按事件触发 `serial.read_hex`，退出 HEX 视图后停止调用二进制读取接口。
 - 读取使用独立线程，写入经 64 槽队列和阻塞任务提交；前端输入队列上限 16 KiB。
 - 命令列表共用写入 actor，每项单独写入和 flush；每项驱动等待上限 2 秒，间隔等待可取消。断开前先停止后续项，再回收连接；Windows、Linux、macOS 共用该实现，无新增依赖、权限或传输方式。
 - 部分虚拟串口驱动不实现 flush（Windows 错误码 1/50）。仅当驱动明确不支持该操作时，写端改为有界查询发送队列，确认排空后才计入发送成功；队列查询失败或排空超时仍为错误，不重发数据。原始写入和列表发送共用这一兼容逻辑。列表失败的结构化信息包含 IO 阶段、错误种类和 OS 错误码，不包含命令内容。
 - 读取线程有停止标志，显式断开时等待其退出并回收句柄（上限 2 秒）；析构也会置位该标志，避免线程泄漏。停止标志只在一次阻塞读之后检查，最坏退出延迟是一次读取轮询（20 ms）。
 - 打开端口是阻塞调用，放在阻塞线程池执行；5 秒超时后关闭端口并报错，不占用异步工作线程。
 - `serial.status` 回报 DTR/RTS 电平与本次连接累计收发字节数；前端 TX 计数取插件回报的实际写入字节，包含插件补上的行结束符。
-- `serial.write` 标记为敏感输入，人工输入可能是密码或密钥，账本只保留脱敏占位。
+- 文本与 HEX 写入及列表均标记为敏感输入，账本只保留脱敏占位。
 - 尚无硬件流控（RTS/CTS 握手）、自动重连、热插拔监听和文件收发。
 
 公共交互、事件和账本规则见 [运行时通信](runtime-communication.md)，修复优先级见 [项目进度](../PROGRESS.md)。

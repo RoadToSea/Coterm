@@ -2,7 +2,6 @@
 //! 真实字节往返只在显式启用的 `live` 测试中执行。
 
 use anyhow::Result;
-use base64::{engine::general_purpose::STANDARD, Engine};
 use coterm_plugin_serial::backend::Backend;
 use serde_json::{json, Value};
 
@@ -182,7 +181,7 @@ async fn backend_rejects_requests_that_break_the_runtime_contract() -> Result<()
             )
             .await
             .expect_err("approval on a closed port must fail");
-        args["commands"] = json!(["valid-first-entry", "invalid\nsecond-entry"]);
+        args["commands"] = json!(["valid-first-entry", ""]);
         backend.request("invoke", json!({
             "operationId":"invalid-list","operation":operation,"effect":"commit",
             "pluginInstanceId":"one","args":args,"source":"agent",
@@ -194,7 +193,7 @@ async fn backend_rejects_requests_that_break_the_runtime_contract() -> Result<()
         .request(
             "invoke",
             json!({"operationId":"op-2","operation":"serial.write","effect":"commit",
-                   "pluginInstanceId":"one","args":{"data":STANDARD.encode(b"ls")},
+                   "pluginInstanceId":"one","args":{"text":"ls"},
                    "source":"human","dispatch":{"mode":"execute"},"pluginId":PLUGIN_ID}),
         )
         .await
@@ -244,7 +243,7 @@ async fn backend_rejects_requests_that_break_the_runtime_contract() -> Result<()
         .request(
             "invoke",
             json!({"operationId":"op-5","operation":"serial.write","effect":"commit",
-                   "pluginInstanceId":"one","args":{"data":STANDARD.encode(b"ls"),"lineEnding":"crlf"},
+                   "pluginInstanceId":"one","args":{"text":"ls","lineEnding":"crlf"},
                    "source":"agent","dispatch":{"mode":"prepare_proposal","proposalId":"p-1"},"pluginId":PLUGIN_ID}),
         )
         .await?;
@@ -261,7 +260,7 @@ async fn backend_rejects_requests_that_break_the_runtime_contract() -> Result<()
         .request(
             "approve",
             json!({"operationId":"op-5","proposalId":"p-1","pluginInstanceId":"one",
-                   "args":{"data":STANDARD.encode(b"ls")}}),
+                   "args":{"text":"ls"}}),
         )
         .await
         .expect_err("a rejected proposal must not be approvable");
@@ -308,6 +307,77 @@ async fn process_host_loads_the_serial_package_and_validates_mcp_tools() -> Resu
         )
         .await?;
     assert_eq!(instance.label, "COM6@115200");
+    // Exercise the public bridge contract, not only the internal mirror operations.
+    let tools = coterm_mcp::server::tools_list(&runtime).await?;
+    let tool = tools["tools"]
+        .as_array()
+        .and_then(|tools| {
+            tools
+                .iter()
+                .find(|tool| tool["name"] == "coterm-plugin-serial__serial.command_hex")
+        })
+        .ok_or_else(|| anyhow::anyhow!("Missing public HEX tool"))?;
+    assert!(tool["inputSchema"]["properties"]
+        .get("pluginInstanceId")
+        .is_none());
+    assert!(tool["inputSchema"]["required"]
+        .as_array()
+        .is_some_and(|required| required.contains(&json!("name"))));
+    let status = coterm_mcp::server::call_tool(
+        &runtime,
+        &json!({"name":"coterm-plugin-serial__serial.status","arguments":{"name":instance.label}}),
+    )
+    .await?;
+    assert_eq!(status["isError"], false);
+    let listed = coterm_mcp::server::call_tool(
+        &runtime,
+        &json!({"name":"coterm.list_instances","arguments":{}}),
+    )
+    .await?;
+    assert!(!listed.to_string().contains(&instance.plugin_instance_id));
+    for (tool, commands) in [
+        ("serial.command", json!(["\u{3}\r\n\u{1b}[A"])),
+        ("serial.command_hex", json!(["00 80 FF"])),
+    ] {
+        let result = coterm_mcp::server::call_tool(
+            &runtime,
+            &json!({
+                "name":format!("coterm-plugin-serial__{tool}"),
+                "arguments":{"name":instance.label,"commands":commands},
+                "_meta":{"coterm/waitTimeoutMs":0}
+            }),
+        )
+        .await?;
+        let operation_id = result["_meta"]["coterm/operation"]["operationId"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Missing MCP operation"))?;
+        let caller = CallerContext {
+            source: OperationSource::Human,
+            session_id: instance.session_id.clone(),
+            plugin_id: Some(instance.plugin_id.clone()),
+        };
+        let record = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            loop {
+                let record = runtime.get(caller.clone(), operation_id).await?;
+                if record.status == OperationStatus::AwaitingApproval {
+                    return Ok::<_, anyhow::Error>(record);
+                }
+                anyhow::ensure!(record.error.is_none(), "{record:?}");
+                tokio::task::yield_now().await;
+            }
+        })
+        .await??;
+        runtime
+            .reject(
+                caller,
+                operation_id,
+                record
+                    .proposal_id
+                    .as_deref()
+                    .ok_or_else(|| anyhow::anyhow!("Missing approval"))?,
+            )
+            .await?;
+    }
     let caller = CallerContext {
         source: OperationSource::Human,
         session_id: instance.session_id.clone(),
@@ -370,7 +440,7 @@ async fn process_host_loads_the_serial_package_and_validates_mcp_tools() -> Resu
     let failed = runtime
         .submit(
             caller.clone(),
-            operation("serial.write", json!({"data":STANDARD.encode(b"\r")})),
+            operation("serial.write", json!({"text":"\r"})),
         )
         .await?;
     assert_eq!(failed.status, OperationStatus::Failed);

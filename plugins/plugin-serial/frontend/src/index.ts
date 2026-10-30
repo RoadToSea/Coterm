@@ -183,8 +183,9 @@ interface Status {
   commandQueue: number;
 }
 interface Probe { config: Config; connected: boolean; ports: PortEntry[] }
-interface Output { data: string; cursor: string; gap: boolean; closed: boolean; more: boolean; connectionId: string }
-interface PushedOutput { data: string; cursor: string; connectionId: string }
+interface Output { text: string; bytes: number; cursor: string; gap: boolean; closed: boolean; more: boolean; connectionId: string }
+interface HexOutput { hex: string; bytes: number; cursor: string; gap: boolean; closed: boolean; more: boolean; connectionId: string }
+interface PushedOutput { text: string; bytes: number; cursor: string; connectionId: string }
 interface Signals { dtr: boolean; rts: boolean }
 
 const BAUD_RATES = [300, 1200, 2400, 4800, 9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600];
@@ -331,20 +332,7 @@ function output<T>(receipt: OperationReceipt<T>): T {
   return receipt.output;
 }
 
-function base64(data: Uint8Array): string {
-  let binary = "";
-  for (const byte of data) binary += String.fromCharCode(byte);
-  return btoa(binary);
-}
-
-function decode(data: string): Uint8Array {
-  const binary = atob(data);
-  const bytes = new Uint8Array(binary.length);
-  for (let index = 0; index < binary.length; index++) bytes[index] = binary.charCodeAt(index);
-  return bytes;
-}
-
-/** HEX 输入是插件自己的便利功能；基座只见 base64。 */
+/** Only explicit HEX paths decode byte strings. Text never passes through this helper. */
 function fromHex(input: string): Uint8Array {
   const cleaned = input.replace(/\s+/g, "").replace(/^0x/i, "");
   if (!cleaned || cleaned.length % 2 !== 0 || !/^[0-9a-f]+$/i.test(cleaned)) {
@@ -542,7 +530,9 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
   const entries: LogEntry[] = [];
   let logBytes = 0;
   let hexOffset = 0;
-  const decoder = new TextDecoder();
+  let hexCursor = "0";
+  const hexEntries: LogEntry[] = [];
+  let hexLogBytes = 0;
   const controller = new AbortController();
   // 语言切换只替换翻译函数；已渲染的日志文本保持原文。
   let t = createTranslator(api.i18n);
@@ -629,7 +619,7 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
   const renderUart = (force: boolean) => {
     if (disposed || (!force && (paused || mode !== "uart"))) return;
     let text = "";
-    for (const item of entries) {
+    for (const item of uartView === "hex" ? hexEntries : entries) {
       const prefix = timestamps.checked ? `[${stamp(item.time)}] ` : "";
       text += prefix + (uartView === "hex" ? item.hex : item.text);
     }
@@ -641,6 +631,9 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
   const clearLog = () => {
     searchView.close(false);
     entries.length = 0;
+    hexEntries.length = 0;
+    hexLogBytes = 0;
+    hexCursor = cursor;
     logBytes = 0;
     hexOffset = 0;
     pendingWhilePaused = 0;
@@ -648,32 +641,52 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
     terminal.reset();
   };
 
-  const appendOutput = (data: string) => {
-    const bytes = decode(data);
-    if (!bytes.length) return;
+  const appendOutput = (text: string, bytes: number) => {
+    if (!bytes && !text) return;
     const now = Date.now();
     entries.push({
       time: now,
-      bytes: bytes.length,
-      text: decoder.decode(bytes, { stream: true }),
-      hex: hexDump(bytes, hexOffset),
+      bytes,
+      text,
+      hex: "",
     });
-    hexOffset += bytes.length;
-    logBytes += bytes.length;
-    statsRx += bytes.length;
+    logBytes += bytes;
+    statsRx += bytes;
     while (logBytes > LOG_LIMIT && entries.length > 1) {
       const dropped = entries.shift();
       if (!dropped) break;
       logBytes -= dropped.bytes;
     }
-    if (paused) pendingWhilePaused += bytes.length;
+    if (paused) pendingWhilePaused += bytes;
     renderStats();
     scheduleRender();
   };
 
   const write = async (data: string) => {
     if (!data || disposed) return;
-    await new Promise<void>((resolve) => terminal.write(decode(data), resolve));
+    await new Promise<void>((resolve) => terminal.write(data, resolve));
+  };
+
+  const refreshHex = async () => {
+    // Merely mounting a terminal or using text mode never invokes the byte interface.
+    for (let batch = 0; batch < 257 && !disposed && mode === "uart" && uartView === "hex" && connectionId; batch++) {
+      const data = await invoke<HexOutput>("serial.read_hex", { cursor: hexCursor });
+      if (disposed || data.connectionId !== connectionId) return;
+      if (data.gap) { hexEntries.length = 0; hexLogBytes = 0; hexOffset = 0; }
+      if (data.hex) {
+        const bytes = fromHex(data.hex);
+        hexEntries.push({ time: Date.now(), bytes: bytes.length, text: "", hex: hexDump(bytes, hexOffset) });
+        hexOffset += bytes.length;
+        hexLogBytes += bytes.length;
+        while (hexLogBytes > LOG_LIMIT && hexEntries.length > 1) {
+          const dropped = hexEntries.shift();
+          if (dropped) hexLogBytes -= dropped.bytes;
+        }
+      }
+      hexCursor = data.cursor;
+      if (!data.more) break;
+    }
+    renderUart(true);
   };
 
   const refreshSnapshot = async () => {
@@ -695,19 +708,20 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
     connect.disabled = working;
     if (!connectionId) return;
     // Replay only on mount, connection change or a reported gap; never idle polling.
-    for (let batch = 0; batch < 64 && !disposed; batch++) {
+    for (let batch = 0; batch < 257 && !disposed; batch++) {
       const data = await invoke<Output>("serial.read", { cursor });
       if (disposed || data.connectionId !== connectionId) return;
       if (data.gap) {
         terminal.reset();
         terminal.write(`\r\n[${t("Output gap: older data expired from the replay buffer")}]\r\n`);
       }
-      await write(data.data);
-      appendOutput(data.data);
+      await write(data.text);
+      appendOutput(data.text, data.bytes);
       cursor = data.cursor;
       if (!data.more) break;
-      if (batch === 63) notice.textContent = t("Replay limit reached; waiting for the next output event.");
+      if (batch === 256) notice.textContent = t("Replay limit reached; waiting for the next output event.");
     }
+    await refreshHex();
     if (connected) resize();
   };
 
@@ -717,25 +731,30 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
     return updates;
   };
 
-  const sendBytes = (payload: Uint8Array, lineEnding: string) => {
+  const sendInput = (operation: "serial.write" | "serial.write_hex", args: {text: string; lineEnding: string} | {hex: string}, bytes: number) => {
     if (disposed || !connected || working) return;
     if (commandQueue > 0) {
       notice.textContent = t("MCP command queue is busy. Wait for it to finish before sending.");
       return;
     }
-    if (queuedBytes + payload.length > 16 * 1024) {
+    if (queuedBytes + bytes > 16 * 1024) {
       notice.textContent = t("Input queue is full. Wait before sending more.");
       return;
     }
-    queuedBytes += payload.length;
+    queuedBytes += bytes;
     inputQueue = inputQueue.then(async () => {
-      if (!disposed && connected) {
+      if (!disposed && connected && (operation !== "serial.write_hex" || (mode === "uart" && uartHex.checked))) {
         // 插件可能补上行结束符，计数以插件回报的实际字节为准。
-        const written = await invoke<{ bytes: number }>("serial.write", { data: base64(payload), lineEnding });
+        const written = await invoke<{ bytes: number }>(operation, args);
         statsTx += written.bytes;
         renderStats();
       }
-    }).catch(showError).finally(() => { queuedBytes -= payload.length; });
+    }).catch(showError).finally(() => { queuedBytes -= bytes; });
+  };
+
+  const sendText = (text: string, lineEnding: string) => {
+    const endingBytes = lineEnding === "crlf" ? 2 : lineEnding === "none" ? 0 : 1;
+    sendInput("serial.write", {text, lineEnding}, new TextEncoder().encode(text).length + endingBytes);
   };
 
   const stopRepeat = (reason?: string) => {
@@ -761,15 +780,16 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
       }
       if (event.name !== "serial.output") return;
       const data = event.payload as PushedOutput;
-      if (typeof data.data !== "string" || typeof data.connectionId !== "string" || typeof data.cursor !== "string" || !/^\d+$/.test(data.cursor)) {
+      if (typeof data.text !== "string" || typeof data.bytes !== "number" || typeof data.connectionId !== "string" || typeof data.cursor !== "string" || !/^\d+$/.test(data.cursor)) {
         throw new Error("Invalid serial output event");
       }
       if (data.connectionId !== connectionId) await refreshSnapshot();
       if (data.connectionId !== connectionId || BigInt(data.cursor) <= BigInt(cursor)) return;
       if (BigInt(data.cursor) !== BigInt(cursor) + 1n) { await refreshSnapshot(); return; }
-      await write(data.data);
-      appendOutput(data.data);
+      await write(data.text);
+      appendOutput(data.text, data.bytes);
       cursor = data.cursor;
+      await refreshHex();
     }));
     if (disposed) { cancel(); return; }
     unsubscribe = cancel;
@@ -777,6 +797,7 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
   };
 
   const setMode = (next: "terminal" | "uart") => {
+    if (mode !== next) stopRepeat();
     mode = next;
     terminalMode.setAttribute("aria-pressed", String(next === "terminal"));
     uartMode.setAttribute("aria-pressed", String(next === "uart"));
@@ -785,6 +806,7 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
     if (next === "uart") {
       searchView.close(false);
       renderUart(true);
+      void enqueue(refreshHex);
       uartText.focus();
     } else {
       requestAnimationFrame(() => {
@@ -820,10 +842,17 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
     finally { if (!disposed) { working = false; connect.disabled = false; setConnected(connected); } }
   }, { signal: controller.signal });
 
-  const payloadOf = (source: HTMLTextAreaElement, asHex: boolean): Uint8Array | null => {
-    if (!source.value) return null;
+  const uartInput = (): (() => void) | null => {
+    if (!uartText.value) return null;
     try {
-      return asHex ? fromHex(source.value) : new TextEncoder().encode(source.value);
+      if (uartHex.checked) {
+        const bytes = fromHex(uartText.value);
+        const hex = Array.from(bytes, byte => byte.toString(16).padStart(2, "0")).join("");
+        return () => sendInput("serial.write_hex", {hex}, bytes.length);
+      }
+      const text = uartText.value;
+      const ending = uartEnding.value;
+      return () => sendText(text, ending);
     } catch (reason) {
       showError(reason);
       return null;
@@ -831,10 +860,9 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
   };
 
   const sendUart = () => {
-    const payload = payloadOf(uartText, uartHex.checked);
-    if (!payload) return;
-    sendBytes(payload, uartEnding.value);
+    if (mode === "uart") uartInput()?.();
   };
+  uartHex.addEventListener("change", () => { stopRepeat(); uartEnding.disabled = uartHex.checked; }, { signal: controller.signal });
   uartSendButton.addEventListener("click", sendUart, { signal: controller.signal });
   uartText.addEventListener("keydown", (event) => {
     if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); sendUart(); }
@@ -849,19 +877,19 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
       return;
     }
     // 重复发送复用同一条输入队列，不绕过节流和连接检查。
-    const payload = payloadOf(uartText, uartHex.checked);
-    if (!payload) return;
+    const send = uartInput();
+    if (!send) return;
     notice.textContent = t("Repeat every {ms} ms", { ms: interval });
     repeatTimer = window.setInterval(() => {
       if (!connected) { stopRepeat(t("Repeat stopped: the port is disconnected.")); return; }
-      sendBytes(payload, uartEnding.value);
+      send();
     }, interval);
     repeatButton.textContent = t("Stop repeating");
     repeatButton.setAttribute("aria-pressed", "true");
   }, { signal: controller.signal });
 
   viewText.addEventListener("click", () => { uartView = "text"; updateViewButtons(); renderUart(true); }, { signal: controller.signal });
-  viewHex.addEventListener("click", () => { uartView = "hex"; updateViewButtons(); renderUart(true); }, { signal: controller.signal });
+  viewHex.addEventListener("click", () => { uartView = "hex"; updateViewButtons(); void enqueue(refreshHex); }, { signal: controller.signal });
   const updateViewButtons = () => {
     viewText.setAttribute("aria-pressed", String(uartView === "text"));
     viewHex.setAttribute("aria-pressed", String(uartView === "hex"));
@@ -915,8 +943,8 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
     finally { if (!disposed) ports.disabled = !connected && working; }
   }, { signal: controller.signal });
 
-  // 终端里的按键按原样发送，不附加行结束符：这里的输入是原始字节。
-  const onData = terminal.onData((data) => sendBytes(new TextEncoder().encode(data), "none"));
+  // Same text contract as MCP: preserve controls, CR and escape sequences exactly.
+  const onData = terminal.onData((text) => sendText(text, "none"));
   const observer = new ResizeObserver(() => {
     window.clearTimeout(resizeTimer);
     resizeTimer = window.setTimeout(resize, 100);

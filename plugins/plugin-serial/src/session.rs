@@ -11,9 +11,9 @@ use std::{
 };
 
 use crate::command::{CommandHandle, CommandJob, CommandList};
+use crate::payload::{encode_hex, Utf8Decoder};
 use crate::serial_io::SerialWriter;
 use anyhow::{anyhow, bail, Result};
-use base64::{engine::general_purpose::STANDARD, Engine};
 use coterm_proto::runtime::{message::PluginNotification, ErrorCategory, RuntimeError};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -24,9 +24,10 @@ use tokio::{
 };
 
 const MAX_OUTPUT_BYTES: usize = 256 * 1024;
-const OUTPUT_CHUNK_BYTES: usize = 8 * 1024;
-// base64 加信封必须落在基座 16 KiB 结果上限内。
-const READ_BYTES: usize = 8 * 1024;
+// Even an all-control-character text page must fit the 16 KiB JSON result limit,
+// including the MCP content envelope and its JSON string escaping.
+const OUTPUT_CHUNK_BYTES: usize = 1024;
+const READ_BYTES: usize = 1024;
 const IO_TIMEOUT: Duration = Duration::from_secs(2);
 const OPEN_TIMEOUT: Duration = Duration::from_secs(5);
 /// 读取线程单次阻塞等待；只影响断开延迟，不影响数据完整性。
@@ -135,28 +136,51 @@ pub fn same_port(left: &str, right: &str) -> bool {
 
 #[derive(Default)]
 pub struct OutputBuffer {
-    chunks: VecDeque<(u64, Vec<u8>)>,
+    chunks: VecDeque<(u64, Vec<u8>, String)>,
+    decoder: Utf8Decoder,
     bytes: usize,
     sequence: u64,
     pub closed: bool,
 }
 
 impl OutputBuffer {
-    pub fn push(&mut self, data: &[u8]) {
+    pub fn push(&mut self, data: &[u8]) -> String {
+        let mut text = String::new();
         for part in data.chunks(OUTPUT_CHUNK_BYTES) {
+            let decoded = self.decoder.push(part);
+            text.push_str(&decoded);
             self.sequence += 1;
-            self.chunks.push_back((self.sequence, part.to_vec()));
+            self.chunks
+                .push_back((self.sequence, part.to_vec(), decoded));
             self.bytes += part.len();
             while self.bytes > MAX_OUTPUT_BYTES {
-                if let Some((_, data)) = self.chunks.pop_front() {
+                if let Some((_, data, _)) = self.chunks.pop_front() {
                     self.bytes -= data.len();
                 }
             }
         }
+        text
+    }
+
+    pub fn close(&mut self) {
+        let tail = self.decoder.finish();
+        if !tail.is_empty() {
+            self.sequence += 1;
+            self.chunks.push_back((self.sequence, Vec::new(), tail));
+        }
+        self.closed = true;
     }
 
     /// 读取 `after` 之后的有界数据；游标过期时报告 gap，交由调用方重新对齐。
     pub fn read(&self, after: u64) -> Result<Value> {
+        self.read_page(after, false)
+    }
+
+    pub fn read_hex(&self, after: u64) -> Result<Value> {
+        self.read_page(after, true)
+    }
+
+    fn read_page(&self, after: u64, hex: bool) -> Result<Value> {
         if after > self.sequence {
             bail!("Output cursor is ahead of the connection");
         }
@@ -167,7 +191,8 @@ impl OutputBuffer {
         let gap = after.saturating_add(1) < first;
         let mut next = if gap { first - 1 } else { after };
         let mut data = Vec::with_capacity(READ_BYTES);
-        for (sequence, part) in &self.chunks {
+        let mut text = String::new();
+        for (sequence, part, decoded) in &self.chunks {
             if *sequence <= next {
                 continue;
             }
@@ -175,15 +200,22 @@ impl OutputBuffer {
                 break;
             }
             data.extend_from_slice(part);
+            text.push_str(decoded);
             next = *sequence;
         }
-        Ok(json!({
-            "data": STANDARD.encode(data),
+        let mut result = json!({
+            "bytes": data.len(),
             "cursor": next.to_string(),
             "gap": gap,
             "closed": self.closed,
             "more": next < self.sequence,
-        }))
+        });
+        if hex {
+            result["hex"] = json!(encode_hex(&data));
+        } else {
+            result["text"] = json!(text);
+        }
+        Ok(result)
     }
 }
 
@@ -404,7 +436,7 @@ impl Connection {
                 )));
             }
             drop(writer);
-            task_output.lock().await.closed = true;
+            task_output.lock().await.close();
             if let Some((instance, sender)) = &events {
                 let cursor = task_output.lock().await.sequence.to_string();
                 let _ = sender
@@ -560,7 +592,7 @@ impl Connection {
             });
             let _ = timeout(READER_JOIN_TIMEOUT, joined).await;
         }
-        self.output.lock().await.closed = true;
+        self.output.lock().await.close();
         result
     }
 }
@@ -585,10 +617,10 @@ fn read_until_stopped<R: Read>(mut source: ReaderSource<R>) {
             Ok(count) => {
                 source.rx_bytes.fetch_add(count as u64, Ordering::Relaxed);
                 let data = buffer[..count].to_vec();
-                let pushed = {
+                let (pushed, text) = {
                     let mut output = source.output.blocking_lock();
-                    output.push(&data);
-                    output.sequence
+                    let text = output.push(&data);
+                    (output.sequence, text)
                 };
                 if let Some((instance, sender)) = &source.events {
                     let notification = PluginNotification::Event {
@@ -596,7 +628,8 @@ fn read_until_stopped<R: Read>(mut source: ReaderSource<R>) {
                         name: "serial.output".into(),
                         payload: json!({
                             "connectionId": source.connection_id,
-                            "data": STANDARD.encode(&data),
+                            "text": text,
+                            "bytes": data.len(),
                             "cursor": pushed.to_string(),
                         }),
                     };
@@ -692,7 +725,7 @@ mod tests {
         let (mut connection, mut receiver) = queued_connection();
         for index in 0..16 {
             connection.queue_commands(&format!("op-{index}"), false,
-                CommandList::parse(&json!({"commands":[format!("first-{index}"), format!("second-{index}")],"intervalMs":0}))?)?;
+                CommandList::parse(&json!({"commands":[format!("first-{index}"), format!("second-{index}")],"lineEnding":"cr","intervalMs":0}))?)?;
         }
         assert_eq!(connection.pending_commands(), 16);
         assert!(connection
@@ -840,13 +873,10 @@ mod tests {
         let read = output.read(0).unwrap();
         assert_eq!(read["cursor"], "1");
         assert_eq!(read["gap"], false);
-        assert_eq!(
-            STANDARD.decode(read["data"].as_str().unwrap()).unwrap(),
-            b"first"
-        );
+        assert_eq!(read["text"], "first");
 
         // 塞入超过上限的数据，最老的块被淘汰。
-        for _ in 0..64 {
+        for _ in 0..300 {
             output.push(&vec![b'x'; OUTPUT_CHUNK_BYTES]);
         }
         let read = output.read(0).unwrap();
@@ -917,8 +947,37 @@ mod tests {
         let mut output = OutputBuffer::default();
         output.push(&vec![b'y'; OUTPUT_CHUNK_BYTES * 4]);
         let read = output.read(0).unwrap();
-        let bytes = STANDARD.decode(read["data"].as_str().unwrap()).unwrap();
-        assert!(bytes.len() <= READ_BYTES);
+        assert!(read["bytes"].as_u64().unwrap() <= READ_BYTES as u64);
         assert_eq!(read["more"], true);
+    }
+
+    #[test]
+    fn text_and_hex_share_cursors_and_utf8_survives_fragmentation() -> Result<()> {
+        let mut output = OutputBuffer::default();
+        output.push(&[0xe4]);
+        assert_eq!(output.read(0)?["text"], "");
+        output.push(&[0xb8, 0xad, 3, 27, 13, 10, 0xff]);
+        let read = output.read(1)?;
+        assert_eq!(read["text"], "中\u{3}\u{1b}\r\n\u{fffd}");
+        let hex = output.read_hex(1)?;
+        assert_eq!(hex["hex"], "b8ad031b0d0aff");
+        assert!(hex.get("text").is_none());
+        assert!(read.get("hex").is_none());
+        assert_eq!(hex["cursor"], read["cursor"]);
+        output.push(&[0xe4]);
+        output.close();
+        assert_eq!(output.read(2)?["text"], "\u{fffd}");
+        Ok(())
+    }
+
+    #[test]
+    fn worst_case_text_pages_fit_mcp_result_envelopes() -> Result<()> {
+        let mut output = OutputBuffer::default();
+        output.push(&vec![0; READ_BYTES * 2]);
+        let page = output.read(0)?;
+        let result = json!({"content":[{"type":"text","text":page.to_string()}],"isError":false});
+        assert!(serde_json::to_vec(&result)?.len() < 16 * 1024);
+        assert_eq!(page["more"], true);
+        Ok(())
     }
 }
