@@ -22,6 +22,8 @@ const zhCN: Readonly<Record<string, string>> = {
   "Stop": "停止",
   "Close view": "关闭视图",
   "JOBS": "任务",
+  "Expand jobs": "展开任务列表",
+  "Collapse jobs": "收起任务列表",
   "Remove job from list": "从列表移除任务",
   "cancelled": "已取消",
   "timed out": "已超时",

@@ -7,6 +7,7 @@
 - `ssh.exec` 的 `commands` 接受多行脚本，总量 64 KiB UTF-8 字节，通过 stdin 交付，列表项共享目录/环境，首个非零状态停止。
 - `ssh.exec`、`ssh.read_file`、`ssh.write_file` 支持显式 `sudo: true`，审批后由桌面收集一次性秘密；不接受 Agent 传密码。
 - ANSI 终端文本保留控制字符并直接返回 UTF-8，二进制、无效 UTF-8 或控制字符过密时无损返回 Base64；摘要同时呈现 stdout/stderr，限制 JSON 扩张。
+- 后台任务默认单行，从新到旧排列；可展开限高列表，选中后自动收起并将选中项定位到行末。
 
 ## 2026-10-30：使用反馈修复
 
@@ -17,6 +18,14 @@
 - 修复基座秘密交互恢复为异步作业时重复迁移 `Running` 的错误。保持原操作 ID，取消/过期/重连后不重放写操作。
 - exec 输出每流每页 4 KiB，缓冲块 4 KiB，避免两条流合并后超过宿主 16 KiB 记录预算；原始字节计数和缺口语义不变。
 - 桌面和独立 Stdio 适配器支持 `--addr`，优先于可选环境变量；默认端口仍是 `127.0.0.1:51234`，不需要 Token，参数错误只输出 stderr。
+
+## 2026-10-30：任务列表布局
+
+- 修复历史任务持续换行挤占终端空间：默认单行，右侧展开/收起按钮和总数保持可见；展开内容最多 180px 或窗口高度的 30%，支持垂直滚轮。
+- 任务以开始事件顺序从新到旧排列。选中后自动折叠，仅显示最新至选中项的区间，横向滚动至选中项；重新展开可访问更早任务。重复点击选中项保持输出视图，关闭视图仍由独立按钮处理。
+- 列表按操作 ID 复用节点，完成事件不会重排；实时新增、状态更新、语言切换和窗口缩放保持选中项或当前浏览锚点。移除选中项清空视图，空列表不占空间；折叠行也支持滚轮浏览。
+- 验证：SSH 前端与桌面 `pnpm build` 通过；真实浏览器验证 50 个任务的展开高度、滚轮、键盘选中、实时更新、320px 窄窗口、移除和卸载；终端快捷键相关 13 项测试、桌面布局与主题集成 5 项测试通过。
+- 继续入口：[任务 UI](../../plugins/plugin-ssh/frontend/src/index.ts)、[浏览器验收](../../tests/ssh-jobs-browser.test.mjs)。回归命令：`pnpm --filter coterm-plugin-ssh-ui build`，然后 `node --import ./scripts/test-ts-loader.mjs --test tests/ssh-jobs-browser.test.mjs tests/terminal-shortcuts.test.mjs tests/terminal-shortcuts-browser.test.mjs`。
 
 ## 验证与入口
 

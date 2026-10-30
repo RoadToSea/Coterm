@@ -64,37 +64,59 @@ const css = `
   .terminal { flex: 1; min-height: 0; overflow: hidden; padding: 10px 4px 0 10px; }
   .jobs {
     display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 6px;
+    flex: 0 0 auto;
+    align-items: flex-start;
+    gap: 8px;
     padding: 6px 10px;
     border-top: 1px solid var(--coterm-border, #333333);
     background: var(--coterm-surface-raised, #252526);
-    min-height: 34px;
+    min-height: 40px;
   }
-  .jobs:empty { display: none; }
-  .jobs-label { font-size: 10px; letter-spacing: .06em; color: var(--coterm-text-muted, #969696); margin-right: 4px; }
+  .jobs[hidden] { display: none; }
+  .jobs-label { flex: none; line-height: 26px; font-size: 10px; letter-spacing: .06em; color: var(--coterm-text-muted, #969696); }
+  .jobs-list {
+    display: flex;
+    flex: 1;
+    min-width: 0;
+    gap: 6px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    overflow-anchor: none;
+    overscroll-behavior: contain;
+    scrollbar-width: none;
+  }
+  .jobs[data-expanded="true"] .jobs-list {
+    flex-wrap: wrap;
+    max-height: min(180px, 30vh);
+    overflow-x: hidden;
+    overflow-y: auto;
+    scrollbar-width: thin;
+  }
+  .jobs-toggle { flex: none; width: 26px; height: 26px; padding: 0; border-radius: 4px; }
   .job {
     display: inline-flex;
+    flex: 0 0 auto;
     align-items: center;
-    gap: 6px;
+    height: 26px;
     border: 1px solid var(--coterm-border-input, #454545);
     border-radius: 10px;
     background: var(--coterm-surface, #1e1e1e);
-    padding: 3px 10px;
+    padding: 0;
     font-size: 11px;
-    max-width: 260px;
+    max-width: min(260px, 100%);
   }
+  .job[hidden] { display: none; }
   .job:hover { background: var(--coterm-surface-hover, #414141); }
-  .job[aria-current="true"] {
+  .job[data-selected="true"] {
     border-color: var(--coterm-focus, #007fd4);
     background: var(--coterm-surface-hover, #414141);
   }
+  .job-select { display: flex; align-items: center; align-self: stretch; gap: 6px; min-width: 0; padding: 3px 6px 3px 10px; border: 0; border-radius: inherit; background: transparent; }
   .job .spin { color: var(--coterm-accent, #0e639c); }
   .job .ok { color: #6a9955; }
   .job .bad { color: var(--coterm-danger, #f48771); }
   .job .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 150px; }
-  .job .dismiss { border: 0; background: transparent; padding: 0 2px; color: var(--coterm-text-muted, #969696); }
+  .job .dismiss { flex: none; align-self: stretch; border: 0; border-radius: inherit; background: transparent; padding: 0 6px; color: var(--coterm-text-muted, #969696); }
   .job .dismiss:hover { color: var(--coterm-accent-foreground, #ffffff); background: transparent; }
   .job-view {
     flex: 0 0 auto;
@@ -254,8 +276,20 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
   terminalContainer.className = "terminal";
   const jobsBar = document.createElement("div");
   jobsBar.className = "jobs";
-  jobsBar.setAttribute("role", "list");
-  jobsBar.setAttribute("aria-label", t("Background jobs"));
+  jobsBar.hidden = true;
+  const jobsLabel = document.createElement("span");
+  jobsLabel.className = "jobs-label";
+  const jobsList = document.createElement("div");
+  jobsList.className = "jobs-list";
+  jobsList.id = "ssh-jobs";
+  jobsList.setAttribute("role", "list");
+  jobsList.setAttribute("aria-label", t("Background jobs"));
+  const jobsToggle = document.createElement("button");
+  jobsToggle.type = "button";
+  jobsToggle.className = "jobs-toggle";
+  jobsToggle.setAttribute("aria-controls", jobsList.id);
+  jobsToggle.setAttribute("aria-expanded", "false");
+  jobsBar.append(jobsLabel, jobsList, jobsToggle);
   main.append(terminalContainer, jobsBar);
   const jobView = document.createElement("section");
   jobView.className = "job-view";
@@ -374,6 +408,14 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
   }
   const jobs = new Map<string, JobView>();
   let selectedJob: string | null = null;
+  let jobsExpanded = false;
+  const jobElements = new Map<string, {
+    item: HTMLDivElement;
+    select: HTMLButtonElement;
+    icon: HTMLSpanElement;
+    name: HTMLSpanElement;
+    dismiss: HTMLButtonElement;
+  }>();
 
   const jobLabel = (job: JobView) => {
     const first = job.text.trim().split(String.fromCharCode(10))[0] ?? "";
@@ -385,45 +427,94 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
     if (job.timedOut || (job.exitCode ?? 0) !== 0) return "✕";
     return "✓";
   };
-  const renderJobs = () => {
-    jobsBar.replaceChildren();
-    if (jobs.size === 0) { jobView.hidden = true; return; }
-    const label = document.createElement("span");
-    label.className = "jobs-label";
-    label.textContent = t("JOBS");
-    jobsBar.append(label);
-    for (const job of jobs.values()) {
-      const tab = document.createElement("button");
-      tab.type = "button";
-      tab.className = "job";
-      tab.setAttribute("role", "listitem");
-      tab.setAttribute("aria-current", String(selectedJob === job.operationId));
-      tab.title = job.text;
-      const icon = document.createElement("span");
+  const renderJobs = (alignSelection = false) => {
+    if (disposed) return;
+    const wasExpanded = jobsBar.dataset.expanded === "true";
+    const viewport = jobsList.getBoundingClientRect();
+    const atEnd = jobsList.scrollWidth - jobsList.clientWidth - jobsList.scrollLeft < 2;
+    // Keep the item at the viewport edge in place when live events prepend jobs.
+    const anchor = Array.from(jobsList.children).find((element) => {
+      if (!(element instanceof HTMLElement) || element.hidden) return false;
+      const bounds = element.getBoundingClientRect();
+      return wasExpanded ? bounds.bottom > viewport.top : bounds.right > viewport.left;
+    });
+    const anchorBefore = anchor?.getBoundingClientRect();
+    jobsBar.hidden = jobs.size === 0;
+    if (jobs.size === 0) { jobsExpanded = false; jobView.hidden = true; }
+    jobsBar.dataset.expanded = String(jobsExpanded);
+    jobsLabel.textContent = `${t("JOBS")} ${jobs.size}`;
+    jobsList.setAttribute("aria-label", t("Background jobs"));
+    jobsToggle.textContent = jobsExpanded ? "▴" : "▾";
+    jobsToggle.title = t(jobsExpanded ? "Collapse jobs" : "Expand jobs");
+    jobsToggle.setAttribute("aria-label", jobsToggle.title);
+    jobsToggle.setAttribute("aria-expanded", String(jobsExpanded));
+    for (const [id, elements] of jobElements) {
+      if (jobs.has(id)) continue;
+      elements.item.remove();
+      jobElements.delete(id);
+    }
+    let afterSelection = false;
+    let next = jobsList.firstElementChild;
+    // Job-start events arrive in order; completion updates must not reorder them.
+    for (const job of [...jobs.values()].reverse()) {
+      let elements = jobElements.get(job.operationId);
+      if (!elements) {
+        const item = document.createElement("div");
+        item.className = "job";
+        item.setAttribute("role", "listitem");
+        const select = document.createElement("button");
+        select.type = "button";
+        select.className = "job-select";
+        const icon = document.createElement("span");
+        icon.setAttribute("aria-hidden", "true");
+        const name = document.createElement("span");
+        name.className = "name";
+        const dismiss = document.createElement("button");
+        dismiss.type = "button";
+        dismiss.className = "dismiss";
+        dismiss.textContent = "×";
+        dismiss.addEventListener("click", () => {
+          const removedSelection = selectedJob === job.operationId;
+          jobs.delete(job.operationId);
+          if (removedSelection) selectedJob = null;
+          renderJobs(removedSelection);
+          renderJobView();
+          if (root.activeElement === null) jobsToggle.focus();
+        });
+        select.addEventListener("click", () => {
+          selectedJob = job.operationId;
+          jobsExpanded = false;
+          renderJobs(true);
+          renderJobView();
+        });
+        select.append(icon, name);
+        item.append(select, dismiss);
+        elements = { item, select, icon, name, dismiss };
+        jobElements.set(job.operationId, elements);
+      }
+      const { item, select, icon, name, dismiss } = elements;
+      item.hidden = !jobsExpanded && afterSelection;
+      item.dataset.selected = String(selectedJob === job.operationId);
+      select.setAttribute("aria-current", String(selectedJob === job.operationId));
+      select.title = job.text;
       icon.textContent = jobIcon(job);
       icon.className = !job.done ? "spin" : (job.cancelled || job.timedOut || (job.exitCode ?? 0) !== 0) ? "bad" : "ok";
-      const name = document.createElement("span");
-      name.className = "name";
       name.textContent = jobLabel(job);
-      const dismiss = document.createElement("span");
-      dismiss.className = "dismiss";
-      dismiss.textContent = "×";
-      dismiss.setAttribute("role", "button");
-      dismiss.setAttribute("aria-label", t("Remove job from list"));
-      dismiss.addEventListener("click", (event) => {
-        event.stopPropagation();
-        jobs.delete(job.operationId);
-        if (selectedJob === job.operationId) selectedJob = null;
-        renderJobs();
-        renderJobView();
-      });
-      tab.append(icon, name, dismiss);
-      tab.addEventListener("click", () => {
-        selectedJob = selectedJob === job.operationId ? null : job.operationId;
-        renderJobs();
-        renderJobView();
-      });
-      jobsBar.append(tab);
+      dismiss.setAttribute("aria-label", `${t("Remove job from list")}: ${jobLabel(job)}`);
+      if (item !== next) jobsList.insertBefore(item, next);
+      next = item.nextElementSibling;
+      if (selectedJob === job.operationId) afterSelection = true;
+    }
+    if (!jobsExpanded && (alignSelection || (selectedJob !== null && atEnd))) {
+      jobsList.scrollLeft = selectedJob ? jobsList.scrollWidth : 0;
+      jobsList.scrollTop = 0;
+    } else if (jobsExpanded !== wasExpanded) {
+      const item = selectedJob ? jobElements.get(selectedJob)?.item : undefined;
+      jobsList.scrollTop = item ? item.getBoundingClientRect().top - jobsList.getBoundingClientRect().top : 0;
+    } else if (anchor instanceof HTMLElement && !anchor.hidden && anchorBefore) {
+      const bounds = anchor.getBoundingClientRect();
+      if (jobsExpanded) jobsList.scrollTop += bounds.top - anchorBefore.top;
+      else jobsList.scrollLeft += bounds.left - anchorBefore.left;
     }
   };
   const renderJobView = () => {
@@ -489,7 +580,23 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
     renderJobs();
   };
 
-  jobClose.addEventListener("click", () => { selectedJob = null; renderJobs(); renderJobView(); });
+  jobsToggle.addEventListener("click", () => {
+    jobsExpanded = !jobsExpanded;
+    renderJobs(!jobsExpanded);
+  }, { signal: controller.signal });
+  jobsList.addEventListener("wheel", (event) => {
+    if (jobsExpanded || event.ctrlKey || jobsList.scrollWidth <= jobsList.clientWidth) return;
+    const delta = Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY;
+    const scale = event.deltaMode === WheelEvent.DOM_DELTA_LINE ? 26
+      : event.deltaMode === WheelEvent.DOM_DELTA_PAGE ? jobsList.clientWidth : 1;
+    jobsList.scrollLeft += delta * scale;
+    event.preventDefault();
+  }, { passive: false, signal: controller.signal });
+  const jobsObserver = new ResizeObserver(() => {
+    if (!disposed && !jobsExpanded && selectedJob) jobsList.scrollLeft = jobsList.scrollWidth;
+  });
+  jobsObserver.observe(jobsList);
+  jobClose.addEventListener("click", () => { selectedJob = null; renderJobs(true); renderJobView(); });
   jobStop.addEventListener("click", async () => {
     const job = selectedJob ? jobs.get(selectedJob) : undefined;
     if (!job || job.done) return;
@@ -568,7 +675,6 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
     searchView.refreshLocale();
     jobStop.textContent = t("Stop");
     jobClose.textContent = t("Close view");
-    jobsBar.setAttribute("aria-label", t("Background jobs"));
     state.textContent = t(stateMessage);
     connect.textContent = t(connected ? "Disconnect" : "Connect");
     renderJobs();
@@ -583,6 +689,7 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
     unsubscribe?.();
     window.clearTimeout(resizeTimer);
     observer.disconnect();
+    jobsObserver.disconnect();
     onData.dispose();
     stopShortcuts();
     searchView.dispose();

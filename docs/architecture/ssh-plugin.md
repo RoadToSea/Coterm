@@ -71,6 +71,8 @@ MCP 显式注册 status、probe、connect、disconnect、reset、command、exec�
 
 每连接回放缓冲 256 KiB，每块最多 4 KiB，`ssh.read` 单次最多 8 KiB；事件为 `ssh.terminal.output`、`ssh.status` 和 `ssh.job`，携带连接 ID 和游标。`ssh.job` 在 exec 作业开始和结束时各发一次，只含 `operationId`、源命令和 `done`，不携带输出；前端据此渲染终端底部的作业行，点击后在该行下方展开作业视图，通过 `ssh.output` 按游标取流。`ssh.status` 事件在重建 Shell 后带 `reset=true`；`ssh.status` 操作本身只报告当前配置与连接 ID。前端先订阅再回放，缺口时恢复；输入队列上限 16 KiB，控制队列 64 项，终端滚动缓存 3000 行。
 
+作业选择区默认只占一行，按作业开始事件的先后从新到旧排列，完成事件不改变顺序。右侧按钮展开完整列表；列表内容高度不超过 `min(180px, 30vh)`，超过时可用滚轮上下查看。选中作业自动收起列表，折叠行只保留从最新作业到选中作业的区间，并滚动至末端，让选中作业位于最右侧；更早的作业仍可重新展开查看。折叠时滚轮可横向浏览该区间。作业状态刷新保持列表节点、键盘焦点和滚动锚点，新作业到达或窗口变窄时保持选中项可见。作业输出视图独立于列表的展开状态，仍保留原有高度上限与内部滚动。
+
 连接错误带稳定阶段：`tcp`、`handshake`、`host_key`、`auth`、`channel`、`pty`、`shell`、`connect`。指纹不匹配使用 `ssh_host_key_mismatch`；远端 Shell 退出使用 `ssh_remote_shell_exited` 并附退出码，网络中断使用 `ssh_connection_lost_before_completion`。
 
 指纹每次连接确认，不持久化。尚无私钥、ssh-agent、MFA、SFTP、端口转发、自动重连和凭据保存；命令块选择与上下文链路也未接通。秘密和背压规则见 [运行时通信](runtime-communication.md)。
