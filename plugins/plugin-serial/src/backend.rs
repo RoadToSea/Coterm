@@ -5,7 +5,7 @@ use anyhow::{anyhow, bail, Result};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use coterm_proto::runtime::{
     lifecycle::{CreateInstance, HelloResult, McpToolRegistration, RuntimeHello},
-    message::{HostCommand, PluginNotification},
+    message::{CancelTarget, DeferredOperation, HostCommand, PluginNotification},
     operation::{
         ApproveProposal, DispatchMode, InvokeRequest, OperationDescriptor, OperationEffect,
         OperationScope,
@@ -14,6 +14,7 @@ use coterm_proto::runtime::{
 };
 use serde_json::{json, Value};
 
+use crate::command::{self, CommandList};
 use crate::session::{same_port, Config, Connection};
 
 pub const PLUGIN_ID: &str = "coterm-plugin-serial";
@@ -77,6 +78,12 @@ pub fn catalog() -> Vec<OperationDescriptor> {
             json!({"data":{"type":"string","contentEncoding":"base64"},"lineEnding":{"type":"string","enum":["none","lf","cr","crlf"]}}),
         ),
         (
+            "serial.command",
+            OperationEffect::Commit,
+            true,
+            command::properties(),
+        ),
+        (
             "serial.signals",
             OperationEffect::Commit,
             false,
@@ -109,6 +116,12 @@ pub fn catalog() -> Vec<OperationDescriptor> {
         sensitive_input: false,
         transient: false,
     });
+    if let Some(operation) = operations
+        .iter_mut()
+        .find(|item| item.name == "serial.command")
+    {
+        operation.input_schema["required"] = json!(["commands"]);
+    }
     for registration in mcp_tools() {
         let native = registration.operation.trim_start_matches("mcp.");
         if let Some(base) = operations.iter().find(|item| item.name == native).cloned() {
@@ -123,7 +136,7 @@ pub fn catalog() -> Vec<OperationDescriptor> {
     operations
 }
 
-/// MCP 是显式插件 API；原始字节写入会直接驱动硬件，不在此暴露。
+/// MCP 只开放经审批的单行命令列表，不暴露任意原始字节与信号控制。
 pub fn mcp_tools() -> Vec<McpToolRegistration> {
     let mut tools: Vec<_> = [
         ("serial.status", "Read the serial port configuration and connection state.", json!({}), vec![]),
@@ -131,6 +144,7 @@ pub fn mcp_tools() -> Vec<McpToolRegistration> {
         ("serial.connect", "Open the configured serial port.", json!({}), vec![]),
         ("serial.disconnect", "Close the serial port and release it.", json!({}), vec![]),
         ("serial.read", "Read bounded base64 bytes from the device using a decimal cursor; reports gaps.", json!({"cursor":{"type":"string","default":"0"}}), vec![]),
+        ("serial.command", "Queue 1-64 single-line commands for sequential serial writes. Each entry receives a line ending (default CR); intervalMs is the delay between writes, not a device completion check. Requires approval unless explicitly allowed. Returns sent/remaining byte accounting; device execution and exit codes are unknown. Never replays after disconnect or uncertain delivery.", command::properties(), vec!["commands"]),
     ]
     .into_iter()
     .map(|(name, description, mut properties, required)| {
@@ -162,10 +176,17 @@ fn validate_mcp_args(operation: &str, args: &Value) -> Result<()> {
     let properties = schema["properties"]
         .as_object()
         .ok_or_else(|| anyhow!("Invalid MCP schema"))?;
-    if object
-        .iter()
-        .any(|(name, value)| !properties.contains_key(name) || !value.is_string())
-    {
+    if object.iter().any(|(name, value)| {
+        let Some(property) = properties.get(name) else {
+            return true;
+        };
+        match property["type"].as_str() {
+            Some("string") => !value.is_string(),
+            Some("array") => !value.is_array(),
+            Some("integer") => !value.is_u64(),
+            _ => true,
+        }
+    }) {
         bail!("Unknown or invalid serial MCP argument");
     }
     if schema["required"].as_array().is_some_and(|required| {
@@ -176,7 +197,25 @@ fn validate_mcp_args(operation: &str, args: &Value) -> Result<()> {
     }) {
         bail!("Missing required serial MCP argument");
     }
+    if object
+        .get("pluginInstanceId")
+        .and_then(Value::as_str)
+        .is_some_and(|id| id.trim().is_empty())
+    {
+        bail!("An explicit serial instance is required");
+    }
+    if operation == "mcp.serial.command" {
+        CommandList::parse(&command_args(args))?;
+    }
     Ok(())
+}
+
+fn command_args(args: &Value) -> Value {
+    let mut args = args.clone();
+    if let Some(object) = args.as_object_mut() {
+        object.remove("pluginInstanceId");
+    }
+    args
 }
 
 fn mcp_result(value: Value) -> Value {
@@ -278,7 +317,17 @@ impl Backend {
             }
             "invoke" => self.invoke(decode(params)?).await,
             "cancel" => {
-                // 串口写入是短事务，没有可取消的长时间操作。
+                let target: CancelTarget = decode(params)?;
+                if let CancelTarget::Operation(operation_id) = target {
+                    for instance in self.instances.values() {
+                        if let Some(connection) = &instance.connection {
+                            let result = connection.cancel_commands(&operation_id).await?;
+                            if result["outcome"] != "unsupported" {
+                                return Ok(result);
+                            }
+                        }
+                    }
+                }
                 Ok(json!({"outcome":"unsupported"}))
             }
             "approve" => {
@@ -366,6 +415,14 @@ impl Backend {
                 "serial.write" => {
                     write_payload(&request.args)?;
                 }
+                "serial.command" | "mcp.serial.command" => {
+                    let args = if request.operation.starts_with("mcp.") {
+                        command_args(&request.args)
+                    } else {
+                        request.args.clone()
+                    };
+                    CommandList::parse(&args)?;
+                }
                 "serial.signals" => {
                     let has_dtr = optional_bool(&request.args, "dtr")?.is_some();
                     let has_rts = optional_bool(&request.args, "rts")?.is_some();
@@ -403,10 +460,35 @@ impl Backend {
             if args.get("pluginInstanceId").and_then(Value::as_str) != Some(id) {
                 bail!("MCP instance argument mismatch");
             }
+            if native == "serial.command" {
+                return self.queue_commands(id, command_args(&args), operation_id, true);
+            }
             let result = self.execute_domain(id, native, args, operation_id).await?;
             return Ok(mcp_result(result));
         }
+        if operation == "serial.command" {
+            return self.queue_commands(id, args, operation_id, false);
+        }
         self.execute_domain(id, operation, args, operation_id).await
+    }
+
+    fn queue_commands(
+        &mut self,
+        id: &str,
+        args: Value,
+        operation_id: &str,
+        mcp: bool,
+    ) -> Result<Value> {
+        let list = CommandList::parse(&args)?;
+        let connection = self
+            .instances
+            .get_mut(id)
+            .and_then(|instance| instance.connection.as_mut())
+            .ok_or_else(|| anyhow!("Serial port is not open"))?;
+        connection.queue_commands(operation_id, mcp, list)?;
+        Ok(serde_json::to_value(DeferredOperation {
+            operation_id: operation_id.into(),
+        })?)
     }
 
     async fn execute_domain(
@@ -521,6 +603,7 @@ fn status_of(instance: &Instance) -> Value {
         "signals": {"dtr": dtr, "rts": rts},
         "rxBytes": rx,
         "txBytes": tx,
+        "commandQueue": connection.map_or(0, Connection::pending_commands),
     })
 }
 
@@ -696,5 +779,39 @@ mod tests {
         )
         .is_err());
         assert!(validate_mcp_args("mcp.serial.nope", &json!({})).is_err());
+    }
+
+    #[test]
+    fn command_mcp_is_sensitive_commit_and_validates_full_lists() -> Result<()> {
+        for name in ["serial.command", "mcp.serial.command"] {
+            let descriptor = catalog()
+                .into_iter()
+                .find(|item| item.name == name)
+                .ok_or_else(|| anyhow!("Missing command operation"))?;
+            assert_eq!(descriptor.effect, OperationEffect::Commit);
+            assert!(descriptor.sensitive_input);
+            assert!(!descriptor.transient);
+            assert_eq!(descriptor.input_schema["required"], json!(["commands"]));
+        }
+        assert!(validate_mcp_args(
+            "mcp.serial.command",
+            &json!({"pluginInstanceId":"one","commands":["pwd","ls"],"intervalMs":0})
+        )
+        .is_ok());
+        for args in [
+            json!({"commands":["pwd"]}),
+            json!({"pluginInstanceId":"","commands":["pwd"]}),
+            json!({"pluginInstanceId":"one","commands":[]}),
+            json!({"pluginInstanceId":"one","commands":["pwd", "bad\nline"]}),
+            json!({"pluginInstanceId":"one","commands":["pwd"],"intervalMs":true}),
+            json!({"pluginInstanceId":"one","commands":["pwd"],"extra":true}),
+            json!({"pluginInstanceId":"one","text":"pwd"}),
+        ] {
+            assert!(
+                validate_mcp_args("mcp.serial.command", &args).is_err(),
+                "{args}"
+            );
+        }
+        Ok(())
     }
 }

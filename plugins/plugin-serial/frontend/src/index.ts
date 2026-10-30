@@ -3,6 +3,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import terminalCSS from "@xterm/xterm/css/xterm.css?inline";
 import type { PluginAPI, PluginConfigurationAPI, PluginFrontend, OperationReceipt } from "@coterm/plugin-sdk";
 import { createTranslator } from "./i18n";
+import { commandList, waitForCommands, type CommandResult } from "./command-list";
 
 const css = `
   :host {
@@ -117,7 +118,7 @@ const css = `
   .uart-send input[type="number"] { width: 82px; }
   .send {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) 110px auto auto;
+    grid-template-columns: minmax(0, 1fr) 90px 100px auto auto;
     gap: 8px;
     align-items: end;
     border-top: 1px solid var(--coterm-border, #333333);
@@ -187,6 +188,7 @@ interface Config {
 interface Status {
   config: Config; connected: boolean; connectionId: string | null;
   signals: { dtr: boolean; rts: boolean }; rxBytes: number; txBytes: number;
+  commandQueue: number;
 }
 interface Probe { config: Config; connected: boolean; ports: PortEntry[] }
 interface Output { data: string; cursor: string; gap: boolean; closed: boolean; more: boolean; connectionId: string }
@@ -506,30 +508,34 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
 
   uartPanel.append(uartBar, uartOutput, uartSend, signalsRow);
 
-  // 终端模式的发送行：文本或 HEX，可附加行结束符。
+  // Shell 列表由后端排队逐项发送；原始文本/HEX 仍在 UART 调试台中提供。
   const send = document.createElement("div");
   send.className = "send";
   const entry = caption(createTranslator(api.i18n)("Send"));
   const entryText = entry.firstElementChild as HTMLSpanElement;
   const text = document.createElement("textarea");
-  text.rows = 1;
+  text.rows = 3;
   entry.append(text);
   const ending = document.createElement("select");
-  ending.append(option("cr", "CR"), option("crlf", "CRLF"), option("lf", "LF"), option("none", "None"));
+  ending.append(option("cr", "CR"), option("crlf", "CRLF"), option("lf", "LF"));
   ending.value = "cr";
   const endingLabel = caption(createTranslator(api.i18n)("Line ending"));
   const endingLabelText = endingLabel.firstElementChild as HTMLSpanElement;
   endingLabel.append(ending);
-  const hexLabel = document.createElement("label");
-  hexLabel.className = "inline";
-  const hexInput = document.createElement("input");
-  hexInput.type = "checkbox";
-  const hexText = document.createElement("span");
-  hexLabel.append(hexInput, hexText);
+  const commandIntervalLabel = caption(createTranslator(api.i18n)("Interval (ms)"));
+  const commandInterval = document.createElement("input");
+  commandInterval.type = "number";
+  commandInterval.min = "0";
+  commandInterval.max = "1000";
+  commandInterval.value = "100";
+  commandIntervalLabel.append(commandInterval);
   const sendButton = document.createElement("button");
   sendButton.type = "button";
   sendButton.disabled = true;
-  send.append(entry, endingLabel, hexLabel, sendButton);
+  const cancelCommands = document.createElement("button");
+  cancelCommands.type = "button";
+  cancelCommands.disabled = true;
+  send.append(entry, endingLabel, commandIntervalLabel, sendButton, cancelCommands);
 
   const notice = document.createElement("div");
   notice.className = "notice";
@@ -556,6 +562,9 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
   let resizeTimer = 0;
   let queuedBytes = 0;
   let inputQueue = Promise.resolve();
+  let activeCommand: string | null = null;
+  let commandSubmitting = false;
+  let commandQueue = 0;
   let mode: "terminal" | "uart" = "terminal";
   let uartView: "text" | "hex" = "text";
   let paused = false;
@@ -599,11 +608,12 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
     uartSendButton.textContent = tr("Send");
     repeatLabelText.textContent = tr("Repeat");
     repeatButton.textContent = repeatTimer ? tr("Stop repeating") : tr("Start repeating");
-    entryText.textContent = tr("Send");
-    text.placeholder = tr("Send text, then Send (Enter sends, Shift+Enter adds a line)");
+    entryText.textContent = tr("Commands (one per line)");
+    text.placeholder = tr("One command per line. Ctrl+Enter sends the list; Enter adds a line.");
     endingLabelText.textContent = tr("Line ending");
-    hexText.textContent = tr("Input is HEX");
-    sendButton.textContent = tr("Send");
+    retitle(commandIntervalLabel, tr("Interval (ms)"));
+    sendButton.textContent = tr("Send list");
+    cancelCommands.textContent = tr("Stop queue");
     uartOutput.dataset.empty = tr("Receive");
     dtrButton.textContent = `${tr("DTR")} ${signals.dtr ? tr("High") : tr("Low")}`;
     rtsButton.textContent = `${tr("RTS")} ${signals.rts ? tr("High") : tr("Low")}`;
@@ -629,7 +639,8 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
     connected = next;
     state.textContent = next ? t("Connected") : t("Disconnected");
     connect.textContent = next ? t("Disconnect") : t("Connect");
-    sendButton.disabled = !next || working;
+    sendButton.disabled = !next || working || commandSubmitting;
+    cancelCommands.disabled = !next || !activeCommand;
     uartSendButton.disabled = !next || working;
     ports.disabled = working;
     dtrButton.disabled = !next || working;
@@ -714,6 +725,9 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
       if (connectionId) clearLog();
     }
     setSignals(status.signals ?? { dtr: status.config.dtr, rts: status.config.rts });
+    commandQueue = status.commandQueue ?? 0;
+    statsTx = status.txBytes;
+    renderStats();
     setConnected(status.connected);
     connect.disabled = working;
     if (!connectionId) return;
@@ -742,6 +756,10 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
 
   const sendBytes = (payload: Uint8Array, lineEnding: string) => {
     if (disposed || !connected || working) return;
+    if (activeCommand || commandSubmitting || commandQueue > 0) {
+      notice.textContent = t("Command queue is busy. Wait or stop it before raw input.");
+      return;
+    }
     if (queuedBytes + payload.length > 16 * 1024) {
       notice.textContent = t("Input queue is full. Wait before sending more.");
       return;
@@ -770,6 +788,17 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
     const cancel = await api.subscribeEvents((event) => enqueue(async () => {
       if (event.name === "runtime.closed") { setConnected(false); notice.textContent = t("Plugin connection closed."); return; }
       if (event.name === "runtime.gap" || event.name === "serial.status") { await refreshSnapshot(); return; }
+      if (event.name === "serial.command") {
+        const progress = event.payload as { connectionId: string; operationId: string; sent: number; total: number; txBytes: number; finished: boolean };
+        if (progress.connectionId !== connectionId) return;
+        statsTx = progress.txBytes;
+        renderStats();
+        if (progress.operationId === activeCommand) {
+          notice.textContent = t("Sent {sent}/{total}; device completion is unknown.", { sent: progress.sent, total: progress.total });
+        }
+        if (progress.finished) await refreshSnapshot();
+        return;
+      }
       if (event.name !== "serial.output") return;
       const data = event.payload as PushedOutput;
       if (typeof data.data !== "string" || typeof data.connectionId !== "string" || typeof data.cursor !== "string" || !/^\d+$/.test(data.cursor)) {
@@ -842,15 +871,42 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
     }
   };
 
-  const sendText = () => {
-    const payload = payloadOf(text, hexInput.checked);
-    if (!payload) return;
-    sendBytes(payload, ending.value);
-    text.value = "";
+  const sendText = async () => {
+    if (disposed || !connected || working || commandSubmitting) return;
+    try {
+      const args = commandList(text.value, ending.value, Number(commandInterval.value));
+      commandSubmitting = true;
+      sendButton.disabled = true;
+      stopRepeat();
+      await inputQueue;
+      if (disposed || !connected) return;
+      const receipt = await api.invoke<CommandResult>("serial.command", args, { waitTimeoutMs: 0 });
+      activeCommand = receipt.operationId;
+      cancelCommands.disabled = false;
+      const completed = await waitForCommands(api, receipt, controller.signal);
+      if (disposed) return;
+      if (completed.status === "cancelled") notice.textContent = t("Queue stopped. Already sent commands cannot be undone.");
+      else {
+        const result = output(completed);
+        notice.textContent = t("Sent {sent}/{total}; device completion is unknown.", { sent: result.sent, total: result.total });
+      }
+      await enqueue(refreshSnapshot);
+    } catch (reason) { showError(reason instanceof Error ? t(reason.message) : reason); }
+    finally {
+      activeCommand = null;
+      commandSubmitting = false;
+      if (!disposed) setConnected(connected);
+    }
   };
   sendButton.addEventListener("click", sendText, { signal: controller.signal });
   text.addEventListener("keydown", (event) => {
-    if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); sendText(); }
+    if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) { event.preventDefault(); void sendText(); }
+  }, { signal: controller.signal });
+  cancelCommands.addEventListener("click", async () => {
+    if (!activeCommand || disposed) return;
+    cancelCommands.disabled = true;
+    try { await api.cancelOperation(activeCommand); }
+    catch (reason) { showError(reason); if (!disposed && activeCommand) cancelCommands.disabled = false; }
   }, { signal: controller.signal });
 
   const sendUart = () => {

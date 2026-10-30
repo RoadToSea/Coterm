@@ -67,6 +67,8 @@ async fn backend_rejects_requests_that_break_the_runtime_contract() -> Result<()
         .filter_map(|operation| operation["name"].as_str())
         .collect();
     assert!(names.contains(&"serial.connect"));
+    assert!(names.contains(&"serial.command"));
+    assert!(names.contains(&"mcp.serial.command"));
     assert!(!names.contains(&"mcp.serial.write"));
     // MCP 工具必须声明实例作用域参数，否则基座在握手期就会拒绝。
     for tool in result["mcpTools"]
@@ -159,6 +161,34 @@ async fn backend_rejects_requests_that_break_the_runtime_contract() -> Result<()
     assert_eq!(status["signals"]["rts"], true);
     assert_eq!(status["rxBytes"], 0);
     assert_eq!(status["txBytes"], 0);
+    assert_eq!(status["commandQueue"], 0);
+    // 列表在审批准备阶段完成整批校验，不打开端口、不提前发送第一项。
+    for operation in ["serial.command", "mcp.serial.command"] {
+        let mut args = json!({"commands":["pwd", "ls -la"],"intervalMs":100});
+        if operation.starts_with("mcp.") {
+            args["pluginInstanceId"] = json!("one");
+        }
+        let proposal = backend.request("invoke", json!({
+            "operationId":"list-proposal","operation":operation,"effect":"commit",
+            "pluginInstanceId":"one","args":args,"source":"agent",
+            "dispatch":{"mode":"prepare_proposal","proposalId":"p-list"},"pluginId":PLUGIN_ID
+        })).await?;
+        assert_eq!(proposal["args"]["commands"], json!(["pwd", "ls -la"]));
+        backend
+            .request(
+                "approve",
+                json!({"operationId":"list-proposal","proposalId":"p-list",
+            "pluginInstanceId":"one","args":args}),
+            )
+            .await
+            .expect_err("approval on a closed port must fail");
+        args["commands"] = json!(["valid-first-entry", "invalid\nsecond-entry"]);
+        backend.request("invoke", json!({
+            "operationId":"invalid-list","operation":operation,"effect":"commit",
+            "pluginInstanceId":"one","args":args,"source":"agent",
+            "dispatch":{"mode":"prepare_proposal","proposalId":"p-invalid"},"pluginId":PLUGIN_ID
+        })).await.expect_err("invalid later entry must reject the whole proposal");
+    }
     // 未打开端口时写入与读取必须失败，而不是静默成功。
     backend
         .request(
@@ -345,6 +375,54 @@ async fn process_host_loads_the_serial_package_and_validates_mcp_tools() -> Resu
         .await?;
     assert_eq!(failed.status, OperationStatus::Failed);
     assert!(failed.error.is_some());
+
+    // 真宿主来源识别、审批和脱敏：Agent 的列表不能直接进入设备队列。
+    let secret_command = "echo serial-test-sensitive-token";
+    let agent = CallerContext {
+        source: OperationSource::Agent,
+        session_id: instance.session_id.clone(),
+        plugin_id: None,
+    };
+    let proposal = runtime
+        .submit(
+            agent.clone(),
+            SubmitOperation { wait_timeout_ms: Some(1000), ..operation(
+                "mcp.serial.command",
+                json!({
+                    "pluginInstanceId":instance.plugin_instance_id,"commands":[secret_command,"pwd"]
+                }),
+            ) },
+        )
+        .await?;
+    assert_eq!(proposal.status, OperationStatus::AwaitingApproval);
+    let history = runtime
+        .recent(caller.clone(), &instance.plugin_instance_id, 100)
+        .await?;
+    assert!(!serde_json::to_string(&history)?.contains(secret_command));
+    let agent_view = runtime.get(agent, &proposal.operation_id).await?;
+    assert!(!serde_json::to_string(&agent_view)?.contains(secret_command));
+    let human_view = runtime.get(caller.clone(), &proposal.operation_id).await?;
+    assert_eq!(
+        human_view
+            .output
+            .as_ref()
+            .map(|output| &output["args"]["commands"]),
+        Some(&json!([secret_command, "pwd"])),
+        "human must see the full list being approved"
+    );
+    let proposal_id = proposal
+        .proposal_id
+        .ok_or_else(|| anyhow::anyhow!("Missing command approval"))?;
+    let approved = runtime.approve(caller.clone(), coterm_proto::runtime::operation::ApproveProposal {
+        operation_id: proposal.operation_id, proposal_id,
+        plugin_instance_id: Some(instance.plugin_instance_id.clone()),
+        args: json!({"pluginInstanceId":instance.plugin_instance_id,"commands":[secret_command,"pwd"]}),
+    }).await?;
+    assert_eq!(
+        approved.status,
+        OperationStatus::Failed,
+        "approved list still cannot write to a closed port"
+    );
 
     runtime.stop(PLUGIN_ID).await?;
     std::fs::remove_dir_all(directory)?;

@@ -53,7 +53,7 @@ pnpm tauri:build --config ../../tests/fixtures/tauri-smoke.conf.json --bundles n
 
 原生验收同时检查 Windows GUI 宿主不为插件分配控制台，以及真实 SSH 配置提交后进入未连接的终端界面；不会自动连接远端服务器。
 
-浏览器测试前需构建桌面与 SSH 前端，并安装 Chrome/Edge/Chromium；可用 `CHROME_BIN` 或 `EDGE_BIN` 指定。串口硬件测试默认 ignored，启用方式见串口说明。
+浏览器测试前需构建桌面、SSH 和串口前端，并安装 Chrome/Edge/Chromium；可用 `CHROME_BIN` 或 `EDGE_BIN` 指定。串口硬件测试默认 ignored，启用方式见串口说明。
 
 ## 目录与文档
 

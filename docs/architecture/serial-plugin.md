@@ -10,7 +10,9 @@
 
 端口名按平台规则校验：Windows 接受 `COM6` 这类设备名（不区分大小写），Unix 接受 `/dev/...` 设备节点；其余带分隔符的名字一律拒绝，避免把配置变成任意文件打开入口。部分开发板会因 DTR 变化复位，可为这类板子取消「打开时置高 DTR」。
 
-终端按键发送原始字节；发送框支持 HEX 与 none/lf/cr/crlf 行结束符。写入总量为 1～16384 字节，HEX 必须为偶数位有效十六进制字符。
+终端按键发送原始字节。Shell 发送框改为命令列表，每行一条；Enter 换行，Ctrl+Enter（macOS 也支持 Cmd+Enter）或「发送列表」提交，空白行忽略。插件逐项写入，每项附加 CR（默认）、LF 或 CRLF；可设置 0～1000 ms 的发送间隔，默认 100 ms。「停止队列」只停止该列表尚未发送的项，不撤回已发送内容，也不向设备注入 Ctrl+C。列表发送期间禁止原始字节写入，以免终端输入、UART 定时发送与命令混写。
+
+UART 调试发送框保留原始文本、HEX 与 none/lf/cr/crlf 行结束符。原始写入总量为 1～16384 字节，HEX 必须为偶数位有效十六进制字符。
 
 ## 操作与 MCP
 
@@ -20,16 +22,35 @@
 | `serial.connect/disconnect` | commit | 打开或关闭端口，清理该实例旧提案 |
 | `serial.read` | read | 游标回放 base64 字节，报告 gap/closed/more |
 | `serial.write` | commit | 人工字节写入；标记为敏感输入 |
+| `serial.command` | commit | 单行命令列表，插件有界队列逐项发送；标记为敏感输入 |
 | `serial.signals` | commit | 设置 DTR/RTS 电平 |
 | `serial.plugin_info` | read | 插件级信息 |
 
-MCP 提供上述工具中的 status、probe、connect、disconnect、read、plugin_info，**不开放 write 与 signals**。除 plugin_info 外必须明确实例 ID。取消请求目前返回 unsupported，不冒充设备已停止。
+MCP 提供上述工具中的 status、probe、connect、disconnect、read、command、plugin_info，**不开放原始字节 write 与 signals**。除 plugin_info 外必须明确实例 ID。`serial.command` 原生接口与 MCP 使用同一列表契约；MCP 额外要求 `pluginInstanceId`。Agent 来源的提交经过基座审批，除非用户主动开启 Bypass 或明确放行；列表整体为审批快照，输入在普通账本中脱敏，普通进度事件不包含命令内容。
+
+例如调用 MCP `serial.command`：
+
+```json
+{
+  "pluginInstanceId": "serial-instance-id",
+  "commands": ["cd /tmp", "pwd", "ls -la"],
+  "lineEnding": "cr",
+  "intervalMs": 100
+}
+```
+
+每个列表为 1～64 项，每项为非空单行文本、最多 4096 UTF-8 字节；允许制表符，拒绝换行及其他控制字符。列表含所有行结束符合计最多 16 KiB，每实例最多 16 个在途列表。插件整批校验后入队，按 FIFO 发送，一个列表的项不会与其他列表交叉；有在途列表时，新的原始字节写入或 DTR/RTS 修改直接拒绝，避免排队超时后迟到执行。不会拼接 `&&`、`eval` 或 shell 包装脚本。
+
+请求入队后通过运行时 DeferredOperation 和通知完成，控制通道保持可响应读取、状态与取消。结果包含 `total/sent/remaining/bytes`、`deviceCompletion:"unknown"`；`serial.command` 进度事件额外携带操作 ID、连接 ID、累计发送字节数，`serial.status.commandQueue` 可恢复在途列表数。**完成只表示所有字节写入并 flush 成功，不代表设备执行完成**：不会猜测提示符、退出码，不因设备命令失败而自动停止。发送间隔也不是等待设备响应；登录密码、交互式程序和长命令应人工确认设备状态后再分批发送。
+
+取消只针对列表：队列中的列表可返回 `not_submitted`；已经开始的列表等待当前写入确认后停止余下项，返回 `stopped`。无法确认时返回 `unknown`。原始字节写入及其他操作的取消仍为 `unsupported`。断开、读写故障或写入超时会丢弃尚未发送的项并报告未知交付，包含已确认发送的项数；当前项可能部分送达，不自动重放，重新连接后也不恢复旧队列。
 
 ## 数据与已知限制
 
 - 每连接缓存 256 KiB，每块及单次读取最多 8 KiB；游标过期报告 gap，超出末尾报错。
 - `serial.output`/`serial.status` 使用连接 ID 和游标；通知队列有界，推送丢失后以回放缓冲恢复。
 - 读取使用独立线程，写入经 64 槽队列和阻塞任务提交；前端输入队列上限 16 KiB。
+- 命令列表共用写入 actor，每项单独写入和 flush；每项驱动等待上限 2 秒，间隔等待可取消。断开前先停止后续项，再回收连接；Windows、Linux、macOS 共用该实现，无新增依赖、权限或传输方式。
 - 读取线程有停止标志，显式断开时等待其退出并回收句柄（上限 2 秒）；析构也会置位该标志，避免线程泄漏。停止标志只在一次阻塞读之后检查，最坏退出延迟是一次读取轮询（20 ms）。
 - 打开端口是阻塞调用，放在阻塞线程池执行；5 秒超时后关闭端口并报错，不占用异步工作线程。
 - `serial.status` 回报 DTR/RTS 电平与本次连接累计收发字节数；前端 TX 计数取插件回报的实际写入字节，包含插件补上的行结束符。
@@ -44,6 +65,16 @@ MCP 提供上述工具中的 status、probe、connect、disconnect、read、plug
 
 ```bash
 cargo test -p coterm-plugin-serial
+node --import ./scripts/test-ts-loader.mjs --test tests/serial-command-list.test.mjs
+```
+
+列表回归使用内存写端验证顺序、独立写入、取消、故障后停止和字节计数；契约测试验证审批前整批校验及 MCP 实例绑定，不向物理端口写入。Shell 列表在真实设备上的发送节奏仍需按设备接收能力验收。
+
+无需硬件的 Shell 列表浏览器验收（需要 Chrome/Edge/Chromium，使用实际前端构建和宿主 API 替身）：
+
+```bash
+pnpm --filter coterm-plugin-serial-ui build
+node --import ./scripts/test-ts-loader.mjs --test tests/serial-command-browser.test.mjs
 ```
 
 硬件用例默认 ignored。确认目标设备可接收写入后显式执行，将示例端口替换为实际端口：

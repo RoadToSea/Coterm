@@ -49,6 +49,24 @@ struct State {
     operation_catalog: HashMap<String, HashMap<String, OperationDescriptor>>,
     /// (plugin_id, plugin_instance_id, proposal_id, operation)
     pending_approvals: HashMap<String, (String, Option<String>, String, String)>,
+    /// 敏感草稿仅在人工审批读取时提供，不能经普通账本或 MCP 返回。
+    approval_drafts: HashMap<String, Value>,
+}
+
+impl State {
+    fn prune_approval_drafts(&mut self) {
+        self.approval_drafts
+            .retain(|id, _| self.pending_approvals.contains_key(id));
+    }
+
+    fn with_approval_draft(&self, mut record: OperationRecord) -> OperationRecord {
+        if record.status == OperationStatus::AwaitingApproval {
+            if let Some(draft) = self.approval_drafts.get(&record.operation_id) {
+                record.output = Some(draft.clone());
+            }
+        }
+        record
+    }
 }
 
 /// 宿主级待处理操作；只含 UI 渲染所需字段，不含操作参数或秘密值。
@@ -660,7 +678,14 @@ impl ProcessPluginRuntime {
         plugin_id: &str,
         limit: usize,
     ) -> Vec<OperationRecord> {
-        self.history.recent(plugin_id, None, limit).await
+        // 此适配器只供桌面人工入口使用，插件级审批也需要读取当前敏感草稿。
+        let state = self.state.lock().await;
+        self.history
+            .recent(plugin_id, None, limit)
+            .await
+            .into_iter()
+            .map(|record| state.with_approval_draft(record))
+            .collect()
     }
 
     /// Only returns the package's validated, self-contained frontend entry.
@@ -1043,6 +1068,7 @@ impl ProcessPluginRuntime {
         state.pending_approvals.retain(|_, (_, instance, _, _)| {
             !instance.as_ref().is_some_and(|id| instances.contains(id))
         });
+        state.prune_approval_drafts();
         for instance_id in instances {
             if let Some(instance) = state.instances.get(instance_id) {
                 for record in self.history.active(&instance.plugin_id, instance_id).await {
@@ -1110,6 +1136,7 @@ async fn settle_closed_plugin(state: &mut State, history: &OperationHistory, plu
     state
         .pending_approvals
         .retain(|_, pending| pending.0 != plugin_id);
+    state.prune_approval_drafts();
     state
         .interactions
         .retain(|_, (request, _)| !ids.contains(&request.plugin_instance_id));
@@ -1417,6 +1444,7 @@ impl PluginRuntime for ProcessPluginRuntime {
                 .collect::<Vec<_>>();
             for operation_id in pending_ids {
                 state.pending_approvals.remove(&operation_id);
+                state.approval_drafts.remove(&operation_id);
                 let _ = self
                     .history
                     .transition(&operation_id, OperationStatus::Cancelled, None, None)
@@ -1706,6 +1734,12 @@ impl Operations for ProcessPluginRuntime {
                 if let Some(proposal_id) = proposal_id {
                     match result {
                         Ok(draft) => {
+                            let draft = if descriptor.sensitive_input {
+                                state.approval_drafts.insert(operation_id.clone(), draft);
+                                serde_json::json!({"redacted":true})
+                            } else {
+                                draft
+                            };
                             state.pending_approvals.insert(
                                 operation_id.clone(),
                                 (
@@ -1787,7 +1821,11 @@ impl Operations for ProcessPluginRuntime {
                 .await
                 .map_err(map_history_error)?;
             verify_record_access(&self.state, &caller, &record).await?;
-            Ok(record)
+            if caller.source == OperationSource::Human {
+                Ok(self.state.lock().await.with_approval_draft(record))
+            } else {
+                Ok(record)
+            }
         })
     }
 
@@ -1881,6 +1919,7 @@ impl Operations for ProcessPluginRuntime {
                 .await
                 .map_err(map_history_error)?;
             let result = process.request(HostCommand::Approve(request.clone())).await;
+            state.approval_drafts.remove(&request.operation_id);
             if state
                 .pending_approvals
                 .remove(&request.operation_id)
@@ -1940,6 +1979,7 @@ impl Operations for ProcessPluginRuntime {
                 })
                 .await?;
             state.pending_approvals.remove(operation_id);
+            state.approval_drafts.remove(operation_id);
             self.bump_attention();
             self.history
                 .transition(operation_id, OperationStatus::Rejected, None, None)
@@ -1993,6 +2033,7 @@ impl Operations for ProcessPluginRuntime {
                     })
                     .await;
                 state.pending_approvals.remove(operation_id);
+                state.approval_drafts.remove(operation_id);
                 self.bump_attention();
                 let (status, error) = match result {
                     Ok(_) => (OperationStatus::Cancelled, None),

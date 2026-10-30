@@ -1,6 +1,6 @@
 //! 串口连接、读取线程和有界回放缓冲。协议语义全部留在这里，基座不感知 UART。
 use std::{
-    collections::VecDeque,
+    collections::{HashMap, VecDeque},
     io::{Read, Write},
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -10,6 +10,7 @@ use std::{
     time::Duration,
 };
 
+use crate::command::{CommandHandle, CommandJob, CommandList};
 use anyhow::{anyhow, bail, Result};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use coterm_proto::runtime::{message::PluginNotification, ErrorCategory, RuntimeError};
@@ -187,6 +188,7 @@ impl OutputBuffer {
 
 enum Input {
     Write(Vec<u8>),
+    Commands(CommandJob),
     /// 只改请求的电平；未给出的信号保持不变。
     Signals {
         dtr: Option<bool>,
@@ -202,6 +204,7 @@ struct Action {
 
 pub struct Connection {
     actions: mpsc::Sender<Action>,
+    commands: HashMap<String, CommandHandle>,
     pub output: Arc<Mutex<OutputBuffer>>,
     task: Option<JoinHandle<()>>,
     reader: Option<ThreadHandle<()>>,
@@ -298,6 +301,11 @@ impl Connection {
                         let Some(action) = action else { break; };
                         let closing = matches!(action.input, Input::Close);
                         let result = match action.input {
+                            Input::Commands(job) => {
+                                let (returned, failed) = job.run(writer.take(), &task_stop, &task_tx, &events, &connection_id).await;
+                                writer = returned;
+                                if failed { Err(anyhow!("Serial command delivery failed")) } else { Ok(()) }
+                            }
                             Input::Write(data) => {
                                 // 写端在阻塞线程里独占使用，闭包返回时归还给本 actor。
                                 let Some(handle) = writer.take() else {
@@ -385,6 +393,15 @@ impl Connection {
             }
             // 停止标志同时约束读取线程；断开或读写失败后都不能让它继续跑。
             task_stop.store(true, Ordering::SeqCst);
+            receiver.close();
+            while let Some(action) = receiver.recv().await {
+                if let Input::Commands(job) = action.input {
+                    job.fail(&events).await;
+                }
+                let _ = action.reply.send(Err(anyhow!(
+                    "Serial connection closed before sending input"
+                )));
+            }
             drop(writer);
             task_output.lock().await.closed = true;
             if let Some((instance, sender)) = &events {
@@ -400,6 +417,7 @@ impl Connection {
         });
         Ok(Self {
             actions,
+            commands: HashMap::new(),
             output,
             task: Some(task),
             reader: Some(reader),
@@ -424,10 +442,78 @@ impl Connection {
     }
 
     pub async fn write(&self, data: Vec<u8>) -> Result<()> {
+        if self.pending_commands() > 0 {
+            bail!("Serial command queue is busy; wait or cancel it before raw input");
+        }
         if data.is_empty() || data.len() > 16 * 1024 {
             bail!("Serial input must contain 1 to 16384 bytes");
         }
         self.submit(Input::Write(data)).await
+    }
+
+    pub(crate) fn queue_commands(
+        &mut self,
+        operation_id: &str,
+        mcp: bool,
+        list: CommandList,
+    ) -> Result<()> {
+        self.commands
+            .retain(|_, handle| !handle.progress.borrow().finished);
+        if self.is_closed() || self.stop.load(Ordering::SeqCst) {
+            bail!("Serial port is not open");
+        }
+        if self.commands.len() >= 16 || self.commands.contains_key(operation_id) {
+            bail!("Serial command queue is full or operation already exists (limit: 16 lists)");
+        }
+        let (job, handle) = CommandJob::new(operation_id.into(), mcp, list);
+        let (reply, _) = oneshot::channel();
+        self.actions
+            .try_send(Action {
+                input: Input::Commands(job),
+                reply,
+            })
+            .map_err(|_| anyhow!("Serial input queue is full or closed"))?;
+        self.commands.insert(operation_id.into(), handle);
+        Ok(())
+    }
+
+    pub fn pending_commands(&self) -> usize {
+        self.commands
+            .values()
+            .filter(|handle| !handle.progress.borrow().finished)
+            .count()
+    }
+
+    pub async fn cancel_commands(&self, operation_id: &str) -> Result<Value> {
+        let Some(handle) = self.commands.get(operation_id) else {
+            return Ok(json!({"outcome":"unsupported"}));
+        };
+        let mut progress = handle.progress.clone();
+        let _ = handle.cancel.send(true);
+        if !progress.borrow().started && !progress.borrow().finished {
+            return Ok(json!({"outcome":"not_submitted","sent":0,"bytes":0}));
+        }
+        let finished = timeout(Duration::from_secs(3), async {
+            loop {
+                let state = progress.borrow().clone();
+                if state.finished {
+                    return Some(state);
+                }
+                if progress.changed().await.is_err() {
+                    return None;
+                }
+            }
+        })
+        .await
+        .ok()
+        .flatten();
+        Ok(match finished {
+            Some(state) if state.cancelled => {
+                json!({"outcome":if state.sent == 0 {"not_submitted"} else {"stopped"},"sent":state.sent,"bytes":state.bytes})
+            }
+            Some(_) => json!({"outcome":"unsupported"}),
+            None => json!({"outcome":"unknown"}),
+        })
     }
 
     /// 当前 DTR/RTS 电平；只在驱动确认后更新，失败保留上一次的值。
@@ -439,6 +525,9 @@ impl Connection {
     }
 
     pub async fn set_signals(&self, dtr: Option<bool>, rts: Option<bool>) -> Result<(bool, bool)> {
+        if self.pending_commands() > 0 {
+            bail!("Serial command queue is busy; wait or cancel it before changing signals");
+        }
         if dtr.is_none() && rts.is_none() {
             bail!("At least one serial signal must be requested");
         }
@@ -456,6 +545,8 @@ impl Connection {
 
     /// 显式断开：先停写端，再等读取线程退出并回收句柄。
     pub async fn disconnect(&mut self) -> Result<()> {
+        // 在 Close 到达 actor 前停止当前列表的后续项；不继续排空设备命令。
+        self.stop.store(true, Ordering::SeqCst);
         let result = self.submit(Input::Close).await;
         self.stop.store(true, Ordering::SeqCst);
         if let Some(task) = self.task.take() {
@@ -519,6 +610,7 @@ fn read_until_stopped<R: Read>(mut source: ReaderSource<R>) {
             Err(_) => break,
         }
     }
+    source.stop.store(true, Ordering::SeqCst);
 }
 
 /// 阻塞打开端口并设置初始信号电平，返回读端和写端两个句柄。
@@ -571,6 +663,112 @@ pub fn domain_error(code: &str, message: impl Into<String>) -> RuntimeError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 只替换物理连接，仍使用 Connection 的真实入队、限流和取消接口。
+    fn queued_connection() -> (Connection, mpsc::Receiver<Action>) {
+        let (actions, receiver) = mpsc::channel(64);
+        (
+            Connection {
+                actions,
+                commands: HashMap::new(),
+                output: Arc::new(Mutex::new(OutputBuffer::default())),
+                task: Some(tokio::spawn(std::future::pending())),
+                reader: None,
+                stop: Arc::new(AtomicBool::new(false)),
+                dtr: Arc::new(AtomicBool::new(true)),
+                rts: Arc::new(AtomicBool::new(true)),
+                rx_bytes: Arc::new(AtomicU64::new(0)),
+                tx_bytes: Arc::new(AtomicU64::new(0)),
+                id: "queue-test".into(),
+            },
+            receiver,
+        )
+    }
+
+    #[tokio::test]
+    async fn command_queue_is_bounded_fifo_and_blocks_conflicting_raw_input() -> Result<()> {
+        let (mut connection, mut receiver) = queued_connection();
+        for index in 0..16 {
+            connection.queue_commands(&format!("op-{index}"), false,
+                CommandList::parse(&json!({"commands":[format!("first-{index}"), format!("second-{index}")],"intervalMs":0}))?)?;
+        }
+        assert_eq!(connection.pending_commands(), 16);
+        assert!(connection
+            .queue_commands(
+                "overflow",
+                false,
+                CommandList::parse(&json!({"commands":["overflow"]}))?
+            )
+            .is_err());
+        assert!(connection.write(b"raw".to_vec()).await.is_err());
+        assert!(connection.set_signals(Some(false), None).await.is_err());
+        let mut writer = Some(std::io::Cursor::new(Vec::<u8>::new()));
+        let mut expected = String::new();
+        for index in 0..16 {
+            let action = receiver.try_recv()?;
+            let Input::Commands(job) = action.input else {
+                bail!("expected queued command list");
+            };
+            assert_eq!(job.operation_id, format!("op-{index}"));
+            let (returned, failed) = job
+                .run(
+                    writer.take(),
+                    &connection.stop,
+                    &connection.tx_bytes,
+                    &None,
+                    &connection.id,
+                )
+                .await;
+            assert!(!failed);
+            writer = returned;
+            expected.push_str(&format!("first-{index}\rsecond-{index}\r"));
+        }
+        assert_eq!(
+            writer.ok_or_else(|| anyhow!("writer lost"))?.into_inner(),
+            expected.as_bytes()
+        );
+        assert_eq!(connection.pending_commands(), 0);
+        assert_eq!(connection.counters().1, expected.len() as u64);
+        // 完成后的句柄会回收，下一批可以立即入队。
+        connection.queue_commands(
+            "next",
+            false,
+            CommandList::parse(&json!({"commands":["next"]}))?,
+        )?;
+        assert_eq!(connection.commands.len(), 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn cancelling_a_queued_list_confirms_not_submitted_and_sends_no_bytes() -> Result<()> {
+        let (mut connection, mut receiver) = queued_connection();
+        connection.queue_commands(
+            "cancel-queued",
+            false,
+            CommandList::parse(&json!({"commands":["must-not-send"]}))?,
+        )?;
+        let outcome = connection.cancel_commands("cancel-queued").await?;
+        assert_eq!(outcome["outcome"], "not_submitted");
+        let Input::Commands(job) = receiver.try_recv()?.input else {
+            bail!("expected queued command list");
+        };
+        let (writer, failed) = job
+            .run(
+                Some(std::io::Cursor::new(Vec::<u8>::new())),
+                &connection.stop,
+                &connection.tx_bytes,
+                &None,
+                &connection.id,
+            )
+            .await;
+        assert!(!failed);
+        assert!(writer
+            .ok_or_else(|| anyhow!("writer lost"))?
+            .into_inner()
+            .is_empty());
+        assert_eq!(connection.pending_commands(), 0);
+        Ok(())
+    }
 
     fn config(port: &str) -> Config {
         Config {
