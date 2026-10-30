@@ -6,27 +6,27 @@ use coterm_core::{
     plugin_runtime::{CallerContext, Operations, PluginRuntime, SubmitOperation},
 };
 use coterm_proto::runtime::{
+    RuntimeError,
     lifecycle::InstanceInfo,
     operation::{OperationReceipt, OperationSource, OperationStatus},
-    RuntimeError,
 };
 use serde::Serialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::{
     io::BufReader,
     net::{TcpListener, TcpStream},
     task::{JoinHandle, JoinSet},
-    time::timeout,
 };
 
 use crate::transport::{read_frame, write_frame};
+
+/// Fixed loopback endpoint used by the desktop MCP bridge.
+pub const DEFAULT_BRIDGE_ADDRESS: &str = "127.0.0.1:51234";
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct McpConnectionInfo {
     pub address: String,
-    /// Private UI command only; never log, persist, or publish in an event.
-    pub token: String,
 }
 
 pub struct BridgeServer {
@@ -35,17 +35,30 @@ pub struct BridgeServer {
 }
 
 impl BridgeServer {
+    /// Bind the production bridge to the stable local endpoint.
     pub async fn bind(runtime: Arc<ProcessPluginRuntime>) -> std::io::Result<Self> {
-        let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await?;
+        let address = DEFAULT_BRIDGE_ADDRESS
+            .parse()
+            .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidInput, error))?;
+        Self::bind_at(runtime, address).await
+    }
+
+    /// Bind a bridge at an explicit address. Tests use port `0` to avoid
+    /// competing with another bridge process.
+    pub async fn bind_at(
+        runtime: Arc<ProcessPluginRuntime>,
+        address: SocketAddr,
+    ) -> std::io::Result<Self> {
+        if !address.ip().is_loopback() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "Coterm MCP requires a loopback address",
+            ));
+        }
+        let listener = TcpListener::bind(address).await?;
         let info = McpConnectionInfo {
             address: listener.local_addr()?.to_string(),
-            token: format!(
-                "{}{}",
-                uuid::Uuid::new_v4().simple(),
-                uuid::Uuid::new_v4().simple()
-            ),
         };
-        let token = info.token.clone();
         let task = tokio::spawn(async move {
             let mut clients = JoinSet::new();
             loop {
@@ -54,8 +67,7 @@ impl BridgeServer {
                         let Ok((socket, peer)) = accepted else { break };
                         if !peer.ip().is_loopback() || clients.len() >= 8 { continue; }
                         let runtime = runtime.clone();
-                        let token = token.clone();
-                        clients.spawn(async move { let _ = serve_client(socket, runtime, &token).await; });
+                        clients.spawn(async move { let _ = serve_client(socket, runtime).await; });
                     }
                     _ = clients.join_next(), if !clients.is_empty() => {}
                 }
@@ -75,32 +87,9 @@ impl Drop for BridgeServer {
     }
 }
 
-async fn serve_client(
-    socket: TcpStream,
-    runtime: Arc<ProcessPluginRuntime>,
-    token: &str,
-) -> anyhow::Result<()> {
+async fn serve_client(socket: TcpStream, runtime: Arc<ProcessPluginRuntime>) -> anyhow::Result<()> {
     let (reader, mut writer) = socket.into_split();
     let mut reader = BufReader::new(reader);
-    let mut auth = timeout(Duration::from_secs(5), read_frame(&mut reader))
-        .await??
-        .ok_or_else(|| anyhow::anyhow!("authentication required"))?;
-    let supplied: Value = serde_json::from_slice(&auth)?;
-    auth.fill(0);
-    let valid = supplied
-        .get("token")
-        .and_then(Value::as_str)
-        .is_some_and(|s| {
-            s.len() == token.len()
-                && s.bytes()
-                    .zip(token.bytes())
-                    .fold(0u8, |v, (a, b)| v | (a ^ b))
-                    == 0
-        });
-    if !valid {
-        anyhow::bail!("authentication failed");
-    }
-    write_frame(&mut writer, &json!({"authenticated":true})).await?;
     let mut initialized = false;
     let mut ready = false;
     let mut last_tools = Value::Null;
@@ -570,6 +559,26 @@ pub fn loopback_address(value: &str) -> anyhow::Result<SocketAddr> {
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn bridge_rejects_non_loopback_bind_addresses() {
+        let runtime = Arc::new(ProcessPluginRuntime::new(
+            "test",
+            coterm_proto::runtime::lifecycle::RuntimeLimits {
+                max_control_bytes: 1024,
+                max_data_chunk_bytes: 1024,
+                initial_window: coterm_proto::runtime::stream::FlowWindow {
+                    chunks: 1,
+                    bytes: 1024,
+                },
+            },
+        ));
+        let address: SocketAddr = "192.0.2.1:51234".parse().expect("address");
+        let result = BridgeServer::bind_at(runtime, address).await;
+        assert!(
+            matches!(result, Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied)
+        );
+    }
+
     #[test]
     fn receipts_report_output_size_instead_of_copying_it() {
         let receipt = OperationReceipt {
@@ -599,7 +608,11 @@ mod tests {
             "output": {"text": "y".repeat(8192)},
         });
         let text = digest(&record);
-        assert!(text.len() <= DIGEST_LIMIT, "digest was {} bytes", text.len());
+        assert!(
+            text.len() <= DIGEST_LIMIT,
+            "digest was {} bytes",
+            text.len()
+        );
         assert!(text.contains("omitted"));
         assert!(!text.contains(&"y".repeat(1024)));
     }
@@ -630,10 +643,15 @@ mod tests {
                 "required": ["pluginInstanceId"],
             }
         }));
-        assert!(descriptor["inputSchema"]["properties"]
-            .get("pluginInstanceId")
-            .is_none());
+        assert!(
+            descriptor["inputSchema"]["properties"]
+                .get("pluginInstanceId")
+                .is_none()
+        );
         assert_eq!(descriptor["inputSchema"]["required"], json!(["name"]));
-        assert_eq!(descriptor["inputSchema"]["properties"]["name"]["type"], "string");
+        assert_eq!(
+            descriptor["inputSchema"]["properties"]["name"]["type"],
+            "string"
+        );
     }
 }

@@ -8,7 +8,7 @@ MCP 只有一个对外入口：本地 Stdio 子进程。桌面前端通过 Tauri
 
 桌面 MCP 面板负责交付配置：
 
-1. 用户点「启用」，桌面在随机回环端口启动私有 Bridge 并签发本次启动有效的 Token；停用或退出即释放，旧 Token 立即失效。
+1. 用户点「启用」，桌面在固定回环地址 `127.0.0.1:51234` 启动私有 Bridge；停用或退出即释放监听。
 2. 面板给出可直接粘贴的完整客户端配置：
 
 ```json
@@ -16,19 +16,15 @@ MCP 只有一个对外入口：本地 Stdio 子进程。桌面前端通过 Tauri
   "mcpServers": {
     "coterm": {
       "command": "<Coterm 安装目录>\coterm-desktop.exe",
-      "args": ["mcp", "stdio"],
-      "env": {
-        "COTERM_MCP_ADDR": "127.0.0.1:<bridge-port>",
-        "COTERM_MCP_TOKEN": "<本次启动签发>"
-      }
+      "args": ["mcp", "stdio"]
     }
   }
 }
 ```
 
-`command` 取当前可执行文件的绝对路径，不搜索 PATH；`COTERM_MCP_ADDR` 与 `COTERM_MCP_TOKEN` 也可由用户自行设置，适配器只认这两个环境变量，不读取本机配置文件。运行时 Token 不匹配或端口不监听时，适配器在 stderr 报错退出，stdout 保持为空，客户端可据此显示启动失败而不是空目录。
+`command` 取当前可执行文件的绝对路径，不搜索 PATH。适配器默认连接固定地址；开发测试可通过 `COTERM_MCP_ADDR` 指向临时回环端口。桥未启用或端口不可用时，适配器在 stderr 报错退出，stdout 保持为空，客户端可据此显示启动失败而不是空目录。
 
-安全边界：桥只监听 IPv4 回环、随机端口，并用定长比较校验 Token；Token 只经桌面私有 Tauri 命令返回面板，不写盘、不进事件、日志、MCP 返回值或插件前端，配置中的 Token 按秘密处理。未启用时面板不显示配置。桌面必须保持运行，适配器不启动插件、不接触前端。内部交互和事件见 [运行时通信](runtime-communication.md)。
+安全边界：桥只监听 IPv4 回环和固定端口，不接受局域网连接；MCP 调用统一标记为 Agent 来源，写操作仍经过基座审批/Bypass 规则、插件校验和协议认证。固定端口本身不承担身份认证，桌面必须保持运行，适配器不启动插件、不接触前端。内部交互和事件见 [运行时通信](runtime-communication.md)。
 
 ## 工具与路由
 
@@ -70,7 +66,7 @@ SSH 认证步骤和工具边界见 [SSH](ssh-plugin.md)，串口可用工具见 
 
 ## 适配器传输
 
-- 每会话走一条新建的 TCP 连接：先发一帧 `{"token":"…"}`，桌面回 `{"authenticated":true}` 后才开始转发 MCP 消息；认证失败直接断开。
+- 每会话走一条新建的 TCP 连接，连接建立后直接转发 MCP JSON-RPC 帧；桥只接受本机回环连接。
 - 帧为单行 JSON，请求与响应各不超过 1 MiB；超限明确失败，不无限排队。
 - 每连接最多 16 个在途工具调用，最多 8 个并发连接；超出返回 JSON-RPC 错误而不是排队。
 - 支持 `2025-06-18`、`2025-03-26`、`2024-11-05`；`initialize` 后必须发送 `notifications/initialized` 才能调用工具。

@@ -1,9 +1,7 @@
 //! 桌面对 Stdio 适配器的私有桥发布。
 //!
-//! 适配器是桌面可执行文件自身（`coterm-desktop mcp stdio`），只认
-//! `COTERM_MCP_ADDR` / `COTERM_MCP_TOKEN`；这里负责按需启动本机桥、签发本次启动有效的
-//! Token，并把可直接粘贴的客户端配置交给桌面面板。Token 只经私有 Tauri 命令返回前端，
-//! 不写盘、不进事件、日志或 MCP 返回值。
+//! 适配器是桌面可执行文件自身（`coterm-desktop mcp stdio`）。这里负责按需启动固定
+//! 回环地址的本机桥，并把可直接粘贴的客户端配置交给桌面面板。
 
 use std::sync::Arc;
 
@@ -17,20 +15,20 @@ use serde::Serialize;
 /// 启用时未找到当前可执行文件，无法给出可启动的客户端配置。
 const EXECUTABLE_UNAVAILABLE: &str = "mcp_stdio_executable_unavailable";
 
-/// 面板展示的 Stdio 状态；`clientConfig` 含 Token，只能走私有命令。
+/// 面板展示的 Stdio 状态；客户端配置不含秘密。
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StdioStatus {
-    /// 桥是否正在监听；停用或退出后旧 Token 立即失效。
+    /// 桥是否正在监听。
     pub enabled: bool,
     /// 适配器入口，即桌面可执行文件；解析失败时为 null。
     pub command: Option<String>,
     pub address: Option<String>,
-    /// 含本次启动 Token 的完整客户端配置；未启用时为 null。
+    /// 不含秘密的完整客户端配置；未启用时为 null。
     pub client_config: Option<String>,
 }
 
-/// 按需存活的私有桥。启用时绑定回环随机端口并生成新 Token；停用即丢弃监听。
+/// 按需存活的本机桥。启用时绑定固定回环端口；停用即丢弃监听。
 pub struct StdioBridge {
     runtime: Arc<ProcessPluginRuntime>,
     command: Option<String>,
@@ -51,12 +49,11 @@ impl StdioBridge {
     }
 
     fn snapshot(&self, info: Option<&McpConnectionInfo>) -> StdioStatus {
-        // 没有适配器时不交付含 Token 的配置：用户无法用它启动任何进程。
+        // 没有适配器时不交付配置：用户无法用它启动任何进程。
         let client_config = match (&self.command, info) {
-            (Some(command), Some(info)) => Some(
-                StdioClientConfiguration::new(command.clone(), &info.address, &info.token)
-                    .client_config,
-            ),
+            (Some(command), Some(info)) => {
+                Some(StdioClientConfiguration::new(command.clone(), &info.address).client_config)
+            }
             _ => None,
         };
         StdioStatus {
@@ -72,15 +69,14 @@ impl StdioBridge {
         self.snapshot(active.as_ref().map(BridgeServer::connection_info).as_ref())
     }
 
-    /// 幂等：重复启用保留已签发的 Token，避免面板轮询期间配置失效。
-    /// 停用后旧 Token 立即失效，用户需要重新复制配置。
+    /// 幂等：重复启用复用已监听的固定端口。停用后桥立即关闭。
     pub async fn set_enabled(&self, enabled: bool) -> Result<StdioStatus, String> {
         let mut active = self.active.lock().await;
         if !enabled {
             *active = None;
             return Ok(self.snapshot(None));
         }
-        // 无法给出可启动的适配器入口时不开监听，也不交付 Token。
+        // 无法给出可启动的适配器入口时不开监听，也不交付配置。
         self.command.as_ref().ok_or(EXECUTABLE_UNAVAILABLE)?;
         if active.is_none() {
             let bridge = BridgeServer::bind(self.runtime.clone())
@@ -121,7 +117,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn enabling_signs_a_client_configuration_and_disabling_revokes_it() {
+    async fn enabling_publishes_a_client_configuration_and_disabling_closes_it() {
         let bridge = StdioBridge::new(runtime(), Some(executable()));
         let idle = bridge.status().await;
         assert!(!idle.enabled);
@@ -135,11 +131,8 @@ mod tests {
         let server = &parsed["mcpServers"]["coterm"];
         assert_eq!(server["command"], executable().to_str().unwrap_or_default());
         assert_eq!(server["args"], serde_json::json!(["mcp", "stdio"]));
-        assert_eq!(
-            server["env"]["COTERM_MCP_ADDR"],
-            enabled.address.clone().expect("address")
-        );
-        // 重复启用不会换 Token，配置可反复复制。
+        assert!(server.get("env").is_none());
+        // 重复启用复用固定地址，配置可反复复制。
         let again = bridge.set_enabled(true).await.expect("bridge");
         assert_eq!(again.client_config, Some(configuration));
 
@@ -157,7 +150,6 @@ mod tests {
     async fn a_relative_or_missing_executable_is_not_published() {
         for executable in [None, Some(PathBuf::from("coterm-desktop.exe"))] {
             let bridge = StdioBridge::new(runtime(), executable);
-            // The status carries the bridge token, so it deliberately has no Debug impl.
             let result = bridge.set_enabled(true).await;
             assert!(matches!(result, Err(message) if message == EXECUTABLE_UNAVAILABLE));
             let status = bridge.status().await;

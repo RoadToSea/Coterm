@@ -637,26 +637,26 @@ struct McpWire {
     reader: tokio::io::BufReader<tokio::net::tcp::OwnedReadHalf>,
     writer: tokio::net::tcp::OwnedWriteHalf,
     next_id: u64,
+    instance_names: std::collections::HashMap<String, String>,
 }
 
 impl McpWire {
-    async fn connect(info: coterm_mcp::server::McpConnectionInfo) -> Result<Self> {
-        use coterm_mcp::transport::{read_frame, write_frame};
+    async fn connect(
+        info: coterm_mcp::server::McpConnectionInfo,
+        instances: &[coterm_proto::runtime::lifecycle::InstanceInfo],
+    ) -> Result<Self> {
+        use coterm_mcp::transport::write_frame;
         let socket = tokio::net::TcpStream::connect(info.address).await?;
         let (reader, writer) = socket.into_split();
         let mut client = Self {
             reader: tokio::io::BufReader::new(reader),
             writer,
             next_id: 0,
+            instance_names: instances
+                .iter()
+                .map(|instance| (instance.plugin_instance_id.clone(), instance.label.clone()))
+                .collect(),
         };
-        write_frame(&mut client.writer, &json!({"token":info.token})).await?;
-        let auth = read_frame(&mut client.reader)
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("Missing auth"))?;
-        assert_eq!(
-            serde_json::from_slice::<Value>(&auth)?["authenticated"],
-            true
-        );
         client.rpc("initialize", json!({"protocolVersion":"2025-06-18","clientInfo":{"name":"ssh-test","version":"1"},"capabilities":{}})).await?;
         write_frame(
             &mut client.writer,
@@ -686,6 +686,16 @@ impl McpWire {
     }
 
     async fn tool(&mut self, name: &str, args: Value) -> Result<Value> {
+        let mut args = args;
+        if let Some(object) = args.as_object_mut() {
+            if let Some(instance_id) = object.remove("pluginInstanceId").and_then(|id| id.as_str().map(str::to_owned)) {
+                let instance_name = self
+                    .instance_names
+                    .get(&instance_id)
+                    .ok_or_else(|| anyhow::anyhow!("Unknown test instance"))?;
+                object.insert("name".to_owned(), json!(instance_name));
+            }
+        }
         self.rpc(
             "tools/call",
             json!({"name":name,"arguments":args,"_meta":{"coterm/waitTimeoutMs":100}}),
@@ -759,8 +769,8 @@ async fn external_mcp_uses_shared_ssh_and_host_secret_and_approval_paths() -> Re
     let other = runtime
         .create_instance("coterm-plugin-ssh", serde_json::to_value(&ssh.config)?)
         .await?;
-    let bridge = coterm_mcp::server::BridgeServer::bind(runtime.clone()).await?;
-    let mut client = McpWire::connect(bridge.connection_info()).await?;
+    let bridge = coterm_mcp::server::BridgeServer::bind_at(runtime.clone(), "127.0.0.1:0".parse()?).await?;
+    let mut client = McpWire::connect(bridge.connection_info(), &[instance.clone(), other.clone()]).await?;
     let tools = client.rpc("tools/list", json!({})).await?;
     let tools = tools["tools"]
         .as_array()
@@ -860,7 +870,7 @@ async fn external_mcp_uses_shared_ssh_and_host_secret_and_approval_paths() -> Re
     let waiting_id = client.next_id;
     coterm_mcp::transport::write_frame(&mut client.writer, &json!({
         "jsonrpc":"2.0","id":waiting_id,"method":"tools/call","params":{
-            "name":"coterm-plugin-ssh__ssh.command","arguments":{"pluginInstanceId":instance.plugin_instance_id,"commands":["original-waiting-command"]}
+            "name":"coterm-plugin-ssh__ssh.command","arguments":{"name":instance.label,"commands":["original-waiting-command"]}
         }
     })).await?;
     assert!(timeout(
@@ -906,17 +916,21 @@ async fn external_mcp_uses_shared_ssh_and_host_secret_and_approval_paths() -> Re
     assert!(domain["text"]
         .as_str()
         .is_some_and(|text| text.contains("approved-default-wait false")));
-    // A second authenticated MCP client shares the same SSH instance and waits on
+    // A second MCP client shares the same SSH instance and waits on
     // approval. Closing that client must never approve, cancel, or replay a write.
-    let second_bridge = coterm_mcp::server::BridgeServer::bind(runtime.clone()).await?;
-    let mut second = McpWire::connect(second_bridge.connection_info()).await?;
+    let second_bridge = coterm_mcp::server::BridgeServer::bind_at(runtime.clone(), "127.0.0.1:0".parse()?).await?;
+    let mut second = McpWire::connect(
+        second_bridge.connection_info(),
+        std::slice::from_ref(&instance),
+    )
+    .await?;
     second.next_id += 1;
     let second_waiting_id = second.next_id;
     coterm_mcp::transport::write_frame(
         &mut second.writer,
         &json!({"jsonrpc":"2.0","id":second_waiting_id,"method":"tools/call","params":{
             "name":"coterm-plugin-ssh__ssh.command",
-            "arguments":{"pluginInstanceId":instance.plugin_instance_id,"commands":["second-client-command"]}
+            "arguments":{"name":instance.label,"commands":["second-client-command"]}
         }}),
     )
     .await?;
@@ -978,7 +992,7 @@ async fn external_mcp_uses_shared_ssh_and_host_secret_and_approval_paths() -> Re
             "tools/call",
             json!({
                 "name":"coterm-plugin-ssh__ssh.command",
-                "arguments":{"pluginInstanceId":instance.plugin_instance_id,"commands":["second-must-not-replay"]},
+                "arguments":{"name":instance.label,"commands":["second-must-not-replay"]},
                 "_meta":{"coterm/waitTimeoutMs":0}
             }),
         )
@@ -1077,7 +1091,7 @@ async fn external_mcp_uses_shared_ssh_and_host_secret_and_approval_paths() -> Re
     );
     // Explicit zero waiting returns an accepted receipt; cancellation never sends it.
     let immediate = client.rpc("tools/call", json!({"name":"coterm-plugin-ssh__ssh.command", "arguments":{
-        "pluginInstanceId":instance.plugin_instance_id,"commands":["must-not-run"]},"_meta":{"coterm/waitTimeoutMs":0}})).await?;
+        "name":instance.label,"commands":["must-not-run"]},"_meta":{"coterm/waitTimeoutMs":0}})).await?;
     assert_eq!(immediate["_meta"]["coterm/operation"]["status"], "accepted");
     let immediate_id = immediate["_meta"]["coterm/operation"]["operationId"]
         .as_str()
@@ -1192,7 +1206,7 @@ async fn external_mcp_uses_shared_ssh_and_host_secret_and_approval_paths() -> Re
     client.next_id += 1;
     let interrupted_id = client.next_id;
     coterm_mcp::transport::write_frame(&mut client.writer, &json!({"jsonrpc":"2.0","id":interrupted_id,"method":"tools/call","params":{
-        "name":"coterm-plugin-ssh__ssh.command","arguments":{"pluginInstanceId":instance.plugin_instance_id,"commands":["never-completes"]}
+        "name":"coterm-plugin-ssh__ssh.command","arguments":{"name":instance.label,"commands":["never-completes"]}
     }})).await?;
     timeout(Duration::from_secs(3), async {
         loop {

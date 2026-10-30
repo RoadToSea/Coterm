@@ -6,7 +6,7 @@ import { Modal } from "../ui/Modal";
 
 /**
  * MCP 面板。对外只有 Stdio：桌面可执行文件的 `mcp stdio` 子命令把标准输入输出
- * 转发到带 Token 的私有回环桥，桥只在用户启用期间存在。面板不展示任何 HTTP 地址。
+ * 转发到固定端口的私有回环桥，桥只在用户启用期间存在。面板不展示任何 HTTP 地址。
  */
 export function McpConfiguration({ onClose }: { onClose: () => void }) {
   useI18n();
@@ -30,7 +30,7 @@ export function McpConfiguration({ onClose }: { onClose: () => void }) {
 
   const toggle = async () => {
     setBusy(true);
-    // 停用会作废 Token，旧的「已复制」提示不能继续显示。
+    // 停用会关闭桥，旧的「已复制」提示不能继续显示。
     setCopied(false);
     try {
       setStatus(await hostAPI.setMcpStdioEnabled(!status?.enabled));
@@ -73,12 +73,12 @@ export function McpConfiguration({ onClose }: { onClose: () => void }) {
         </button>
       </div>
       <p className="mb-2 text-[11px] text-coterm-text-muted">
-        {t("Enabling opens a private loopback bridge protected by a token issued at startup. Disabling, or closing Coterm, revokes it.")}
+        {t("Enabling opens the local loopback bridge on a fixed port. Disabling, or closing Coterm, stops it.")}
       </p>
       {status?.clientConfig && (
         <>
           <p className="mb-1 text-[11px] text-coterm-text-muted">
-            {t("Paste this into the agent's MCP settings. The token below is a secret: do not share the configuration.")}
+            {t("Paste this into the agent's MCP settings. Host-side Agent approval still applies to write operations.")}
           </p>
           <textarea
             aria-label={t("Stdio client configuration")}

@@ -6,7 +6,7 @@ use coterm_mcp::{
     transport::{read_frame, write_frame},
 };
 use coterm_proto::runtime::{lifecycle::RuntimeLimits, stream::FlowWindow};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::{process::Stdio, sync::Arc, time::Duration};
 use tokio::{
     io::{AsyncWriteExt, BufReader},
@@ -38,12 +38,11 @@ async fn read_message(
 
 #[tokio::test]
 async fn desktop_subcommand_serves_as_the_stdio_adapter() -> anyhow::Result<()> {
-    let server = BridgeServer::bind(runtime()).await?;
+    let server = BridgeServer::bind_at(runtime(), "127.0.0.1:0".parse()?).await?;
     let info = server.connection_info();
     let mut child = tokio::process::Command::new(env!("CARGO_BIN_EXE_coterm-desktop"))
         .args(["mcp", "stdio"])
         .env("COTERM_MCP_ADDR", &info.address)
-        .env("COTERM_MCP_TOKEN", &info.token)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -73,9 +72,6 @@ async fn desktop_subcommand_serves_as_the_stdio_adapter() -> anyhow::Result<()> 
         instances["result"]["structuredContent"],
         json!({"instances":[]})
     );
-    // The bridge token must never reach the MCP client.
-    assert!(!instances.to_string().contains(&info.token));
-
     input.shutdown().await?;
     drop(input);
     let status = timeout(Duration::from_secs(10), child.wait()).await??;
@@ -84,11 +80,10 @@ async fn desktop_subcommand_serves_as_the_stdio_adapter() -> anyhow::Result<()> 
 }
 
 #[tokio::test]
-async fn adapter_reports_a_missing_bridge_configuration_on_stderr_only() -> anyhow::Result<()> {
+async fn adapter_reports_bridge_connection_failure_on_stderr_only() -> anyhow::Result<()> {
     let child = tokio::process::Command::new(env!("CARGO_BIN_EXE_coterm-desktop"))
         .args(["mcp", "stdio"])
-        .env_remove("COTERM_MCP_ADDR")
-        .env_remove("COTERM_MCP_TOKEN")
+        .env("COTERM_MCP_ADDR", "127.0.0.1:0")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -101,6 +96,9 @@ async fn adapter_reports_a_missing_bridge_configuration_on_stderr_only() -> anyh
         "stdout is reserved for MCP frames"
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("COTERM_MCP_ADDR"), "stderr: {stderr}");
+    assert!(
+        !stderr.trim().is_empty(),
+        "stderr should explain the failure"
+    );
     Ok(())
 }

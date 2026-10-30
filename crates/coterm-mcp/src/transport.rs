@@ -1,4 +1,4 @@
-//! Private authenticated loopback transport. External MCP remains JSON-RPC stdio.
+//! Private loopback transport. External MCP remains JSON-RPC stdio.
 use std::io;
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite, AsyncWriteExt};
 

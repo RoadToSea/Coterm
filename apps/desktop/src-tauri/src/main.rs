@@ -426,7 +426,6 @@ async fn respond_secret(
 }
 
 /// Stdio 适配器状态：是否已允许本机客户端连接，以及可粘贴的客户端配置。
-/// `clientConfig` 含本次启动的 Token，只供该私有命令使用。
 #[tauri::command]
 async fn mcp_stdio_status(
     state: tauri::State<'_, AppState>,
@@ -434,7 +433,7 @@ async fn mcp_stdio_status(
     Ok(state.stdio_bridge.status().await)
 }
 
-/// 用户显式启用或停用私有 Stdio Bridge。停用使已复制的 Token 立即失效。
+/// 用户显式启用或停用私有 Stdio Bridge。
 #[tauri::command]
 async fn set_mcp_stdio_enabled(
     enabled: bool,

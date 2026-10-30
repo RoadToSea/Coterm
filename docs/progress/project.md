@@ -11,7 +11,7 @@
 | 操作与公共交互 | 来源/scope/schema 校验、提案审批、显式 Bypass、宿主公共交互、查询与取消；账本有界、仅保留本次启动 |
 | SSH | 密码认证、指纹确认、共享 PTY、命令输出/退出码、回放与事件 |
 | 串口 | 人工 Shell 按键直发、UART 调试发送框，保留字节读写、HEX/行结束符、DTR/RTS、收发计数与回放；仅 MCP 提供命令列表队列，顺序、间隔与取消通过 Windows 虚拟串口配对验收；兼容 HHD 驱动不支持 flush；列表的物理板卡发送节奏仍待验收 |
-| MCP | 唯一对外入口为 Stdio（桌面 `mcp stdio`）；私有 Token 桥、插件原生 Tools、实例发现与操作路由；HTTP 端点已移除 |
+| MCP | 唯一对外入口为 Stdio（桌面 `mcp stdio`）；固定 `127.0.0.1:51234` 回环桥、插件原生 Tools、实例发现与操作路由；HTTP 端点已移除；写操作仍经基座审批 |
 | SDK 与 UI | 后端控制协议 v1.0、统一编解码与握手校验、前端 SDK v1.0、通用块列表、版本化宿主订阅；SSH/串口 Shell 共用选区复制、粘贴、Ctrl+F 本地输出搜索及终端快捷键规则 |
 | 本地终端 | 已接入当前运行时，仅有实例/配置与插件信息，尚无 PTY |
 
@@ -50,7 +50,8 @@
 - 2026-10-27 已修复上述 SSH/MCP 边界问题：命令执行前先做静态语法检查，避免登录 Shell 因语法错误退出；取消未确认时自动重建 PTY 并新增 `ssh.reset`；连接错误改为稳定阶段码（`ssh_host_key_mismatch`、`ssh_remote_shell_exited` 等）；包装回显从回放中移除；结果新增 `text/base64` 双编码、原始/丢弃字节数与截断上限。新增 `ssh.exec` 独立通道、`ssh.output` 作业进度、`ssh.system_info`/`ssh.file_info` 只读工具；MCP 工具结果改为 `structuredContent` 加摘要文本，`_meta` 收据不再重复完整输出；MCP 面板可列出并按前缀关闭会话，429 附恢复指引与 `Retry-After`。SSH 与 MCP 新增 6 个回归测试，远端服务器真实验收仍需单独执行。
 - 2026-10-29 SSH Agent 易用性：共享 PTY 命令超时后自动重建 Shell；新增有界 UTF-8 `ssh.read_file`/`ssh.write_file`（写入走审批及原子替换、无 sudo）；MCP `ssh.command`/`ssh.exec` 接收有序 `commands` 列表并在首个失败时停止。MCP 首选 Stdio、前端使用 Tauri Host API；私有 Stdio Bridge 已由桌面面板按需启停并交付客户端配置，桌面可执行文件的 `mcp stdio` 子命令即适配器，无需单独分发 CLI。
 - 2026-10-30 串口插件真实硬件验收：在 COM6（RISC-V Linux 板卡）验证登录交互、`uname -a` 往返、HEX 渲染、收发计数与 DTR/RTS；修复 TX 计数漏算行结束符；界面验收脚本改为不依赖界面语言。三项 P0 关闭，详见[记录](serial-plugin.md)。
-- 2026-10-29 MCP 只保留 Stdio：桌面 MCP 面板按需启停私有 Token 桥并交付可粘贴的 `mcpServers` 配置，`coterm-desktop mcp stdio` 即适配器，不创建窗口或运行时；Token 只经私有命令返回面板，停用或退出即失效。移除 Streamable HTTP 端点、`axum`/`reqwest`/`futures` 依赖及面板中的地址与会话列表，SSH 的 HTTP 回归改为第二个桥客户端。仓库内的 `coterm-mcp-stdio` 保留为开发回归入口。
+- 2026-10-29 MCP 只保留 Stdio：桌面 MCP 面板按需启停本地回环桥并交付可粘贴的 `mcpServers` 配置，`coterm-desktop mcp stdio` 即适配器，不创建窗口或运行时；当时使用随机端口和每次启动的 Token。移除 Streamable HTTP 端点、`axum`/`reqwest`/`futures` 依赖及面板中的地址与会话列表，SSH 的 HTTP 回归改为第二个桥客户端。仓库内的 `coterm-mcp-stdio` 保留为开发回归入口。
+- 2026-10-30 MCP 桥固定监听 `127.0.0.1:51234`，Stdio 配置不再包含地址环境变量或 Token；连接建立后直接转发 MCP 帧。保留回环、连接数和帧大小限制，写操作继续由基座来源识别与审批规则控制。
 
 ### P2：功能与生态
 

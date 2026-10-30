@@ -112,7 +112,7 @@ export interface BackendSecretRequest extends InteractionOptions {
 
 /**
  * Stdio 适配器状态。适配器是桌面可执行文件的 `mcp stdio` 子命令；
- * `clientConfig` 含本次启动的 Token，只用于用户复制，不得写入日志或转发给插件。
+ * `clientConfig` 是不含秘密的 Stdio 客户端配置，只用于用户复制。
  */
 export interface McpStdioStatus {
   enabled: boolean;

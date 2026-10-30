@@ -4,17 +4,16 @@ use coterm_mcp::{
     transport::{read_frame, write_frame},
 };
 use coterm_proto::runtime::{lifecycle::RuntimeLimits, stream::FlowWindow};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::{process::Stdio, sync::Arc, time::Duration};
 use tokio::{
     io::{AsyncWriteExt, BufReader},
-    net::TcpStream,
     process::Command,
     time::timeout,
 };
 
 #[tokio::test]
-async fn real_stdio_adapter_negotiates_and_routes_to_desktop_runtime() -> anyhow::Result<()> {
+async fn real_stdio_adapter_routes_to_desktop_runtime() -> anyhow::Result<()> {
     let runtime = Arc::new(ProcessPluginRuntime::new(
         "test",
         RuntimeLimits {
@@ -26,21 +25,11 @@ async fn real_stdio_adapter_negotiates_and_routes_to_desktop_runtime() -> anyhow
             },
         },
     ));
-    let server = BridgeServer::bind(runtime).await?;
+    let server = BridgeServer::bind_at(runtime, "127.0.0.1:0".parse()?).await?;
     let info = server.connection_info();
-    // A loopback socket alone is insufficient: authentication is mandatory.
-    let mut unauthorized = TcpStream::connect(&info.address).await?;
-    write_frame(&mut unauthorized, &json!({"token":"wrong"})).await?;
-    assert!(timeout(
-        Duration::from_secs(2),
-        read_frame(&mut BufReader::new(unauthorized))
-    )
-    .await??
-    .is_none());
 
     let mut child = Command::new(env!("CARGO_BIN_EXE_coterm-mcp-stdio"))
         .env("COTERM_MCP_ADDR", &info.address)
-        .env("COTERM_MCP_TOKEN", &info.token)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -94,12 +83,13 @@ async fn real_stdio_adapter_negotiates_and_routes_to_desktop_runtime() -> anyhow
         instances["result"]["structuredContent"],
         json!({"instances":[]})
     );
-    assert!(!instances.to_string().contains(&info.token));
     input.shutdown().await?;
     drop(input);
-    assert!(timeout(Duration::from_secs(5), child.wait())
-        .await??
-        .success());
+    assert!(
+        timeout(Duration::from_secs(5), child.wait())
+            .await??
+            .success()
+    );
     Ok(())
 }
 

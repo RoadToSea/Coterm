@@ -1,8 +1,7 @@
 //! 发布给本机 MCP 客户端的 Stdio 适配器配置。
 //!
 //! 适配器是桌面可执行文件自身的 `mcp stdio` 子命令，因此无需独立分发二进制。
-//! 地址与 Token 由桌面每次启动生成，只存在于内存；配置通过桌面私有命令交给用户，
-//! 不写入磁盘、不进入事件或日志。
+//! 桥使用固定的本机回环地址；配置只需要桌面可执行文件自身的 Stdio 子命令。
 
 use serde::Serialize;
 use serde_json::json;
@@ -12,16 +11,16 @@ use serde_json::json;
 #[serde(rename_all = "camelCase")]
 pub struct StdioClientConfiguration {
     pub command: String,
-    /// 私有桥的回环地址，不含 Token。
+    /// 固定私有桥的回环地址，供面板展示。
     pub address: String,
-    /// 含 Token 的完整客户端配置；不得记录或持久化。
+    /// 不含秘密的完整客户端配置。
     pub client_config: String,
 }
 
 impl StdioClientConfiguration {
-    pub fn new(command: String, address: &str, token: &str) -> Self {
+    pub fn new(command: String, address: &str) -> Self {
         Self {
-            client_config: client_config(&command, address, token),
+            client_config: client_config(&command),
             command,
             address: address.to_owned(),
         }
@@ -30,16 +29,12 @@ impl StdioClientConfiguration {
 
 /// 与 MCP 客户端自身设置文件相同的文档结构。`args` 固定为 `mcp stdio`，
 /// 桌面在参数模式下不初始化窗口或运行时。
-pub fn client_config(command: &str, address: &str, token: &str) -> String {
+pub fn client_config(command: &str) -> String {
     let document = json!({
         "mcpServers": {
             "coterm": {
                 "command": command,
-                "args": ["mcp", "stdio"],
-                "env": {
-                    "COTERM_MCP_ADDR": address,
-                    "COTERM_MCP_TOKEN": token,
-                }
+                "args": ["mcp", "stdio"]
             }
         }
     });
@@ -51,12 +46,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn client_config_starts_the_desktop_adapter_subcommand_with_the_bridge_secret() {
-        let rendered = client_config(
-            r"C:\Program Files\Coterm\coterm-desktop.exe",
-            "127.0.0.1:51234",
-            "secret-token",
-        );
+    fn client_config_starts_the_desktop_adapter_subcommand_without_credentials() {
+        let rendered = client_config(r"C:\Program Files\Coterm\coterm-desktop.exe");
         let parsed: serde_json::Value = serde_json::from_str(&rendered).expect("valid JSON");
         let server = &parsed["mcpServers"]["coterm"];
         assert_eq!(
@@ -64,19 +55,17 @@ mod tests {
             r"C:\Program Files\Coterm\coterm-desktop.exe"
         );
         assert_eq!(server["args"], json!(["mcp", "stdio"]));
-        assert_eq!(server["env"]["COTERM_MCP_ADDR"], "127.0.0.1:51234");
-        assert_eq!(server["env"]["COTERM_MCP_TOKEN"], "secret-token");
+        assert!(server.get("env").is_none());
     }
 
     #[test]
-    fn configuration_exposes_the_address_without_copying_the_token() {
+    fn configuration_exposes_the_fixed_address_without_credentials() {
         let configuration = StdioClientConfiguration::new(
             "/opt/coterm/coterm-desktop".to_owned(),
             "127.0.0.1:51234",
-            "secret-token",
         );
         assert_eq!(configuration.address, "127.0.0.1:51234");
-        assert!(configuration.client_config.contains("secret-token"));
-        assert!(!configuration.address.contains("secret-token"));
+        assert!(!configuration.client_config.contains("token"));
+        assert!(!configuration.client_config.contains("env"));
     }
 }
