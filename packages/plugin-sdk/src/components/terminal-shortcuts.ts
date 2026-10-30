@@ -9,7 +9,8 @@ export interface ShortcutTerminal {
 }
 
 /** Local shortcuts only run for events delivered to this terminal, not the page. */
-export function attachTerminalShortcuts(terminal: ShortcutTerminal, onCopyError: () => void): () => void {
+export function attachTerminalShortcuts(terminal: ShortcutTerminal, onCopyError: () => void,
+  onFind?: () => void): () => void {
   let disposed = false;
   const localKeys = new Set<string>();
   const element = terminal.element;
@@ -50,6 +51,7 @@ export function attachTerminalShortcuts(terminal: ShortcutTerminal, onCopyError:
     const pasteKey = ((ctrl || cmd) && key === "v")
       || (!event.ctrlKey && !event.metaKey && event.shiftKey && key === "insert");
     const selectAll = key === "a" && ((ctrl && event.shiftKey) || (cmd && !event.shiftKey));
+    const find = key === "f" && (ctrl || cmd) && !event.shiftKey && onFind !== undefined;
     const clearSelection = key === "escape" && !event.ctrlKey && !event.metaKey
       && !event.shiftKey && terminal.hasSelection();
 
@@ -60,12 +62,13 @@ export function attachTerminalShortcuts(terminal: ShortcutTerminal, onCopyError:
       if (event.type === "keydown") localKeys.add(identity);
       return false;
     }
-    if (!copyKey && !selectAll && !clearSelection) return true;
+    if (!copyKey && !selectAll && !clearSelection && !find) return true;
     event.preventDefault();
     event.stopPropagation();
     if (event.type === "keydown" && !event.repeat) {
       localKeys.add(identity);
       if (copyKey) void copy();
+      else if (find) onFind?.();
       else if (selectAll) terminal.selectAll();
       else terminal.clearSelection();
     }

@@ -78,7 +78,7 @@ MCP Tools 需单独注册 descriptor 与内部 operation 的映射；不会自�
 
 当前前端入口是无相对依赖的单文件 ES bundle，最大 2 MiB，经 Blob URL 加载。使用 `@coterm/plugin-sdk` 类型，不能导入桌面源码、直接调用 Tauri 内部接口或访问其他实例。
 
-可选前端终端可复用 SDK 的 `@coterm/plugin-sdk/components/terminal-shortcuts`，让本地复制、粘贴、选区操作与远端 Shell 控制键一致分流；安装与卸载约定见[终端快捷键](terminal-shortcuts.md)。该纯前端模块不扩展 `PluginAPI` 或后端控制协议。
+可选前端终端可复用 SDK 的 `@coterm/plugin-sdk/components/terminal-shortcuts`，让本地复制、粘贴、选区操作与远端 Shell 控制键一致分流；`@coterm/plugin-sdk/components/terminal-search` 提供本地搜索条，接收插件自己的搜索适配接口。安装与卸载约定见[终端快捷键](terminal-shortcuts.md)。这些纯前端模块不扩展 `PluginAPI` 或后端控制协议。
 
 ### 界面语言
 

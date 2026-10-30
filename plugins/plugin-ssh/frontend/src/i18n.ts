@@ -1,6 +1,13 @@
 import type { PluginI18n } from "@coterm/plugin-sdk";
 
 const zhCN: Readonly<Record<string, string>> = {
+  "Find in terminal": "在终端中查找",
+  "No matches": "未找到匹配项",
+  "{index} of {total}": "第 {index} / {total} 项",
+  "{total} matches": "{total} 个匹配项",
+  "Previous match (Shift+Enter)": "上一处（Shift+Enter）",
+  "Next match (Enter)": "下一处（Enter）",
+  "Close search (Esc)": "关闭搜索（Esc）",
   "Could not copy terminal selection. Try copying again.": "无法复制终端选区，请重试复制。",
   "Host": "主机",
   "Port": "端口",

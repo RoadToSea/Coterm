@@ -1,9 +1,11 @@
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
+import { SearchAddon } from "@xterm/addon-search";
 import terminalCSS from "@xterm/xterm/css/xterm.css?inline";
 import type { PluginAPI, PluginConfigurationAPI, PluginFrontend, OperationReceipt } from "@coterm/plugin-sdk";
 import { createTranslator } from "./i18n";
 import { attachTerminalShortcuts } from "@coterm/plugin-sdk/components/terminal-shortcuts";
+import { mountTerminalSearch, TERMINAL_SEARCH_HIGHLIGHT_LIMIT } from "@coterm/plugin-sdk/components/terminal-search";
 
 const css = `
   :host {
@@ -504,12 +506,15 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
   root.append(layout);
 
   const terminal = new Terminal({
+    allowProposedApi: true,
     cursorBlink: true, scrollback: 3000, fontSize: 13,
     fontFamily: 'Consolas, "Liberation Mono", monospace',
     theme: { background: "#1e1e1e", foreground: "#cccccc", cursor: "#cccccc" },
   });
   const fit = new FitAddon();
   terminal.loadAddon(fit);
+  const searchAddon = new SearchAddon({ highlightLimit: TERMINAL_SEARCH_HIGHLIGHT_LIMIT });
+  terminal.loadAddon(searchAddon);
   terminal.open(terminalContainer);
 
   let disposed = false;
@@ -539,9 +544,10 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
   const controller = new AbortController();
   // 语言切换只替换翻译函数；已渲染的日志文本保持原文。
   let t = createTranslator(api.i18n);
+  const searchView = mountTerminalSearch(bar, terminal, searchAddon, (message, values) => t(message, values));
   const stopShortcuts = attachTerminalShortcuts(terminal, () => {
     if (!disposed) notice.textContent = t("Could not copy terminal selection. Try copying again.");
-  });
+  }, searchView.open);
 
   const invoke = async <T = unknown>(operation: string, args: unknown): Promise<T> => output(await api.invoke<T>(operation, args));
   const showError = (reason: unknown) => { if (!disposed) notice.textContent = String(reason); };
@@ -550,6 +556,7 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
   const applyLocale = () => {
     const tr = createTranslator(api.i18n);
     t = tr;
+    searchView.refreshLocale();
     label.textContent = tr("Serial");
     terminalMode.textContent = tr("Terminal");
     uartMode.textContent = tr("UART console");
@@ -630,6 +637,7 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
   };
 
   const clearLog = () => {
+    searchView.close(false);
     entries.length = 0;
     logBytes = 0;
     hexOffset = 0;
@@ -773,6 +781,7 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
     terminalPanel.hidden = next !== "terminal";
     uartPanel.hidden = next !== "uart";
     if (next === "uart") {
+      searchView.close(false);
       renderUart(true);
       uartText.focus();
     } else {
@@ -927,6 +936,7 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
     observer.disconnect();
     onData.dispose();
     stopShortcuts();
+    searchView.dispose();
     terminal.dispose();
     container.replaceChildren();
   } };

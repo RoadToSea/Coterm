@@ -11,6 +11,8 @@ test("human Shell uses terminal keys, UART uses its sender, and MCP queues stay 
   const built = fs.statSync(artifact).mtimeMs;
   assert.ok(built >= fs.statSync(new URL("../packages/plugin-sdk/src/components/terminal-shortcuts.ts", import.meta.url)).mtimeMs,
     "rebuild the serial frontend after changing shared terminal shortcuts");
+  assert.ok(built >= fs.statSync(new URL("../packages/plugin-sdk/src/components/terminal-search.ts", import.meta.url)).mtimeMs,
+    "rebuild the serial frontend after changing terminal search");
   for (const file of ["index.ts", "i18n.ts"]) {
     assert.ok(built >= fs.statSync(new URL(`../plugins/plugin-serial/frontend/src/${file}`, import.meta.url)).mtimeMs,
       "run pnpm --filter coterm-plugin-serial-ui build before the serial browser test");

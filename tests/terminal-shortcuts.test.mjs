@@ -2,11 +2,12 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { attachTerminalShortcuts } from "../packages/plugin-sdk/src/components/terminal-shortcuts.ts";
 
-function fixture({ selection = "selected output", clipboardFails = false, nativeCopy = false } = {}) {
+function fixture({ selection = "selected output", clipboardFails = false, nativeCopy = false, find = false } = {}) {
   const copies = [];
   const listeners = new Map();
   let errors = 0;
   let nativeCalls = 0;
+  let finds = 0;
   const terminal = {
     element: {
       matches: () => true,
@@ -26,7 +27,7 @@ function fixture({ selection = "selected output", clipboardFails = false, native
     selectAll: () => { selection = "all output"; },
     attachCustomKeyEventHandler(fn) { this.handler = fn; },
   };
-  const dispose = attachTerminalShortcuts(terminal, () => errors++);
+  const dispose = attachTerminalShortcuts(terminal, () => errors++, find ? () => finds++ : undefined);
   const press = (key, flags = {}) => {
     const event = {
       key, code:key, type:"keydown", ctrlKey:false, shiftKey:false, metaKey:false,
@@ -38,7 +39,7 @@ function fixture({ selection = "selected output", clipboardFails = false, native
   };
   const release = (key, flags = {}) => press(key, { ...flags, type:"keyup" });
   return { terminal, copies, listeners, press, release, dispose,
-    get errors() { return errors; }, get nativeCalls() { return nativeCalls; } };
+    get errors() { return errors; }, get nativeCalls() { return nativeCalls; }, get finds() { return finds; } };
 }
 
 test("Ctrl+C copies only with a terminal selection; explicit copy shortcuts never interrupt", async () => {
@@ -149,4 +150,24 @@ test("a late clipboard denial cannot copy from a different focus or selection", 
     assert.equal(f.errors, 1);
     f.dispose();
   }
+});
+
+test("Ctrl+F and Cmd+F open local search once per gesture when a search view is installed", () => {
+  const olderHost = fixture();
+  assert.equal(olderHost.press("f", {ctrlKey:true}).forwarded, true);
+  olderHost.dispose();
+  const f = fixture({find:true});
+  for (const flags of [{ctrlKey:true}, {metaKey:true}]) {
+    const pressed = f.press("f", flags);
+    assert.equal(pressed.forwarded, false);
+    assert.equal(pressed.event.prevented, true);
+    assert.equal(f.press("f", {...flags,repeat:true}).forwarded, false);
+    assert.equal(f.release("f", flags).forwarded, false);
+  }
+  assert.equal(f.finds, 2);
+  assert.equal(f.press("f", {ctrlKey:true,isComposing:true}).forwarded, true);
+  assert.equal(f.press("f", {ctrlKey:true,altKey:true}).forwarded, true);
+  assert.equal(f.press("f", {ctrlKey:true,shiftKey:true}).forwarded, true);
+  f.dispose();
+  assert.equal(f.press("f", {ctrlKey:true}).forwarded, true);
 });

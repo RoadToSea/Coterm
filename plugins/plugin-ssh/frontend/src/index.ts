@@ -1,9 +1,11 @@
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
+import { SearchAddon } from "@xterm/addon-search";
 import terminalCSS from "@xterm/xterm/css/xterm.css?inline";
 import type { PluginAPI, PluginConfigurationAPI, PluginFrontend, OperationReceipt } from "@coterm/plugin-sdk";
 import { createTranslator } from "./i18n";
 import { attachTerminalShortcuts } from "@coterm/plugin-sdk/components/terminal-shortcuts";
+import { mountTerminalSearch, TERMINAL_SEARCH_HIGHLIGHT_LIMIT } from "@coterm/plugin-sdk/components/terminal-search";
 
 const css = `
   :host {
@@ -278,12 +280,15 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
   root.append(layout);
 
   const terminal = new Terminal({
+    allowProposedApi: true,
     cursorBlink: true, scrollback: 3000, fontSize: 13,
     fontFamily: 'Consolas, "Liberation Mono", monospace',
     theme: { background: "#1e1e1e", foreground: "#cccccc", cursor: "#cccccc" },
   });
   const fit = new FitAddon();
   terminal.loadAddon(fit);
+  const searchAddon = new SearchAddon({ highlightLimit: TERMINAL_SEARCH_HIGHLIGHT_LIMIT });
+  terminal.loadAddon(searchAddon);
   terminal.open(terminalContainer);
   let disposed = false;
   let connected = false;
@@ -296,9 +301,10 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
   let queuedBytes = 0;
   let inputQueue = Promise.resolve();
   const controller = new AbortController();
+  const searchView = mountTerminalSearch(bar, terminal, searchAddon, t);
   const stopShortcuts = attachTerminalShortcuts(terminal, () => {
     if (!disposed) notice.textContent = t("Could not copy terminal selection. Try copying again.");
-  });
+  }, searchView.open);
 
   const invoke = async <T = unknown>(operation: string, args: unknown): Promise<T> => output(await api.invoke<T>(operation, args));
   const showError = (reason: unknown) => { if (!disposed) notice.textContent = String(reason); };
@@ -326,7 +332,7 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
     if (connectionId !== status.connectionId) {
       connectionId = status.connectionId;
       cursor = "0";
-      if (connectionId) terminal.reset();
+      if (connectionId) { searchView.close(false); terminal.reset(); }
     }
     setConnected(status.connected);
     connect.disabled = working;
@@ -557,6 +563,7 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
   });
   observer.observe(terminalContainer);
   const stopLocale = api.i18n?.subscribe(() => {
+    searchView.refreshLocale();
     jobStop.textContent = t("Stop");
     jobClose.textContent = t("Close view");
     jobsBar.setAttribute("aria-label", t("Background jobs"));
@@ -576,6 +583,7 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
     observer.disconnect();
     onData.dispose();
     stopShortcuts();
+    searchView.dispose();
     terminal.dispose();
     container.replaceChildren();
   } };

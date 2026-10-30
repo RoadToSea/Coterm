@@ -14,6 +14,7 @@ for (const protocol of ["serial", "ssh"]) {
       new URL(`../plugins/plugin-${protocol}/frontend/src/index.ts`, import.meta.url),
       new URL(`../plugins/plugin-${protocol}/frontend/src/i18n.ts`, import.meta.url),
       new URL("../packages/plugin-sdk/src/components/terminal-shortcuts.ts", import.meta.url),
+      new URL("../packages/plugin-sdk/src/components/terminal-search.ts", import.meta.url),
     ]) assert.ok(built >= fs.statSync(source).mtimeMs, `rebuild plugin:${protocol}:build before testing`);
     const moduleURL = `data:text/javascript;base64,${fs.readFileSync(artifact).toString("base64")}`;
     const session = await openSession({ browserPath, totalTimeoutMs:30_000 });
@@ -112,6 +113,52 @@ for (const protocol of ["serial", "ssh"]) {
       await run(`window.paste(${JSON.stringify("safe\npaste")})`);
       const bracketed = pasted + "\u001b[200~safe\rpaste\u001b[201~";
       await waitForValue(client, `window.raw() === ${JSON.stringify(bracketed)}`);
+
+      await t.test("Ctrl+F searches terminal output locally, navigates, updates, and closes", async () => {
+        await run(`window.output(${JSON.stringify("needle first\r\nneedle second\r\nNEEDLE third\r\n")})`);
+        await key("f", "KeyF", 70, 2);
+        await waitForValue(client, `!root.querySelector('.terminal-find').hidden && root.activeElement === root.querySelector('.terminal-find input')`);
+        await client.send("Input.insertText", {text:"needle"});
+        await waitForValue(client, `root.querySelector('.terminal-find-result').textContent === '1 of 3'`);
+        await key("Enter", "Enter", 13);
+        await waitForValue(client, `root.querySelector('.terminal-find-result').textContent === '2 of 3'`);
+        await key("Enter", "Enter", 13, 8);
+        await waitForValue(client, `root.querySelector('.terminal-find-result').textContent === '1 of 3'`);
+        await run(`root.querySelector('.terminal-find button').click()`);
+        await waitForValue(client, `root.querySelector('.terminal-find-result').textContent === '3 of 3'`);
+        await run(`root.querySelectorAll('.terminal-find button')[1].click()`);
+        await waitForValue(client, `root.querySelector('.terminal-find-result').textContent === '1 of 3'`);
+        await run(`window.output(${JSON.stringify("needle later\r\n")})`);
+        await waitForValue(client, `root.querySelector('.terminal-find-result').textContent.endsWith('of 4')`);
+
+        await run(`root.querySelector('.terminal-find input').focus()`);
+        await key("f", "KeyF", 70, 2);
+        await client.send("Input.insertText", {text:".*"});
+        await waitForValue(client, `root.querySelector('.terminal-find-result').textContent === 'No matches'`);
+        assert.equal(await run(`root.querySelector('.terminal-find button').disabled`), true, "search is literal, not an unbounded regular expression");
+        await run(`window.locale = 'zh-CN'; window.translate()`);
+        assert.equal(await run(`root.querySelector('.terminal-find input').getAttribute('aria-label')`), "在终端中查找");
+        assert.equal(await run(`root.querySelector('.terminal-find-result').textContent`), "未找到匹配项");
+        await key("f", "KeyF", 70, 2);
+        await client.send("Input.insertText", {text:"中文"});
+        await waitForValue(client, `root.querySelector('.terminal-find-result').textContent === '第 1 / 1 项'`);
+        await key("Escape", "Escape", 27);
+        await waitForValue(client, `root.querySelector('.terminal-find').hidden && root.activeElement?.classList.contains('xterm-helper-textarea')`);
+        assert.equal(await run(`window.raw()`), bracketed, "search text and navigation never reach the remote shell");
+
+        await key("f", "KeyF", 70, 2);
+        assert.equal(await run(`root.querySelector('.terminal-find input').value`), "中文", "the query survives closing within this mounted view");
+        assert.equal(await run(`root.querySelector('.terminal-find input').maxLength`), 512);
+        if (protocol === "serial") {
+          await run(`root.querySelectorAll('.modes button')[1].click()`);
+          assert.equal(await run(`root.querySelector('.terminal-find').hidden`), true, "UART mode hides Shell search");
+          await run(`root.querySelectorAll('.modes button')[0].click()`);
+        } else {
+          await run(`root.querySelectorAll('.terminal-find button')[2].click()`);
+        }
+        await waitForValue(client, `root.activeElement?.classList.contains('xterm-helper-textarea')`);
+        await run(`window.locale = 'en'; window.translate()`);
+      });
 
       // Shortcut handlers are scoped to the terminal, leaving ordinary inputs alone.
       await run(`(() => {

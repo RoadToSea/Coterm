@@ -1,6 +1,13 @@
 import type { PluginI18n } from "@coterm/plugin-sdk";
 
 const zhCN: Readonly<Record<string, string>> = {
+  "Find in terminal": "在终端中查找",
+  "No matches": "未找到匹配项",
+  "{index} of {total}": "第 {index} / {total} 项",
+  "{total} matches": "{total} 个匹配项",
+  "Previous match (Shift+Enter)": "上一处（Shift+Enter）",
+  "Next match (Enter)": "下一处（Enter）",
+  "Close search (Esc)": "关闭搜索（Esc）",
   // 配置界面
   "Port": "端口",
   "Baud rate": "波特率",
