@@ -44,5 +44,5 @@ cargo test --workspace
 
 - 客户端导出 `parameters:null` 尚不能在服务端复现：服务端 `tools/list` 已提供标准 schema；仍需对比使用现场的原始响应与客户端转换结果，不能将客户端导出字段当作服务端缺失的证据。
 - `serial.get_recent` 是重复可读的尾部快照，不提供隐式共享游标。需要精确增量时使用 `serial.read(cursor)`。
-- 协议、边界与示例见 [MCP 接入](../architecture/mcp-integration.md) 和 [串口插件](../architecture/serial-plugin.md)。
+- 基座协议与边界见 [MCP 接入](../architecture/mcp-integration.md)；串口接口设计和使用说明已整理到插件自己的 [docs 目录](../../plugins/plugin-serial/docs/README.md)，[原架构入口](../architecture/serial-plugin.md) 保留基座集成边界与导航。
 - 继续验收从 [待确认反馈](../feedback/serial_mcp_use_feedback.md) 及 `plugins/plugin-serial/tests/serial.rs` 的真实进程回归入口开始。
