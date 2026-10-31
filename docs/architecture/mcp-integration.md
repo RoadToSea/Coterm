@@ -37,6 +37,8 @@ MCP 只有一个对外入口：本地 Stdio 子进程。桌面前端通过 Tauri
 
 Bridge 保留插件参数和原生 `CallToolResult`，仅处理命名空间、目标路由及操作元信息。不会自动把整个内部操作目录公开为 MCP。
 
+`tools/list` 保留插件注册提供的 `inputSchema`；客户端导出界面中的 `parameters` 属于客户端转换结果。若客户端本地显示为 `null`，应对比同一连接的原始 `tools/list` 响应与客户端导出值，服务端集成测试会验证 schema 是否已发送。插件工具目录由已启动插件的握手注册；当前 manifest 只标识 MCP provider，不含静态工具 schema，因此未启动插件的工具不会出现在目录中，也没有 MCP 自动恢复工作区实例的操作。
+
 - 实例级工具的 schema 要求字符串 `name`。它对应 `coterm.list_instances` 返回的唯一实例名称；Bridge 在内部解析为 UUID 后再路由，插件不会跨实例搜索。
 - 插件级工具不绑定实例；插件授权域由已注册工具名称确定。
 - 查询/取消公共工具使用 `name` 或 `pluginId` 定位记录授权域；UUID 只存在于 Bridge 和运行时内部。
@@ -63,6 +65,8 @@ SSH 认证步骤和工具边界见 [SSH](ssh-plugin.md)，串口可用工具见 
 ```
 
 `0` 表示立即返回，`1..300000` 指定毫秒上限。等待超时或客户端断开均不代表底层操作取消，也不触发重放。取消仅在插件确认未提交或已停止时成功，否则可能为 unknown。
+
+部分客户端只向模型暴露 `arguments`，无法设置协议级 `_meta`。这类客户端应省略 `_meta`，使用默认 60 秒等待；收到 `pending`、`expired` 或客户端本地超时的收据后，使用同一工具返回的 `operationId` 调用 `coterm.get_operation` 查询，不能把 `_meta` 塞进领域参数。服务端保持严格的 `additionalProperties:false` 校验，未知字段会返回 `operation_args_invalid`。
 
 ## 适配器传输
 

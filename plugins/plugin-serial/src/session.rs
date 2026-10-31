@@ -144,6 +144,10 @@ pub struct OutputBuffer {
 }
 
 impl OutputBuffer {
+    pub fn cursor(&self) -> u64 {
+        self.sequence
+    }
+
     pub fn push(&mut self, data: &[u8]) -> String {
         let mut text = String::new();
         for part in data.chunks(OUTPUT_CHUNK_BYTES) {
@@ -205,7 +209,7 @@ impl OutputBuffer {
         }
         let mut result = json!({
             "bytes": data.len(),
-            "cursor": next.to_string(),
+            "cursor": next,
             "gap": gap,
             "closed": self.closed,
             "more": next < self.sequence,
@@ -335,7 +339,7 @@ impl Connection {
                         let closing = matches!(action.input, Input::Close);
                         let result = match action.input {
                             Input::Commands(job) => {
-                                let (returned, failed) = job.run(writer.take(), &task_stop, &task_tx, &events, &connection_id).await;
+                                let (returned, failed) = job.run(writer.take(), &task_stop, &task_tx, &events, &connection_id, task_output.clone()).await;
                                 writer = returned;
                                 if failed { Err(anyhow!("Serial command delivery failed")) } else { Ok(()) }
                             }
@@ -438,7 +442,7 @@ impl Connection {
             drop(writer);
             task_output.lock().await.close();
             if let Some((instance, sender)) = &events {
-                let cursor = task_output.lock().await.sequence.to_string();
+                let cursor = task_output.lock().await.sequence;
                 let _ = sender
                     .send(PluginNotification::Event {
                         plugin_instance_id: instance.clone(),
@@ -630,7 +634,7 @@ fn read_until_stopped<R: Read>(mut source: ReaderSource<R>) {
                             "connectionId": source.connection_id,
                             "text": text,
                             "bytes": data.len(),
-                            "cursor": pushed.to_string(),
+                            "cursor": pushed,
                         }),
                     };
                     // 有界队列已满时丢弃推送：回放缓冲才是权威来源。
@@ -752,6 +756,7 @@ mod tests {
                     &connection.tx_bytes,
                     &None,
                     &connection.id,
+                    connection.output.clone(),
                 )
                 .await;
             assert!(!failed);
@@ -794,6 +799,7 @@ mod tests {
                 &connection.tx_bytes,
                 &None,
                 &connection.id,
+                connection.output.clone(),
             )
             .await;
         assert!(!failed);
@@ -871,7 +877,7 @@ mod tests {
         let mut output = OutputBuffer::default();
         output.push(b"first");
         let read = output.read(0).unwrap();
-        assert_eq!(read["cursor"], "1");
+        assert_eq!(read["cursor"], 1);
         assert_eq!(read["gap"], false);
         assert_eq!(read["text"], "first");
 

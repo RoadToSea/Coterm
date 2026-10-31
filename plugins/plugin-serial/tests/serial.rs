@@ -222,7 +222,7 @@ async fn backend_rejects_requests_that_break_the_runtime_contract() -> Result<()
         .request(
             "invoke",
             json!({"operationId":"op-3","operation":"serial.read","effect":"read",
-                   "pluginInstanceId":"one","args":{"cursor":"0"},
+                   "pluginInstanceId":"one","args":{"cursor":0},
                    "source":"human","dispatch":{"mode":"execute"},"pluginId":PLUGIN_ID}),
         )
         .await
@@ -323,6 +323,34 @@ async fn process_host_loads_the_serial_package_and_validates_mcp_tools() -> Resu
     assert!(tool["inputSchema"]["required"]
         .as_array()
         .is_some_and(|required| required.contains(&json!("name"))));
+    let command_tool = tools["tools"]
+        .as_array()
+        .and_then(|tools| {
+            tools
+                .iter()
+                .find(|tool| tool["name"] == "coterm-plugin-serial__serial.command")
+        })
+        .ok_or_else(|| anyhow::anyhow!("Missing public text tool"))?;
+    assert_eq!(
+        command_tool["inputSchema"]["properties"]["commands"]["items"]["type"],
+        "string"
+    );
+    assert_eq!(
+        command_tool["inputSchema"]["properties"]["waitForPrompt"]["type"],
+        "string"
+    );
+    let read_tool = tools["tools"]
+        .as_array()
+        .and_then(|tools| {
+            tools
+                .iter()
+                .find(|tool| tool["name"] == "coterm-plugin-serial__serial.read")
+        })
+        .ok_or_else(|| anyhow::anyhow!("Missing public read tool"))?;
+    assert_eq!(
+        read_tool["inputSchema"]["properties"]["cursor"]["type"],
+        "integer"
+    );
     let status = coterm_mcp::server::call_tool(
         &runtime,
         &json!({"name":"coterm-plugin-serial__serial.status","arguments":{"name":instance.label}}),

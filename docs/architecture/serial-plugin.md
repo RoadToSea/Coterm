@@ -20,10 +20,10 @@ UART 调试模式使用发送框；Enter 发送，Shift+Enter 换行。文本模
 |---|---|---|
 | `serial.status/probe` | read | 状态与系统端口枚举 |
 | `serial.connect/disconnect` | commit | 打开或关闭端口，清理该实例旧提案 |
-| `serial.read` | read | `text` 游标回放，报告 bytes/cursor/gap/closed/more |
+| `serial.read` | read | `text` 游标回放，报告 bytes/cursor/gap/closed/more；`cursor` 是从 0 开始的非负整数 |
 | `serial.write` | commit | 人工文本输入 `text`，保留控制字符；标记为敏感输入 |
-| `serial.command` | commit | Agent 文本输入列表 `commands`，与人工 Shell 同样按 UTF-8 原样发送 |
-| `serial.read_hex` | read | 显式 HEX 读取，返回 `hex` 与相同游标、状态和原始字节计数 |
+| `serial.command` | commit | Agent 文本输入列表 `commands`，与人工 Shell 同样按 UTF-8 原样发送；可选 `waitForPrompt` 和 `waitTimeoutMs` 有界收集新输出 |
+| `serial.read_hex` | read | 显式 HEX 读取，返回 `hex` 与相同整数游标、状态和原始字节计数 |
 | `serial.write_hex` | commit | 人工 HEX 输入 `hex`，没有行结束符或文本参数 |
 | `serial.command_hex` | commit | Agent HEX 字符串列表 `commands`，共用有界 FIFO 和审批 |
 | `serial.signals` | commit | 设置 DTR/RTS 电平 |
@@ -54,11 +54,11 @@ Base64 和 HEX 都是字节的表示方式，均不是加密。本插件接口�
 {"name":"COM1@115200","commands":["00 80 FF","0d0a"],"intervalMs":100}
 ```
 
-第二个示例调用 `coterm-plugin-serial__serial.command_hex`，返回读取使用 `coterm-plugin-serial__serial.read_hex`，其载荷形如 `{"hex":"0080ff0d0a","bytes":5,"cursor":"2","gap":false,"closed":false,"more":false}`。不自动追加换行，也不把 `0d0a` 当四个文本字符发送。
+第二个示例调用 `coterm-plugin-serial__serial.command_hex`，返回读取使用 `coterm-plugin-serial__serial.read_hex`，其载荷形如 `{"hex":"0080ff0d0a","bytes":5,"cursor":2,"gap":false,"closed":false,"more":false}`。不自动追加换行，也不把 `0d0a` 当四个文本字符发送。
 
-每个列表为 1～64 项，每项实际发送 1～4096 字节（包含显式选择的行结束符），整批最多 16 KiB，每实例最多 16 个在途列表。文本与 HEX 列表共用同一 FIFO，一个列表的项不会与其他列表交叉；整批校验失败时不会发送任何项。有在途列表时人工文本、HEX 写入和 DTR/RTS 修改均拒绝。不会拼接 `&&`、`eval` 或 shell 包装脚本。
+每个列表为 1～64 项，每项实际发送 1～4096 字节（包含显式选择的行结束符）；文本列表允许空字符串，但必须选择 `cr`、`lf` 或 `crlf` 使实际载荷非空。整批最多 16 KiB，每实例最多 16 个在途列表。文本与 HEX 列表共用同一 FIFO，一个列表的项不会与其他列表交叉；整批校验失败时不会发送任何项。有在途列表时人工文本、HEX 写入和 DTR/RTS 修改均拒绝。不会拼接 `&&`、`eval` 或 shell 包装脚本。
 
-请求入队后通过运行时 DeferredOperation 和通知完成，控制通道保持可响应读取、状态与取消。结果包含 `total/sent/remaining/bytes`、`deviceCompletion:"unknown"`；`serial.command` 进度事件额外携带操作 ID、连接 ID、累计发送字节数，`serial.status.commandQueue` 可恢复在途列表数。**完成只表示所有字节写入并 flush 成功，不代表设备执行完成**：不会猜测提示符、退出码，不因设备命令失败而自动停止。发送间隔也不是等待设备响应；登录密码、交互式程序和长命令应人工确认设备状态后再分批发送。
+请求入队后通过运行时 DeferredOperation 和通知完成，控制通道保持可响应读取、状态与取消。结果包含 `total/sent/remaining/bytes`、`deviceCompletion:"unknown"`；MCP 返回在 `structuredContent` 提供完整机器可读结果，同时文本块保留 JSON 结果或发送摘要。`serial.command` 进度事件额外携带操作 ID、连接 ID、累计发送字节数，`serial.status.commandQueue` 可恢复在途列表数。**完成只表示所有字节写入并 flush 成功，不代表设备执行完成**：不会推断退出码，也不因设备命令失败而自动停止。可传 `waitForPrompt`（区分大小写的字面子串，不是正则）或 `waitTimeoutMs`（0～300000，提示符等待默认 5000；只传超时表示定时收集），在发送后有界收集至多 8 KiB 新输出并返回 `output.text/output.cursor/output.promptMatched/output.truncated/output.gap`；超时不代表设备失败。未提供等待字段时仍只返回发送收据。登录密码和交互式程序仍需人工确认设备状态。
 
 取消只针对列表：队列中的列表可返回 `not_submitted`；已经开始的列表等待当前写入确认后停止余下项，返回 `stopped`。无法确认时返回 `unknown`。原始字节写入及其他操作的取消仍为 `unsupported`。断开、读写故障或写入超时会丢弃尚未发送的项并报告未知交付，包含已确认发送的项数；当前项可能部分送达，不自动重放，重新连接后也不恢复旧队列。
 

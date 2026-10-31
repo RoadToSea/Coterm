@@ -294,7 +294,7 @@ export function makeHostMockSource(initial) {
         }
         if (operation === "serial.status") return {status:"completed",output:{config:{port:"COM1",baudRate:115200,dtr:true,rts:true},
           connected:true,connectionId:"serial-conn",signals:{dtr:true,rts:true},rxBytes:0,txBytes:0,commandQueue:0}};
-        if (operation === "serial.read") return {status:"completed",output:{text:"serial ready\\r\\n",bytes:14,cursor:"14",gap:false,closed:false,more:false,connectionId:"serial-conn"}};
+        if (operation === "serial.read") return {status:"completed",output:{text:"serial ready\\r\\n",bytes:14,cursor:14,gap:false,closed:false,more:false,connectionId:"serial-conn"}};
         return { status: "completed", output: {} };
       },
       subscribe_plugin_events: () => "sub-" + ++nextSubscription,

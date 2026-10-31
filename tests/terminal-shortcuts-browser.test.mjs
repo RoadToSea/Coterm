@@ -46,11 +46,11 @@ for (const protocol of ["serial", "ssh"]) {
               connected:true, connectionId:'conn', config:{port:'COM1',baudRate:115200,dtr:true,rts:true,
                 username:'user',host:'localhost'},signals:{dtr:true,rts:true},rxBytes:0,txBytes:0,commandQueue:0,
             });
-            if (operation === 'serial.read') return receipt({text:args.cursor === '0' ? ${JSON.stringify("selected terminal output 中文\r\n")} : '',bytes:33,
-              cursor:'1',gap:false,closed:false,more:false,connectionId:'conn'});
-            if (operation.endsWith('.read')) return receipt({data:args.cursor === '0'
+            if (operation === 'serial.read') return receipt({text:args.cursor === 0 ? ${JSON.stringify("selected terminal output 中文\r\n")} : '',bytes:33,
+              cursor:1,gap:false,closed:false,more:false,connectionId:'conn'});
+            if (operation.endsWith('.read')) return receipt({data:args.cursor === (protocol === 'serial' ? 0 : '0')
               ? ${JSON.stringify(Buffer.from("selected terminal output 中文\r\n").toString("base64"))} : '',
-              cursor:'1',gap:false,closed:false,more:false,connectionId:'conn'});
+              cursor:protocol === 'serial' ? 1 : '1',gap:false,closed:false,more:false,connectionId:'conn'});
             if (operation === 'serial.write') return receipt({bytes:new TextEncoder().encode(args.text).length});
             if (operation === 'ssh.input') return receipt({bytes:atob(args.data).length});
             if (operation === 'ssh.resize') return receipt({});
@@ -70,7 +70,7 @@ for (const protocol of ["serial", "ssh"]) {
         };
         window.output = async (text) => {
           await window.event({name:protocol === 'serial' ? 'serial.output' : 'ssh.terminal.output',
-            payload:{connectionId:'conn',cursor:String(++window.cursor),...(protocol === 'serial' ? {text,bytes:new TextEncoder().encode(text).length} : {data:btoa(text)})}});
+            payload:{connectionId:'conn',cursor:protocol === 'serial' ? ++window.cursor : String(++window.cursor),...(protocol === 'serial' ? {text,bytes:new TextEncoder().encode(text).length} : {data:btoa(text)})}});
         };
         window.cursor = 1;
       })()`);

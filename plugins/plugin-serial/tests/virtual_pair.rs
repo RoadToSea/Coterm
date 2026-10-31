@@ -28,7 +28,7 @@ fn decode_hex_page(hex: &str) -> Result<Vec<u8>> {
 
 struct Endpoint {
     instance: InstanceInfo,
-    cursor: String,
+    cursor: u64,
 }
 
 impl Endpoint {
@@ -126,9 +126,8 @@ impl Endpoint {
             "unexpected read gap or closure: {output}"
         );
         self.cursor = output["cursor"]
-            .as_str()
-            .ok_or_else(|| anyhow!("missing cursor"))?
-            .into();
+            .as_u64()
+            .ok_or_else(|| anyhow!("missing cursor"))?;
         decode_hex_page(
             output["hex"]
                 .as_str()
@@ -225,7 +224,7 @@ async fn exercise(runtime: &ProcessPluginRuntime, a: &str, b: &str, baud: u32) -
             .await?;
         let endpoint = Endpoint {
             instance,
-            cursor: "0".into(),
+            cursor: 0,
         };
         endpoint.call(runtime, "serial.connect", json!({})).await?;
         endpoints.push(endpoint);
@@ -413,11 +412,7 @@ async fn exercise(runtime: &ProcessPluginRuntime, a: &str, b: &str, baud: u32) -
     let output = approved
         .output
         .ok_or_else(|| anyhow!("missing MCP result"))?;
-    let domain: Value = serde_json::from_str(
-        output["content"][0]["text"]
-            .as_str()
-            .ok_or_else(|| anyhow!("missing MCP text"))?,
-    )?;
+    let domain = output["structuredContent"].clone();
     ensure!(
         domain["sent"] == 2 && domain["remaining"] == 0,
         "bad MCP result: {domain}"

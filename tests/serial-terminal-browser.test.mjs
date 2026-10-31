@@ -31,7 +31,7 @@ test("human Shell uses terminal keys, UART uses its sender, and MCP queues stay 
     await run(`(async () => {
       document.body.style.cssText = 'margin:0;width:1100px;height:800px';
       window.calls = []; window.locale = 'en'; window.connected = true;
-      window.commandQueue = 0; window.txBytes = 0; window.cursor = '0';
+      window.commandQueue = 0; window.txBytes = 0; window.cursor = 0;
       window.receipt = (output = null) => ({ operationId: 'human-input', status:'completed', output,
         error:null, proposalId:null, waitExpired:false });
       window.api = {
@@ -86,8 +86,8 @@ test("human Shell uses terminal keys, UART uses its sender, and MCP queues stay 
     assert.equal(await run(`window.calls.some(c => c.operation.endsWith('_hex'))`), false, "Shell never uses HEX interfaces");
 
     await run(`(async () => {
-      window.cursor = '1';
-      await window.event({name:'serial.output',payload:{connectionId:'conn',cursor:'1',text:${JSON.stringify("device echo\r\n")},bytes:13}});
+      window.cursor = 1;
+      await window.event({name:'serial.output',payload:{connectionId:'conn',cursor:1,text:${JSON.stringify("device echo\r\n")},bytes:13}});
     })()`);
     await waitForValue(client, `root.querySelector('.xterm-screen').textContent.includes('device echo')`);
 

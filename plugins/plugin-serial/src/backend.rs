@@ -68,7 +68,7 @@ pub fn catalog() -> Vec<OperationDescriptor> {
             "serial.read",
             OperationEffect::Read,
             false,
-            json!({"cursor":{"type":"string","default":"0"}}),
+            json!({"cursor":{"type":"integer","minimum":0,"default":0}}),
         ),
         // 人工输入可能是登录密码或密钥：账本只保留脱敏占位。
         (
@@ -81,7 +81,7 @@ pub fn catalog() -> Vec<OperationDescriptor> {
             "serial.read_hex",
             OperationEffect::Read,
             false,
-            json!({"cursor":{"type":"string","default":"0"}}),
+            json!({"cursor":{"type":"integer","minimum":0,"default":0}}),
         ),
         (
             "serial.write_hex",
@@ -165,9 +165,9 @@ pub fn mcp_tools() -> Vec<McpToolRegistration> {
         ("serial.probe", "List serial ports visible to the operating system together with this instance's configuration.", json!({}), vec![]),
         ("serial.connect", "Open the configured serial port.", json!({}), vec![]),
         ("serial.disconnect", "Close the serial port and release it.", json!({}), vec![]),
-        ("serial.read", "Read bounded text from the device using a decimal cursor; reports gaps. Non-text bytes are represented with replacement characters.", json!({"cursor":{"type":"string","default":"0"}}), vec![]),
-        ("serial.read_hex", "Read bounded serial bytes as a HEX string using a decimal cursor. Explicit HEX mode only; no Base64 or device protocol parsing.", json!({"cursor":{"type":"string","default":"0"}}), vec![]),
-        ("serial.command", "Queue 1-64 text inputs in order, exactly like human Shell input. Preserves all control characters, newlines and escape sequences. lineEnding defaults to none; include CR in the text or select an ending explicitly. intervalMs is a sending delay, not a device completion check. Requires approval unless Bypass or allowlist permits. Never replays after uncertain delivery.", command::properties(), vec!["commands"]),
+        ("serial.read", "Read bounded text from the device using a non-negative cursor; reports gaps. Non-text bytes are represented with replacement characters.", json!({"cursor":{"type":"integer","minimum":0,"default":0}}), vec![]),
+        ("serial.read_hex", "Read bounded serial bytes as a HEX string using a non-negative cursor. Explicit HEX mode only; no Base64 or device protocol parsing.", json!({"cursor":{"type":"integer","minimum":0,"default":0}}), vec![]),
+        ("serial.command", "Queue 1-64 text inputs in order, exactly like human Shell input. Preserves all control characters, newlines and escape sequences. lineEnding defaults to none; include CR in the text or select an ending explicitly. Optional waitForPrompt (literal substring) or waitTimeoutMs collects bounded device output after sending; without either, completion only confirms bytes sent. Requires approval unless Bypass or allowlist permits. Never replays after uncertain delivery.", command::properties(), vec!["commands"]),
         ("serial.command_hex", "Queue 1-64 HEX byte strings in order (for example 00 80 FF). Explicit HEX mode only. No Base64, automatic line endings, Modbus interpretation or firmware flashing. Requires approval unless Bypass or allowlist permits; device completion is unknown.", command::hex_properties(), vec!["commands"]),
     ]
     .into_iter()
@@ -243,7 +243,7 @@ fn command_args(args: &Value) -> Value {
 }
 
 fn mcp_result(value: Value) -> Value {
-    json!({"content":[{"type":"text","text":value.to_string()}],"isError":false})
+    json!({"content":[{"type":"text","text":value.to_string()}],"structuredContent":value,"isError":false})
 }
 
 fn parse_commands(operation: &str, args: &Value) -> Result<CommandList> {
@@ -590,12 +590,12 @@ impl Backend {
                 Ok(json!({"connected":false}))
             }
             "serial.read" | "serial.read_hex" => {
-                let cursor = args
-                    .get("cursor")
-                    .and_then(Value::as_str)
-                    .unwrap_or("0")
-                    .parse::<u64>()
-                    .map_err(|_| anyhow!("Invalid serial output cursor"))?;
+                let cursor = match args.get("cursor") {
+                    None => 0,
+                    Some(value) => value
+                        .as_u64()
+                        .ok_or_else(|| anyhow!("Invalid serial output cursor"))?,
+                };
                 let connection = instance
                     .connection
                     .as_ref()
@@ -747,17 +747,15 @@ mod tests {
     fn mcp_read_returns_text_without_binary_payload() {
         let value = json!({
             "text": "COM2_OK\r\n",
-            "cursor": "7",
+            "cursor": 7,
             "gap": false,
             "closed": false,
             "more": false,
         });
         let result = mcp_result(value);
-        let text: Value =
-            serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
-        assert_eq!(text["text"], "COM2_OK\r\n");
-        assert!(text.get("data").is_none());
-        assert_eq!(text["cursor"], "7");
+        assert_eq!(result["structuredContent"]["text"], "COM2_OK\r\n");
+        assert!(result["structuredContent"].get("data").is_none());
+        assert_eq!(result["structuredContent"]["cursor"], 7);
     }
 
     #[test]
@@ -821,8 +819,27 @@ mod tests {
             "mcp.serial.read",
             &json!({"pluginInstanceId":"one","cursor":7})
         )
-        .is_err());
+        .is_ok());
         assert!(validate_mcp_args("mcp.serial.nope", &json!({})).is_err());
+    }
+
+    #[test]
+    fn mcp_read_cursors_are_non_negative_integer_schema_values() {
+        for tool in mcp_tools().into_iter().filter(|tool| {
+            matches!(
+                tool.operation.as_str(),
+                "mcp.serial.read" | "mcp.serial.read_hex"
+            )
+        }) {
+            assert_eq!(
+                tool.descriptor["inputSchema"]["properties"]["cursor"]["type"],
+                "integer"
+            );
+            assert_eq!(
+                tool.descriptor["inputSchema"]["properties"]["cursor"]["minimum"],
+                0
+            );
+        }
     }
 
     #[test]
@@ -867,6 +884,11 @@ mod tests {
         assert!(validate_mcp_args(
             "mcp.serial.command",
             &json!({"pluginInstanceId":"one","commands":[controls]})
+        )
+        .is_ok());
+        assert!(validate_mcp_args(
+            "mcp.serial.command",
+            &json!({"pluginInstanceId":"one","commands":[""],"lineEnding":"crlf"})
         )
         .is_ok());
         assert!(validate_mcp_args(

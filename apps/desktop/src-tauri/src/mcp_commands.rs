@@ -3,7 +3,7 @@
 //! 适配器是桌面可执行文件自身（`coterm-desktop mcp stdio`）。这里负责按需启动固定
 //! 回环地址的本机桥，并把可直接粘贴的客户端配置交给桌面面板。
 
-use std::sync::Arc;
+use std::{net::SocketAddr, sync::Arc};
 
 use coterm_core::plugin_manager::ProcessPluginRuntime;
 use coterm_mcp::{
@@ -32,18 +32,32 @@ pub struct StdioStatus {
 pub struct StdioBridge {
     runtime: Arc<ProcessPluginRuntime>,
     command: Option<String>,
+    bind_address: SocketAddr,
     active: tokio::sync::Mutex<Option<BridgeServer>>,
 }
 
 impl StdioBridge {
     /// `executable` 必须是不经 PATH 解析的绝对路径，客户端才能从任意工作目录启动。
     pub fn new(runtime: Arc<ProcessPluginRuntime>, executable: Option<std::path::PathBuf>) -> Self {
+        Self::with_address(
+            runtime,
+            executable,
+            SocketAddr::from(([127, 0, 0, 1], 51234)),
+        )
+    }
+
+    fn with_address(
+        runtime: Arc<ProcessPluginRuntime>,
+        executable: Option<std::path::PathBuf>,
+        bind_address: SocketAddr,
+    ) -> Self {
         let command = executable
             .filter(|path| path.is_absolute())
             .map(|path| path.to_string_lossy().into_owned());
         Self {
             runtime,
             command,
+            bind_address,
             active: tokio::sync::Mutex::new(None),
         }
     }
@@ -79,7 +93,7 @@ impl StdioBridge {
         // 无法给出可启动的适配器入口时不开监听，也不交付配置。
         self.command.as_ref().ok_or(EXECUTABLE_UNAVAILABLE)?;
         if active.is_none() {
-            let bridge = BridgeServer::bind(self.runtime.clone())
+            let bridge = BridgeServer::bind_at(self.runtime.clone(), self.bind_address)
                 .await
                 .map_err(|error| format!("MCP Stdio bridge unavailable: {error}"))?;
             *active = Some(bridge);
@@ -118,7 +132,11 @@ mod tests {
 
     #[tokio::test]
     async fn enabling_publishes_a_client_configuration_and_disabling_closes_it() {
-        let bridge = StdioBridge::new(runtime(), Some(executable()));
+        let bridge = StdioBridge::with_address(
+            runtime(),
+            Some(executable()),
+            "127.0.0.1:0".parse().expect("socket address"),
+        );
         let idle = bridge.status().await;
         assert!(!idle.enabled);
         assert!(idle.client_config.is_none());

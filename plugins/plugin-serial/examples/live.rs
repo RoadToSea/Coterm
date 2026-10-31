@@ -70,7 +70,7 @@ async fn main() {
                "dispatch":{"mode":"execute"},"pluginId":"coterm-plugin-serial"}),
     )
     .await;
-    let mut cursor = before["cursor"].as_str().unwrap_or("0").to_owned();
+    let mut cursor = before["cursor"].as_u64().unwrap_or(0);
     println!("cursor before: {cursor}");
 
     let script: [(usize, &[u8]); 5] = [
@@ -108,7 +108,7 @@ async fn main() {
             if !bytes.is_empty() {
                 print!("{}", String::from_utf8_lossy(bytes));
             }
-            cursor = read["cursor"].as_str().unwrap_or(&cursor).to_owned();
+            cursor = read["cursor"].as_u64().unwrap_or(cursor);
             if read["gap"].as_bool().unwrap_or(false) {
                 eprintln!("[gap: replay buffer wrapped]");
             }

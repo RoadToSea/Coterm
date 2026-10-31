@@ -65,7 +65,7 @@ async fn real_device_round_trips_bytes_at_the_configured_baud_rate() -> Result<(
 
     // 发送两个回车取得提示符，随后发一条能产生确定性输出的命令。
     let before = invoke(&mut backend, "serial.read", json!({}), "read").await?;
-    let mut cursor = before["cursor"].as_str().unwrap_or("0").to_owned();
+    let mut cursor = before["cursor"].as_u64().unwrap_or(0);
     for payload in [&b"\r"[..], b"\r\n"] {
         invoke(
             &mut backend,
@@ -88,7 +88,7 @@ async fn real_device_round_trips_bytes_at_the_configured_baud_rate() -> Result<(
             )
             .await?;
             received.extend_from_slice(read["text"].as_str().unwrap_or_default().as_bytes());
-            cursor = read["cursor"].as_str().unwrap_or(&cursor).to_owned();
+            cursor = read["cursor"].as_u64().unwrap_or(cursor);
             assert_eq!(
                 read["gap"], false,
                 "a fresh connection must not report a gap"
@@ -101,7 +101,7 @@ async fn real_device_round_trips_bytes_at_the_configured_baud_rate() -> Result<(
     })
     .await??;
     assert!(
-        cursor.parse::<u64>().unwrap_or(0) > 0,
+        cursor > 0,
         "the replay cursor must advance after real bytes arrive"
     );
     let _ = received;

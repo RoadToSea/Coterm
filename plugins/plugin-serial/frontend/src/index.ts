@@ -184,9 +184,9 @@ interface Status {
   commandQueue: number;
 }
 interface Probe { config: Config; connected: boolean; ports: PortEntry[] }
-interface Output { text: string; bytes: number; cursor: string; gap: boolean; closed: boolean; more: boolean; connectionId: string }
-interface HexOutput { hex: string; bytes: number; cursor: string; gap: boolean; closed: boolean; more: boolean; connectionId: string }
-interface PushedOutput { text: string; bytes: number; cursor: string; connectionId: string }
+interface Output { text: string; bytes: number; cursor: number; gap: boolean; closed: boolean; more: boolean; connectionId: string }
+interface HexOutput { hex: string; bytes: number; cursor: number; gap: boolean; closed: boolean; more: boolean; connectionId: string }
+interface PushedOutput { text: string; bytes: number; cursor: number; connectionId: string }
 interface Signals { dtr: boolean; rts: boolean }
 
 const BAUD_RATES = [300, 1200, 2400, 4800, 9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600];
@@ -511,7 +511,7 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
   let disposed = false;
   let connected = false;
   let working = false;
-  let cursor = "0";
+  let cursor = 0;
   let connectionId: string | null = null;
   let unsubscribe: (() => void) | undefined;
   let updates = Promise.resolve();
@@ -531,7 +531,7 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
   const entries: LogEntry[] = [];
   let logBytes = 0;
   let hexOffset = 0;
-  let hexCursor = "0";
+  let hexCursor = 0;
   const hexEntries: LogEntry[] = [];
   let hexLogBytes = 0;
   const controller = new AbortController();
@@ -696,7 +696,7 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
     label.textContent = `${status.config.port}@${status.config.baudRate}`;
     if (connectionId !== status.connectionId) {
       connectionId = status.connectionId;
-      cursor = "0";
+      cursor = 0;
       statsRx = 0;
       statsTx = 0;
       if (connectionId) clearLog();
@@ -781,12 +781,12 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
       }
       if (event.name !== "serial.output") return;
       const data = event.payload as PushedOutput;
-      if (typeof data.text !== "string" || typeof data.bytes !== "number" || typeof data.connectionId !== "string" || typeof data.cursor !== "string" || !/^\d+$/.test(data.cursor)) {
+      if (typeof data.text !== "string" || typeof data.bytes !== "number" || typeof data.connectionId !== "string" || !Number.isSafeInteger(data.cursor) || data.cursor < 0) {
         throw new Error("Invalid serial output event");
       }
       if (data.connectionId !== connectionId) await refreshSnapshot();
-      if (data.connectionId !== connectionId || BigInt(data.cursor) <= BigInt(cursor)) return;
-      if (BigInt(data.cursor) !== BigInt(cursor) + 1n) { await refreshSnapshot(); return; }
+      if (data.connectionId !== connectionId || data.cursor <= cursor) return;
+      if (data.cursor !== cursor + 1) { await refreshSnapshot(); return; }
       await write(data.text);
       appendOutput(data.text, data.bytes);
       cursor = data.cursor;

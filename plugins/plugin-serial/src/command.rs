@@ -1,5 +1,6 @@
 //! Text / HEX lists define send order, not device completion or protocol semantics.
 use crate::payload::{decode_hex, encode_text};
+use crate::session::OutputBuffer;
 use anyhow::{anyhow, bail, Result};
 use coterm_proto::runtime::{message::PluginNotification, ErrorCategory, RuntimeError};
 use serde::Deserialize;
@@ -10,13 +11,14 @@ use std::{
     time::Duration,
 };
 use tokio::{
-    sync::{mpsc, watch},
+    sync::{mpsc, watch, Mutex},
     time::{sleep, timeout},
 };
 
 pub const MAX_COMMANDS: usize = 64;
 pub const MAX_COMMAND_BYTES: usize = 4096;
 pub const MAX_BATCH_BYTES: usize = 16 * 1024;
+const MAX_COLLECTED_OUTPUT_BYTES: usize = 8 * 1024;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -26,6 +28,10 @@ struct CommandArgs {
     line_ending: String,
     #[serde(default = "default_interval")]
     interval_ms: u64,
+    #[serde(default)]
+    wait_for_prompt: Option<String>,
+    #[serde(default)]
+    wait_timeout_ms: Option<u64>,
 }
 
 fn default_ending() -> String {
@@ -38,13 +44,21 @@ fn default_interval() -> u64 {
 pub struct CommandList {
     pub payloads: Vec<Vec<u8>>,
     pub interval: Duration,
+    pub wait: Option<WaitSpec>,
+}
+
+#[derive(Clone, Debug)]
+pub struct WaitSpec {
+    pub prompt: Option<String>,
+    pub timeout: Duration,
 }
 
 impl CommandList {
     pub fn parse(args: &Value) -> Result<Self> {
         let args: CommandArgs = serde_json::from_value(args.clone())
             .map_err(|_| anyhow!("Invalid serial command list parameters"))?;
-        Self::from_entries(args.commands, args.interval_ms, |entry| {
+        let wait = wait_spec(args.wait_for_prompt, args.wait_timeout_ms)?;
+        Self::from_entries(args.commands, args.interval_ms, wait, |entry| {
             encode_text(entry, &args.line_ending)
         })
     }
@@ -59,12 +73,13 @@ impl CommandList {
         }
         let args: HexListArgs = serde_json::from_value(args.clone())
             .map_err(|_| anyhow!("Invalid serial HEX list parameters"))?;
-        Self::from_entries(args.commands, args.interval_ms, decode_hex)
+        Self::from_entries(args.commands, args.interval_ms, None, decode_hex)
     }
 
     fn from_entries(
         commands: Vec<String>,
         interval_ms: u64,
+        wait: Option<WaitSpec>,
         encode: impl Fn(&str) -> Result<Vec<u8>>,
     ) -> Result<Self> {
         if commands.is_empty() || commands.len() > MAX_COMMANDS {
@@ -77,7 +92,7 @@ impl CommandList {
         let mut payloads = Vec::with_capacity(commands.len());
         for command in commands {
             let payload = encode(&command)?;
-            if command.is_empty() || payload.len() > MAX_COMMAND_BYTES {
+            if payload.is_empty() || payload.len() > MAX_COMMAND_BYTES {
                 bail!("Each serial entry must contain 1 to 4096 bytes including optional line endings");
             }
             bytes += payload.len();
@@ -89,16 +104,36 @@ impl CommandList {
         Ok(Self {
             payloads,
             interval: Duration::from_millis(interval_ms),
+            wait,
         })
     }
+}
+
+fn wait_spec(prompt: Option<String>, timeout_ms: Option<u64>) -> Result<Option<WaitSpec>> {
+    if prompt.is_none() && timeout_ms.is_none() {
+        return Ok(None);
+    }
+    let timeout_ms = timeout_ms.unwrap_or(5_000);
+    if timeout_ms > 300_000 {
+        bail!("Serial command wait timeout must be between 0 and 300000 ms");
+    }
+    if prompt.as_ref().is_some_and(String::is_empty) {
+        bail!("Serial command wait prompt must not be empty");
+    }
+    Ok(Some(WaitSpec {
+        prompt,
+        timeout: Duration::from_millis(timeout_ms),
+    }))
 }
 
 pub fn properties() -> Value {
     json!({
         "commands":{"type":"array","minItems":1,"maxItems":64,
-            "items":{"type":"string","minLength":1,"maxLength":4096}},
+            "items":{"type":"string","minLength":0,"maxLength":4096}},
         "lineEnding":{"type":"string","enum":["none","cr","lf","crlf"],"default":"none"},
-        "intervalMs":{"type":"integer","minimum":0,"maximum":1000,"default":100}
+        "intervalMs":{"type":"integer","minimum":0,"maximum":1000,"default":100},
+        "waitForPrompt":{"type":"string","minLength":1},
+        "waitTimeoutMs":{"type":"integer","minimum":0,"maximum":300000}
     })
 }
 
@@ -205,6 +240,7 @@ impl CommandJob {
         tx: &AtomicU64,
         events: &Option<(String, mpsc::Sender<PluginNotification>)>,
         connection_id: &str,
+        output: std::sync::Arc<Mutex<OutputBuffer>>,
     ) -> (Option<W>, bool) {
         let mut state = Progress {
             started: true,
@@ -212,6 +248,7 @@ impl CommandJob {
         };
         let mut failure = None;
         let mut io_failure = None;
+        let output_start = output.lock().await.cursor();
         self.publish(&state, events, connection_id, tx.load(Ordering::Relaxed));
         for index in 0..self.list.payloads.len() {
             if *self.cancel.borrow() {
@@ -272,6 +309,57 @@ impl CommandJob {
                 }
             }
         }
+        let collected = if !state.cancelled && failure.is_none() {
+            if let Some(wait) = &self.list.wait {
+                let deadline = tokio::time::Instant::now() + wait.timeout;
+                let mut cursor = output_start;
+                let mut collected = String::new();
+                let mut truncated = false;
+                let mut gap = false;
+                loop {
+                    let page = output.lock().await.read(cursor).ok();
+                    if let Some(page) = page {
+                        gap |= page["gap"].as_bool().unwrap_or(false);
+                        if let Some(text) = page["text"].as_str() {
+                            let remaining =
+                                MAX_COLLECTED_OUTPUT_BYTES.saturating_sub(collected.len());
+                            let mut end = text.len().min(remaining);
+                            while !text.is_char_boundary(end) {
+                                end -= 1;
+                            }
+                            collected.push_str(&text[..end]);
+                            truncated |= end < text.len();
+                            cursor = page["cursor"].as_u64().unwrap_or(cursor);
+                            if wait
+                                .prompt
+                                .as_ref()
+                                .is_some_and(|prompt| collected.contains(prompt))
+                            {
+                                break;
+                            }
+                        }
+                    }
+                    if truncated
+                        || collected.len() >= MAX_COLLECTED_OUTPUT_BYTES
+                        || tokio::time::Instant::now() >= deadline
+                    {
+                        break;
+                    }
+                    sleep(
+                        Duration::from_millis(20)
+                            .min(deadline.saturating_duration_since(tokio::time::Instant::now())),
+                    )
+                    .await;
+                }
+                Some(
+                    json!({"text":collected,"cursor":cursor,"promptMatched":wait.prompt.as_ref().is_some_and(|prompt| collected.contains(prompt)),"truncated":truncated,"gap":gap}),
+                )
+            } else {
+                None
+            }
+        } else {
+            None
+        };
         state.finished = true;
         self.publish(&state, events, connection_id, tx.load(Ordering::Relaxed));
         if let Some(message) = failure {
@@ -297,9 +385,12 @@ impl CommandJob {
         // 取消的终态由宿主 cancel 响应写入；绝不把它报成 completed。
         if !state.cancelled {
             if let Some((_, sender)) = events {
-                let domain = self.summary(&state);
+                let mut domain = self.summary(&state);
+                if let Some(output) = collected {
+                    domain["output"] = output;
+                }
                 let result = if self.mcp {
-                    json!({"content":[{"type":"text","text":domain.to_string()}],"isError":false})
+                    json!({"content":[{"type":"text","text":format!("Serial input sent: {} bytes", domain["bytes"].as_u64().unwrap_or(0))}],"structuredContent":domain,"isError":false})
                 } else {
                     domain
                 };
@@ -346,6 +437,22 @@ mod tests {
         }
     }
 
+    struct ReplyingWriter {
+        output: std::sync::Arc<tokio::sync::Mutex<OutputBuffer>>,
+    }
+
+    impl Write for ReplyingWriter {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            let mut output = self.output.blocking_lock();
+            output.push(b"help output\r\n# ");
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
     fn job(interval: u64) -> Result<(CommandJob, CommandHandle)> {
         Ok(CommandJob::new(
             "op-list".into(),
@@ -371,6 +478,7 @@ mod tests {
                 &tx,
                 &Some(("one".into(), sender)),
                 "conn",
+                std::sync::Arc::new(tokio::sync::Mutex::new(OutputBuffer::default())),
             )
             .await;
         assert!(!failed);
@@ -391,14 +499,52 @@ mod tests {
             }
         }
         let result = result.ok_or_else(|| anyhow::anyhow!("missing completion"))?;
-        let domain: Value = serde_json::from_str(
-            result["content"][0]["text"]
-                .as_str()
-                .ok_or_else(|| anyhow::anyhow!("missing MCP text"))?,
-        )?;
+        let domain = result["structuredContent"].clone();
         assert_eq!(domain["deviceCompletion"], "unknown");
         assert_eq!(domain["remaining"], 0);
         assert!(domain.get("exitCode").is_none());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn prompt_wait_returns_only_output_after_submission_cursor() -> Result<()> {
+        let list = CommandList::parse(&json!({
+            "commands":["help"],
+            "lineEnding":"cr",
+            "waitForPrompt":"# ",
+            "waitTimeoutMs":1000
+        }))?;
+        let output = std::sync::Arc::new(tokio::sync::Mutex::new(OutputBuffer::default()));
+        output.lock().await.push(b"old output");
+        let (job, _) = CommandJob::new("prompt-wait".into(), true, list);
+        let (sender, mut events) = mpsc::channel(8);
+        let (_, failed) = job
+            .run(
+                Some(ReplyingWriter {
+                    output: output.clone(),
+                }),
+                &AtomicBool::new(false),
+                &AtomicU64::new(0),
+                &Some(("instance".into(), sender)),
+                "connection",
+                output,
+            )
+            .await;
+        assert!(!failed);
+        let result = loop {
+            if let Some(PluginNotification::OperationCompleted { result, .. }) = events.recv().await
+            {
+                break result;
+            }
+        };
+        let domain = result["structuredContent"].clone();
+        assert_eq!(domain["output"]["text"], "help output\r\n# ");
+        assert_eq!(domain["output"]["promptMatched"], true);
+        assert_eq!(domain["output"]["cursor"], 2);
+        assert_eq!(
+            result["structuredContent"]["output"]["text"],
+            "help output\r\n# "
+        );
         Ok(())
     }
 
@@ -420,6 +566,7 @@ mod tests {
                     &AtomicU64::new(0),
                     &None,
                     "conn",
+                    std::sync::Arc::new(tokio::sync::Mutex::new(OutputBuffer::default())),
                 )
                 .await;
             assert!(!failed);
@@ -445,6 +592,7 @@ mod tests {
                 &AtomicU64::new(0),
                 &Some(("one".into(), sender)),
                 "conn",
+                std::sync::Arc::new(tokio::sync::Mutex::new(OutputBuffer::default())),
             )
             .await;
         assert!(failed);
@@ -483,6 +631,7 @@ mod tests {
                 &AtomicU64::new(0),
                 &None,
                 "conn",
+                std::sync::Arc::new(tokio::sync::Mutex::new(OutputBuffer::default())),
             )
             .await
         });
@@ -523,6 +672,7 @@ mod tests {
                     &AtomicU64::new(0),
                     &None,
                     "conn",
+                    std::sync::Arc::new(tokio::sync::Mutex::new(OutputBuffer::default())),
                 )
                 .await;
             assert_eq!(failed, disconnected);
@@ -572,6 +722,7 @@ mod tests {
                 &AtomicU64::new(0),
                 &None,
                 "conn",
+                std::sync::Arc::new(tokio::sync::Mutex::new(OutputBuffer::default())),
             )
             .await
         });
@@ -604,6 +755,7 @@ mod tests {
                 &AtomicU64::new(0),
                 &None,
                 "conn",
+                std::sync::Arc::new(tokio::sync::Mutex::new(OutputBuffer::default())),
             )
             .await
         });
@@ -640,6 +792,11 @@ mod tests {
             )?;
             assert_eq!(list.payloads[0], format!("pwd{suffix}").as_bytes());
         }
+        assert_eq!(
+            CommandList::parse(&json!({"commands":[""],"lineEnding":"crlf"}))?.payloads,
+            [b"\r\n".to_vec()]
+        );
+        assert!(CommandList::parse(&json!({"commands":[""]})).is_err());
         Ok(())
     }
 
