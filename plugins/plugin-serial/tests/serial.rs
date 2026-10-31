@@ -182,6 +182,7 @@ async fn backend_rejects_requests_that_break_the_runtime_contract() -> Result<()
             .await
             .expect_err("approval on a closed port must fail");
         args["commands"] = json!(["valid-first-entry", ""]);
+        args["lineEnding"] = json!("none");
         backend.request("invoke", json!({
             "operationId":"invalid-list","operation":operation,"effect":"commit",
             "pluginInstanceId":"one","args":args,"source":"agent",
@@ -339,6 +340,15 @@ async fn process_host_loads_the_serial_package_and_validates_mcp_tools() -> Resu
         command_tool["inputSchema"]["properties"]["waitForPrompt"]["type"],
         "string"
     );
+    assert_eq!(
+        command_tool["inputSchema"]["properties"]["lineEnding"]["default"],
+        "cr"
+    );
+    assert!(
+        command_tool["inputSchema"]["properties"]["name"]["description"]
+            .as_str()
+            .is_some_and(|description| description.contains("coterm.list_instances"))
+    );
     let read_tool = tools["tools"]
         .as_array()
         .and_then(|tools| {
@@ -351,12 +361,111 @@ async fn process_host_loads_the_serial_package_and_validates_mcp_tools() -> Resu
         read_tool["inputSchema"]["properties"]["cursor"]["type"],
         "integer"
     );
-    let status = coterm_mcp::server::call_tool(
+    let recent_tool = tools["tools"]
+        .as_array()
+        .and_then(|tools| {
+            tools
+                .iter()
+                .find(|tool| tool["name"] == "coterm-plugin-serial__serial.get_recent")
+        })
+        .ok_or_else(|| anyhow::anyhow!("Missing public recent-output tool"))?;
+    assert_eq!(
+        recent_tool["inputSchema"]["properties"]["lines"]["default"],
+        50
+    );
+    assert!(
+        recent_tool["inputSchema"]["properties"]["name"]["description"]
+            .as_str()
+            .is_some()
+    );
+    let missing_name = coterm_mcp::server::call_tool(
         &runtime,
-        &json!({"name":"coterm-plugin-serial__serial.status","arguments":{"name":instance.label}}),
+        &json!({"name":"coterm-plugin-serial__serial.status","arguments":{}}),
     )
-    .await?;
-    assert_eq!(status["isError"], false);
+    .await
+    .expect_err("instance-scoped tools must explain their routing argument");
+    assert!(missing_name.to_string().contains("name"));
+    assert!(missing_name.to_string().contains("instanceName"));
+    let invalid_field = coterm_mcp::server::call_tool(
+        &runtime,
+        &json!({
+            "name":"coterm-plugin-serial__serial.command",
+            "arguments":{
+                "name":instance.label,
+                "commands":["secret-command-value"],
+                "line_ending":"cr"
+            }
+        }),
+    )
+    .await
+    .expect_err("unknown argument fields must fail schema validation");
+    assert!(invalid_field.to_string().contains("line_ending"));
+    assert!(!invalid_field.to_string().contains("secret-command-value"));
+    for field in ["name", "instance", "instanceName", "instance_name"] {
+        let status = coterm_mcp::server::call_tool(
+            &runtime,
+            &json!({
+                "name":"coterm-plugin-serial__serial.status",
+                "arguments":{field:instance.label}
+            }),
+        )
+        .await?;
+        assert_eq!(status["isError"], false, "{field}");
+        assert_eq!(status["structuredContent"]["connected"], false);
+    }
+    let duplicate_names = coterm_mcp::server::call_tool(
+        &runtime,
+        &json!({
+            "name":"coterm-plugin-serial__serial.status",
+            "arguments":{"name":instance.label,"instance":"different"}
+        }),
+    )
+    .await
+    .expect_err("ambiguous instance aliases must not silently pick a target");
+    assert!(duplicate_names.to_string().contains("exactly one"));
+    let proposal = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        coterm_mcp::server::call_tool(
+            &runtime,
+            &json!({
+                "name":"coterm-plugin-serial__serial.connect",
+                "arguments":{"instanceName":instance.label}
+            }),
+        ),
+    )
+    .await??;
+    assert_eq!(proposal["structuredContent"]["status"], "pending_approval");
+    assert_eq!(
+        proposal["_meta"]["coterm/operation"]["status"],
+        "awaiting_approval"
+    );
+    let proposal_id = proposal["_meta"]["coterm/operation"]["operationId"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("Missing pending operation ID"))?;
+    let proposal = runtime
+        .get(
+            CallerContext {
+                source: OperationSource::Human,
+                session_id: instance.session_id.clone(),
+                plugin_id: Some(instance.plugin_id.clone()),
+            },
+            proposal_id,
+        )
+        .await?;
+    runtime
+        .reject(
+            CallerContext {
+                source: OperationSource::Human,
+                session_id: instance.session_id.clone(),
+                plugin_id: Some(instance.plugin_id.clone()),
+            },
+            proposal_id,
+            proposal
+                .proposal_id
+                .as_deref()
+                .ok_or_else(|| anyhow::anyhow!("Missing proposal identifier"))?,
+        )
+        .await?;
     let listed = coterm_mcp::server::call_tool(
         &runtime,
         &json!({"name":"coterm.list_instances","arguments":{}}),

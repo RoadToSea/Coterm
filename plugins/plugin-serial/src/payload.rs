@@ -4,6 +4,41 @@ use serde::Deserialize;
 use serde_json::Value;
 
 pub const MAX_WRITE_BYTES: usize = 16 * 1024;
+/// Text appears in both MCP content and structuredContent. Reserve room for the
+/// envelope within the host's 16 KiB result budget, including JSON escaping.
+pub(crate) const OUTPUT_TEXT_JSON_BUDGET: usize = 6 * 1024;
+
+pub(crate) fn bounded_output_text(text: &str, budget: usize, tail: bool) -> (&str, usize) {
+    let mut chars = text.char_indices();
+    let mut used = 0;
+    let mut boundary = if tail { text.len() } else { 0 };
+    loop {
+        let next = if tail {
+            chars.next_back()
+        } else {
+            chars.next()
+        };
+        let Some((index, ch)) = next else { break };
+        let bytes = match ch {
+            '"' | '\\' | '\n' | '\r' | '\t' | '\u{8}' | '\u{c}' => 2,
+            '\u{0}'..='\u{1f}' => 6,
+            _ => ch.len_utf8(),
+        };
+        if used + bytes > budget {
+            break;
+        }
+        used += bytes;
+        boundary = if tail { index } else { index + ch.len_utf8() };
+    }
+    (
+        if tail {
+            &text[boundary..]
+        } else {
+            &text[..boundary]
+        },
+        used,
+    )
+}
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

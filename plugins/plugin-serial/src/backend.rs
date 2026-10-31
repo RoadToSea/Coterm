@@ -68,7 +68,13 @@ pub fn catalog() -> Vec<OperationDescriptor> {
             "serial.read",
             OperationEffect::Read,
             false,
-            json!({"cursor":{"type":"integer","minimum":0,"default":0}}),
+            json!({"cursor":{"type":"integer","minimum":0,"default":0,"description":"Sequence cursor returned by the previous read; omit to start at the beginning of the current buffer."}}),
+        ),
+        (
+            "serial.get_recent",
+            OperationEffect::Read,
+            false,
+            json!({"lines":{"type":"integer","minimum":1,"maximum":200,"default":50,"description":"Number of trailing text lines to return."}}),
         ),
         // 人工输入可能是登录密码或密钥：账本只保留脱敏占位。
         (
@@ -81,7 +87,7 @@ pub fn catalog() -> Vec<OperationDescriptor> {
             "serial.read_hex",
             OperationEffect::Read,
             false,
-            json!({"cursor":{"type":"integer","minimum":0,"default":0}}),
+            json!({"cursor":{"type":"integer","minimum":0,"default":0,"description":"Sequence cursor returned by the previous HEX read; omit to start at the beginning of the current buffer."}}),
         ),
         (
             "serial.write_hex",
@@ -120,7 +126,7 @@ pub fn catalog() -> Vec<OperationDescriptor> {
                 sensitive_input,
                 transient: matches!(
                     name,
-                    "serial.read" | "serial.read_hex" | "serial.status" | "serial.probe" | "serial.write" | "serial.write_hex"
+                    "serial.read" | "serial.read_hex" | "serial.get_recent" | "serial.status" | "serial.probe" | "serial.write" | "serial.write_hex"
                 ),
             },
         )
@@ -165,19 +171,20 @@ pub fn mcp_tools() -> Vec<McpToolRegistration> {
         ("serial.probe", "List serial ports visible to the operating system together with this instance's configuration.", json!({}), vec![]),
         ("serial.connect", "Open the configured serial port.", json!({}), vec![]),
         ("serial.disconnect", "Close the serial port and release it.", json!({}), vec![]),
-        ("serial.read", "Read bounded text from the device using a non-negative cursor; reports gaps. Non-text bytes are represented with replacement characters.", json!({"cursor":{"type":"integer","minimum":0,"default":0}}), vec![]),
-        ("serial.read_hex", "Read bounded serial bytes as a HEX string using a non-negative cursor. Explicit HEX mode only; no Base64 or device protocol parsing.", json!({"cursor":{"type":"integer","minimum":0,"default":0}}), vec![]),
-        ("serial.command", "Queue 1-64 text inputs in order, exactly like human Shell input. Preserves all control characters, newlines and escape sequences. lineEnding defaults to none; include CR in the text or select an ending explicitly. Optional waitForPrompt (literal substring) or waitTimeoutMs collects bounded device output after sending; without either, completion only confirms bytes sent. Requires approval unless Bypass or allowlist permits. Never replays after uncertain delivery.", command::properties(), vec!["commands"]),
+        ("serial.read", "Read bounded text from the device after a non-negative cursor; reports gaps. Non-text bytes are represented with replacement characters. Prefer serial.get_recent when the caller does not want to track a cursor.", json!({"cursor":{"type":"integer","minimum":0,"default":0,"description":"Sequence cursor returned by the previous serial.read result; omit for the beginning of the current buffer."}}), vec![]),
+        ("serial.get_recent", "Read the most recent bounded text lines without keeping a cursor. This is a snapshot of the current serial output buffer.", json!({"lines":{"type":"integer","minimum":1,"maximum":200,"default":50,"description":"Number of trailing lines to return."}}), vec![]),
+        ("serial.read_hex", "Read bounded serial bytes as a HEX string using a non-negative cursor. Explicit HEX mode only; no Base64 or device protocol parsing.", json!({"cursor":{"type":"integer","minimum":0,"default":0,"description":"Sequence cursor returned by the previous HEX read; omit to start at the beginning of the current buffer."}}), vec![]),
+        ("serial.command", "Queue 1-64 text inputs in order, exactly like human Shell input. Preserves all control characters, newlines and escape sequences. lineEnding defaults to CR so a shell command is submitted; use none for raw input. Optional waitForPrompt (literal substring) or waitTimeoutMs collects bounded device output after sending; without either, completion only confirms bytes sent. Requires approval unless Bypass or allowlist permits. Never replays after uncertain delivery.", command::properties(), vec!["commands"]),
         ("serial.command_hex", "Queue 1-64 HEX byte strings in order (for example 00 80 FF). Explicit HEX mode only. No Base64, automatic line endings, Modbus interpretation or firmware flashing. Requires approval unless Bypass or allowlist permits; device completion is unknown.", command::hex_properties(), vec!["commands"]),
     ]
     .into_iter()
     .map(|(name, description, mut properties, required)| {
-        properties["pluginInstanceId"] = json!({"type":"string","minLength":1});
+            properties["pluginInstanceId"] = json!({"type":"string","minLength":1,"description":"Internal routing key supplied by the host; the public MCP bridge replaces this with the instance name."});
         let mut required = required;
         required.push("pluginInstanceId");
         McpToolRegistration {
             operation: format!("mcp.{name}"),
-            descriptor: json!({"name":name,"description":description,"inputSchema":{"type":"object","properties":properties,"required":required,"additionalProperties":false}}),
+            descriptor: json!({"name":name,"description":description,"inputSchema":{"type":"object","properties":properties,"required":required,"additionalProperties":false},"_meta":{"coterm/returnOnApproval":true}}),
         }
     })
     .collect();
@@ -243,7 +250,16 @@ fn command_args(args: &Value) -> Value {
 }
 
 fn mcp_result(value: Value) -> Value {
-    json!({"content":[{"type":"text","text":value.to_string()}],"structuredContent":value,"isError":false})
+    let text = if let Some(text) = value["text"].as_str() {
+        let mut metadata = value.clone();
+        if let Some(object) = metadata.as_object_mut() {
+            object.remove("text");
+        }
+        format!("{metadata}\n\n{text}")
+    } else {
+        value.to_string()
+    };
+    json!({"content":[{"type":"text","text":text}],"structuredContent":value,"isError":false})
 }
 
 fn parse_commands(operation: &str, args: &Value) -> Result<CommandList> {
@@ -609,6 +625,23 @@ impl Backend {
                 result["connectionId"] = json!(connection.id);
                 Ok(result)
             }
+            "serial.get_recent" => {
+                let lines = match args.get("lines") {
+                    None => 50,
+                    Some(lines) => lines
+                        .as_u64()
+                        .ok_or_else(|| anyhow!("Invalid recent serial output line count"))?,
+                };
+                let lines = usize::try_from(lines)
+                    .map_err(|_| anyhow!("Invalid recent serial output line count"))?;
+                let connection = instance
+                    .connection
+                    .as_ref()
+                    .ok_or_else(|| anyhow!("Serial port is not open"))?;
+                let mut result = connection.output.lock().await.recent_text(lines)?;
+                result["connectionId"] = json!(connection.id);
+                Ok(result)
+            }
             "serial.write" => {
                 let data = text_payload(&args)?;
                 let submitted = data.len();
@@ -756,6 +789,30 @@ mod tests {
         assert_eq!(result["structuredContent"]["text"], "COM2_OK\r\n");
         assert!(result["structuredContent"].get("data").is_none());
         assert_eq!(result["structuredContent"]["cursor"], 7);
+        assert!(result["content"][0]["text"]
+            .as_str()
+            .is_some_and(|text| text.contains("COM2_OK\r\n")));
+    }
+
+    #[test]
+    fn recent_output_fits_the_host_result_limit_after_json_escaping() -> Result<()> {
+        for text in [
+            "x".repeat(16 * 1024),
+            "\0".repeat(16 * 1024),
+            "\"\\\r\n".repeat(4096),
+            "中文".repeat(4096),
+        ] {
+            let mut output = crate::session::OutputBuffer::default();
+            output.push(text.as_bytes());
+            let recent = output.recent_text(50)?;
+            let result = mcp_result(recent);
+            assert!(serde_json::to_vec(&result)?.len() <= 16 * 1024);
+            assert!(!result["structuredContent"]["text"]
+                .as_str()
+                .unwrap_or("")
+                .is_empty());
+        }
+        Ok(())
     }
 
     #[test]
@@ -798,6 +855,7 @@ mod tests {
             "serial.connect",
             "serial.disconnect",
             "serial.read",
+            "serial.get_recent",
             "serial.write",
             "serial.plugin_info",
             "mcp.serial.status",
@@ -863,7 +921,7 @@ mod tests {
             json!({"commands":["pwd"]}),
             json!({"pluginInstanceId":"","commands":["pwd"]}),
             json!({"pluginInstanceId":"one","commands":[]}),
-            json!({"pluginInstanceId":"one","commands":["pwd", ""]}),
+            json!({"pluginInstanceId":"one","commands":["pwd", ""],"lineEnding":"none"}),
             json!({"pluginInstanceId":"one","commands":["pwd"],"intervalMs":true}),
             json!({"pluginInstanceId":"one","commands":["pwd"],"extra":true}),
             json!({"pluginInstanceId":"one","text":"pwd"}),
@@ -879,11 +937,11 @@ mod tests {
     #[test]
     fn mcp_text_and_hex_are_separate_approved_list_contracts() -> Result<()> {
         let controls = "\u{3}\t\u{1b}[A\u{7f}\r\n中文";
-        let text = CommandList::parse(&json!({"commands":[controls]}))?;
+        let text = CommandList::parse(&json!({"commands":[controls],"lineEnding":"none"}))?;
         assert_eq!(text.payloads[0], text_payload(&json!({"text":controls}))?);
         assert!(validate_mcp_args(
             "mcp.serial.command",
-            &json!({"pluginInstanceId":"one","commands":[controls]})
+            &json!({"pluginInstanceId":"one","commands":[controls],"lineEnding":"none"})
         )
         .is_ok());
         assert!(validate_mcp_args(

@@ -1587,11 +1587,22 @@ impl PluginRuntime for ProcessPluginRuntime {
     }
 }
 
-impl Operations for ProcessPluginRuntime {
-    fn submit<'a>(
+impl ProcessPluginRuntime {
+    /// MCP adapters may return once a validated proposal is ready for human review.
+    /// Other callers retain the normal wait-until-completed behavior.
+    pub fn submit_until_approval<'a>(
         &'a self,
         caller: CallerContext,
         request: SubmitOperation,
+    ) -> RuntimeFuture<'a, OperationReceipt> {
+        self.submit_with_wait_policy(caller, request, true)
+    }
+
+    fn submit_with_wait_policy<'a>(
+        &'a self,
+        caller: CallerContext,
+        request: SubmitOperation,
+        return_on_approval: bool,
     ) -> RuntimeFuture<'a, OperationReceipt> {
         Box::pin(async move {
             let bypass = *self.bypass.read().await;
@@ -1802,7 +1813,10 @@ impl Operations for ProcessPluginRuntime {
                 tokio::time::timeout(std::time::Duration::from_millis(wait_ms), async {
                     loop {
                         let record = updates.borrow_and_update().clone();
-                        if crate::operation_history::terminal(record.status) {
+                        if crate::operation_history::terminal(record.status)
+                            || (return_on_approval
+                                && record.status == OperationStatus::AwaitingApproval)
+                        {
                             return record;
                         }
                         if updates.changed().await.is_err() {
@@ -1820,6 +1834,16 @@ impl Operations for ProcessPluginRuntime {
                 }
             }
         })
+    }
+}
+
+impl Operations for ProcessPluginRuntime {
+    fn submit<'a>(
+        &'a self,
+        caller: CallerContext,
+        request: SubmitOperation,
+    ) -> RuntimeFuture<'a, OperationReceipt> {
+        self.submit_with_wait_policy(caller, request, false)
     }
 
     fn get<'a>(
@@ -2205,9 +2229,57 @@ fn validate_operation_args(
         runtime_error_with(
             ErrorCategory::InvalidRequest,
             "operation_args_invalid",
-            "Operation arguments do not match the registered schema".to_owned(),
+            operation_args_error(schema, args),
         )
     })
+}
+
+fn operation_args_error(schema: &Value, args: &Value) -> String {
+    let Some(arguments) = args.as_object() else {
+        return "Operation arguments must be an object".to_owned();
+    };
+    let Some(properties) = schema.get("properties").and_then(Value::as_object) else {
+        return "Operation arguments do not match the registered schema".to_owned();
+    };
+
+    let mut unknown = if schema["additionalProperties"] == false {
+        arguments
+            .keys()
+            .filter(|name| !properties.contains_key(*name))
+            .cloned()
+            .collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
+    unknown.sort();
+
+    let mut missing = schema["required"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .filter(|name| !arguments.contains_key(*name))
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    missing.sort();
+
+    let format_fields = |fields: &[String]| {
+        fields
+            .iter()
+            .map(|field| format!("{field:?}"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    match (unknown.is_empty(), missing.is_empty()) {
+        (false, false) => format!(
+            "Unknown field(s): {}. Missing required field(s): {}.",
+            format_fields(&unknown),
+            format_fields(&missing)
+        ),
+        (false, true) => format!("Unknown field(s): {}.", format_fields(&unknown)),
+        (true, false) => format!("Missing required field(s): {}.", format_fields(&missing)),
+        (true, true) => "Operation arguments do not match the registered schema".to_owned(),
+    }
 }
 
 fn schema_is_valid(schema: &Value, value: &Value) -> bool {
@@ -2265,8 +2337,8 @@ mod tests {
     };
 
     use super::{
-        failure_status, requires_proposal, schema_is_valid, validate_plugin_authority,
-        validate_scope_target, ProcessPluginRuntime,
+        failure_status, operation_args_error, requires_proposal, schema_is_valid,
+        validate_plugin_authority, validate_scope_target, ProcessPluginRuntime,
     };
     use coterm_proto::runtime::interaction::{InteractionKind, InteractionRequest};
     use coterm_proto::runtime::lifecycle::{InstanceInfo, InstanceStatus, RuntimeLimits};
@@ -2678,6 +2750,20 @@ mod tests {
         assert!(!schema_is_valid(&schema, &json!({"count":5})));
         assert!(!schema_is_valid(&schema, &json!({"extra":true})));
         assert!(!schema_is_valid(&schema, &json!({})));
+    }
+
+    #[test]
+    fn schema_errors_name_unknown_and_missing_fields_without_echoing_values() {
+        let schema = json!({
+            "type": "object",
+            "properties": {"commands": {"type": "array"}},
+            "required": ["commands"],
+            "additionalProperties": false,
+        });
+        let message = operation_args_error(&schema, &json!({"line_ending":"private-value"}));
+        assert!(message.contains("line_ending"));
+        assert!(message.contains("commands"));
+        assert!(!message.contains("private-value"));
     }
 
     mod discovery {

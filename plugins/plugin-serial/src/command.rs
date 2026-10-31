@@ -1,5 +1,5 @@
 //! Text / HEX lists define send order, not device completion or protocol semantics.
-use crate::payload::{decode_hex, encode_text};
+use crate::payload::{bounded_output_text, decode_hex, encode_text, OUTPUT_TEXT_JSON_BUDGET};
 use crate::session::OutputBuffer;
 use anyhow::{anyhow, bail, Result};
 use coterm_proto::runtime::{message::PluginNotification, ErrorCategory, RuntimeError};
@@ -35,7 +35,7 @@ struct CommandArgs {
 }
 
 fn default_ending() -> String {
-    "none".into()
+    "cr".into()
 }
 fn default_interval() -> u64 {
     100
@@ -128,20 +128,20 @@ fn wait_spec(prompt: Option<String>, timeout_ms: Option<u64>) -> Result<Option<W
 
 pub fn properties() -> Value {
     json!({
-        "commands":{"type":"array","minItems":1,"maxItems":64,
+        "commands":{"type":"array","description":"Text entries to send in order; each entry is a separate serial write.","minItems":1,"maxItems":64,
             "items":{"type":"string","minLength":0,"maxLength":4096}},
-        "lineEnding":{"type":"string","enum":["none","cr","lf","crlf"],"default":"none"},
-        "intervalMs":{"type":"integer","minimum":0,"maximum":1000,"default":100},
-        "waitForPrompt":{"type":"string","minLength":1},
-        "waitTimeoutMs":{"type":"integer","minimum":0,"maximum":300000}
+        "lineEnding":{"type":"string","enum":["none","cr","lf","crlf"],"default":"cr","description":"Line ending appended to each text entry. Defaults to CR so shell commands are submitted; use none for raw input."},
+        "intervalMs":{"type":"integer","minimum":0,"maximum":1000,"default":100,"description":"Delay between serial writes, in milliseconds."},
+        "waitForPrompt":{"type":"string","minLength":1,"description":"Optional case-sensitive literal substring to stop output collection when found."},
+        "waitTimeoutMs":{"type":"integer","minimum":0,"maximum":300000,"description":"Maximum time to collect output after sending; used alone, this collects output for the specified duration."}
     })
 }
 
 pub fn hex_properties() -> Value {
     json!({
-        "commands":{"type":"array","minItems":1,"maxItems":64,
+        "commands":{"type":"array","description":"HEX byte strings to send in order; each entry is a separate serial write.","minItems":1,"maxItems":64,
             "items":{"type":"string","minLength":1,"maxLength":12290}},
-        "intervalMs":{"type":"integer","minimum":0,"maximum":1000,"default":100}
+        "intervalMs":{"type":"integer","minimum":0,"maximum":1000,"default":100,"description":"Delay between serial writes, in milliseconds."}
     })
 }
 
@@ -314,21 +314,34 @@ impl CommandJob {
                 let deadline = tokio::time::Instant::now() + wait.timeout;
                 let mut cursor = output_start;
                 let mut collected = String::new();
+                let mut encoded_bytes = 0;
                 let mut truncated = false;
                 let mut gap = false;
                 loop {
+                    if *self.cancel.borrow() {
+                        state.cancelled = true;
+                        break;
+                    }
+                    if stop.load(Ordering::SeqCst) {
+                        failure = Some("Serial connection closed while waiting for output");
+                        break;
+                    }
                     let page = output.lock().await.read(cursor).ok();
                     if let Some(page) = page {
                         gap |= page["gap"].as_bool().unwrap_or(false);
                         if let Some(text) = page["text"].as_str() {
                             let remaining =
                                 MAX_COLLECTED_OUTPUT_BYTES.saturating_sub(collected.len());
-                            let mut end = text.len().min(remaining);
-                            while !text.is_char_boundary(end) {
-                                end -= 1;
-                            }
-                            collected.push_str(&text[..end]);
-                            truncated |= end < text.len();
+                            let (bounded, bytes) = bounded_output_text(
+                                text,
+                                remaining.min(OUTPUT_TEXT_JSON_BUDGET - encoded_bytes),
+                                false,
+                            );
+                            encoded_bytes += bytes;
+                            collected.push_str(bounded);
+                            truncated |= bounded.len() < text.len();
+                            truncated |=
+                                encoded_bytes >= OUTPUT_TEXT_JSON_BUDGET && page["more"] == true;
                             cursor = page["cursor"].as_u64().unwrap_or(cursor);
                             if wait
                                 .prompt
@@ -341,6 +354,7 @@ impl CommandJob {
                     }
                     if truncated
                         || collected.len() >= MAX_COLLECTED_OUTPUT_BYTES
+                        || encoded_bytes >= OUTPUT_TEXT_JSON_BUDGET
                         || tokio::time::Instant::now() >= deadline
                     {
                         break;
@@ -390,7 +404,18 @@ impl CommandJob {
                     domain["output"] = output;
                 }
                 let result = if self.mcp {
-                    json!({"content":[{"type":"text","text":format!("Serial input sent: {} bytes", domain["bytes"].as_u64().unwrap_or(0))}],"structuredContent":domain,"isError":false})
+                    let mut text = format!(
+                        "Serial input sent: {} bytes",
+                        domain["bytes"].as_u64().unwrap_or(0)
+                    );
+                    if let Some(output) = domain["output"]["text"].as_str() {
+                        text.push_str("\n\nCaptured output:\n");
+                        text.push_str(output);
+                        if domain["output"]["truncated"] == true {
+                            text.push_str("\n[output truncated]");
+                        }
+                    }
+                    json!({"content":[{"type":"text","text":text}],"structuredContent":domain,"isError":false})
                 } else {
                     domain
                 };
@@ -439,12 +464,13 @@ mod tests {
 
     struct ReplyingWriter {
         output: std::sync::Arc<tokio::sync::Mutex<OutputBuffer>>,
+        reply: Vec<u8>,
     }
 
     impl Write for ReplyingWriter {
         fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
             let mut output = self.output.blocking_lock();
-            output.push(b"help output\r\n# ");
+            output.push(&self.reply);
             Ok(bytes.len())
         }
 
@@ -522,6 +548,7 @@ mod tests {
             .run(
                 Some(ReplyingWriter {
                     output: output.clone(),
+                    reply: b"help output\r\n# ".to_vec(),
                 }),
                 &AtomicBool::new(false),
                 &AtomicU64::new(0),
@@ -545,6 +572,94 @@ mod tests {
             result["structuredContent"]["output"]["text"],
             "help output\r\n# "
         );
+        assert!(result["content"][0]["text"]
+            .as_str()
+            .is_some_and(|text| text.contains("Captured output:\nhelp output\r\n# ")));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn captured_output_fits_the_host_result_limit_in_both_mcp_representations() -> Result<()>
+    {
+        for reply in [
+            "x".repeat(16 * 1024),
+            "\0".repeat(16 * 1024),
+            "\"\\\r\n".repeat(4096),
+            "中文".repeat(4096),
+        ] {
+            let list = CommandList::parse(&json!({
+                "commands":["help"],
+                "waitTimeoutMs":1000
+            }))?;
+            let output = Arc::new(tokio::sync::Mutex::new(OutputBuffer::default()));
+            let (job, _handle) = CommandJob::new("bounded-result".into(), true, list);
+            let (sender, mut events) = mpsc::channel(8);
+            let (_, failed) = job
+                .run(
+                    Some(ReplyingWriter {
+                        output: output.clone(),
+                        reply: reply.into_bytes(),
+                    }),
+                    &AtomicBool::new(false),
+                    &AtomicU64::new(0),
+                    &Some(("instance".into(), sender)),
+                    "connection",
+                    output,
+                )
+                .await;
+            assert!(!failed);
+            let result = loop {
+                match events.recv().await {
+                    Some(PluginNotification::OperationCompleted { result, .. }) => break result,
+                    Some(_) => {}
+                    None => bail!("Missing command completion"),
+                }
+            };
+            assert!(serde_json::to_vec(&result)?.len() <= 16 * 1024);
+            assert_eq!(result["structuredContent"]["output"]["truncated"], true);
+            assert!(result["structuredContent"]["output"]["text"]
+                .as_str()
+                .is_some_and(|text| !text.is_empty()));
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn output_wait_can_be_cancelled_after_all_bytes_were_sent() -> Result<()> {
+        let list = CommandList::parse(&json!({
+            "commands":["help"],
+            "waitTimeoutMs":300000
+        }))?;
+        let (job, mut handle) = CommandJob::new("cancel-output-wait".into(), true, list);
+        let (sender, mut events) = mpsc::channel(8);
+        let task = tokio::spawn(async move {
+            job.run(
+                Some(RecordingWriter::default()),
+                &AtomicBool::new(false),
+                &AtomicU64::new(0),
+                &Some(("instance".into(), sender)),
+                "connection",
+                Arc::new(tokio::sync::Mutex::new(OutputBuffer::default())),
+            )
+            .await
+        });
+        timeout(Duration::from_secs(2), async {
+            while handle.progress.borrow().sent == 0 {
+                handle.progress.changed().await?;
+            }
+            Result::<()>::Ok(())
+        })
+        .await??;
+        handle.cancel.send(true)?;
+        let (_, failed) = timeout(Duration::from_millis(500), task).await??;
+        assert!(!failed);
+        assert!(handle.progress.borrow().cancelled);
+        while let Ok(event) = events.try_recv() {
+            assert!(!matches!(
+                event,
+                PluginNotification::OperationCompleted { .. }
+            ));
+        }
         Ok(())
     }
 
@@ -780,9 +895,9 @@ mod tests {
         assert_eq!(
             list.payloads,
             [
-                b"cd /tmp".to_vec(),
-                b"printf 'a && b'".to_vec(),
-                "echo 中文".as_bytes().to_vec()
+                b"cd /tmp\r".to_vec(),
+                b"printf 'a && b'\r".to_vec(),
+                "echo 中文\r".as_bytes().to_vec()
             ]
         );
         assert_eq!(list.interval, Duration::from_millis(100));
@@ -796,7 +911,16 @@ mod tests {
             CommandList::parse(&json!({"commands":[""],"lineEnding":"crlf"}))?.payloads,
             [b"\r\n".to_vec()]
         );
-        assert!(CommandList::parse(&json!({"commands":[""]})).is_err());
+        assert_eq!(
+            CommandList::parse(&json!({"commands":["pwd"],"lineEnding":"none"}))?.payloads,
+            [b"pwd".to_vec()],
+            "raw input can still disable the default CR"
+        );
+        assert_eq!(
+            CommandList::parse(&json!({"commands":[""]}))?.payloads,
+            [b"\r".to_vec()],
+            "empty text input submits a CR by default"
+        );
         Ok(())
     }
 
@@ -804,7 +928,7 @@ mod tests {
     fn validates_the_entire_list_before_any_sending() {
         for args in [
             json!({"commands":[]}),
-            json!({"commands":["ok", ""]}),
+            json!({"commands":["ok", ""],"lineEnding":"none"}),
             json!({"commands":[7]}),
             json!({"commands":["x".repeat(4097)]}),
             json!({"commands":vec!["x";65]}),

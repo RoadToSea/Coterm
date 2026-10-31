@@ -449,7 +449,7 @@ async fn exercise(runtime: &ProcessPluginRuntime, a: &str, b: &str, baud: u32) -
             sender.caller(OperationSource::Human),
             sender.request(
                 "serial.command",
-                json!({"commands":["invalid-first-never", ""]}),
+                json!({"commands":["invalid-first-never", ""],"lineEnding":"none"}),
                 3000,
             ),
         )

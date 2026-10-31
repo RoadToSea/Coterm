@@ -6,12 +6,12 @@ use coterm_core::{
     plugin_runtime::{CallerContext, Operations, PluginRuntime, SubmitOperation},
 };
 use coterm_proto::runtime::{
-    RuntimeError,
     lifecycle::InstanceInfo,
     operation::{OperationReceipt, OperationSource, OperationStatus},
+    RuntimeError,
 };
 use serde::Serialize;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use tokio::{
     io::BufReader,
     net::{TcpListener, TcpStream},
@@ -217,7 +217,7 @@ pub(crate) fn initialize_result(params: &Value) -> Result<Value, (i32, String)> 
         "protocolVersion": version,
         "capabilities": {"tools": {"listChanged": true}},
         "serverInfo": {"name": "Coterm", "version": env!("CARGO_PKG_VERSION")},
-        "instructions": "Instance-scoped tools use the public instance name from coterm.list_instances; UUIDs are internal and must not be supplied. Tools wait up to 60s including approval and human interaction. Set tools/call.params._meta['coterm/waitTimeoutMs'] to 0 for an immediate receipt, or 1..300000 to bound waiting. Only query coterm.get_operation after a pending/expired receipt; never pass credentials or replay writes automatically. Agent commit operations require approval unless the user has enabled Bypass or an explicit allowlist entry."
+        "instructions": "Instance-scoped tools use the public instance name from coterm.list_instances; UUIDs are internal and must not be supplied. Tools wait up to 60s including approval and human interaction. Serial tools return as soon as a write enters approval, with status pending_approval; use coterm.get_operation to query its final result. Set tools/call.params._meta['coterm/waitTimeoutMs'] to 0 for an immediate receipt, or 1..300000 to bound waiting. Only query coterm.get_operation after a pending/expired receipt; never pass credentials or replay writes automatically. Agent commit operations require approval unless the user has enabled Bypass or an explicit allowlist entry."
     }))
 }
 
@@ -279,7 +279,14 @@ fn public_tool_descriptor(mut descriptor: Value) -> Value {
     if properties.remove("pluginInstanceId").is_none() {
         return descriptor;
     }
-    properties.insert("name".to_owned(), json!({"type":"string","minLength":1}));
+    properties.insert(
+        "name".to_owned(),
+        json!({
+            "type":"string",
+            "minLength":1,
+            "description":"Required public instance name returned by coterm.list_instances. The bridge also accepts instance, instanceName, or instance_name as compatibility aliases."
+        }),
+    );
     if let Some(required) = schema.get_mut("required").and_then(Value::as_array_mut) {
         for entry in required {
             if entry.as_str() == Some("pluginInstanceId") {
@@ -477,22 +484,35 @@ pub async fn call_tool(runtime: &ProcessPluginRuntime, params: &Value) -> anyhow
         .into_iter()
         .find(|op| op.name == tool.operation)
         .ok_or_else(|| anyhow::anyhow!("Operation descriptor not found"))?;
-    let instance_id =
-        if descriptor.scope == coterm_proto::runtime::operation::OperationScope::Instance {
-            let public_name = args["name"]
-                .as_str()
-                .ok_or_else(|| anyhow::anyhow!("Instance name required"))?;
-            let instance = resolve_instance_name(runtime, Some(&plugin), public_name).await?;
-            let instance_id = instance.plugin_instance_id.clone();
-            let object = args
-                .as_object_mut()
-                .ok_or_else(|| anyhow::anyhow!("Tool arguments must be an object"))?;
-            object.remove("name");
-            object.insert("pluginInstanceId".to_owned(), json!(&instance_id));
-            Some(instance_id)
-        } else {
-            None
-        };
+    let instance_id = if descriptor.scope
+        == coterm_proto::runtime::operation::OperationScope::Instance
+    {
+        let target_fields = ["name", "instance", "instanceName", "instance_name"]
+            .into_iter()
+            .filter(|field| args.get(*field).is_some())
+            .collect::<Vec<_>>();
+        if target_fields.len() != 1 {
+            anyhow::bail!(
+                "Provide exactly one instance name using name, instance, instanceName, or instance_name"
+            );
+        }
+        let public_name = args[target_fields[0]]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Instance name must be a string"))?;
+        let instance = resolve_instance_name(runtime, Some(&plugin), public_name).await?;
+        let instance_id = instance.plugin_instance_id.clone();
+        let object = args
+            .as_object_mut()
+            .ok_or_else(|| anyhow::anyhow!("Tool arguments must be an object"))?;
+        object.remove("name");
+        object.remove("instance");
+        object.remove("instanceName");
+        object.remove("instance_name");
+        object.insert("pluginInstanceId".to_owned(), json!(&instance_id));
+        Some(instance_id)
+    } else {
+        None
+    };
     let session_id = if let Some(instance_id) = instance_id.as_deref() {
         let instance = runtime
             .get_instance(instance_id)
@@ -511,18 +531,24 @@ pub async fn call_tool(runtime: &ProcessPluginRuntime, params: &Value) -> anyhow
         session_id,
         plugin_id: Some(plugin.clone()),
     };
-    let receipt = runtime
-        .submit(
-            caller,
-            SubmitOperation {
-                plugin_id: plugin,
-                plugin_instance_id: instance_id,
-                operation: tool.operation,
-                args,
-                wait_timeout_ms,
-            },
-        )
-        .await?;
+    let return_on_approval = tool.descriptor["_meta"]["coterm/returnOnApproval"] == true;
+    let request = SubmitOperation {
+        plugin_id: plugin,
+        plugin_instance_id: instance_id,
+        operation: tool.operation,
+        args,
+        wait_timeout_ms,
+    };
+    let receipt = if return_on_approval {
+        runtime.submit_until_approval(caller, request).await?
+    } else {
+        runtime.submit(caller, request).await?
+    };
+    let public_status = if return_on_approval && receipt.status == OperationStatus::AwaitingApproval {
+        json!("pending_approval")
+    } else {
+        serde_json::to_value(receipt.status)?
+    };
     let mut result = if receipt.status == OperationStatus::Completed {
         let output = receipt
             .output
@@ -534,7 +560,7 @@ pub async fn call_tool(runtime: &ProcessPluginRuntime, params: &Value) -> anyhow
         output
     } else {
         text_result(
-            json!({"operationId":receipt.operation_id,"status":receipt.status,"proposalId":receipt.proposal_id,"error":receipt.error}),
+            json!({"operationId":receipt.operation_id,"status":public_status,"proposalId":receipt.proposal_id,"error":receipt.error}),
         )
     };
     if receipt.error.is_some() {
@@ -643,15 +669,21 @@ mod tests {
                 "required": ["pluginInstanceId"],
             }
         }));
-        assert!(
-            descriptor["inputSchema"]["properties"]
-                .get("pluginInstanceId")
-                .is_none()
-        );
+        assert!(descriptor["inputSchema"]["properties"]
+            .get("pluginInstanceId")
+            .is_none());
         assert_eq!(descriptor["inputSchema"]["required"], json!(["name"]));
         assert_eq!(
             descriptor["inputSchema"]["properties"]["name"]["type"],
             "string"
+        );
+        assert!(
+            descriptor["inputSchema"]["properties"]["name"]["description"]
+                .as_str()
+                .is_some_and(|description| {
+                    description.contains("coterm.list_instances")
+                        && description.contains("instanceName")
+                })
         );
     }
 }

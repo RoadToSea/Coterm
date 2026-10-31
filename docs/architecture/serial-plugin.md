@@ -21,6 +21,7 @@ UART 调试模式使用发送框；Enter 发送，Shift+Enter 换行。文本模
 | `serial.status/probe` | read | 状态与系统端口枚举 |
 | `serial.connect/disconnect` | commit | 打开或关闭端口，清理该实例旧提案 |
 | `serial.read` | read | `text` 游标回放，报告 bytes/cursor/gap/closed/more；`cursor` 是从 0 开始的非负整数 |
+| `serial.get_recent` | read | 无状态读取有界输出缓冲的最近文本行，默认 50 行；适合不想保存游标的调用方 |
 | `serial.write` | commit | 人工文本输入 `text`，保留控制字符；标记为敏感输入 |
 | `serial.command` | commit | Agent 文本输入列表 `commands`，与人工 Shell 同样按 UTF-8 原样发送；可选 `waitForPrompt` 和 `waitTimeoutMs` 有界收集新输出 |
 | `serial.read_hex` | read | 显式 HEX 读取，返回 `hex` 与相同整数游标、状态和原始字节计数 |
@@ -29,7 +30,7 @@ UART 调试模式使用发送框；Enter 发送，Shift+Enter 换行。文本模
 | `serial.signals` | commit | 设置 DTR/RTS 电平 |
 | `serial.plugin_info` | read | 插件级信息 |
 
-MCP 提供 status、probe、connect、disconnect、read、read_hex、command、command_hex、plugin_info，不开放人工单次 write/write_hex 与 signals。除 plugin_info 外使用 `name` 指定 `coterm.list_instances` 返回的唯一实例名称，UUID 由基座内部路由。文本接口和 HEX 接口互不接受对方参数。`serial.command` 与人工 Shell 共用文本编码逻辑，允许 Ctrl+C (`\u0003`)、Tab、方向键 ESC 序列、换行、DEL、NUL 等所有控制字符；默认 `lineEnding:"none"`，不擅自补回车。列表只是顺序发送的输入片段，无单行或可打印字符限制。人工输入不用列表。Agent 来源的提交经过基座审批，除非用户主动开启 Bypass 或明确放行；列表整体为审批快照，输入在普通账本中脱敏，进度事件不包含输入内容。
+MCP 提供 status、probe、connect、disconnect、read、get_recent、read_hex、command、command_hex、plugin_info，不开放人工单次 write/write_hex 与 signals。除 plugin_info 外使用 `name` 指定 `coterm.list_instances` 返回的唯一实例名称，桥接层也兼容 `instance`、`instanceName` 与 `instance_name` 别名，UUID 由基座内部路由。文本接口和 HEX 接口互不接受对方参数。`serial.command` 与人工 Shell 共用文本编码逻辑，允许 Ctrl+C (`\u0003`)、Tab、方向键 ESC 序列、换行、DEL、NUL 等所有控制字符；默认 `lineEnding:"cr"`，面向 Shell 的命令会直接提交；需要原样输入时显式指定 `none`。列表只是顺序发送的输入片段，无单行或可打印字符限制。人工输入不用列表。Agent 来源的提交经过基座审批，除非用户主动开启 Bypass 或明确放行；列表整体为审批快照，输入在普通账本中脱敏，进度事件不包含输入内容。
 
 Base64 和 HEX 都是字节的表示方式，均不是加密。本插件接口、事件与前端已移除 Base64；文本直接使用 JSON 字符串，二进制通过显式 HEX 工具收发。本次变更不改变基座私有 Bridge 的认证或传输机制。
 
@@ -47,7 +48,7 @@ Base64 和 HEX 都是字节的表示方式，均不是加密。本插件接口�
 原样输入和 HEX 输入示例（以下为各自工具的 arguments，不混用）：
 
 ```json
-{"name":"COM1@115200","commands":["\u0003","pwd\r","\u001b[A\r"],"intervalMs":100}
+{"name":"COM1@115200","commands":["\u0003","pwd\r","\u001b[A\r"],"lineEnding":"none","intervalMs":100}
 ```
 
 ```json
@@ -58,9 +59,13 @@ Base64 和 HEX 都是字节的表示方式，均不是加密。本插件接口�
 
 每个列表为 1～64 项，每项实际发送 1～4096 字节（包含显式选择的行结束符）；文本列表允许空字符串，但必须选择 `cr`、`lf` 或 `crlf` 使实际载荷非空。整批最多 16 KiB，每实例最多 16 个在途列表。文本与 HEX 列表共用同一 FIFO，一个列表的项不会与其他列表交叉；整批校验失败时不会发送任何项。有在途列表时人工文本、HEX 写入和 DTR/RTS 修改均拒绝。不会拼接 `&&`、`eval` 或 shell 包装脚本。
 
-请求入队后通过运行时 DeferredOperation 和通知完成，控制通道保持可响应读取、状态与取消。结果包含 `total/sent/remaining/bytes`、`deviceCompletion:"unknown"`；MCP 返回在 `structuredContent` 提供完整机器可读结果，同时文本块保留 JSON 结果或发送摘要。`serial.command` 进度事件额外携带操作 ID、连接 ID、累计发送字节数，`serial.status.commandQueue` 可恢复在途列表数。**完成只表示所有字节写入并 flush 成功，不代表设备执行完成**：不会推断退出码，也不因设备命令失败而自动停止。可传 `waitForPrompt`（区分大小写的字面子串，不是正则）或 `waitTimeoutMs`（0～300000，提示符等待默认 5000；只传超时表示定时收集），在发送后有界收集至多 8 KiB 新输出并返回 `output.text/output.cursor/output.promptMatched/output.truncated/output.gap`；超时不代表设备失败。未提供等待字段时仍只返回发送收据。登录密码和交互式程序仍需人工确认设备状态。
+请求入队后通过运行时 DeferredOperation 和通知完成，控制通道保持可响应读取、状态与取消。结果包含 `total/sent/remaining/bytes`、`deviceCompletion:"unknown"`；MCP 返回在 `structuredContent` 提供完整机器可读结果，同时文本块保留发送摘要及等待期间捕获的输出。`serial.command` 进度事件额外携带操作 ID、连接 ID、累计发送字节数，`serial.status.commandQueue` 可恢复在途列表数。**完成只表示所有字节写入并 flush 成功，不代表设备执行完成**：不会推断退出码，也不因设备命令失败而自动停止。可传 `waitForPrompt`（区分大小写的字面子串，不是正则）或 `waitTimeoutMs`（0～300000，提示符等待默认 5000；只传超时表示定时收集），在发送后有界收集至多 8 KiB 新输出并返回 `output.text/output.cursor/output.promptMatched/output.truncated/output.gap`；超时不代表设备失败。未提供等待字段时仍只返回发送收据。登录密码和交互式程序仍需人工确认设备状态。
 
 取消只针对列表：队列中的列表可返回 `not_submitted`；已经开始的列表等待当前写入确认后停止余下项，返回 `stopped`。无法确认时返回 `unknown`。原始字节写入及其他操作的取消仍为 `unsupported`。断开、读写故障或写入超时会丢弃尚未发送的项并报告未知交付，包含已确认发送的项数；当前项可能部分送达，不自动重放，重新连接后也不恢复旧队列。
+
+串口 MCP 工具通过注册 descriptor 的 `_meta["coterm/returnOnApproval"]: true` 选择审批就绪即返回模式：首次调用返回 `structuredContent.status:"pending_approval"`、操作 ID 和提案 ID，操作收据仍使用运行时的 `awaiting_approval`。用户批准后用 `coterm.get_operation` 查询原操作；不要再次提交同一命令。未需审批时继续等待正常完成；`coterm/waitTimeoutMs:0` 仍立即返回。等待输出期间也支持取消和断开，不会因最长 300 秒的收集期限阻塞取消。
+
+不保存游标时可调用 `serial.get_recent`，例如 `{"name":"COM1@115200","lines":50}`。`lines` 范围为 1～200，默认 50；返回 `text/lines/cursor/connectionId/closed/gap/truncated`。这是缓冲尾部的快照，重复调用可能包含相同内容；需要精确增量时仍用 `serial.read` 的独立游标。等待回显和近期快照均另设 6 KiB 的 JSON 转义文本预算，保证文本块与结构化副本一起放进宿主 16 KiB 结果上限；达到上限时标记 `truncated`，不会把超限结果静默替换成摘要。控制字符较多时实际文本字节数会少于此预算。
 
 ## 数据与已知限制
 

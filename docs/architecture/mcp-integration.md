@@ -39,11 +39,11 @@ Bridge 保留插件参数和原生 `CallToolResult`，仅处理命名空间、�
 
 `tools/list` 保留插件注册提供的 `inputSchema`；客户端导出界面中的 `parameters` 属于客户端转换结果。若客户端本地显示为 `null`，应对比同一连接的原始 `tools/list` 响应与客户端导出值，服务端集成测试会验证 schema 是否已发送。插件工具目录由已启动插件的握手注册；当前 manifest 只标识 MCP provider，不含静态工具 schema，因此未启动插件的工具不会出现在目录中，也没有 MCP 自动恢复工作区实例的操作。
 
-- 实例级工具的 schema 要求字符串 `name`。它对应 `coterm.list_instances` 返回的唯一实例名称；Bridge 在内部解析为 UUID 后再路由，插件不会跨实例搜索。
+- 实例级工具的 schema 要求字符串 `name`，字段描述明确指向 `coterm.list_instances` 返回的唯一实例名称。Bridge 兼容 `instance`、`instanceName`、`instance_name`，但一个调用只能提供一种名称字段；缺少或冲突时提示字段名。Bridge 在内部解析为 UUID 后再路由，插件不会跨实例搜索。
 - 插件级工具不绑定实例；插件授权域由已注册工具名称确定。
 - 查询/取消公共工具使用 `name` 或 `pluginId` 定位记录授权域；UUID 只存在于 Bridge 和运行时内部。
 - 所有外部调用固定为 Agent 来源；Agent 不能自行批准、伪造来源或开启 Bypass。
-- 工具结果的机器可读副本是 `structuredContent`；`content[].text` 是简短摘要，不再完整重复负载。`_meta["coterm/operation"]` 只含操作收据，`output` 已替换为大小标记，避免同一结果在响应里出现两次。
+- 工具结果的机器可读副本是 `structuredContent`；Bridge 自己生成的 `content[].text` 是有界摘要，插件原生文本块保持原样，串口工具在其中提供可直接阅读的有界设备回显。`_meta["coterm/operation"]` 只含操作收据，`output` 已替换为大小标记，避免在元信息中再次重复负载。
 - Agent commit 默认经过人工审批。Bypass 只跳过提交审批，仍需协议认证及秘密输入。
 - 放行（allowlist）在桌面「Agent approval」面板按操作名显式添加，保存在加密工作区。它同样只跳过审批：effect、插件校验、秘密交互和来源限制都不变，Agent 不能放行、不能自批。
 - `effect=read` 且不涉及敏感输入的操作不需要审批；它们只观察状态，不能修改远端。
@@ -52,7 +52,9 @@ SSH 认证步骤和工具边界见 [SSH](ssh-plugin.md)，串口可用工具见 
 
 ## 等待、结果与取消
 
-默认最多等待 60 秒，覆盖审批、秘密交互及执行。调用完成直接返回插件结果，`_meta["coterm/operation"]` 附操作收据。立即返回或等待到期时返回 pending，最终结果可通过查询记录的 `output` 获取。
+默认最多等待 60 秒，覆盖审批、秘密交互及执行。串口提交操作会在进入人工审批时立即返回 `structuredContent.status` 为 `pending_approval` 的结果；调用方可用 `coterm.get_operation` 查询，不必等用户点击后才得到首次响应。调用完成直接返回插件结果，`_meta["coterm/operation"]` 附操作收据。立即返回或等待到期时返回 pending，最终结果可通过查询记录的 `output` 获取。
+
+插件可在注册的工具 descriptor（不是调用参数）中声明 `_meta["coterm/returnOnApproval"]: true`。Bridge 使用运行时已有的状态订阅，在终态或 `awaiting_approval` 时结束本次等待；不轮询账本，不在基座硬编码插件 ID，也不改变普通 `Operations.submit` 的等待行为。未声明的工具仍等待审批、交互和执行直到终态或本次期限。此扩展只影响等待，不能授予审批权限或改变操作的 effect，前端和跨进程调用消息无需变更。
 
 通过调用元信息设置等待上限，不把它混入领域参数。`_meta` 位于 JSON-RPC `tools/call` 的 `params` 顶层，与 `name`、`arguments` 同级：
 
@@ -66,7 +68,7 @@ SSH 认证步骤和工具边界见 [SSH](ssh-plugin.md)，串口可用工具见 
 
 `0` 表示立即返回，`1..300000` 指定毫秒上限。等待超时或客户端断开均不代表底层操作取消，也不触发重放。取消仅在插件确认未提交或已停止时成功，否则可能为 unknown。
 
-部分客户端只向模型暴露 `arguments`，无法设置协议级 `_meta`。这类客户端应省略 `_meta`，使用默认 60 秒等待；收到 `pending`、`expired` 或客户端本地超时的收据后，使用同一工具返回的 `operationId` 调用 `coterm.get_operation` 查询，不能把 `_meta` 塞进领域参数。服务端保持严格的 `additionalProperties:false` 校验，未知字段会返回 `operation_args_invalid`。
+部分客户端只向模型暴露 `arguments`，无法设置协议级 `_meta`。这类客户端应省略 `_meta`，使用默认 60 秒等待；收到 `pending`、`expired` 或客户端本地超时的收据后，使用同一工具返回的 `operationId` 调用 `coterm.get_operation` 查询，不能把 `_meta` 塞进领域参数。服务端保持严格的 `additionalProperties:false` 校验，未知字段会返回 `operation_args_invalid` 并指出未知或缺失的字段名，不回显参数值。
 
 ## 适配器传输
 

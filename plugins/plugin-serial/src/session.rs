@@ -11,7 +11,7 @@ use std::{
 };
 
 use crate::command::{CommandHandle, CommandJob, CommandList};
-use crate::payload::{encode_hex, Utf8Decoder};
+use crate::payload::{bounded_output_text, encode_hex, Utf8Decoder, OUTPUT_TEXT_JSON_BUDGET};
 use crate::serial_io::SerialWriter;
 use anyhow::{anyhow, bail, Result};
 use coterm_proto::runtime::{message::PluginNotification, ErrorCategory, RuntimeError};
@@ -182,6 +182,36 @@ impl OutputBuffer {
 
     pub fn read_hex(&self, after: u64) -> Result<Value> {
         self.read_page(after, true)
+    }
+
+    /// Return a bounded tail snapshot without requiring the caller to remember a cursor.
+    pub fn recent_text(&self, lines: usize) -> Result<Value> {
+        if !(1..=200).contains(&lines) {
+            bail!("Recent serial output lines must be between 1 and 200");
+        }
+
+        let text = self
+            .chunks
+            .iter()
+            .map(|(_, _, decoded)| decoded.as_str())
+            .collect::<String>();
+        let selected = text
+            .split_inclusive('\n')
+            .rev()
+            .take(lines)
+            .collect::<Vec<_>>();
+        let recent = selected.iter().rev().copied().collect::<String>();
+        let (bounded, _) = bounded_output_text(&recent, OUTPUT_TEXT_JSON_BUDGET, true);
+        let truncated = bounded.len() < recent.len();
+
+        Ok(json!({
+            "text": bounded,
+            "lines": bounded.split_inclusive('\n').count(),
+            "cursor": self.sequence,
+            "closed": self.closed,
+            "gap": self.chunks.front().is_some_and(|chunk| chunk.0 > 1),
+            "truncated": truncated,
+        }))
     }
 
     fn read_page(&self, after: u64, hex: bool) -> Result<Value> {
@@ -702,6 +732,47 @@ pub fn domain_error(code: &str, message: impl Into<String>) -> RuntimeError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recent_text_returns_bounded_tail_lines_without_a_cursor() -> Result<()> {
+        let mut output = OutputBuffer::default();
+        output.push("old\r\nmiddle\r\nnew".as_bytes());
+
+        let recent = output.recent_text(2)?;
+        assert_eq!(recent["text"], "middle\r\nnew");
+        assert_eq!(recent["lines"], 2);
+        assert_eq!(recent["cursor"], output.cursor());
+        assert_eq!(recent["gap"], false);
+        assert_eq!(recent["truncated"], false);
+        assert!(output.recent_text(0).is_err());
+        assert!(output.recent_text(201).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn recent_text_caps_a_single_long_line() -> Result<()> {
+        let mut output = OutputBuffer::default();
+        output.push("x".repeat(OUTPUT_TEXT_JSON_BUDGET * 2).as_bytes());
+
+        let recent = output.recent_text(1)?;
+        assert_eq!(
+            recent["text"].as_str().map(str::len),
+            Some(OUTPUT_TEXT_JSON_BUDGET)
+        );
+        assert_eq!(recent["truncated"], true);
+        Ok(())
+    }
+
+    #[test]
+    fn recent_text_reports_when_the_bounded_buffer_evicted_earlier_output() -> Result<()> {
+        let mut output = OutputBuffer::default();
+        output.push(&vec![b'x'; MAX_OUTPUT_BYTES + 1]);
+
+        let recent = output.recent_text(1)?;
+        assert_eq!(recent["gap"], true);
+        assert_eq!(recent["truncated"], true);
+        Ok(())
+    }
 
     /// 只替换物理连接，仍使用 Connection 的真实入队、限流和取消接口。
     fn queued_connection() -> (Connection, mpsc::Receiver<Action>) {
