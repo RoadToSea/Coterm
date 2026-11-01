@@ -178,13 +178,13 @@ for (const protocol of ["serial", "ssh"]) {
       await run(`root.querySelector('.xterm-helper-textarea').focus(); window.failCopy = true; window.locale = 'zh-CN'; window.translate()`);
       await key("A", "KeyA", 65, 10);
       await key("c", "KeyC", 67, 2);
-      await waitForValue(client, `root.querySelector('.notice').textContent === '无法复制终端选区，请重试复制。'`);
+      await waitForValue(client, `root.querySelector('.notice,.coterm-toasts').textContent === '无法复制终端选区，请重试复制。'`);
       assert.equal(await run(`window.raw()`), bracketed, "clipboard failure never sends an interrupt");
       await run(`window.frontend.unmount()`);
       assert.equal(await run(`window.unsubscribed`), true);
     } catch (error) {
       t.diagnostic(JSON.stringify(await run(`({calls:window.calls?.map(c => c.operation),
-        notice:window.root?.querySelector('.notice')?.textContent,copies:window.copies?.length})`).catch(() => null)));
+        notice:window.root?.querySelector('.notice,.coterm-toasts')?.textContent,copies:window.copies?.length})`).catch(() => null)));
       throw error;
     } finally { await session.close(); }
   });

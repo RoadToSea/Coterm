@@ -4,91 +4,103 @@ export interface SerialConfig {
   port: string; baudRate: number; dataBits: number; stopBits: number;
   parity: "none" | "odd" | "even"; dtr: boolean; rts: boolean;
 }
+export type SerialParameters = Omit<SerialConfig, "port">;
 
-/** Disconnected-only framing editor; it never opens a port or writes bytes itself. */
-export function createCommunicationSettings(translate: Translator,
-  apply: (config: Omit<SerialConfig, "port">) => Promise<void>) {
+/** A local draft: framing is applied only by the next explicit connection action. */
+export function createCommunicationSettings(translate: Translator, warn: (message: string) => void,
+  signal: (name: "dtr" | "rts", value: boolean) => Promise<void>) {
   let t = translate;
-  let busy = false;
-  let externalBusy = false;
-  let connected = false;
+  let connected = false, busy = false, dirty = false, signalBusy = false;
+  let initial: SerialParameters | null = null;
+  let levels = { dtr: false, rts: false };
   const form = document.createElement("form");
-  form.className = "communication-settings";
-  const fields = document.createElement("fieldset");
-  const title = document.createElement("legend");
-  fields.append(title);
-  const grid = document.createElement("div");
-  grid.className = "settings-grid";
+  form.className = "communication-settings settings-grid";
   const labels: [HTMLSpanElement, string][] = [];
   const field = (name: string, control: HTMLElement) => {
-    const label = document.createElement("label");
-    const text = document.createElement("span");
-    labels.push([text, name]);
-    label.append(text, control);
-    grid.append(label);
+    const label = document.createElement("label"), text = document.createElement("span");
+    labels.push([text, name]); label.append(text, control); form.append(label);
   };
-  const select = (values: string[]) => {
-    const control = document.createElement("select");
-    for (const value of values) control.add(new Option(value, value));
-    return control;
+  const select = (name: string, values: string[]) => {
+    const input = document.createElement("select"); input.name = name;
+    for (const value of values) input.add(new Option(value, value));
+    return input;
   };
-  const port = document.createElement("input");
-  port.readOnly = true;
-  port.name = "port";
   const baud = document.createElement("input");
-  baud.type = "number"; baud.min = "1"; baud.max = "4294967295";
-  baud.required = true; baud.name = "baudRate";
-  const data = select(["5", "6", "7", "8"]); data.name = "dataBits";
-  const stop = select(["1", "2"]); stop.name = "stopBits";
-  const parity = select(["none", "odd", "even"]); parity.name = "parity";
+  baud.type = "number"; baud.min = "1"; baud.max = "4294967295"; baud.required = true; baud.name = "baudRate";
+  const data = select("dataBits", ["5", "6", "7", "8"]);
+  const stop = select("stopBits", ["1", "2"]);
+  const parity = select("parity", ["none", "odd", "even"]);
+  field("Baud rate", baud); field("Data bits", data); field("Stop bits", stop); field("Parity", parity);
   const dtr = document.createElement("input"); dtr.type = "checkbox"; dtr.name = "dtr";
   const rts = document.createElement("input"); rts.type = "checkbox"; rts.name = "rts";
-  field("Port", port); field("Baud rate", baud); field("Data bits", data);
-  field("Stop bits", stop); field("Parity", parity);
-  const lines = document.createElement("div");
-  lines.className = "checks";
-  for (const [control, name] of [[dtr, "DTR high on open"], [rts, "RTS high on open"]] as const) {
-    const label = document.createElement("label");
-    const text = document.createElement("span"); labels.push([text, name]);
-    label.append(control, text); lines.append(label);
+  for (const [control, name] of [[dtr, "DTR"], [rts, "RTS"]] as const) {
+    const label = document.createElement("label"), text = document.createElement("span");
+    label.className = "signal-check"; labels.push([text, name]); label.append(control, text); form.append(label);
   }
-  const save = document.createElement("button"); save.type = "submit";
-  save.className = "primary apply-settings";
-  fields.append(grid, lines, save);
-  const hint = document.createElement("p"); hint.className = "hint";
-  const error = document.createElement("p"); error.className = "error"; error.setAttribute("role", "alert");
-  form.append(fields, hint, error);
+  const framing = [baud, data, stop, parity];
   const refresh = () => {
-    title.textContent = t("Communication parameters");
     for (const [text, name] of labels) text.textContent = t(name);
     for (const [index, name] of ["None", "Odd", "Even"].entries()) parity.options[index].textContent = t(name);
-    save.textContent = busy ? t("Applying…") : t("Apply parameters");
-    fields.disabled = connected || busy || externalBusy;
-    hint.textContent = t("Disconnect before applying parameters. DTR / RTS are line levels, not automatic flow control.");
+    for (const control of framing) control.setAttribute("aria-disabled", String(connected || busy));
+    baud.readOnly = connected || busy;
+    dtr.disabled = busy || signalBusy; rts.disabled = busy || signalBusy;
   };
-  form.addEventListener("submit", async event => {
+  const locked = (event: Event) => {
+    if (!connected && !busy) return;
+    if (event instanceof KeyboardEvent && ["Tab", "Escape"].includes(event.key)) return;
     event.preventDefault();
-    if (connected || busy || externalBusy || !form.reportValidity()) return;
-    busy = true; error.textContent = ""; refresh();
-    try {
-      await apply({ baudRate: Number(baud.value), dataBits: Number(data.value), stopBits: Number(stop.value),
-        parity: parity.value as SerialConfig["parity"], dtr: dtr.checked, rts: rts.checked });
-    } catch (reason) { error.textContent = String(reason); }
-    finally { busy = false; refresh(); }
-  });
+    warn(t("Disconnect before changing communication parameters. Changes apply on the next connection."));
+  };
+  for (const control of framing) {
+    control.addEventListener("pointerdown", locked);
+    control.addEventListener("click", locked);
+    control.addEventListener("keydown", locked);
+    control.addEventListener("wheel", event => { if (connected || busy) locked(event); }, { passive: false });
+    control.addEventListener("input", () => { if (!connected && !busy) dirty = true; });
+    control.addEventListener("change", () => { if (!connected && !busy) dirty = true; });
+  }
+  for (const [control, name] of [[dtr, "dtr"], [rts, "rts"]] as const) {
+    control.addEventListener("change", async () => {
+      if (!connected) { dirty = true; return; }
+      signalBusy = true; refresh();
+      try { await signal(name, control.checked); }
+      finally { signalBusy = false; control.checked = connected ? levels[name] : initial?.[name] ?? false; refresh(); }
+    });
+  }
+  form.addEventListener("submit", event => event.preventDefault());
+  const write = (config: SerialParameters) => {
+    baud.value = String(config.baudRate); data.value = String(config.dataBits);
+    stop.value = String(config.stopBits); parity.value = config.parity;
+    dtr.checked = config.dtr; rts.checked = config.rts;
+  };
   refresh();
   return {
     element: form,
-    update(config: SerialConfig, isConnected: boolean) {
-      // Status events must not overwrite a user's disconnected draft.
-      if (port.value === "" || connected !== isConnected) {
-        port.value = config.port; baud.value = String(config.baudRate);
-        data.value = String(config.dataBits); stop.value = String(config.stopBits);
-        parity.value = config.parity; dtr.checked = config.dtr; rts.checked = config.rts;
+    update(config: SerialConfig, isConnected: boolean, applied = false) {
+      const wasConnected = connected;
+      connected = isConnected;
+      const { port: _port, ...parameters } = config;
+      if (!initial || applied || isConnected || (wasConnected && !isConnected)) {
+        initial = parameters; dirty = false; write(parameters);
+      } else if (!dirty) { initial = parameters; write(parameters); }
+      if (connected) { dtr.checked = levels.dtr; rts.checked = levels.rts; }
+      refresh();
+    },
+    prepare(): SerialParameters | null {
+      if (!initial || !dirty) return null;
+      if (!Number.isInteger(Number(baud.value)) || Number(baud.value) < 1 || Number(baud.value) > 4294967295
+        || ![5, 6, 7, 8].includes(Number(data.value)) || ![1, 2].includes(Number(stop.value))
+        || !["none", "odd", "even"].includes(parity.value)) {
+        throw new Error(t("Check the communication parameters before connecting."));
       }
-      connected = isConnected; refresh();
+      return { baudRate: Number(baud.value), dataBits: Number(data.value), stopBits: Number(stop.value),
+        parity: parity.value as SerialConfig["parity"], dtr: dtr.checked, rts: rts.checked };
+    },
+    signals(next: { dtr: boolean; rts: boolean }) {
+      levels = next;
+      if (connected) { dtr.checked = next.dtr; rts.checked = next.rts; }
     },
     locale(next: Translator) { t = next; refresh(); },
-    setBusy(value: boolean) { externalBusy = value; refresh(); },
+    setBusy(value: boolean) { busy = value; refresh(); },
   };
 }

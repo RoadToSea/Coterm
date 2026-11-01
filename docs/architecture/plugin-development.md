@@ -86,6 +86,8 @@ SSH/串口配置前端在自己的 Shadow DOM 中为输入框、选择框及提�
 
 命令消息块由插件前端直接导入 `@coterm/plugin-sdk/components/block-list` 的 `mountBlockList`，随插件 bundle 一起构建。插件后端负责命令与回复的块数据，经已有操作结果 / 实例事件交给前端适配并展示；选择状态由前端管理。宿主不推断块边界或解析协议标记。入口、数据形状与更新约定见 [公共块组件](../../packages/plugin-sdk/docs/command-blocks.md)。
 
+非模态消息可直接导入 `@coterm/plugin-sdk/components/toasts` 的 `mountToasts`，错误红色、警告黄色，自动消失且不移动焦点。每个挂载作用域维护自己的提示栈，卸载时清理；可访问名称随语言更新。API 与示例见 [公共提示组件](../../packages/plugin-sdk/docs/toasts.md)。
+
 ### 界面语言
 
 桌面与插件的浅色/深色适配见[桌面界面与主题](desktop-appearance.md)。优先复用继承的 `--coterm-*` 颜色变量；xterm 等独立渲染器可使用 SDK 的 `components/terminal-theme` 原地更新配色，卸载时注销观察器。

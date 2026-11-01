@@ -6,6 +6,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./components/block-list": "./src/components/block-list.ts",
+    "./components/toasts": "./src/components/toasts.ts",
     "./components/terminal-shortcuts": "./src/components/terminal-shortcuts.ts",
     "./components/terminal-search": "./src/components/terminal-search.ts",
     "./components/terminal-theme": "./src/components/terminal-theme.ts"

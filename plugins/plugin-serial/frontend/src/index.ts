@@ -5,6 +5,9 @@ import { SearchAddon } from "@xterm/addon-search";
 import terminalCSS from "@xterm/xterm/css/xterm.css?inline";
 import type { PluginAPI, PluginConfigurationAPI, PluginFrontend, OperationReceipt } from "@coterm/plugin-sdk";
 import { createTranslator } from "./i18n";
+import { mountToasts, type ToastTone } from "@coterm/plugin-sdk/components/toasts";
+import { createFormatSwitch, type Format } from "./format-switch";
+import { createToolbar } from "./toolbar";
 import { createCommunicationSettings, type SerialConfig } from "./console-settings";
 import { attachTerminalShortcuts } from "@coterm/plugin-sdk/components/terminal-shortcuts";
 import { mountTerminalSearch, TERMINAL_SEARCH_HIGHLIGHT_LIMIT } from "@coterm/plugin-sdk/components/terminal-search";
@@ -56,7 +59,7 @@ const css = `
   .checks input { width: auto; }
   .error { color: var(--coterm-danger, #f48771); overflow-wrap: anywhere; margin: 0; }
   .hint { color: var(--coterm-text-muted, #969696); font-size: 11px; overflow-wrap: anywhere; margin: 0; }
-  .layout { display: flex; flex-direction: column; height: 100%; min-height: 0; overflow: hidden; background: var(--coterm-surface, #1e1e1e); }
+  .layout { position: relative; display: flex; flex-direction: column; height: 100%; min-height: 0; overflow: hidden; background: var(--coterm-surface, #1e1e1e); }
   .bar {
     display: flex;
     flex-wrap: wrap;
@@ -67,11 +70,23 @@ const css = `
     padding: 6px 14px;
     background: var(--coterm-surface-raised, #252526);
   }
-  .bar strong { font-weight: 500; }
-  .bar .connection-label { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
-  .bar .state { font-size: 11px; color: var(--coterm-text-muted, #969696); }
   .bar .spacer { margin-left: auto; }
   .bar button { font-size: 11px; padding: 4px 10px; }
+  .bar .connect-button[data-connected="true"], .repeat-button[aria-pressed="true"] {
+    border-color: var(--coterm-success, hsl(var(--success, 149 58% 38%)));
+    background: color-mix(in srgb, var(--coterm-success, hsl(var(--success, 149 58% 38%))) 26%, var(--coterm-surface-raised, #252526));
+  }
+  .icon-button { display: inline-grid; place-items: center; min-width: 30px; min-height: 28px; padding: 5px; }
+  .icon-button svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.5; }
+  .format-switch { position: relative; display: inline-grid; grid-template-columns: 1fr 1fr; width: 116px;
+    padding: 2px; border: 1px solid var(--coterm-border-input, #454545); border-radius: var(--radius, 6px);
+    background: var(--coterm-surface, #1e1e1e); touch-action: pan-y; }
+  .format-thumb { position: absolute; inset: 2px auto 2px 2px; width: calc((100% - 4px) / 2);
+    border-radius: max(2px, calc(var(--radius, 6px) - 2px)); background: var(--coterm-surface-active, #37373d);
+    transition: transform 160ms ease-out; pointer-events: none; }
+  .format-switch[data-value="hex"] .format-thumb { transform: translateX(100%); }
+  .format-switch button { position: relative; min-height: 25px; padding: 3px 8px; background: transparent; border: 0; border-radius: 4px; font-size: 11px; }
+  .format-switch button[aria-pressed="true"] { background: transparent; color: var(--coterm-text-bright, #ffffff); }
   .modes { display: inline-flex; }
   .modes button { border-radius: 0; }
   .modes button:first-child { border-radius: 2px 0 0 2px; }
@@ -90,13 +105,21 @@ const css = `
   }
   .settings-panel[data-open="true"] { transform: translateY(0); opacity: 1; visibility: visible; }
   .settings-panel form { margin: 0; }
-  .settings-panel fieldset { margin: 0; padding: 12px; min-width: 0; border: 1px solid var(--coterm-border, #333333); }
-  .settings-panel legend { padding: 0 6px; font-weight: 600; }
-  .settings-panel .checks { margin: 12px 0; }
   .settings-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
-  .settings-sections { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 14px; margin-top: 14px; }
-  .receive-settings { display: grid; gap: 12px; align-content: start; }
-  .settings-panel .signals { padding: 12px 0 0; border: 0; }
+  .settings-grid .signal-check { display: flex; flex-direction: row; align-items: center; gap: 7px; align-self: end; min-height: 34px; }
+  .signal-check input { width: auto; }
+  .settings-grid [aria-disabled="true"] { opacity: .65; cursor: not-allowed; }
+  .settings-grid label:has(.receive-filename) { grid-column: span 2; }
+  .toolbar-item { display: inline-flex; flex: 0 0 auto; align-items: center; }
+  .toolbar-item[data-control="stats"] { margin-left: auto; }
+  .toolbar-customization { position: absolute; z-index: 3; inset: 0 0 auto auto; width: min(360px, 100%);
+    max-height: 100%; overflow: auto; padding: 14px; display: grid; gap: 12px;
+    border: 1px solid var(--coterm-border-input, #454545); border-radius: 0 0 0 var(--radius, 6px);
+    background: var(--coterm-surface-raised, #252526); box-shadow: 0 6px 18px #0003; }
+  .toolbar-settings-list { display: grid; gap: 6px; }
+  .toolbar-setting { display: flex; align-items: center; gap: 6px; }
+  .toolbar-setting label { flex: 1; display: inline-flex; flex-direction: row; align-items: center; gap: 8px; min-height: 30px; }
+  .toolbar-setting input { width: auto; }
   .terminal { flex: 1; min-height: 0; overflow: hidden; padding: 10px 4px 0 10px; }
   .uart { flex: 1; min-height: 0; display: flex; flex-direction: column; }
   .uart-bar {
@@ -146,8 +169,6 @@ const css = `
   .file-actions button { display: grid; place-items: center; padding: 4px; }
   .file-actions svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.5; }
   .send-controls { display: grid; gap: 8px; align-content: center; }
-  .send-controls .send-format { display: flex; align-items: center; gap: 8px; }
-  .send-controls .send-format select { width: 86px; padding: 4px 6px; }
   .send-controls .inline { gap: 8px; }
   .send-controls button { white-space: nowrap; }
   .send-history { position: absolute; z-index: 3; inset: auto 0 calc(100% + 8px); max-height: 240px; overflow: auto;
@@ -159,29 +180,15 @@ const css = `
   .uart-send .inline { display: inline-flex; align-items: center; gap: 6px; }
   .uart-send .inline input { width: auto; }
   .uart-send input[type="number"] { width: 82px; }
-  .signals {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 8px;
-    padding: 6px 14px;
-    border-top: 1px solid var(--coterm-border, #333333);
-    font-size: 11px;
-    color: var(--coterm-text-muted, #969696);
-  }
-  .notice { padding: 7px 14px; font-size: 12px; color: var(--coterm-text-subtle, #aaaaaa); overflow-wrap: anywhere; }
-  .notice:empty { display: none; }
   @container serial-console (max-width: 520px) {
     .uart-send { grid-template-columns: minmax(0, 1fr) 34px; }
     .send-controls { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; }
     .settings-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-    .settings-sections { grid-template-columns: minmax(0, 1fr); }
-    .bar .connection-label { display: none; }
     .bar { padding-inline: 8px; gap: 6px; }
     .uart-bar { padding-inline: 8px; gap: 6px; }
   }
   .layout { container: serial-console / inline-size; }
-  @media (prefers-reduced-motion: reduce) { .settings-panel { transition: none; } }
+  @media (prefers-reduced-motion: reduce) { .settings-panel, .format-thumb { transition: none; } }
 `;
 
 function surface(container: HTMLElement, withTerminalStyle = false): ShadowRoot {
@@ -223,14 +230,12 @@ function retitle(label: HTMLLabelElement, text: string) {
   else label.prepend(document.createTextNode(text));
 }
 
-interface PortEntry { portName: string; portType: { kind: string; product?: string | null } }
 type Config = SerialConfig;
 interface Status {
   config: Config; connected: boolean; connectionId: string | null;
   signals: { dtr: boolean; rts: boolean }; rxBytes: number; txBytes: number;
   commandQueue: number;
 }
-interface Probe { config: Config; connected: boolean; ports: PortEntry[] }
 interface Output { text: string; bytes: number; cursor: number; gap: boolean; closed: boolean; more: boolean; connectionId: string }
 interface HexOutput { hex: string; bytes: number; cursor: number; gap: boolean; closed: boolean; more: boolean; connectionId: string }
 interface PushedOutput { text: string; bytes: number; cursor: number; connectionId: string }
@@ -421,13 +426,6 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
   layout.className = "layout";
   const bar = document.createElement("div");
   bar.className = "bar";
-  const label = document.createElement("strong");
-  label.className = "connection-label";
-  label.textContent = "Serial";
-  const state = document.createElement("span");
-  state.className = "state";
-  state.textContent = createTranslator(api.i18n)("Loading…");
-
   const modes = document.createElement("div");
   modes.className = "modes";
   modes.setAttribute("role", "group");
@@ -437,9 +435,6 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
   uartMode.type = "button";
   modes.append(terminalMode, uartMode);
 
-  const ports = document.createElement("button");
-  ports.type = "button";
-  ports.disabled = true;
   const connect = document.createElement("button");
   connect.className = "connect-button";
   connect.type = "button";
@@ -451,7 +446,11 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
   settingsButton.className = "settings-toggle";
   settingsButton.setAttribute("aria-expanded", "false");
   settingsButton.setAttribute("aria-controls", "serial-settings");
-  bar.append(modes, label, state, spacer, connect, settingsButton);
+  const toolbarButton = document.createElement("button");
+  toolbarButton.type = "button"; toolbarButton.className = "toolbar-toggle icon-button";
+  toolbarButton.setAttribute("aria-expanded", "false"); toolbarButton.setAttribute("aria-controls", "serial-toolbar-settings");
+  toolbarButton.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h7m4 0h5M4 17h2m4 0h10M11 4v6M6 14v6"/></svg>';
+  bar.append(modes, spacer, connect, settingsButton, toolbarButton);
   const receiveArea = document.createElement("div");
   receiveArea.className = "receive-area";
   const settingsPanel = document.createElement("section");
@@ -460,27 +459,16 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
   settingsPanel.tabIndex = -1;
   settingsPanel.inert = true;
   settingsPanel.setAttribute("aria-hidden", "true");
-  const communication = createCommunicationSettings(createTranslator(api.i18n), async config => {
-    if (disposed) return;
-    stopRepeat();
-    await invoke<Status>("serial.configure", config);
-    if (!disposed) {
-      await enqueue(refreshSnapshot);
-      notice.textContent = t("Parameters applied. Connect to use the new settings.");
-    }
-  });
-  const settingsSections = document.createElement("div");
-  settingsSections.className = "settings-sections";
-  const receiveSettings = document.createElement("fieldset");
-  receiveSettings.className = "receive-settings";
-  const receiveLegend = document.createElement("legend");
-  const sendSettings = document.createElement("fieldset");
-  sendSettings.className = "send-settings";
-  const sendLegend = document.createElement("legend");
-  receiveSettings.append(receiveLegend);
-  sendSettings.append(sendLegend);
-  settingsSections.append(receiveSettings, sendSettings);
-  settingsPanel.append(communication.element, settingsSections);
+  const communication = createCommunicationSettings(createTranslator(api.i18n),
+    message => notify(message, "warning"), async (name, value) => {
+      if (disposed || !connected || working) return;
+      const targetConnection = connectionId;
+      try {
+        const result = await invoke<Signals>("serial.signals", { [name]: value });
+        if (!disposed && connected && connectionId === targetConnection) communication.signals(result);
+      } catch (reason) { showError(reason); }
+    });
+  settingsPanel.append(communication.element);
 
   // 终端模式：原始字节与远端回显，按键即发送。
   const terminalPanel = document.createElement("div");
@@ -495,10 +483,7 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
   uartPanel.hidden = true;
   const uartBar = document.createElement("div");
   uartBar.className = "uart-bar";
-  const viewText = document.createElement("button");
-  viewText.type = "button";
-  const viewHex = document.createElement("button");
-  viewHex.type = "button";
+  const receiveFormats = createFormatSwitch(createTranslator(api.i18n)("Receive format"));
   const timestampsLabel = document.createElement("label");
   const timestamps = document.createElement("input");
   timestamps.type = "checkbox";
@@ -516,21 +501,27 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
   clear.type = "button";
   const stats = document.createElement("span");
   stats.className = "stats";
-  uartBar.append(timestampsLabel, autoscrollLabel, pause, clear, stats);
-  const receiveFormats = document.createElement("div");
-  receiveFormats.className = "modes";
-  receiveFormats.append(viewText, viewHex);
-  const receiveFilenameLabel = caption(createTranslator(api.i18n)("File name"));
+  const receiveFilenameLabel = caption(createTranslator(api.i18n)("Save file (download directory)"));
   const receiveFilename = document.createElement("input");
+  receiveFilename.className = "receive-filename";
   receiveFilename.value = "serial-receive.txt";
   receiveFilename.maxLength = 128;
   receiveFilenameLabel.append(receiveFilename);
   const exportButton = document.createElement("button");
   exportButton.type = "button";
   exportButton.className = "export-receive";
-  const exportHint = document.createElement("p");
-  exportHint.className = "hint";
-  receiveSettings.append(receiveFormats, receiveFilenameLabel, exportButton, exportHint);
+  exportButton.classList.add("icon-button");
+  exportButton.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m-5-5 5 5 5-5M4 16v5h16v-5"/></svg>';
+  const toolbar = createToolbar(uartBar, [
+    { id: "format", label: "Receive format", element: receiveFormats.element },
+    { id: "timestamps", label: "Show timestamps", element: timestampsLabel },
+    { id: "autoscroll", label: "Auto-scroll", element: autoscrollLabel },
+    { id: "pause", label: "Pause / resume", element: pause },
+    { id: "clear", label: "Clear", element: clear },
+    { id: "save", label: "Save receive buffer", element: exportButton },
+    { id: "stats", label: "Byte counters", element: stats },
+  ], createTranslator(api.i18n));
+  toolbar.panel.id = "serial-toolbar-settings";
 
   const uartOutput = document.createElement("pre");
   uartOutput.className = "uart-output";
@@ -572,13 +563,25 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
   entryArea.className = "entry";
   entryArea.append(uartEntry, historyPanel);
   fileActions.append(importButton, historyButton, fileInput);
-  const uartHexLabel = document.createElement("label");
-  uartHexLabel.className = "send-format";
-  const sendFormat = document.createElement("select");
-  sendFormat.className = "send-format-select";
-  sendFormat.append(option("text", "ASCII"), option("hex", "HEX"));
-  const uartHexText = document.createElement("span");
-  uartHexLabel.append(uartHexText, sendFormat);
+  const sendFormat = createFormatSwitch(createTranslator(api.i18n)("Send format"), next => {
+    if (disposed || importing) return false;
+    if (!uartText.value) return true;
+    try {
+      const bytes = next === "hex" ? new TextEncoder().encode(uartText.value) : fromHex(uartText.value);
+      if (bytes.length > WRITE_LIMIT) throw new Error(t("A send must contain 1–16384 bytes including the line ending."));
+      const converted = next === "hex"
+        ? Array.from(bytes, byte => byte.toString(16).padStart(2, "0")).join(" ")
+        : new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
+      uartText.value = converted;
+      return true;
+    } catch (reason) {
+      notify(reason instanceof TypeError ? t("These bytes are not UTF-8 text. Keep HEX to preserve them.")
+        : reason instanceof Error && !reason.message.startsWith("HEX input") ? reason.message
+        : t("HEX input must contain an even number of hexadecimal digits."), "warning");
+      return false;
+    }
+  });
+  sendFormat.element.classList.add("send-mode");
   const uartEndingLabel = caption(createTranslator(api.i18n)("Line ending"));
   const uartEndingLabelText = uartEndingLabel.firstElementChild as HTMLSpanElement;
   const uartEnding = document.createElement("select");
@@ -586,13 +589,7 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
   uartEnding.append(option("none", "None"), option("cr", "CR"), option("lf", "LF"), option("crlf", "CRLF"));
   uartEnding.value = "crlf";
   uartEndingLabel.append(uartEnding);
-  sendSettings.append(uartEndingLabel);
-  const uartSendButton = document.createElement("button");
-  uartSendButton.type = "button";
-  uartSendButton.className = "primary";
-  uartSendButton.disabled = true;
-  const repeatLabel = caption(createTranslator(api.i18n)("Repeat"));
-  const repeatLabelText = repeatLabel.firstElementChild as HTMLSpanElement;
+  communication.element.append(uartEndingLabel, receiveFilenameLabel);
   const repeatRow = document.createElement("div");
   repeatRow.className = "inline";
   const repeatMs = document.createElement("input");
@@ -606,36 +603,20 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
   repeatUnit.textContent = "ms";
   const repeatButton = document.createElement("button");
   repeatButton.type = "button";
+  repeatButton.className = "repeat-button";
   repeatButton.disabled = true;
   repeatRow.append(repeatMs, repeatUnit, repeatButton);
-  repeatLabel.append(repeatRow);
   const sendControls = document.createElement("div");
   sendControls.className = "send-controls";
-  const sendFormatRow = document.createElement("div");
-  sendFormatRow.className = "inline";
-  sendFormatRow.append(uartHexLabel, uartSendButton);
-  sendControls.append(sendFormatRow, repeatLabel);
+  sendControls.append(sendFormat.element, repeatRow);
   uartSend.append(entryArea, fileActions, sendControls);
 
-  const signalsRow = document.createElement("div");
-  signalsRow.className = "signals";
-  const dtrButton = document.createElement("button");
-  dtrButton.type = "button";
-  dtrButton.disabled = true;
-  const rtsButton = document.createElement("button");
-  rtsButton.type = "button";
-  rtsButton.disabled = true;
-  signalsRow.append(dtrButton, rtsButton, ports);
-
-  communication.element.append(signalsRow);
   uartPanel.append(uartBar, uartOutput);
-  receiveArea.append(terminalPanel, uartPanel, settingsPanel);
+  receiveArea.append(terminalPanel, uartPanel, settingsPanel, toolbar.panel);
 
-  const notice = document.createElement("div");
-  notice.className = "notice";
-  notice.setAttribute("role", "status");
-  layout.append(bar, receiveArea, uartSend, notice);
+  layout.append(bar, receiveArea, uartSend);
   root.append(layout);
+  const toasts = mountToasts(layout);
 
   const terminal = new Terminal({
     allowProposedApi: true,
@@ -674,9 +655,8 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
   let importing = false;
   let historyBytes = 0;
   let inputGeneration = 0;
-  interface SendHistory { text: string; format: string; ending: string; bytes: number }
+  interface SendHistory { text: string; format: Format; ending: string; bytes: number }
   const history: SendHistory[] = [];
-  let signals: Signals = { dtr: true, rts: true };
   let statsRx = 0;
   let statsTx = 0;
   const entries: LogEntry[] = [];
@@ -690,11 +670,34 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
   let t = createTranslator(api.i18n);
   const searchView = mountTerminalSearch(bar, terminal, searchAddon, (message, values) => t(message, values));
   const stopShortcuts = attachTerminalShortcuts(terminal, () => {
-    if (!disposed) notice.textContent = t("Could not copy terminal selection. Try copying again.");
+    notify(t("Could not copy terminal selection. Try copying again."), "error");
   }, searchView.open);
 
   const invoke = async <T = unknown>(operation: string, args: unknown): Promise<T> => output(await api.invoke<T>(operation, args));
-  const showError = (reason: unknown) => { if (!disposed) notice.textContent = String(reason); };
+  const notify = (message: string, tone: ToastTone = "info") => { if (!disposed) toasts.show({ message, tone }); };
+  const showError = (reason: unknown) => notify(reason instanceof Error ? reason.message : String(reason), "error");
+  const renderConnection = () => {
+    connect.dataset.connected = String(connected);
+    connect.textContent = working ? t("Working…") : connected ? t("Connected") : t("Connect");
+    connect.title = connected ? t("Disconnect") : t("Connect");
+    connect.setAttribute("aria-label", connect.title);
+    connect.setAttribute("aria-pressed", String(connected));
+    connect.disabled = working;
+  };
+  const renderPause = () => {
+    pause.className = "icon-button";
+    pause.title = paused ? t("Resume") : t("Pause"); pause.setAttribute("aria-label", pause.title);
+    pause.setAttribute("aria-pressed", String(paused));
+    pause.innerHTML = paused
+      ? '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 5 11 7-11 7Z"/></svg>'
+      : '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14M16 5v14"/></svg>';
+  };
+  const setToolbarOpen = (open: boolean, restoreFocus = true) => {
+    toolbar.panel.hidden = !open;
+    toolbarButton.setAttribute("aria-expanded", String(open));
+    if (open) { setSettingsOpen(false, false); closeHistory(); toolbar.panel.querySelector("input")?.focus(); }
+    else if (restoreFocus) toolbarButton.focus();
+  };
 
   const setSettingsOpen = (open: boolean, restoreFocus = true) => {
     settingsOpen = open;
@@ -704,7 +707,7 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
     settingsButton.setAttribute("aria-expanded", String(open));
     terminalPanel.inert = open;
     uartPanel.inert = open;
-    if (open) { closeHistory(); settingsPanel.focus(); }
+    if (open) { setToolbarOpen(false, false); closeHistory(); settingsPanel.focus(); }
     else if (restoreFocus) settingsButton.focus();
   };
 
@@ -736,7 +739,7 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
     }
   };
 
-  const remember = (text: string, format: string, ending: string) => {
+  const remember = (text: string, format: Format, ending: string) => {
     const previous = history.findIndex(item => item.text === text && item.format === format && item.ending === ending);
     if (previous >= 0) historyBytes -= history.splice(previous, 1)[0].bytes;
     const bytes = new TextEncoder().encode(text).length;
@@ -752,34 +755,28 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
     const tr = createTranslator(api.i18n);
     t = tr;
     searchView.refreshLocale();
-    label.textContent = currentConfig ? `${currentConfig.port}@${currentConfig.baudRate}` : tr("Serial");
     terminalMode.textContent = tr("Terminal");
     uartMode.textContent = tr("UART console");
-    ports.textContent = tr("Ports");
-    connect.textContent = connected ? tr("Disconnect") : tr("Connect");
+    renderConnection();
     settingsButton.textContent = tr("Settings");
     settingsPanel.setAttribute("aria-label", tr("Serial settings"));
-    communication.locale(tr);
-    receiveLegend.textContent = tr("Receive");
-    sendLegend.textContent = tr("Send");
-    receiveFilenameLabel.firstElementChild!.textContent = tr("File name");
-    exportButton.textContent = tr("Save receive buffer");
-    exportHint.textContent = tr("Exports the current bounded buffer, not a continuous recording. Save location follows the system download settings.");
-    state.textContent = connected ? tr("Connected") : tr("Disconnected");
-    viewText.textContent = tr("ASCII");
-    viewHex.textContent = tr("HEX");
+    toolbarButton.title = tr("Customize toolbar"); toolbarButton.setAttribute("aria-label", toolbarButton.title);
+    toolbar.locale(tr); communication.locale(tr);
+    toasts.updateLabels({ ariaLabel: tr("Notifications"), closeLabel: tr("Dismiss notification") });
+    receiveFilenameLabel.firstElementChild!.textContent = tr("Save file (download directory)");
+    exportButton.title = tr("Save receive buffer"); exportButton.setAttribute("aria-label", exportButton.title);
+    receiveFormats.label(tr("Receive format")); sendFormat.label(tr("Send format"));
     timestampsText.textContent = tr("Show timestamps");
     autoscrollText.textContent = tr("Auto-scroll");
-    pause.textContent = paused ? tr("Resume") : tr("Pause");
-    clear.textContent = tr("Clear");
+    renderPause();
+    clear.className = "icon-button"; clear.title = tr("Clear"); clear.setAttribute("aria-label", clear.title);
+    clear.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M9 6V3h6v3M6 6l1 15h10l1-15M10 10v7m4-7v7"/></svg>';
     uartEntryText.textContent = tr("Send");
-    uartText.placeholder = tr("Send text, then Send (Enter sends, Shift+Enter adds a line)");
-    uartHexText.textContent = tr("Send format");
+    uartText.placeholder = tr("Enter to send · Shift+Enter for a new line");
     uartEndingLabelText.textContent = tr("Line ending");
     uartEnding.options[0].textContent = tr("None");
-    uartSendButton.textContent = tr("Send");
-    repeatLabelText.textContent = tr("Repeat");
-    repeatButton.textContent = repeating ? tr("Stop repeating") : tr("Start repeating");
+    repeatButton.textContent = tr("Timed send");
+    repeatButton.title = repeating ? tr("Stop repeating") : tr("Start repeating");
     repeatMs.setAttribute("aria-label", tr("Repeat interval (ms)"));
     importButton.title = tr("Import send content from file");
     importButton.setAttribute("aria-label", importButton.title);
@@ -788,10 +785,6 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
     historyPanel.setAttribute("aria-label", historyButton.title);
     renderHistory();
     uartOutput.dataset.empty = tr("Receive");
-    dtrButton.textContent = `${tr("DTR")} ${signals.dtr ? tr("High") : tr("Low")}`;
-    rtsButton.textContent = `${tr("RTS")} ${signals.rts ? tr("High") : tr("Low")}`;
-    dtrButton.setAttribute("aria-pressed", String(signals.dtr));
-    rtsButton.setAttribute("aria-pressed", String(signals.rts));
     renderStats();
     renderUart(true);
   };
@@ -800,28 +793,14 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
     stats.textContent = t("RX {rx} B · TX {tx} B", { rx: statsRx, tx: statsTx });
   };
 
-  const setSignals = (next: Signals) => {
-    signals = next;
-    dtrButton.textContent = `${t("DTR")} ${next.dtr ? t("High") : t("Low")}`;
-    rtsButton.textContent = `${t("RTS")} ${next.rts ? t("High") : t("Low")}`;
-    dtrButton.setAttribute("aria-pressed", String(next.dtr));
-    rtsButton.setAttribute("aria-pressed", String(next.rts));
-  };
+  const setSignals = (next: Signals) => communication.signals(next);
 
   const setConnected = (next: boolean) => {
     connected = next;
     if (currentConfig) communication.update(currentConfig, next);
-    state.textContent = next ? t("Connected") : t("Disconnected");
-    connect.textContent = next ? t("Disconnect") : t("Connect");
-    uartSendButton.disabled = !next || working;
-    ports.disabled = working;
-    dtrButton.disabled = !next || working;
-    rtsButton.disabled = !next || working;
+    renderConnection();
     repeatButton.disabled = !next || working;
-    if (!next) {
-      inputGeneration++;
-      stopRepeat(t("Repeat stopped: the port is disconnected."));
-    }
+    if (!next) { inputGeneration++; stopRepeat(t("Repeat stopped: the port is disconnected.")); }
     communication.setBusy(working);
   };
 
@@ -916,8 +895,6 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
   const refreshSnapshot = async () => {
     const status = await invoke<Status>("serial.status", {});
     if (disposed) return;
-    label.textContent = `${status.config.port}@${status.config.baudRate}`;
-    label.title = label.textContent;
     currentConfig = status.config;
     if (connectionId !== status.connectionId) {
       connectionId = status.connectionId;
@@ -946,7 +923,7 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
       appendOutput(data.text, data.bytes);
       cursor = data.cursor;
       if (!data.more) break;
-      if (batch === 256) notice.textContent = t("Replay limit reached; waiting for the next output event.");
+      if (batch === 256) notify(t("Replay limit reached; waiting for the next output event."), "warning");
     }
     await refreshHex();
     if (connected) resize();
@@ -961,15 +938,15 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
   const sendInput = (operation: "serial.write" | "serial.write_hex", args: {text: string; lineEnding: string} | {hex: string}, bytes: number): Promise<boolean> => {
     if (disposed || !connected || working) return Promise.resolve(false);
     if (commandQueue > 0) {
-      notice.textContent = t("MCP command queue is busy. Wait for it to finish before sending.");
+      notify(t("MCP command queue is busy. Wait for it to finish before sending."), "warning");
       return Promise.resolve(false);
     }
     if (bytes < 1 || bytes > WRITE_LIMIT) {
-      notice.textContent = t("A send must contain 1–16384 bytes including the line ending.");
+      notify(t("A send must contain 1–16384 bytes including the line ending."), "warning");
       return Promise.resolve(false);
     }
     if (queuedBytes + bytes > WRITE_LIMIT) {
-      notice.textContent = t("Input queue is full. Wait before sending more.");
+      notify(t("Input queue is full. Wait before sending more."), "warning");
       return Promise.resolve(false);
     }
     const generation = inputGeneration;
@@ -1004,26 +981,36 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
     repeatTimer = 0;
     sendFormat.disabled = false;
     repeatMs.disabled = false;
-    repeatButton.textContent = t("Start repeating");
+    repeatButton.textContent = t("Timed send");
+    repeatButton.title = t("Start repeating");
     repeatButton.setAttribute("aria-pressed", "false");
-    if (reason && !disposed) notice.textContent = reason;
+    if (reason) notify(reason, "warning");
   };
 
   const doConnect = async () => {
     if (working || disposed) return;
     working = true;
-    connect.disabled = true;
-    uartSendButton.disabled = true;
+    renderConnection();
     repeatButton.disabled = true;
     communication.setBusy(true);
     stopRepeat();
     inputGeneration++;
-    notice.textContent = "";
+    toasts.clear();
     try {
       if (connected) {
         await invoke("serial.disconnect", {});
         setConnected(false);
       } else {
+        let parameters: ReturnType<typeof communication.prepare>;
+        try { parameters = communication.prepare(); }
+        catch (reason) { notify(reason instanceof Error ? reason.message : String(reason), "warning"); return; }
+        if (parameters) {
+          await invoke("serial.configure", parameters);
+          if (disposed) return;
+          await enqueue(refreshSnapshot);
+          if (currentConfig) communication.update(currentConfig, false, true);
+        }
+        if (disposed) return;
         await invoke("serial.connect", {});
         if (disposed) return;
         await enqueue(refreshSnapshot);
@@ -1035,7 +1022,7 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
 
   const startEvents = async () => {
     const cancel = await api.subscribeEvents((event) => enqueue(async () => {
-      if (event.name === "runtime.closed") { setConnected(false); notice.textContent = t("Plugin connection closed."); return; }
+      if (event.name === "runtime.closed") { setConnected(false); notify(t("Plugin connection closed."), "warning"); return; }
       if (event.name === "runtime.gap" || event.name === "serial.status") { await refreshSnapshot(); return; }
       if (event.name === "serial.command") {
         const progress = event.payload as { connectionId: string; txBytes: number; finished: boolean };
@@ -1103,8 +1090,9 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
       const ending = uartEnding.value;
       return () => sendText(text, ending);
     } catch (reason) {
-      showError(reason instanceof Error && reason.message.startsWith("HEX input")
-        ? t("HEX input must contain an even number of hexadecimal digits.") : reason);
+      notify(reason instanceof Error && reason.message.startsWith("HEX input")
+        ? t("HEX input must contain an even number of hexadecimal digits.")
+        : reason instanceof Error ? reason.message : String(reason), "warning");
       return null;
     }
   };
@@ -1114,10 +1102,19 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
     const text = uartText.value, format = sendFormat.value, ending = uartEnding.value;
     if (await uartInput()?.() && !disposed) remember(text, format, ending);
   };
-  sendFormat.addEventListener("change", () => { stopRepeat(); uartEnding.disabled = sendFormat.value === "hex"; }, { signal: controller.signal });
+  sendFormat.element.addEventListener("change", () => { stopRepeat(); uartEnding.disabled = sendFormat.value === "hex"; }, { signal: controller.signal });
   uartEnding.addEventListener("change", () => stopRepeat(), { signal: controller.signal });
-  uartText.addEventListener("input", () => stopRepeat(), { signal: controller.signal });
-  uartSendButton.addEventListener("click", sendUart, { signal: controller.signal });
+  uartText.addEventListener("input", () => {
+    stopRepeat();
+    if (sendFormat.value === "hex" && /[^0-9a-f\s]/i.test(uartText.value.replace(/^0x/i, ""))) {
+      notify(t("HEX input must contain an even number of hexadecimal digits."), "warning");
+    }
+  }, { signal: controller.signal });
+  uartText.addEventListener("blur", () => {
+    if (sendFormat.value !== "hex" || !uartText.value) return;
+    try { uartText.value = Array.from(fromHex(uartText.value), byte => byte.toString(16).padStart(2, "0")).join(" "); }
+    catch { notify(t("HEX input must contain an even number of hexadecimal digits."), "warning"); }
+  }, { signal: controller.signal });
   uartText.addEventListener("keydown", (event) => {
     if (event.key === "Enter" && !event.shiftKey && !event.isComposing && event.keyCode !== 229) {
       event.preventDefault();
@@ -1131,7 +1128,7 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
     if (!connected || working || importing) return;
     const interval = Number(repeatMs.value);
     if (!Number.isInteger(interval) || interval < REPEAT_MIN_MS || interval > REPEAT_MAX_MS) {
-      notice.textContent = t("Repeat interval must be between 20 and 60000 ms.");
+      notify(t("Repeat interval must be between 20 and 60000 ms."), "warning");
       return;
     }
     // 重复发送复用同一条输入队列，不绕过节流和连接检查。
@@ -1143,7 +1140,6 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
     sendFormat.disabled = true;
     repeatMs.disabled = true;
     closeHistory();
-    notice.textContent = t("Repeat every {ms} ms", { ms: interval });
     let remembered = false;
     const tick = async () => {
       if (!repeating || generation !== repeatGeneration || disposed) return;
@@ -1155,52 +1151,38 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
       repeatTimer = window.setTimeout(() => void tick(), interval);
     };
     repeatTimer = window.setTimeout(() => void tick(), interval);
-    repeatButton.textContent = t("Stop repeating");
+    repeatButton.textContent = t("Timed send");
+    repeatButton.title = t("Stop repeating");
     repeatButton.setAttribute("aria-pressed", "true");
   }, { signal: controller.signal });
 
-  viewText.addEventListener("click", () => { uartView = "text"; updateViewButtons(); renderUart(true); }, { signal: controller.signal });
-  viewHex.addEventListener("click", () => { uartView = "hex"; updateViewButtons(); void enqueue(refreshHex); }, { signal: controller.signal });
-  const updateViewButtons = () => {
-    viewText.setAttribute("aria-pressed", String(uartView === "text"));
-    viewHex.setAttribute("aria-pressed", String(uartView === "hex"));
-  };
+  receiveFormats.element.addEventListener("change", () => {
+    uartView = receiveFormats.value;
+    if (uartView === "hex") void enqueue(refreshHex);
+    else renderUart(true);
+  }, { signal: controller.signal });
   timestamps.addEventListener("change", () => renderUart(true), { signal: controller.signal });
   autoscroll.addEventListener("change", () => { if (autoscroll.checked) renderUart(true); }, { signal: controller.signal });
   clear.addEventListener("click", () => {
     clearLog();
-    if (paused) { paused = false; pause.textContent = t("Pause"); }
+    if (paused) { paused = false; renderPause(); }
     pendingWhilePaused = 0;
-    notice.textContent = "";
+    toasts.clear();
   }, { signal: controller.signal });
   pause.addEventListener("click", () => {
     paused = !paused;
-    pause.textContent = paused ? t("Resume") : t("Pause");
-    pause.setAttribute("aria-pressed", String(paused));
+    renderPause();
     if (paused) {
       pendingWhilePaused = 0;
     } else {
-      if (pendingWhilePaused > 0) notice.textContent = t("The device sent {bytes} bytes while paused.", { bytes: pendingWhilePaused });
+      if (pendingWhilePaused > 0) notify(t("The device sent {bytes} bytes while paused.", { bytes: pendingWhilePaused }));
       pendingWhilePaused = 0;
       renderUart(true);
     }
   }, { signal: controller.signal });
 
-  const toggleSignal = async (name: "dtr" | "rts") => {
-    if (!connected || working || disposed) return;
-    const next = { ...signals, [name]: !signals[name] };
-    dtrButton.disabled = true;
-    rtsButton.disabled = true;
-    try {
-      const result = await invoke<Signals>("serial.signals", { [name]: next[name] });
-      if (!disposed) setSignals(result);
-    } catch (reason) { showError(reason); }
-    finally { if (!disposed) { dtrButton.disabled = !connected; rtsButton.disabled = !connected; } }
-  };
-  dtrButton.addEventListener("click", () => void toggleSignal("dtr"), { signal: controller.signal });
-  rtsButton.addEventListener("click", () => void toggleSignal("rts"), { signal: controller.signal });
-
   settingsButton.addEventListener("click", () => setSettingsOpen(!settingsOpen), { signal: controller.signal });
+  toolbarButton.addEventListener("click", () => setToolbarOpen(toolbar.panel.hidden), { signal: controller.signal });
   historyButton.addEventListener("click", () => {
     const open = historyPanel.hidden;
     if (open) { setSettingsOpen(false, false); renderHistory(); }
@@ -1212,11 +1194,13 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
     if ((event as KeyboardEvent).key !== "Escape") return;
     if (!historyPanel.hidden) { closeHistory(); historyButton.focus(); event.stopPropagation(); }
     else if (settingsOpen) { setSettingsOpen(false); event.stopPropagation(); }
+    else if (!toolbar.panel.hidden) { setToolbarOpen(false); event.stopPropagation(); }
   }, { signal: controller.signal });
   root.addEventListener("pointerdown", event => {
     const path = event.composedPath();
     if (!path.includes(historyPanel) && !path.includes(historyButton)) closeHistory();
-    if (settingsOpen && !path.includes(settingsPanel) && !path.includes(settingsButton)) setSettingsOpen(false, false);
+    if (settingsOpen && !path.includes(settingsPanel) && !path.includes(settingsButton) && !path.includes(layout.querySelector(".coterm-toasts")!)) setSettingsOpen(false, false);
+    if (!toolbar.panel.hidden && !path.includes(toolbar.panel) && !path.includes(toolbarButton)) setToolbarOpen(false, false);
   }, { signal: controller.signal });
 
   importButton.addEventListener("click", () => { stopRepeat(); fileInput.click(); }, { signal: controller.signal });
@@ -1234,7 +1218,7 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
       uartText.value = format === "hex"
         ? Array.from(bytes, byte => byte.toString(16).padStart(2, "0")).join(" ")
         : new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-      notice.textContent = t("Imported {name}. Review the content, then press Enter to send.", { name: file.name });
+      notify(t("Imported {name}. Review the content, then press Enter to send.", { name: file.name }));
       uartText.focus();
     } catch (reason) {
       showError(reason instanceof TypeError ? t("The file is not UTF-8 text. Select HEX to import binary data.") : reason);
@@ -1247,12 +1231,12 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
   exportButton.addEventListener("click", async () => {
     exportButton.disabled = true;
     try {
-      if (downloads.size >= 4) { notice.textContent = t("Wait before saving another snapshot."); return; }
+      if (downloads.size >= 4) { notify(t("Wait before saving another snapshot."), "warning"); return; }
       if (uartView === "hex" && connected) await enqueue(() => refreshHex(true));
       if (disposed) return;
       const text = (uartView === "hex" ? hexEntries : entries)
         .map(item => uartView === "hex" ? item.hex : item.text).join("");
-      if (!text) { notice.textContent = t("The receive buffer is empty."); return; }
+      if (!text) { notify(t("The receive buffer is empty."), "warning"); return; }
       const filename = receiveFilename.value.trim().replace(/[\\/:*?"<>|\u0000-\u001f]/g, "_").replace(/^\.+/, "") || "serial-receive.txt";
       const url = URL.createObjectURL(new Blob([text], { type: "text/plain;charset=utf-8" }));
       const link = document.createElement("a");
@@ -1262,20 +1246,6 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
       downloads.set(url, timer);
     } catch (reason) { showError(reason); }
     finally { if (!disposed) exportButton.disabled = false; }
-  }, { signal: controller.signal });
-
-  // 端口枚举是只读探测，不触碰已经打开的连接。
-  ports.addEventListener("click", async () => {
-    if (disposed) return;
-    ports.disabled = true;
-    try {
-      const probe = await invoke<Probe>("serial.probe", {});
-      if (disposed) return;
-      notice.textContent = probe.ports.length
-        ? probe.ports.map((item) => `${item.portName} (${item.portType.kind}${item.portType.product ? `: ${item.portType.product}` : ""})`).join(", ")
-        : t("No serial ports were reported by the operating system.");
-    } catch (reason) { showError(reason); }
-    finally { if (!disposed) ports.disabled = !connected && working; }
   }, { signal: controller.signal });
 
   // Same text contract as MCP: preserve controls, CR and escape sequences exactly.
@@ -1305,6 +1275,7 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
     observer.disconnect();
     onData.dispose();
     stopShortcuts();
+    toolbar.unmount(); receiveFormats.unmount(); sendFormat.unmount(); toasts.unmount();
     searchView.dispose();
     stopTheme();
     terminal.dispose();

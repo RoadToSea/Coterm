@@ -124,7 +124,7 @@ test("appearance switches live SSH and serial renderers, persists, and follows s
       const receipt = output => ({ operationId:'theme',status:'completed',output,error:null,proposalId:null,waitExpired:false });
       const api = { pluginInstanceId:'theme-serial', async invoke(operation,args) {
         themeSerialCalls.push({operation,args});
-        if (operation === 'serial.status') return receipt({config:{port:'COM1',baudRate:115200,dtr:true,rts:true},connected:true,connectionId:'theme-conn',signals:{dtr:true,rts:true},rxBytes:0,txBytes:0,commandQueue:0});
+        if (operation === 'serial.status') return receipt({config:{port:'COM1',baudRate:115200,dataBits:8,stopBits:1,parity:'none',dtr:true,rts:true},connected:true,connectionId:'theme-conn',signals:{dtr:true,rts:true},rxBytes:0,txBytes:0,commandQueue:0});
         if (operation === 'serial.read') return receipt({text:'Theme probe\\r\\n',bytes:13,cursor:1,gap:false,closed:false,more:false,connectionId:'theme-conn'});
         throw new Error('Unexpected operation: ' + operation);
       }, async subscribeEvents() { themeSerialSubscriptions++; return () => {}; } };
@@ -132,7 +132,7 @@ test("appearance switches live SSH and serial renderers, persists, and follows s
       window.themeSerial = container.firstElementChild;
       window.themeSerialTerminal = themeSerial.shadowRoot.querySelector('.xterm');
     })()`);
-    await waitForValue({ send: page.send }, `themeSerial.shadowRoot.querySelector('.state')?.textContent === 'Connected'`);
+    await waitForValue({ send: page.send }, `themeSerial.shadowRoot.querySelector('.connect-button')?.dataset.connected === 'true'`);
     assert.equal(await terminalBackground("themeSerial"), "rgb(255, 255, 255)");
     await choose("dark");
     await waitForValue({ send: page.send }, `getComputedStyle(themeSerial.shadowRoot.querySelector('.xterm-viewport')).backgroundColor === 'rgb(21, 26, 35)'`);

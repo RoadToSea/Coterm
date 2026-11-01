@@ -13,7 +13,9 @@ test("human Shell uses terminal keys, UART uses its sender, and MCP queues stay 
     "rebuild the serial frontend after changing shared terminal shortcuts");
   assert.ok(built >= fs.statSync(new URL("../packages/plugin-sdk/src/components/terminal-search.ts", import.meta.url)).mtimeMs,
     "rebuild the serial frontend after changing terminal search");
-  for (const file of ["index.ts", "i18n.ts", "console-settings.ts"]) {
+  assert.ok(built >= fs.statSync(new URL("../packages/plugin-sdk/src/components/toasts.ts", import.meta.url)).mtimeMs,
+    "rebuild the serial frontend after changing shared notices");
+  for (const file of ["index.ts", "i18n.ts", "console-settings.ts", "format-switch.ts", "toolbar.ts"]) {
     assert.ok(built >= fs.statSync(new URL(`../plugins/plugin-serial/frontend/src/${file}`, import.meta.url)).mtimeMs,
       "run pnpm --filter coterm-plugin-serial-ui build before the serial browser test");
   }
@@ -26,12 +28,20 @@ test("human Shell uses terminal keys, UART uses its sender, and MCP queues stay 
     await client.send("Input.dispatchKeyEvent", { type: "keyDown", ...params });
     await client.send("Input.dispatchKeyEvent", { type: "keyUp", ...params });
   };
+  const click = async selector => {
+    const { x, y } = await run(`(() => { const r=root.querySelector(${JSON.stringify(selector)}).getBoundingClientRect(); return {x:r.left+r.width/2,y:r.top+r.height/2}; })()`);
+    await client.send("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", clickCount: 1 });
+    await client.send("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", clickCount: 1 });
+  };
   try {
     await client.send("Runtime.enable");
+    await client.send("Emulation.setFocusEmulationEnabled", { enabled: true });
+    await client.send("Emulation.setDeviceMetricsOverride", { width: 1100, height: 800, deviceScaleFactor: 1, mobile: false });
     await run(`(async () => {
       document.body.style.cssText = 'margin:0;width:1100px;height:800px';
       window.calls = []; window.locale = 'en'; window.connected = true;
       window.commandQueue = 0; window.txBytes = 0; window.cursor = 0;
+      window.levels = {dtr:true,rts:true};
       window.config = {port:'COM1',baudRate:115200,dataBits:8,stopBits:1,parity:'none',dtr:true,rts:true};
       window.receipt = (output = null) => ({ operationId: 'human-input', status:'completed', output,
         error:null, proposalId:null, waitExpired:false });
@@ -44,7 +54,7 @@ test("human Shell uses terminal keys, UART uses its sender, and MCP queues stay 
           window.calls.push({ operation, args });
           if (operation === 'serial.status') return window.receipt({
             config:window.config, connected:window.connected,
-            connectionId:window.connected ? 'conn' : null, signals:{dtr:true,rts:true},
+            connectionId:window.connected ? 'conn' : null, signals:window.levels,
             rxBytes:0, txBytes:window.txBytes, commandQueue:window.commandQueue,
           });
           if (operation === 'serial.read') return window.receipt({text:'',bytes:0,cursor:window.cursor,
@@ -58,6 +68,7 @@ test("human Shell uses terminal keys, UART uses its sender, and MCP queues stay 
             window.txBytes += bytes;
             return window.receipt({bytes});
           }
+          if (operation === 'serial.signals') { Object.assign(window.levels,args); return window.receipt(window.levels); }
           if (operation === 'serial.disconnect') { window.connected = false; return window.receipt({}); }
           if (operation === 'serial.connect') { window.connected = true; return window.receipt({}); }
           if (operation === 'serial.configure') { Object.assign(window.config, args); return window.receipt({}); }
@@ -69,9 +80,10 @@ test("human Shell uses terminal keys, UART uses its sender, and MCP queues stay 
       window.frontend = module.mount(document.body, window.api);
       window.root = document.body.firstElementChild.shadowRoot;
       window.writes = () => window.calls.filter(c => c.operation === 'serial.write' || c.operation === 'serial.write_hex');
+      window.sendUart = () => root.querySelector('.uart-send textarea').dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}));
       window.raw = () => window.writes().map(c => c.args.text ?? '').join('');
     })()`);
-    await waitForValue(client, `root.querySelector('.state').textContent === 'Connected' && root.activeElement?.classList.contains('xterm-helper-textarea')`);
+    await waitForValue(client, `root.querySelector('.connect-button').dataset.connected === 'true' && root.activeElement?.classList.contains('xterm-helper-textarea')`);
     assert.equal(await run(`root.querySelector('.send') === null`), true, "Shell has no list editor or send toolbar");
     assert.equal(await run(`root.querySelector('.panel:not([hidden]) textarea:not(.xterm-helper-textarea)') === null`), true);
     assert.equal(await run(`root.querySelector('.uart').hidden`), true);
@@ -100,7 +112,7 @@ test("human Shell uses terminal keys, UART uses its sender, and MCP queues stay 
     await run(`(() => {
       root.querySelectorAll('.modes button')[1].click();
       root.querySelector('.uart-send textarea').value = ${JSON.stringify("first\nsecond")};
-      root.querySelector('.uart-send .primary').click();
+      window.sendUart();
     })()`);
     await waitForValue(client, `window.writes().some(c => c.args.text === ${JSON.stringify("first\nsecond")})`);
     assert.deepEqual(await run(`window.writes().at(-1).args`),
@@ -117,7 +129,7 @@ test("human Shell uses terminal keys, UART uses its sender, and MCP queues stay 
     await waitForValue(client, `getComputedStyle(root.querySelector('.settings-panel')).transform === 'matrix(1, 0, 0, 1, 0, 0)'`);
     assert.equal(await run(`JSON.stringify(root.querySelector('.uart-output').getBoundingClientRect().toJSON())`), receiveRect);
     assert.equal(await run(`JSON.stringify(root.querySelector('.uart-send').getBoundingClientRect().toJSON())`), sendRect);
-    assert.equal(await run(`root.querySelector('.communication-settings fieldset').disabled`), true);
+    assert.equal(await run(`root.querySelector('[name=baudRate]').readOnly`), true);
     assert.equal(await run(`root.querySelector('.settings-panel').inert`), false);
     const overlayBounds = await run(`(() => { const a=root.querySelector('.receive-area').getBoundingClientRect();
       const b=root.querySelector('.settings-panel').getBoundingClientRect(); return {top:b.top-a.top,bottom:b.bottom<=a.bottom+1}; })()`);
@@ -126,18 +138,63 @@ test("human Shell uses terminal keys, UART uses its sender, and MCP queues stay 
     assert.equal(await run(`root.querySelector('.settings-panel').inert`), true);
     assert.equal(await run(`root.activeElement.className`), "settings-toggle");
 
+    // 顶栏精简；快捷栏显隐、调序与默认恢复只影响界面，不产生协议操作。
+    assert.equal(await run(`root.querySelector('.connection-label,.state,.apply-settings,.receive-settings,.send-format-select,.uart-send .primary') === null`), true);
+    assert.equal(await run(`root.querySelectorAll('.communication-settings fieldset, .communication-settings [name=port]').length`), 0);
+    assert.equal(await run(`root.querySelector('.settings-toggle').nextElementSibling.classList.contains('toolbar-toggle')`), true);
+    assert.equal(await run(`['pause','clear','save'].every(id=>root.querySelector('[data-control='+id+'] button[aria-label] svg'))`), true);
+    await run(`root.querySelector('.settings-toggle').click(); root.querySelector('[name=baudRate]').click()`);
+    await waitForValue(client, `root.querySelector('.coterm-toast[data-tone=warning]')`);
+    assert.equal(await run(`root.querySelector('[name=baudRate]').value`), '115200');
+    assert.equal(await run(`root.querySelector('[role=dialog],dialog') === null`), true);
+    assert.equal(await run(`JSON.stringify(root.querySelector('.uart-send').getBoundingClientRect().toJSON())`), sendRect);
+    await run(`root.querySelector('[name=dtr]').click()`);
+    await waitForValue(client, `window.levels.dtr===false && !root.querySelector('[name=dtr]').disabled`);
+    assert.equal(await run(`window.calls.at(-1).operation`), 'serial.signals');
+    await run(`root.querySelector('.toolbar-toggle').click()`);
+    assert.equal(await run(`root.querySelector('.settings-panel').inert`), true);
+    assert.equal(await run(`root.querySelector('.toolbar-customization').hidden`), false);
+    const toolbarCallCount = await run(`window.calls.length`);
+    await run(`root.querySelector('[data-item=timestamps] input').click();
+      root.querySelector('[data-item=save] button').click()`);
+    assert.equal(await run(`root.querySelector('[data-control=timestamps]').hidden`), true);
+    assert.deepEqual(await run(`[...root.querySelector('.uart-bar').children].map(el=>el.dataset.control)`),
+      ['format','timestamps','autoscroll','pause','save','clear','stats']);
+    assert.equal(await run(`window.calls.length`), toolbarCallCount);
+    await run(`root.querySelector('.toolbar-customization > button').click(); root.querySelector('.toolbar-toggle').click()`);
+    assert.equal(await run(`root.querySelector('[data-control=timestamps]').hidden`), false);
+    assert.deepEqual(await run(`[...root.querySelector('.uart-bar').children].map(el=>el.dataset.control)`),
+      ['format','timestamps','autoscroll','pause','clear','save','stats']);
+
+    // 滑块使用 UTF-8 转换草稿，字节以空格分隔；非法 HEX 只提示不发送。
+    await run(`root.querySelector('.uart-send textarea').value='A中'`);
+    await click('.send-mode button[data-value=hex]');
+    assert.equal(await run(`root.querySelector('.uart-send textarea').value`), '41 e4 b8 ad');
+    await click('.send-mode button[data-value=text]');
+    assert.equal(await run(`root.querySelector('.uart-send textarea').value`), 'A中');
+    const slider = await run(`(() => { const r=root.querySelector('.send-mode').getBoundingClientRect(); return {x:r.left+20,y:r.top+r.height/2}; })()`);
+    await client.send("Input.dispatchMouseEvent", { type: "mousePressed", ...slider, button: "left", clickCount: 1 });
+    await client.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: slider.x + 36, y: slider.y, button: "left", buttons: 1 });
+    await client.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: slider.x + 65, y: slider.y, button: "left", clickCount: 1 });
+    assert.equal(await run(`root.querySelector('.send-mode').dataset.value`), 'hex', 'pointer swipe changes format and converts the draft');
+    assert.equal(await run(`root.querySelector('.uart-send textarea').value`), '41 e4 b8 ad');
+    await run(`root.querySelector('.uart-send textarea').value='zz'; window.sendUart()`);
+    await waitForValue(client, `root.querySelector('.coterm-toast[data-tone=warning]')?.textContent.includes('hexadecimal')`);
+    assert.equal(await run(`root.querySelector('.uart-send textarea').value`), 'zz');
+
     await run(`(() => {
-      root.querySelector('.send-format-select').value = 'hex';
-      root.querySelector('.send-format-select').dispatchEvent(new Event('change'));
+      root.querySelector('.send-mode button[data-value=hex]').click();
       root.querySelector('.uart-send textarea').value = '00 80 FF';
       root.querySelector('.uart-send textarea').dispatchEvent(new KeyboardEvent('keydown', {key:'Enter',bubbles:true}));
     })()`);
     await waitForValue(client, `window.writes().at(-1)?.args.hex === '0080ff'`);
     assert.deepEqual(await run(`window.writes().at(-1)`), { operation:"serial.write_hex", args:{hex:"0080ff"} });
-    await run(`window.hexOutput = '0080ff'; root.querySelectorAll('.receive-settings .modes button')[1].click()`);
+    await run(`window.hexOutput = '0080ff'; root.querySelector('.uart-bar .format-switch button').focus()`);
+    await key("ArrowRight", "ArrowRight", 39);
     await waitForValue(client, `window.calls.some(c => c.operation === 'serial.read_hex')`);
     await waitForValue(client, `root.querySelector('.uart-output').textContent.includes('00 80 ff')`);
-    await run(`root.querySelectorAll('.receive-settings .modes button')[0].click()`);
+    await key("ArrowLeft", "ArrowLeft", 37);
+    assert.equal(await run(`root.querySelector('.uart-bar .format-switch').dataset.value`), 'text');
     const count = await run(`window.writes().length`);
     assert.equal(await run(`(() => {
       const event = new KeyboardEvent('keydown', {key:'Enter',shiftKey:true,bubbles:true,cancelable:true});
@@ -155,9 +212,9 @@ test("human Shell uses terminal keys, UART uses its sender, and MCP queues stay 
       window.commandQueue = 1;
       await window.event({name:'serial.status',payload:{}});
       await window.event({name:'serial.command',payload:{connectionId:'conn',txBytes:99,finished:false}});
-      root.querySelector('.uart-send .primary').click();
+      window.sendUart();
     })()`);
-    await waitForValue(client, `root.querySelector('.notice').textContent.includes('MCP command queue is busy')`);
+    await waitForValue(client, `root.querySelector('.coterm-toasts').textContent.includes('MCP command queue is busy')`);
     assert.match(await run(`root.querySelector('.stats').textContent`), /TX 99 B/);
     await run(`root.querySelectorAll('.modes button')[0].click()`);
     await waitForValue(client, `root.activeElement?.classList.contains('xterm-helper-textarea')`);
@@ -174,29 +231,39 @@ test("human Shell uses terminal keys, UART uses its sender, and MCP queues stay 
 
     await run(`window.locale = 'zh-CN'; window.translate()`);
     assert.equal(await run(`root.querySelector('.modes button').textContent`), "终端");
-    assert.equal(await run(`root.querySelector('.uart-send .primary').textContent`), "发送");
+    assert.equal(await run(`root.querySelector('.repeat-button').textContent`), "定时发送");
     assert.equal(await run(`root.querySelector('.uart-output').textContent.includes('device echo')`), true,
       "mode and language changes keep captured output");
     assert.equal(await run(`window.calls.some(c => c.operation === 'serial.command' || c.operation === 'serial.connect')`), false,
       "human UI never submits command lists or reconnects when changing mode or locale");
 
     await run(`root.querySelector('.connect-button').click()`);
-    await waitForValue(client, `root.querySelector('.state').textContent === '未连接'`);
+    await waitForValue(client, `root.querySelector('.connect-button').dataset.connected === 'false'`);
     const disconnectedCount = await run(`window.writes().length`);
     await run(`root.querySelector('.xterm-helper-textarea').focus()`);
     await client.send("Input.insertText", { text: "disconnected" });
     assert.equal(await run(`window.writes().length`), disconnectedCount);
 
-    // 断开后修改通信参数，不更换实例、不自动连接或写入。
+    // 离线草稿只在用户点击连接时应用；后台快照不能覆盖未保存的草稿。
+    const beforeConfigure = await run(`window.calls.filter(c=>c.operation==='serial.configure').length`);
     await run(`root.querySelector('.settings-toggle').click();
       root.querySelector('[name=baudRate]').value='9600';
-      root.querySelector('.communication-settings').requestSubmit()`);
-    await waitForValue(client, `window.config.baudRate === 9600`);
-    await waitForValue(client, `!root.querySelector('.apply-settings').disabled`);
-    assert.equal(await run(`root.querySelector('.connection-label').textContent`), "COM1@9600");
+      root.querySelector('[name=baudRate]').dispatchEvent(new Event('input'))`);
+    assert.equal(await run(`window.config.baudRate`), 115200);
+    await run(`window.event({name:'serial.status',payload:{}})`);
+    assert.equal(await run(`root.querySelector('[name=baudRate]').value`), '9600');
+    assert.equal(await run(`window.calls.filter(c=>c.operation==='serial.configure').length`), beforeConfigure);
     assert.equal(await run(`window.writes().length`), disconnectedCount);
-    await run(`root.querySelector('.settings-toggle').click(); root.querySelector('.connect-button').click()`);
-    await waitForValue(client, `root.querySelector('.state').textContent === '已连接'`);
+    await run(`root.querySelector('[name=baudRate]').value='0'; root.querySelector('.connect-button').click()`);
+    await waitForValue(client, `root.querySelector('.coterm-toast[data-tone=warning]')?.textContent.includes('通信参数')`);
+    assert.equal(await run(`window.connected`), false);
+    assert.equal(await run(`window.calls.filter(c=>c.operation==='serial.configure').length`), beforeConfigure);
+    await run(`root.querySelector('[name=baudRate]').value='9600';
+      root.querySelector('.settings-toggle').click(); root.querySelector('.connect-button').click()`);
+    await waitForValue(client, `root.querySelector('.connect-button').dataset.connected === 'true'`);
+    assert.equal(await run(`window.config.baudRate`), 9600);
+    assert.deepEqual(await run(`window.calls.filter(c=>['serial.configure','serial.connect'].includes(c.operation)).map(c=>c.operation)`),
+      ['serial.configure','serial.connect']);
     await run(`root.querySelectorAll('.modes button')[1].click()`);
 
     // 文件导入只填输入框，HEX 保留原始字节，错误不覆盖已有草稿。
@@ -208,14 +275,17 @@ test("human Shell uses terminal keys, UART uses its sender, and MCP queues stay 
     await importFile([0, 128, 255], "bytes.bin");
     await waitForValue(client, `root.querySelector('.uart-send textarea').value === '00 80 ff'`);
     assert.equal(await run(`window.writes().length`), disconnectedCount);
-    await run(`root.querySelector('.send-format-select').value='text'; root.querySelector('.send-format-select').dispatchEvent(new Event('change'))`);
+    await run(`root.querySelector('.send-mode button[data-value=text]').click()`);
+    assert.equal(await run(`root.querySelector('.send-mode').dataset.value`), 'hex', 'binary bytes cannot be silently decoded as UTF-8');
+    assert.equal(await run(`root.querySelector('.uart-send textarea').value`), '00 80 ff');
+    await run(`root.querySelector('.uart-send textarea').value=''; root.querySelector('.send-mode button[data-value=text]').click()`);
     await importFile([104, 101, 108, 108, 111], "hello.txt");
     await waitForValue(client, `root.querySelector('.uart-send textarea').value === 'hello'`);
     await importFile([255], "not-text.bin");
-    await waitForValue(client, `root.querySelector('.notice').textContent.includes('UTF-8')`);
+    await waitForValue(client, `root.querySelector('.coterm-toasts').textContent.includes('UTF-8')`);
     assert.equal(await run(`root.querySelector('.uart-send textarea').value`), "hello");
     await importFile(new Array(16385).fill(65), "large.txt");
-    await waitForValue(client, `root.querySelector('.notice').textContent.includes('16 KiB')`);
+    await waitForValue(client, `root.querySelector('.coterm-toasts').textContent.includes('16 KiB')`);
     assert.equal(await run(`root.querySelector('.uart-send textarea').value`), "hello");
 
     // 真实 Shift+Enter 编辑；发送保留输入中的换行。
@@ -232,7 +302,7 @@ test("human Shell uses terminal keys, UART uses its sender, and MCP queues stay 
       URL.createObjectURL=blob => { window.savedBlobs.push(blob); return 'blob:test-'+window.savedBlobs.length; };
       URL.revokeObjectURL=url => window.revoked.push(url);
       HTMLAnchorElement.prototype.click=function() { window.downloadName=this.download; };
-      root.querySelector('.receive-settings input').value='../receive.txt';
+      root.querySelector('.receive-filename').value='../receive.txt';
       root.querySelector('.export-receive').click();
     })()`);
     // Reconnect cleared the old receive log; put new data through the actual event path.
@@ -245,27 +315,27 @@ test("human Shell uses terminal keys, UART uses its sender, and MCP queues stay 
 
     // 大小校验包含 UTF-8 和结束符，拒绝后不写入、不记录为发送成功。
     const beforeOversized = await run(`window.writes().length`);
-    await run(`root.querySelector('.uart-send textarea').value='中'.repeat(6000); root.querySelector('.uart-send .primary').click()`);
-    await waitForValue(client, `root.querySelector('.notice').textContent.includes('16384')`);
+    await run(`root.querySelector('.uart-send textarea').value='中'.repeat(6000); window.sendUart()`);
+    await waitForValue(client, `root.querySelector('.coterm-toasts').textContent.includes('16384')`);
     assert.equal(await run(`window.writes().length`), beforeOversized);
     await run(`root.querySelector('.uart-send textarea').value='repeat'`);
 
     // 慢写入只允许一次在途；停止时不追发积压，失败不自动重试。
     await run(`window.holdWrite = true; root.querySelector('.uart-send input[type=number]').value='20';
-      root.querySelector('.uart-send .inline button:not(.primary)').click()`);
+      root.querySelector('.repeat-button').click()`);
     await waitForValue(client, `typeof window.releaseWrite === 'function'`);
     const heldCount = await run(`window.writes().length`);
     await run(`new Promise(resolve => setTimeout(resolve, 100))`);
     assert.equal(await run(`window.writes().length`), heldCount);
-    await run(`root.querySelector('.uart-send .inline button:not(.primary)').click(); window.holdWrite=false; window.releaseWrite()`);
+    await run(`root.querySelector('.repeat-button').click(); window.holdWrite=false; window.releaseWrite()`);
     await run(`new Promise(resolve => setTimeout(resolve, 80))`);
     assert.equal(await run(`window.writes().length`), heldCount);
-    await run(`window.failWrite=true; root.querySelector('.uart-send .inline button:not(.primary)').click()`);
-    await waitForValue(client, `root.querySelector('.notice').textContent.includes('simulated write failure')`);
+    await run(`window.failWrite=true; root.querySelector('.repeat-button').click()`);
+    await waitForValue(client, `root.querySelector('.coterm-toasts').textContent.includes('simulated write failure')`);
     const failedCount = await run(`window.writes().length`);
     await run(`new Promise(resolve => setTimeout(resolve, 80))`);
     assert.equal(await run(`window.writes().length`), failedCount);
-    assert.equal(await run(`root.querySelector('.uart-send .inline button:not(.primary)').getAttribute('aria-pressed')`), "false");
+    assert.equal(await run(`root.querySelector('.repeat-button').getAttribute('aria-pressed')`), "false");
     await run(`window.failWrite=false`);
 
     // 历史有界、去重；选取恢复当时的发送格式与行结束符。
@@ -276,17 +346,17 @@ test("human Shell uses terminal keys, UART uses its sender, and MCP queues stay 
     } root.querySelector('.history-toggle').click(); })()`);
     assert.equal(await run(`root.querySelectorAll('.send-history button').length`), 50);
     assert.equal(await run(`root.querySelector('.send-history button').textContent`), "ASCII · history-54");
-    await run(`root.querySelector('.send-history button').click(); root.querySelector('.uart-send .primary').click()`);
+    await run(`root.querySelector('.send-history button').click(); window.sendUart()`);
     await run(`new Promise(resolve=>setTimeout(resolve,0))`);
     assert.equal(await run(`root.querySelectorAll('.send-history button').length`), 50);
 
-    await run(`root.querySelector('.uart-send .inline button:not(.primary)').click()`);
-    await waitForValue(client, `root.querySelector('.uart-send .inline button:not(.primary)').getAttribute('aria-pressed')==='true'`);
+    await run(`root.querySelector('.repeat-button').click()`);
+    await waitForValue(client, `root.querySelector('.repeat-button').getAttribute('aria-pressed')==='true'`);
     await run(`(async () => { window.connected=false; await window.event({name:'serial.status',payload:{}}); })()`);
-    assert.equal(await run(`root.querySelector('.uart-send .inline button:not(.primary)').getAttribute('aria-pressed')`), "false");
+    assert.equal(await run(`root.querySelector('.repeat-button').getAttribute('aria-pressed')`), "false");
     const stoppedAtDisconnect = await run(`window.writes().length`);
     await run(`root.querySelector('.connect-button').click()`);
-    await waitForValue(client, `root.querySelector('.state').textContent === '已连接'`);
+    await waitForValue(client, `root.querySelector('.connect-button').dataset.connected === 'true'`);
     await run(`new Promise(resolve=>setTimeout(resolve,80))`);
     assert.equal(await run(`window.writes().length`), stoppedAtDisconnect, "reconnect does not resume repeating");
 
@@ -297,7 +367,7 @@ test("human Shell uses terminal keys, UART uses its sender, and MCP queues stay 
     assert.equal(await run(`root.querySelector('.settings-panel').clientHeight <= root.querySelector('.receive-area').clientHeight`), true);
     await run(`document.body.style.width='1100px'; root.querySelector('.settings-toggle').click()`);
 
-    await run(`root.querySelector('.uart-send .inline button:not(.primary)').click()`);
+    await run(`root.querySelector('.repeat-button').click()`);
     const unmountCount = await run(`(() => { const count=window.writes().length; window.frontend.unmount(); return count; })()`);
     assert.equal(await run(`window.unsubscribed && window.localeUnsubscribed && document.body.childElementCount === 0`), true);
     assert.deepEqual(await run(`window.revoked`), ["blob:test-1"]);
@@ -305,8 +375,8 @@ test("human Shell uses terminal keys, UART uses its sender, and MCP queues stay 
     assert.equal(await run(`window.writes().length`), unmountCount, "unmount cancels the repeat timer");
   } catch (error) {
     t.diagnostic(JSON.stringify(await run(`({
-      calls:window.calls?.slice(-6), state:root.querySelector('.state')?.textContent,
-      notice:root.querySelector('.notice')?.textContent,
+      calls:window.calls?.slice(-6), state:root.querySelector('.connect-button')?.textContent,
+      notice:root.querySelector('.coterm-toasts')?.textContent,
       buttons:[...root.querySelectorAll('.bar button')].map(b => ({text:b.textContent,disabled:b.disabled})),
     })`).catch(() => null)));
     throw error;
