@@ -10,6 +10,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import {
+  setAppLocale,
   assertFreshBuild,
   assertFreshTestArtifacts,
   delay,
@@ -180,10 +181,7 @@ test("Alpha language switching and offline installation preserve live SSH state"
       window.__alphaSubscriptions = window.__cotermTest.calls.filter((command) => command === 'subscribe_plugin_events').length;
       return !!window.__alphaTerminal;
     })()`, { label: "live SSH frontend" });
-    const switchLanguage = (locale) => page.evaluate(`(() => {
-      const select = document.getElementById('locale-select'); select.value = ${JSON.stringify(locale)};
-      select.dispatchEvent(new Event('change', { bubbles: true }));
-    })()`);
+    const switchLanguage = (locale) => setAppLocale({ send: page.send }, locale);
     await switchLanguage("zh-CN");
     await waitForValue({ send: page.send }, `document.documentElement.lang === 'zh-CN' && document.getElementById('install-plugin-button').title === '安装插件'`, { label: "Chinese host controls" });
     assert.equal(await page.evaluate(`window.__alphaSshHost.shadowRoot.querySelector('.bar span').textContent`), "已连接");
@@ -243,7 +241,7 @@ test("Alpha language switching and offline installation preserve live SSH state"
     await page.evaluate(`document.querySelector('dialog button[aria-label="关闭对话框"]').click()`);
     await waitForValue({ send: page.send }, `window.__cotermTest.invocations.some((item) => item.command === 'discard_plugin_install' && item.args.token === 'install-ticket')`, { label: "cancelled preview released" });
     await page.send("Page.reload");
-    await waitForValue({ send: page.send }, `document.documentElement.lang === 'zh-CN' && document.getElementById('locale-select')?.value === 'zh-CN'`, { label: "language preference survives reload" });
+    await waitForValue({ send: page.send }, `document.documentElement.lang === 'zh-CN' && !!document.getElementById('open-settings')`, { label: "language preference survives reload" });
     await switchLanguage("en");
     await waitForValue({ send: page.send }, `document.getElementById('install-plugin-button')?.title === 'Install plugin'`, { label: "switch back to English" });
   } finally {

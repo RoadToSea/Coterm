@@ -2,7 +2,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import { assertFreshBuild, findBrowser, openSession, evaluate, waitForValue, startStaticServer } from "./support/browser-harness.mjs";
+import { setAppLocale, assertFreshBuild, findBrowser, openSession, evaluate, waitForValue, startStaticServer } from "./support/browser-harness.mjs";
 import { defaultScenario, makeHostMockSource } from "./support/host-mock.js";
 
 test("inline protocol configuration and instance tabs preserve live frontends and separate view/lifecycle actions", async t => {
@@ -156,8 +156,8 @@ test("inline protocol configuration and instance tabs preserve live frontends an
     await run(`document.querySelector('dialog.host-secret-dialog button[type=submit]').click()`);
     await wait(`!document.getElementById('instance-tab-inst-1')`, "destroy removes the tab");
     assert.equal(await run(`__cotermTest.countCalls('destroy_instance')`), 1);
-    await run(`(()=>{const select=document.getElementById('locale-select');select.value='zh-CN';select.dispatchEvent(new Event('change',{bubbles:true}));})();
-      document.querySelector('button[aria-label="管理 SSH"]').click()`);
+    await setAppLocale(client, 'zh-CN');
+    await run(`document.querySelector('button[aria-label="管理 SSH"]').click()`);
     await wait(`configuration()?.querySelector('button').textContent==='创建 SSH 实例'`, "inline plugin form translates");
     assert.ok(await run(`document.getElementById('plugin-configuration').textContent.includes('新建实例')`));
     assert.deepEqual(errors, []);

@@ -9,7 +9,7 @@ import path from "node:path";
 import net from "node:net";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { connectCdp, delay, evaluate, waitForValue } from "../tests/support/browser-harness.mjs";
+import { setAppLocale, connectCdp, delay, evaluate, waitForValue } from "../tests/support/browser-harness.mjs";
 
 if (process.platform !== "win32") throw new Error("Serial UI acceptance requires Windows + WebView2");
 const root = fileURLToPath(new URL("../", import.meta.url));
@@ -51,10 +51,9 @@ async function launch() {
   client = await connectCdp(page.webSocketDebuggerUrl);
   await client.send("Runtime.enable");
   // 系统语言可能是中文，节点的 aria-label 会被翻译；改用稳定的 id 判断加载。
-  await waitForValue(client, "!!window.__TAURI_INTERNALS__ && !!document.getElementById('locale-select')", { label: "real Tauri UI loaded" });
+  await waitForValue(client, "!!window.__TAURI_INTERNALS__ && !!document.getElementById('open-settings')", { label: "real Tauri UI loaded" });
   // 验收断言使用英文文案，先显式切换到英文；随后再验证语言切换。
-  await evaluate(client, `(() => { const select = document.getElementById('locale-select');
-    select.value = 'en'; select.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+  await setAppLocale(client, 'en');
   await waitForValue(client, "!!document.querySelector('[aria-label=\"Plugin list\"]')", { label: "English UI applied" });
 }
 
@@ -175,7 +174,7 @@ try {
   await run(`${await serialRoot()}.querySelector('.settings-toggle').click()`);
   console.log("PASS DTR/RTS controls drive serial.signals");
 
-  await run(`(() => { const select=document.getElementById('locale-select'); select.value='zh-CN'; select.dispatchEvent(new Event('change',{bubbles:true})); })()`);
+  await setAppLocale(client, 'zh-CN');
   await waitForValue(client, `${await serialRoot()}?.querySelector('.modes button').textContent === '终端'`, { label: "serial UI follows locale" });
   const zh = await run(`(() => { const r = ${await serialRoot()};
     return { modes: [...r.querySelectorAll('.bar .modes button')].map(b => b.textContent),

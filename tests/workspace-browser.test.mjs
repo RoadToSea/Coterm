@@ -2,7 +2,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import { assertFreshBuild, findBrowser, openSession, evaluate, waitForValue, startStaticServer } from "./support/browser-harness.mjs";
+import { setAppLocale, assertFreshBuild, findBrowser, openSession, evaluate, waitForValue, startStaticServer } from "./support/browser-harness.mjs";
 import { defaultScenario, makeHostMockSource } from "./support/host-mock.js";
 
 test("workspace groups manage and move live/saved instances without reconnecting", async t => {
@@ -117,7 +117,7 @@ test("workspace groups manage and move live/saved instances without reconnecting
     await wait(`document.querySelectorAll('[data-instance-id]').length === 1`, "instance deleted directly from its card");
     assert.equal(await run(`__cotermTest.countCalls('destroy_instance')`), 1);
     assert.equal(await run(`__cotermTest.workspace().entries.some(entry=>entry.configRef==='ref-saved')`), false);
-    await run(`(() => {const select=document.getElementById('locale-select');select.value='zh-CN';select.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+    await setAppLocale(client, 'zh-CN');
     await wait(`!!document.querySelector('button[aria-label="新建工作区"]')`, "workspace controls translate");
     assert.ok(await run(`document.querySelector('[data-workspace-id="default"]').textContent.includes('默认工作区')`));
     assert.equal(await run(`document.documentElement.scrollWidth <= innerWidth`), true);

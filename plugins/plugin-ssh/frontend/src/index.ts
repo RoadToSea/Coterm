@@ -1,4 +1,4 @@
-import { attachTerminalTheme, readTerminalTheme } from "@coterm/plugin-sdk/components/terminal-theme";
+import { attachTerminalPreferences, attachTerminalTheme, readTerminalPreferences, readTerminalTheme } from "@coterm/plugin-sdk/components/terminal-theme";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { SearchAddon } from "@xterm/addon-search";
@@ -15,7 +15,7 @@ const css = `
     height: 100%;
     min-height: 0;
     color: var(--coterm-text-primary, #cccccc);
-    font: 13px var(--coterm-font-sans, "Segoe UI", -apple-system, BlinkMacSystemFont, sans-serif);
+    font: var(--coterm-ui-font-size, 13px) var(--coterm-font-sans, "Segoe UI", -apple-system, BlinkMacSystemFont, sans-serif);
   }
   * { box-sizing: border-box; }
   button, input, textarea { font: inherit; color: inherit; }
@@ -154,7 +154,7 @@ const css = `
     margin: 0;
     white-space: pre-wrap;
     overflow-wrap: anywhere;
-    font: 12px var(--coterm-font-mono, Consolas, "Liberation Mono", monospace);
+    font: var(--coterm-terminal-font-size, 12px) var(--coterm-font-mono, Consolas, "Liberation Mono", monospace);
     color: var(--coterm-text-primary, #cccccc);
   }
   .notice { padding: 7px 14px; font-size: 12px; color: var(--coterm-text-subtle, #aaaaaa); overflow-wrap: anywhere; }
@@ -169,7 +169,7 @@ const css = `
   .proposal { display: grid; gap: 6px; margin-bottom: 8px; }
   .proposal:last-child { margin-bottom: 0; }
   .proposal div { display: flex; gap: 8px; }
-  .proposal textarea { resize: vertical; font-family: var(--coterm-font-mono, Consolas, monospace); min-height: 36px; }
+  .proposal textarea { resize: vertical; font-family: var(--coterm-font-mono, Consolas, monospace); font-size: var(--coterm-terminal-font-size, 13px); min-height: 36px; }
 `;
 
 function surface(container: HTMLElement): ShadowRoot {
@@ -342,7 +342,7 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
 
   const terminal = new Terminal({
     allowProposedApi: true,
-    cursorBlink: true, scrollback: 3000, fontSize: 13,
+    ...readTerminalPreferences(terminalContainer), scrollback: 3000,
     fontFamily: 'Consolas, "Liberation Mono", monospace',
     theme: readTerminalTheme(terminalContainer),
   });
@@ -352,6 +352,10 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
   terminal.loadAddon(searchAddon);
   terminal.open(terminalContainer);
   const stopTheme = attachTerminalTheme(terminalContainer, (theme) => { terminal.options.theme = theme; });
+  const stopPreferences = attachTerminalPreferences(terminalContainer, (preferences) => {
+    Object.assign(terminal.options, preferences);
+    resize();
+  });
   let disposed = false;
   let connected = false;
   let working = false;
@@ -738,7 +742,7 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
     onData.dispose();
     stopShortcuts();
     searchView.dispose();
-    stopTheme();
+    stopTheme(); stopPreferences();
     terminal.dispose();
     container.replaceChildren();
   } };

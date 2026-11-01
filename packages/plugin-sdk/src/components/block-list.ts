@@ -10,7 +10,7 @@ const style = `
     padding: 12px;
     color: var(--coterm-text-primary, #cccccc);
     background: var(--coterm-surface, #1e1e1e);
-    font: 12px var(--coterm-font-sans, "Segoe UI", -apple-system, BlinkMacSystemFont, sans-serif);
+    font: var(--coterm-ui-font-size, 12px) var(--coterm-font-sans, "Segoe UI", -apple-system, BlinkMacSystemFont, sans-serif);
   }
   .coterm-block {
     display: grid;
@@ -67,7 +67,7 @@ const style = `
     white-space: pre-wrap;
     overflow-wrap: anywhere;
     tab-size: 4;
-    font: 12px/1.7 var(--coterm-font-mono, Consolas, monospace);
+    font: var(--coterm-terminal-font-size, 12px)/1.7 var(--coterm-font-mono, Consolas, monospace);
     user-select: text;
   }
   .coterm-block-command { flex: 1; }

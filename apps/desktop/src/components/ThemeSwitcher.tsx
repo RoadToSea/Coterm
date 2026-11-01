@@ -4,11 +4,11 @@ import { useI18n } from "../use-i18n";
 import { getThemePreference, setThemePreference, subscribeTheme } from "../theme";
 import { ToggleGroup, ToggleGroupItem } from "./ui/toggle-group";
 
-export function ThemeSwitcher() {
+export function ThemeSwitcher({ id = "theme-switcher" }: { id?: string } = {}) {
   const { t } = useI18n();
   const preference = useSyncExternalStore(subscribeTheme, getThemePreference, getThemePreference);
   return (
-    <ToggleGroup id="theme-switcher" type="single" size="sm" value={preference}
+    <ToggleGroup id={id} type="single" size="sm" value={preference}
       aria-label={t("Appearance")} className="rounded-lg border border-border p-0.5"
       onValueChange={(value) => {
         if (value === "light" || value === "dark" || value === "system") setThemePreference(value);

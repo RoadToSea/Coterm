@@ -37,6 +37,26 @@ export function findBrowser() {
   return BROWSER_CANDIDATES.find((candidate) => fs.existsSync(candidate)) ?? null;
 }
 
+/** Exercise the public Settings entry now that language is no longer in the toolbar. */
+export async function setAppLocale(client, locale) {
+  const alreadyOpen = await evaluate(client, `!!document.getElementById('app-settings-dialog')`);
+  if (!alreadyOpen) {
+    await evaluate(client, `document.getElementById('open-settings').click()`);
+    await waitForValue(client, `!!document.getElementById('app-settings-dialog')?.open`);
+  }
+  await evaluate(client, `document.querySelector('#app-settings-dialog .settings-navigation button').click()`);
+  await waitForValue(client, `!!document.getElementById('locale-select')`);
+  await evaluate(client, `(() => {
+    const select = document.getElementById('locale-select'); select.value = ${JSON.stringify(locale)};
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+  })()`);
+  await waitForValue(client, `document.documentElement.lang === ${JSON.stringify(locale)}`);
+  if (!alreadyOpen) {
+    await evaluate(client, `document.querySelector('#app-settings-dialog > header button').click()`);
+    await waitForValue(client, `!document.getElementById('app-settings-dialog')`);
+  }
+}
+
 const MIME = {
   ".html": "text/html; charset=utf-8",
   ".js": "application/javascript; charset=utf-8",

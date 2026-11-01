@@ -6,7 +6,7 @@ import path from "node:path";
 import net from "node:net";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { connectCdp, delay, evaluate, waitForValue } from "../tests/support/browser-harness.mjs";
+import { setAppLocale, connectCdp, delay, evaluate, waitForValue } from "../tests/support/browser-harness.mjs";
 
 if (process.platform !== "win32") throw new Error("Native acceptance requires Windows + WebView2");
 const root = fileURLToPath(new URL("../", import.meta.url));
@@ -60,8 +60,8 @@ async function launch() {
   if (!page?.webSocketDebuggerUrl) throw new Error(`No native WebView CDP endpoint: ${failures}`);
   client = await connectCdp(page.webSocketDebuggerUrl);
   await client.send("Runtime.enable");
-  await waitForValue(client, "!!document.getElementById('locale-select')", { label: "language selector mounted" });
-  await evaluate(client, "(() => { const select=document.getElementById('locale-select'); select.value='en'; select.dispatchEvent(new Event('change',{bubbles:true})); })()");
+  await waitForValue(client, "!!document.getElementById('open-settings')", { label: "settings entry mounted" });
+  await setAppLocale(client, 'en');
   await waitForValue(client, "!!window.__TAURI_INTERNALS__ && !!document.querySelector('[aria-label=\"Plugin list\"]')", { label: "real Tauri UI loaded" });
   await waitForValue(client, "!!document.querySelector('[aria-label=\"Manage Fixture\"]')", { label: "installed fixture discovered" });
 }

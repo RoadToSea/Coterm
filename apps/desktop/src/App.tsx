@@ -3,9 +3,10 @@ import { useI18n } from "./use-i18n";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useInstanceViews } from "./use-instance-views";
 import { InstanceTabs, instanceTabId, instancePanelId } from "./components/InstanceTabs";
-import { PanelLeftClose, PanelLeftOpen, Plus, PlugZap, ShieldAlert, ShieldCheck, SlidersHorizontal, TerminalSquare, Trash2 } from "lucide-react";
+import { PanelLeftClose, PanelLeftOpen, Plus, PlugZap, Settings2, ShieldAlert, ShieldCheck, SlidersHorizontal, TerminalSquare, Trash2 } from "lucide-react";
 import { WorkspaceInstances, workspaceName } from "./components/WorkspaceInstances";
 import { ThemeSwitcher } from "./components/ThemeSwitcher";
+import { AppSettings } from "./components/settings/AppSettings";
 import { Button } from "./components/ui/button";
 import { Badge } from "./components/ui/badge";
 import { Separator } from "./components/ui/separator";
@@ -37,7 +38,8 @@ const EMPTY_WORKSPACE: SavedWorkspace = {
 };
 
 export default function App() {
-  const { locale, setLocale } = useI18n();
+  const { locale } = useI18n();
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [instancesCollapsed, setInstancesCollapsed] = useState(() => {
     if (typeof window !== "undefined" && typeof window.innerWidth === "number") {
       return window.innerWidth < 900;
@@ -328,23 +330,17 @@ export default function App() {
         <div className="flex items-center gap-2">
           <div className="flex items-center gap-2 px-1">
             <TerminalSquare className="size-5 text-primary" />
-            <span className="text-sm font-semibold tracking-tight">Coterm</span>
+            <span className="hidden text-sm font-semibold tracking-tight sm:inline">Coterm</span>
           </div>
         </div>
         <div className="flex items-center gap-3">
         <ThemeSwitcher />
-        <label className="flex items-center gap-2 text-[11px] text-coterm-text-muted">
-          <span className="hidden sm:inline">{t("Language")}</span>
-          <select id="locale-select" aria-label={t("Language")} value={locale}
-            onChange={(event) => setLocale(event.target.value as "en" | "zh-CN")}
-            className="h-8 border border-input bg-background px-2 text-foreground">
-            <option value="zh-CN">简体中文</option>
-            <option value="en">English</option>
-          </select>
-        </label>
+        <Button id="open-settings" type="button" variant="outline" size="sm" aria-haspopup="dialog" aria-controls="app-settings-dialog" aria-expanded={settingsOpen}
+          onClick={() => setSettingsOpen(true)}><Settings2 data-icon="inline-start" />{t("Settings")}</Button>
         </div>
       </div>
       <HostInteractions />
+      {settingsOpen && <AppSettings onClose={() => setSettingsOpen(false)} />}
       {workspace?.persistence === "memory_only" && <p role="status" className="px-3 py-2 text-xs text-warning">{t("Workspace is session-only on this platform; secure disk storage is not available.")}</p>}
       {workspaceError && <div role="alert" className="px-3 py-2 text-xs text-destructive">
         {t("Workspace:")} {workspaceError}{t(". Saved state is preserved.")}

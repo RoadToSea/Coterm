@@ -2,7 +2,7 @@ import { useEffect, useRef, useCallback } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebglAddon } from "@xterm/addon-webgl";
-import { attachTerminalTheme, readTerminalTheme } from "@coterm/plugin-sdk/components/terminal-theme";
+import { attachTerminalPreferences, attachTerminalTheme, readTerminalPreferences, readTerminalTheme } from "@coterm/plugin-sdk/components/terminal-theme";
 
 interface UseTerminalOptions {
   onData?: (data: string) => void;
@@ -27,13 +27,14 @@ export function useTerminal(options: UseTerminalOptions = {}) {
     if (!containerRef.current) return;
 
     // 1. 创建 Terminal 实例
+    const preferences = readTerminalPreferences(containerRef.current);
     const term = new Terminal({
       theme: readTerminalTheme(containerRef.current),
-      fontSize,
+      fontSize: options.fontSize ?? preferences.fontSize,
       fontFamily,
-      cursorBlink: true,
+      cursorBlink: preferences.cursorBlink,
       cursorStyle: "bar",
-      lineHeight: 1.25,
+      lineHeight: preferences.lineHeight,
       allowTransparency: true,
       convertEol: true,
       scrollback: 10000,
@@ -47,6 +48,13 @@ export function useTerminal(options: UseTerminalOptions = {}) {
     // 3. 打开至 DOM 容器
     term.open(containerRef.current);
     const stopTheme = attachTerminalTheme(containerRef.current, (theme) => { term.options.theme = theme; });
+    const stopPreferences = attachTerminalPreferences(containerRef.current, (preferences) => {
+      Object.assign(term.options, preferences);
+      if (containerRef.current?.clientWidth) {
+        fitAddon.fit();
+        onResize?.(term.cols, term.rows);
+      }
+    });
 
     // 4. 尝试挂载 WebglAddon 加速渲染 (降级容错)
     try {
@@ -94,7 +102,7 @@ export function useTerminal(options: UseTerminalOptions = {}) {
 
     return () => {
       disposableData.dispose();
-      stopTheme();
+      stopTheme(); stopPreferences();
       resizeObserver.disconnect();
       term.dispose();
       terminalRef.current = null;

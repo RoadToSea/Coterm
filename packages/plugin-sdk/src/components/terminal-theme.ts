@@ -42,3 +42,31 @@ export function attachTerminalTheme(element: HTMLElement, apply: (theme: ReturnT
   observer.observe(element.ownerDocument.documentElement, { attributes: true, attributeFilter: ["class", "data-theme", "style"] });
   return () => observer.disconnect();
 }
+
+/** Host typography is optional; standalone plugins keep their terminal defaults. */
+export function readTerminalPreferences(element: HTMLElement) {
+  const style = element.ownerDocument.defaultView?.getComputedStyle(element);
+  const bounded = (name: string, fallback: number, min: number, max: number) => {
+    const value = Number.parseFloat(style?.getPropertyValue(name) ?? "");
+    return Number.isFinite(value) && value >= min && value <= max ? value : fallback;
+  };
+  return {
+    fontSize: bounded("--coterm-terminal-font-size", 13, 10, 28),
+    lineHeight: bounded("--coterm-terminal-line-height", 1, 1, 2),
+    cursorBlink: style?.getPropertyValue("--coterm-terminal-cursor-blink").trim() !== "false",
+  };
+}
+
+/** Update options and fit the existing renderer; never recreate a live terminal. */
+export function attachTerminalPreferences(element: HTMLElement, apply: (preferences: ReturnType<typeof readTerminalPreferences>) => void): () => void {
+  let previous = JSON.stringify(readTerminalPreferences(element));
+  const observer = new MutationObserver(() => {
+    const preferences = readTerminalPreferences(element);
+    const next = JSON.stringify(preferences);
+    if (next === previous) return;
+    previous = next;
+    apply(preferences);
+  });
+  observer.observe(element.ownerDocument.documentElement, { attributes: true, attributeFilter: ["style"] });
+  return () => observer.disconnect();
+}

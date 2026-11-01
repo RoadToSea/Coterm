@@ -1,4 +1,4 @@
-import { attachTerminalTheme, readTerminalTheme } from "@coterm/plugin-sdk/components/terminal-theme";
+import { attachTerminalPreferences, attachTerminalTheme, readTerminalPreferences, readTerminalTheme } from "@coterm/plugin-sdk/components/terminal-theme";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { SearchAddon } from "@xterm/addon-search";
@@ -18,7 +18,7 @@ const css = `
     height: 100%;
     min-height: 0;
     color: var(--coterm-text-primary, #cccccc);
-    font: 13px var(--coterm-font-sans, "Segoe UI", -apple-system, BlinkMacSystemFont, sans-serif);
+    font: var(--coterm-ui-font-size, 13px) var(--coterm-font-sans, "Segoe UI", -apple-system, BlinkMacSystemFont, sans-serif);
   }
   * { box-sizing: border-box; }
   button, input, select, textarea { font: inherit; color: inherit; }
@@ -171,7 +171,7 @@ const css = `
     padding: 8px 14px;
     background: var(--coterm-surface, #1e1e1e);
     color: var(--coterm-text-primary, #cccccc);
-    font: 12px/1.45 var(--coterm-font-mono, Consolas, "Liberation Mono", monospace);
+    font: var(--coterm-terminal-font-size, 12px)/1.45 var(--coterm-font-mono, Consolas, "Liberation Mono", monospace);
     white-space: pre-wrap;
     overflow-wrap: anywhere;
     tab-size: 4;
@@ -191,7 +191,7 @@ const css = `
   .uart-send label { gap: 4px; }
   .uart-send .entry { position: relative; min-width: 0; }
   .uart-send label.entry { height: 100%; }
-  .uart-send .entry textarea { height: 100%; border-radius: var(--radius, 6px); }
+  .uart-send .entry textarea { height: 100%; border-radius: var(--radius, 6px); font-size: var(--coterm-terminal-font-size, 13px); }
   .file-actions { display: grid; gap: 4px; grid-template-rows: 1fr 1fr; }
   .file-actions button { display: grid; place-items: center; padding: 4px; }
   .file-actions svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.5; }
@@ -650,7 +650,7 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
 
   const terminal = new Terminal({
     allowProposedApi: true,
-    cursorBlink: true, scrollback: 3000, fontSize: 13,
+    ...readTerminalPreferences(terminalContainer), scrollback: 3000,
     fontFamily: 'Consolas, "Liberation Mono", monospace',
     theme: readTerminalTheme(terminalContainer),
   });
@@ -660,6 +660,10 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
   terminal.loadAddon(searchAddon);
   terminal.open(terminalContainer);
   const stopTheme = attachTerminalTheme(terminalContainer, (theme) => { terminal.options.theme = theme; });
+  const stopPreferences = attachTerminalPreferences(terminalContainer, (preferences) => {
+    Object.assign(terminal.options, preferences);
+    resize();
+  });
 
   let disposed = false;
   let connected = false;
@@ -1312,7 +1316,7 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
     stopShortcuts();
     toolbar.unmount(); receiveFormats.unmount(); sendFormat.unmount(); toasts.unmount();
     searchView.dispose();
-    stopTheme();
+    stopTheme(); stopPreferences();
     terminal.dispose();
     container.replaceChildren();
   } };
