@@ -206,7 +206,7 @@ const css = `
   .send-history p { margin: 8px; }
   .uart-send .inline { display: inline-flex; align-items: center; gap: 6px; }
   .uart-send .inline input { width: auto; }
-  .uart-send input[type="number"] { width: 82px; }
+  .uart-send input[type="number"] { width: 82px; border-radius: var(--radius, 6px); }
   @container serial-console (max-width: 520px) {
     .uart-send { grid-template-columns: minmax(0, 1fr) 34px; }
     .send-controls { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; }
