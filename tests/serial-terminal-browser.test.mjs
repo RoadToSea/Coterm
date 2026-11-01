@@ -34,24 +34,30 @@ test("human Shell uses terminal keys, UART uses its sender, and MCP queues stay 
     await client.send("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", clickCount: 1 });
   };
   const dragToolbar = async (from, to, after, cancel = false) => {
-    const points = await run(`(() => {
+    const start = await run(`(() => {
       const a=root.querySelector('[data-control=${from}]').getBoundingClientRect();
-      const b=root.querySelector('[data-control=${to}]').getBoundingClientRect();
-      return {start:{x:a.left+a.width/2,y:a.top+a.height/2},
-        end:{x:b.left+b.width*${after ? .8 : .2},y:b.top+b.height/2}};
+      return {x:a.left+a.width/2,y:a.top+a.height/2};
     })()`);
     await client.send("Input.setInterceptDrags", { enabled: true });
     try {
       const intercepted = client.waitFor("Input.dragIntercepted", 5000);
-      await client.send("Input.dispatchMouseEvent", { type: "mouseMoved", ...points.start });
-      await client.send("Input.dispatchMouseEvent", { type: "mousePressed", ...points.start, button: "left", clickCount: 1 });
-      await client.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: points.start.x + 12, y: points.start.y, button: "left", buttons: 1 });
+      await client.send("Input.dispatchMouseEvent", { type: "mouseMoved", ...start });
+      await client.send("Input.dispatchMouseEvent", { type: "mousePressed", ...start, button: "left", clickCount: 1 });
+      await client.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: start.x + 12, y: start.y, button: "left", buttons: 1 });
       const { data } = await intercepted;
       assert.equal(data.items.some(item => item.mimeType === "text/plain"), false, 'dragging controls must not paste their IDs into text editors');
-      for (const type of ["dragEnter", "dragOver"]) await client.send("Input.dispatchDragEvent", { type, ...points.end, data });
-      assert.equal(await run(`root.querySelector('[data-control=${to}]').dataset.dropSide`), after ? 'after' : 'before');
-      await client.send("Input.dispatchDragEvent", { type: cancel ? "dragCancel" : "drop", ...points.end, data });
-      await client.send("Input.dispatchMouseEvent", { type: "mouseReleased", ...points.end, button: "left", clickCount: 1 });
+      assert.equal(await run(`root.querySelector('.toolbar-trash').hidden`), false, 'the trash appears only while dragging');
+      assert.equal(await run(`getComputedStyle(root.querySelector('[data-control=${from}] > *')).animationPlayState`), 'paused');
+      const end = await run(`(() => {
+        const b=root.querySelector(${JSON.stringify(to === 'trash' ? '.toolbar-trash' : `[data-control=${to}]`)}).getBoundingClientRect();
+        return {x:b.left+b.width*${to === 'trash' ? .5 : after ? .8 : .2},y:b.top+b.height/2};
+      })()`);
+      for (const type of ["dragEnter", "dragOver"]) await client.send("Input.dispatchDragEvent", { type, ...end, data });
+      if (to === 'trash') assert.equal(await run(`root.querySelector('.toolbar-trash').dataset.over`), 'true');
+      else assert.equal(await run(`root.querySelector('[data-control=${to}]').dataset.dropSide`), after ? 'after' : 'before');
+      await client.send("Input.dispatchDragEvent", { type: cancel ? "dragCancel" : "drop", ...end, data });
+      await client.send("Input.dispatchMouseEvent", { type: "mouseReleased", ...end, button: "left", clickCount: 1 });
+      assert.equal(await run(`root.querySelector('.toolbar-trash').hidden`), true, 'drop or cancel releases the trash target');
     } finally { await client.send("Input.setInterceptDrags", { enabled: false }); }
   };
   try {
@@ -159,7 +165,7 @@ test("human Shell uses terminal keys, UART uses its sender, and MCP queues stay 
     assert.equal(await run(`root.querySelector('.settings-panel').inert`), true);
     assert.equal(await run(`root.activeElement.className`), "settings-toggle");
 
-    // 顶栏精简；快捷栏显隐、调序与默认恢复只影响界面，不产生协议操作。
+    // 快捷栏晃动调整、拖到垃圾桶移除与默认恢复只影响界面，不产生协议操作。
     assert.equal(await run(`root.querySelector('.connection-label,.state,.apply-settings,.receive-settings,.send-format-select,.uart-send .primary') === null`), true);
     assert.equal(await run(`root.querySelectorAll('.communication-settings fieldset, .communication-settings [name=port]').length`), 0);
     assert.equal(await run(`root.querySelector('.settings-toggle').nextElementSibling.classList.contains('toolbar-toggle')`), true);
@@ -175,15 +181,24 @@ test("human Shell uses terminal keys, UART uses its sender, and MCP queues stay 
     await run(`root.querySelector('.toolbar-toggle').click()`);
     assert.equal(await run(`root.querySelector('.settings-panel').inert`), true);
     assert.equal(await run(`root.querySelector('.toolbar-customization').hidden`), false);
-    assert.equal(await run(`root.querySelectorAll('.toolbar-setting button').length`), 0, 'sorting arrows are removed');
+    assert.equal(await run(`root.querySelectorAll('.toolbar-customization input,.toolbar-settings-list,.toolbar-setting').length`), 0, 'the checkbox list is removed');
+    assert.equal(await run(`root.querySelector('.toolbar-trash').hidden`), true);
+    assert.equal(await run(`getComputedStyle(root.querySelector('.export-receive')).animationName`), 'serial-toolbar-wiggle');
+    await run(`window.firstToolbarTransform=getComputedStyle(root.querySelector('.export-receive')).transform`);
+    await waitForValue(client, `getComputedStyle(root.querySelector('.export-receive')).transform !== window.firstToolbarTransform`);
+    await client.send("Emulation.setEmulatedMedia", { features: [{name: "prefers-reduced-motion", value: "reduce"}] });
+    assert.equal(await run(`getComputedStyle(root.querySelector('.export-receive')).animationName`), 'none');
+    await client.send("Emulation.setEmulatedMedia", { features: [{name: "prefers-reduced-motion", value: "no-preference"}] });
     assert.equal(await run(`root.querySelector('.toolbar-customization').getBoundingClientRect().top >= root.querySelector('.uart-bar').getBoundingClientRect().bottom - 1`), true, 'settings leave the actual toolbar exposed for dragging');
     const toolbarCallCount = await run(`window.calls.length`);
-    await run(`root.querySelector('[data-item=timestamps] input').click()`);
+    await dragToolbar('timestamps', 'trash', false, true);
+    assert.equal(await run(`root.querySelector('[data-control=timestamps]').hidden`), false, 'cancelling over the trash does not remove a control');
+    await dragToolbar('timestamps', 'trash', false);
     await dragToolbar('save', 'clear', false);
     assert.equal(await run(`root.querySelector('[data-control=timestamps]').hidden`), true);
     assert.deepEqual(await run(`[...root.querySelector('.uart-bar').children].map(el=>el.dataset.control)`),
       ['format','timestamps','autoscroll','pause','save','clear','stats']);
-    assert.equal(await run(`root.querySelector('.toolbar-customization').hidden`), false, 'dragging toolbar controls keeps customization open');
+    assert.equal(await run(`root.querySelector('.toolbar-customization').hidden`), false, 'dragging toolbar controls keeps customization active');
     assert.equal(await run(`root.querySelectorAll('[data-dragging],[data-drop-side]').length`), 0);
     await dragToolbar('save', 'format', false, true);
     assert.deepEqual(await run(`[...root.querySelector('.uart-bar').children].map(el=>el.dataset.control)`),
@@ -196,11 +211,26 @@ test("human Shell uses terminal keys, UART uses its sender, and MCP queues stay 
     assert.deepEqual(await run(`[...root.querySelector('.uart-bar').children].map(el=>el.dataset.control)`),
       ['format','timestamps','autoscroll','pause','save','clear','stats'], 'Alt + arrows offer keyboard reordering');
     assert.equal(await run(`window.calls.length`), toolbarCallCount);
-    await run(`root.querySelector('.toolbar-customization > button').click(); root.querySelector('.toolbar-toggle').click()`);
+    await run(`root.querySelector('[data-restore=timestamps]').click()`);
     assert.equal(await run(`root.querySelector('[data-control=timestamps]').hidden`), false);
+    await run(`root.querySelector('[data-control=save]').focus()`);
+    await key("Delete", "Delete", 46);
+    assert.equal(await run(`root.querySelector('[data-control=save]').hidden`), true, 'keyboard users can remove the focused control');
+    await run(`root.querySelector('[data-restore=save]').click()`);
+    assert.equal(await run(`root.querySelector('[data-control=save]').hidden`), false);
+    await run(`for(const slot of [...root.querySelector('.uart-bar').children]) {
+      slot.focus(); slot.dispatchEvent(new KeyboardEvent('keydown',{key:'Delete',bubbles:true,cancelable:true}));
+    }`);
+    assert.equal(await run(`root.querySelectorAll('.toolbar-item:not([hidden])').length`), 0);
+    assert.equal(await run(`root.querySelectorAll('.toolbar-removed button').length`), 7, 'removed controls can always be restored');
+    assert.equal(await run(`root.activeElement.className`), 'toolbar-done');
+    await run(`root.querySelector('.toolbar-reset').click(); root.querySelector('.toolbar-done').click()`);
     assert.deepEqual(await run(`[...root.querySelector('.uart-bar').children].map(el=>el.dataset.control)`),
       ['format','timestamps','autoscroll','pause','clear','save','stats']);
     assert.equal(await run(`root.querySelector('[data-control=save]').draggable || root.querySelector('.export-receive').inert`), false, 'leaving customization restores normal button actions');
+    assert.equal(await run(`getComputedStyle(root.querySelector('.export-receive')).animationName`), 'none');
+    assert.equal(await run(`getComputedStyle(root.querySelector('.export-receive')).willChange`), 'auto');
+    assert.equal(await run(`window.calls.length`), toolbarCallCount, 'removing and restoring controls never sends device operations');
     assert.equal(await run(`root.querySelector('.history-toggle').getAttribute('aria-label')`), 'Send history');
 
     // 滑块使用 UTF-8 转换草稿，字节以空格分隔；非法 HEX 只提示不发送。

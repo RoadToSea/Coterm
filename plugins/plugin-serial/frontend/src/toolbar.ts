@@ -25,17 +25,24 @@ export function createToolbar(bar: HTMLElement, items: Item[], translate: Transl
   }
   const panel = document.createElement("section");
   panel.className = "toolbar-customization"; panel.hidden = true;
-  const title = document.createElement("strong");
   const hint = document.createElement("p"); hint.className = "hint";
-  const list = document.createElement("div"); list.className = "toolbar-settings-list";
+  const actions = document.createElement("div"); actions.className = "toolbar-edit-actions";
   const reset = document.createElement("button"); reset.type = "button";
-  panel.append(title, hint, list, reset);
+  reset.className = "toolbar-reset";
+  const done = document.createElement("button"); done.type = "button"; done.className = "toolbar-done";
+  const removed = document.createElement("div"); removed.className = "toolbar-removed";
+  const trash = document.createElement("div"); trash.className = "toolbar-trash"; trash.hidden = true;
+  trash.setAttribute("role", "group");
+  trash.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M9 6V3h6v3M6 6l1 15h10l1-15M10 10v7m4-7v7"/></svg>';
+  const trashText = document.createElement("span"); trash.append(trashText);
+  actions.append(reset, done); panel.append(hint, actions, removed);
   const controller = new AbortController();
   let editing = false;
   let dragged: string | null = null;
   const clearDrop = () => { for (const slot of slots.values()) delete slot.dataset.dropSide; };
   const finishDrag = () => {
     dragged = null; clearDrop();
+    trash.hidden = true; delete trash.dataset.over;
     for (const slot of slots.values()) delete slot.dataset.dragging;
   };
   const save = () => {
@@ -57,36 +64,51 @@ export function createToolbar(bar: HTMLElement, items: Item[], translate: Transl
     slots.get(id)?.focus({ preventScroll: true });
   };
   const render = () => {
-    panel.setAttribute("aria-label", t("Customize toolbar")); title.textContent = t("Customize toolbar");
-    hint.textContent = t("Drag controls in the toolbar to reorder them. Alt + Left / Right also moves the focused control.");
-    reset.textContent = t("Restore default toolbar"); list.replaceChildren();
-    order.forEach(id => {
+    panel.setAttribute("aria-label", t("Customize toolbar"));
+    hint.textContent = t("Drag to reorder. Drop on the trash to remove.");
+    reset.textContent = t("Restore default toolbar"); done.textContent = t("Done");
+    trashText.textContent = t("Drop here to remove from toolbar"); trash.setAttribute("aria-label", trashText.textContent);
+    removed.replaceChildren(); removed.hidden = hidden.size === 0;
+    if (hidden.size) {
+      const label = document.createElement("span"); label.textContent = t("Removed:"); removed.append(label);
+    }
+    order.forEach((id, index) => {
       const item = items.find(value => value.id === id)!;
       const slot = slots.get(id)!;
       slot.draggable = editing; item.element.inert = editing;
+      slot.style.setProperty("--wiggle-delay", `${-index * 37}ms`);
+      slot.style.setProperty("--wiggle-period", `${260 + index % 3 * 30}ms`);
       if (editing) {
         slot.tabIndex = 0; slot.setAttribute("role", "group");
         slot.setAttribute("aria-label", t("Reorder {item}", { item: t(item.label) }));
-        slot.setAttribute("aria-keyshortcuts", "Alt+ArrowLeft Alt+ArrowRight");
-        slot.title = t("Drag to reorder. Alt + Left / Right also works.");
+        slot.setAttribute("aria-keyshortcuts", "Alt+ArrowLeft Alt+ArrowRight Delete Backspace");
+        slot.title = t("Drag to reorder; drop on the trash to remove. Delete removes; Alt + Left / Right moves.");
       } else {
         for (const name of ["tabindex", "role", "aria-label", "aria-keyshortcuts", "title"]) slot.removeAttribute(name);
       }
-      const row = document.createElement("div"); row.className = "toolbar-setting"; row.dataset.item = id;
-      const label = document.createElement("label"), check = document.createElement("input"), text = document.createElement("span");
-      check.type = "checkbox"; check.checked = !hidden.has(id); text.textContent = t(item.label);
-      check.addEventListener("change", () => {
-        if (check.checked) hidden.delete(id); else hidden.add(id);
-        arrange(); save();
+      if (!hidden.has(id)) return;
+      const restore = document.createElement("button"); restore.type = "button"; restore.dataset.restore = id;
+      restore.setAttribute("aria-label", t("Add {item} back to the toolbar", { item: t(item.label) }));
+      restore.innerHTML = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>';
+      restore.append(document.createTextNode(t(item.label)));
+      restore.addEventListener("click", () => {
+        hidden.delete(id); arrange(); save(); render(); slot.focus({ preventScroll: true });
       });
-      label.append(check, text); row.append(label);
-      list.append(row);
+      removed.append(restore);
     });
+  };
+  const remove = (id: string) => {
+    if (!editing || !slots.has(id) || hidden.has(id)) return;
+    const visible = order.filter(value => !hidden.has(value));
+    const index = visible.indexOf(id);
+    hidden.add(id); arrange(); save(); render();
+    (slots.get(visible[index + 1] ?? visible[index - 1]) ?? done).focus({ preventScroll: true });
   };
   for (const [id, slot] of slots) {
     slot.addEventListener("dragstart", event => {
       if (!editing || !event.dataTransfer) { event.preventDefault(); return; }
       finishDrag(); dragged = id; slot.dataset.dragging = "true";
+      trash.hidden = false;
       event.dataTransfer.effectAllowed = "move";
       event.dataTransfer.setData("application/x-coterm-serial-toolbar", id);
     }, { signal: controller.signal });
@@ -95,6 +117,7 @@ export function createToolbar(bar: HTMLElement, items: Item[], translate: Transl
       event.preventDefault();
       if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
       clearDrop();
+      delete trash.dataset.over;
       if (dragged !== id) slot.dataset.dropSide = event.clientX < slot.getBoundingClientRect().left + slot.offsetWidth / 2 ? "before" : "after";
     }, { signal: controller.signal });
     slot.addEventListener("dragleave", () => { delete slot.dataset.dropSide; }, { signal: controller.signal });
@@ -107,6 +130,9 @@ export function createToolbar(bar: HTMLElement, items: Item[], translate: Transl
     }, { signal: controller.signal });
     slot.addEventListener("dragend", finishDrag, { signal: controller.signal });
     slot.addEventListener("keydown", event => {
+      if (editing && !event.altKey && !event.ctrlKey && !event.metaKey && ["Delete", "Backspace"].includes(event.key)) {
+        event.preventDefault(); event.stopPropagation(); remove(id); return;
+      }
       if (!editing || !event.altKey || event.ctrlKey || event.metaKey || !["ArrowLeft", "ArrowRight"].includes(event.key)) return;
       event.preventDefault(); event.stopPropagation();
       const visible = order.filter(value => !hidden.has(value));
@@ -115,6 +141,17 @@ export function createToolbar(bar: HTMLElement, items: Item[], translate: Transl
       if (target) move(id, target, delta > 0);
     }, { signal: controller.signal });
   }
+  trash.addEventListener("dragover", event => {
+    if (!editing || !dragged) return;
+    event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+    clearDrop(); trash.dataset.over = "true";
+  }, { signal: controller.signal });
+  trash.addEventListener("dragleave", () => { delete trash.dataset.over; }, { signal: controller.signal });
+  trash.addEventListener("drop", event => {
+    if (!editing || !dragged) return;
+    event.preventDefault(); const id = dragged; finishDrag(); remove(id);
+  }, { signal: controller.signal });
   bar.addEventListener("click", event => {
     if (editing) { event.preventDefault(); event.stopImmediatePropagation(); }
   }, { capture: true, signal: controller.signal });
@@ -123,7 +160,7 @@ export function createToolbar(bar: HTMLElement, items: Item[], translate: Transl
   reset.addEventListener("click", () => { order = items.map(item => item.id); hidden.clear(); arrange(); save(); render(); }, { signal: controller.signal });
   arrange(); render();
   return {
-    panel,
+    panel, trash, done,
     setEditing(value: boolean) {
       editing = value; finishDrag(); bar.dataset.customizing = String(value); positionPanel(); render();
     },
@@ -132,7 +169,7 @@ export function createToolbar(bar: HTMLElement, items: Item[], translate: Transl
       editing = false; finishDrag(); controller.abort(); observer.disconnect();
       for (const item of items) item.element.inert = false;
       for (const slot of slots.values()) slot.draggable = false;
-      delete bar.dataset.customizing; panel.remove();
+      delete bar.dataset.customizing; panel.remove(); trash.remove();
     },
   };
 }

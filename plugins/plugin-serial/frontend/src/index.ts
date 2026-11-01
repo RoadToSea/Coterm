@@ -115,19 +115,38 @@ const css = `
   .uart-bar[data-customizing="true"] .toolbar-item { cursor: grab; user-select: none;
     outline: 1px dashed var(--coterm-border-input, #454545); outline-offset: 2px; border-radius: 3px; }
   .uart-bar[data-customizing="true"] .toolbar-item:focus-visible { outline: 2px solid var(--coterm-focus, #007fd4); }
+  .uart-bar[data-customizing="true"] .toolbar-item > * { transform-origin: 50% 50%;
+    animation: serial-toolbar-wiggle var(--wiggle-period, 280ms) ease-in-out var(--wiggle-delay, 0ms) infinite; will-change: transform; }
+  .uart-bar[data-customizing="true"] .toolbar-item[data-dragging="true"] > * { animation-play-state: paused; }
+  @keyframes serial-toolbar-wiggle {
+    0%, 100% { transform: translate3d(-.4px, 0, 0) rotate(-1.4deg); }
+    25% { transform: translate3d(0, -.4px, 0) rotate(.5deg); }
+    50% { transform: translate3d(.4px, 0, 0) rotate(1.4deg); }
+    75% { transform: translate3d(0, .4px, 0) rotate(-.5deg); }
+  }
   .toolbar-item[data-dragging="true"] { opacity: .5; cursor: grabbing; }
   .toolbar-item[data-drop-side]::before { content: ""; position: absolute; top: -3px; bottom: -3px; width: 2px;
     background: var(--coterm-focus, #007fd4); pointer-events: none; }
   .toolbar-item[data-drop-side="before"]::before { left: -5px; }
   .toolbar-item[data-drop-side="after"]::before { right: -5px; }
-  .toolbar-customization { position: absolute; z-index: 3; inset: var(--toolbar-height, 0px) 0 auto auto; width: min(360px, 100%);
-    max-height: calc(100% - var(--toolbar-height, 0px)); overflow: auto; padding: 14px; display: grid; gap: 12px;
-    border: 1px solid var(--coterm-border-input, #454545); border-radius: 0 0 0 var(--radius, 6px);
-    background: var(--coterm-surface-raised, #252526); box-shadow: 0 6px 18px #0003; }
-  .toolbar-settings-list { display: grid; gap: 6px; }
-  .toolbar-setting { display: flex; align-items: center; gap: 6px; }
-  .toolbar-setting label { flex: 1; display: inline-flex; flex-direction: row; align-items: center; gap: 8px; min-height: 30px; }
-  .toolbar-setting input { width: auto; }
+  .toolbar-customization { position: absolute; z-index: 3; inset: var(--toolbar-height, 0px) 0 auto; width: 100%;
+    max-height: calc(100% - var(--toolbar-height, 0px)); overflow: auto; padding: 8px 14px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+    border-bottom: 1px solid var(--coterm-border, #333333); background: var(--coterm-surface-raised, #252526); }
+  .toolbar-customization > .hint { flex: 1 1 180px; }
+  .toolbar-edit-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-left: auto; }
+  .toolbar-customization button { font-size: 11px; padding: 4px 8px; }
+  .toolbar-removed { flex: 1 1 100%; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+  .toolbar-removed > span { color: var(--coterm-text-muted, #969696); font-size: 11px; }
+  .toolbar-removed button { display: inline-flex; align-items: center; gap: 5px; }
+  .toolbar-removed svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 1.5; }
+  .toolbar-trash { position: absolute; z-index: 3; bottom: 16px; left: 50%; transform: translateX(-50%);
+    display: flex; align-items: center; gap: 10px; width: max-content; max-width: calc(100% - 28px); min-height: 54px; padding: 12px 18px;
+    border: 1px dashed var(--coterm-border-input, #454545); border-radius: var(--radius, 8px);
+    background: var(--coterm-surface-raised, #252526); box-shadow: 0 4px 12px #0002; }
+  .toolbar-trash > * { pointer-events: none; }
+  .toolbar-trash svg { flex: 0 0 22px; width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.5; }
+  .toolbar-trash[data-over="true"] { color: var(--coterm-danger, #e86464); border-color: currentColor; border-style: solid;
+    background: color-mix(in srgb, var(--coterm-danger, #e86464) 13%, var(--coterm-surface-raised, #252526)); }
   .terminal { flex: 1; min-height: 0; overflow: hidden; padding: 10px 4px 0 10px; }
   .uart { flex: 1; min-height: 0; display: flex; flex-direction: column; }
   .uart-bar {
@@ -196,7 +215,10 @@ const css = `
     .uart-bar { padding-inline: 8px; gap: 6px; }
   }
   .layout { container: serial-console / inline-size; }
-  @media (prefers-reduced-motion: reduce) { .settings-panel, .format-thumb { transition: none; } }
+  @media (prefers-reduced-motion: reduce) {
+    .settings-panel, .format-thumb { transition: none; }
+    .uart-bar[data-customizing="true"] .toolbar-item > * { animation: none; will-change: auto; }
+  }
 `;
 
 function surface(container: HTMLElement, withTerminalStyle = false): ShadowRoot {
@@ -620,7 +642,7 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
   uartSend.append(entryArea, fileActions, sendControls);
 
   uartPanel.append(uartBar, uartOutput);
-  receiveArea.append(terminalPanel, uartPanel, settingsPanel, toolbar.panel);
+  receiveArea.append(terminalPanel, uartPanel, settingsPanel, toolbar.panel, toolbar.trash);
 
   layout.append(bar, receiveArea, uartSend);
   root.append(layout);
@@ -704,7 +726,10 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
     toolbar.panel.hidden = !open;
     toolbar.setEditing(open);
     toolbarButton.setAttribute("aria-expanded", String(open));
-    if (open) { setSettingsOpen(false, false); closeHistory(); toolbar.panel.querySelector("input")?.focus(); }
+    if (open) {
+      setSettingsOpen(false, false); closeHistory();
+      (uartBar.querySelector<HTMLElement>(".toolbar-item:not([hidden])") ?? toolbar.done).focus();
+    }
     else if (restoreFocus) toolbarButton.focus();
   };
 
@@ -1192,6 +1217,7 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
 
   settingsButton.addEventListener("click", () => setSettingsOpen(!settingsOpen), { signal: controller.signal });
   toolbarButton.addEventListener("click", () => setToolbarOpen(toolbar.panel.hidden), { signal: controller.signal });
+  toolbar.done.addEventListener("click", () => setToolbarOpen(false), { signal: controller.signal });
   historyButton.addEventListener("click", () => {
     const open = historyPanel.hidden;
     if (open) { setSettingsOpen(false, false); renderHistory(); }
@@ -1209,7 +1235,7 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
     const path = event.composedPath();
     if (!path.includes(historyPanel) && !path.includes(historyButton)) closeHistory();
     if (settingsOpen && !path.includes(settingsPanel) && !path.includes(settingsButton) && !path.includes(layout.querySelector(".coterm-toasts")!)) setSettingsOpen(false, false);
-    if (!toolbar.panel.hidden && !path.includes(toolbar.panel) && !path.includes(toolbarButton) && !path.includes(uartBar)) setToolbarOpen(false, false);
+    if (!toolbar.panel.hidden && !path.includes(toolbar.panel) && !path.includes(toolbarButton) && !path.includes(uartBar) && !path.includes(toolbar.trash)) setToolbarOpen(false, false);
   }, { signal: controller.signal });
 
   importButton.addEventListener("click", () => { stopRepeat(); fileInput.click(); }, { signal: controller.signal });
