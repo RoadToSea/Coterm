@@ -59,6 +59,18 @@ pub fn catalog() -> Vec<OperationDescriptor> {
         ("serial.probe", OperationEffect::Read, false, json!({})),
         ("serial.connect", OperationEffect::Commit, false, json!({})),
         (
+            "serial.configure",
+            OperationEffect::Commit,
+            false,
+            json!({
+                "baudRate":{"type":"integer","minimum":1,"maximum":4294967295_u32},
+                "dataBits":{"type":"integer","minimum":5,"maximum":8},
+                "stopBits":{"type":"integer","enum":[1,2]},
+                "parity":{"type":"string","enum":["none","odd","even"]},
+                "dtr":{"type":"boolean"},"rts":{"type":"boolean"}
+            }),
+        ),
+        (
             "serial.disconnect",
             OperationEffect::Commit,
             false,
@@ -147,6 +159,7 @@ pub fn catalog() -> Vec<OperationDescriptor> {
             }
             "serial.write" => operation.input_schema["required"] = json!(["text"]),
             "serial.write_hex" => operation.input_schema["required"] = json!(["hex"]),
+            "serial.configure" => operation.input_schema["minProperties"] = json!(1),
             _ => {}
         }
     }
@@ -268,6 +281,30 @@ fn parse_commands(operation: &str, args: &Value) -> Result<CommandList> {
     } else {
         CommandList::parse(args)
     }
+}
+
+/// Only framing and initial line levels may change; the instance keeps its port identity.
+fn configured(current: &Config, args: &Value) -> Result<Config> {
+    let patch = args
+        .as_object()
+        .ok_or_else(|| anyhow!("Invalid serial configuration"))?;
+    if patch.is_empty()
+        || patch.keys().any(|key| {
+            !matches!(
+                key.as_str(),
+                "baudRate" | "dataBits" | "stopBits" | "parity" | "dtr" | "rts"
+            )
+        })
+    {
+        bail!("Provide serial framing or initial line levels only");
+    }
+    let mut value = serde_json::to_value(current)?;
+    for (key, item) in patch {
+        value[key] = item.clone();
+    }
+    let next: Config = decode(value)?;
+    next.validate()?;
+    Ok(next)
 }
 
 impl coterm_proto::runtime::backend::PluginBackend for Backend {
@@ -484,6 +521,13 @@ impl Backend {
                         bail!("Provide dtr, rts, or both");
                     }
                 }
+                "serial.configure" => {
+                    let instance = self
+                        .instances
+                        .get(&id)
+                        .ok_or_else(|| anyhow!("Serial instance not found"))?;
+                    configured(&instance.config, &request.args)?;
+                }
                 _ => {}
             }
             self.proposals.insert(
@@ -567,6 +611,31 @@ impl Backend {
             "serial.probe" => {
                 let mut status = status_of(instance);
                 status["ports"] = json!(available_ports());
+                Ok(status)
+            }
+            "serial.configure" => {
+                if instance
+                    .connection
+                    .as_ref()
+                    .is_some_and(|connection| !connection.is_closed())
+                {
+                    bail!("Disconnect the serial port before changing communication parameters");
+                }
+                let next = configured(&instance.config, &args)?;
+                instance.config = next;
+                instance.connection = None;
+                // Prepared writes belong to the previous communication settings.
+                self.proposals
+                    .retain(|_, proposal| proposal.instance_id != id);
+                let status = status_of(instance);
+                let _ = self
+                    .events
+                    .send(PluginNotification::Event {
+                        plugin_instance_id: id.to_owned(),
+                        name: "serial.status".into(),
+                        payload: json!({"connected":false}),
+                    })
+                    .await;
                 Ok(status)
             }
             "serial.connect" => {

@@ -14,7 +14,7 @@
 
 ## 操作总表
 
-共 13 个业务操作，其中 10 个向 MCP 开放。下表省略 MCP 实例工具公共参数 `name`；`?` 表示可选。MCP 实际工具名需在表中操作名前加 `coterm-plugin-serial__`。
+共 14 个业务操作，其中 10 个向 MCP 开放。下表省略 MCP 实例工具公共参数 `name`；`?` 表示可选。MCP 实际工具名需在表中操作名前加 `coterm-plugin-serial__`。
 
 | 操作 | MCP | effect | 业务参数 | 业务结果 / 用途 |
 |---|:---:|---|---|---|
@@ -31,8 +31,9 @@
 | `serial.write` | 否 | commit | `text: string`、`lineEnding?`，默认 `none` | 人工单次文本写入，返回 `submitted / bytes` |
 | `serial.write_hex` | 否 | commit | `hex: string` | 人工单次 HEX 写入，返回 `submitted / bytes` |
 | `serial.signals` | 否 | commit | `dtr?: boolean`、`rts?: boolean`，至少一个 | 仅修改给定信号，返回修改后的 `dtr / rts` |
+| `serial.configure` | 否 | commit | `baudRate? / dataBits? / stopBits? / parity? / dtr? / rts?`，至少一个 | 断开后更新通信参数；返回与 status 相同的完整状态，不打开端口 |
 
-`read` 操作不触发写入审批。Agent 来源的 `commit` 操作默认经过宿主审批；用户主动开启 Bypass 或明确放行后可跳过提交审批，协议自身的认证与人工交互仍保留。`write/write_hex/signals` 未注册 MCP descriptor，人工界面通过基座调用。
+`read` 操作不触发写入审批。Agent 来源的 `commit` 操作默认经过宿主审批；用户主动开启 Bypass 或明确放行后可跳过提交审批，协议自身的认证与人工交互仍保留。`write/write_hex/signals/configure` 未注册 MCP descriptor，人工界面通过基座调用。
 
 ## 命令列表参数与编码
 
@@ -53,6 +54,8 @@ HEX 接受偶数位十六进制字符，可包含 ASCII 空白和一个开头 `0
 ## 实例配置与生命周期
 
 配置在创建实例时提供；`serial.connect` 本身不接收端口参数。
+
+`serial.configure` 只在断开状态接受非空参数补丁，字段约束同下表（波特率上限为 u32 最大值）；未知字段、空补丁和类型错误均拒绝。端口身份固定，不能通过该接口更换 `port`。成功后清理该实例的旧提案，并发布 `serial.status`；下一次连接使用新参数。它只更新当前插件进程内的实例配置，不改宿主的初始配置快照或已有实例名称，重建 / 恢复实例仍使用宿主保存的初始参数。
 
 | 字段 | 类型 | 后端默认 / 约束 |
 |---|---|---|

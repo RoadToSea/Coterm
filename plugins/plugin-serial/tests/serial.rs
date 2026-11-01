@@ -7,6 +7,75 @@ use serde_json::{json, Value};
 
 const PLUGIN_ID: &str = "coterm-plugin-serial";
 
+#[tokio::test]
+async fn disconnected_configuration_is_validated_and_keeps_the_instance_port() -> Result<()> {
+    let mut backend = Backend::default();
+    backend.request("create_instance", json!({
+        "instance":{"pluginId":PLUGIN_ID,"pluginInstanceId":"settings","sessionId":"s","label":"Serial","status":"ready"},
+        "config":{"port":"COM6","baudRate":115200}
+    })).await?;
+    let invoke = |args: Value| {
+        json!({
+            "operationId":"settings-op","operation":"serial.configure","effect":"commit",
+            "pluginInstanceId":"settings","pluginId":PLUGIN_ID,"source":"human",
+            "dispatch":{"mode":"execute"},"args":args
+        })
+    };
+    for args in [
+        json!({}),
+        json!({"port":"COM7"}),
+        json!({"baudRate":0}),
+        json!({"baudRate":4294967296_u64}),
+        json!({"baudRate":1.5}),
+        json!({"dataBits":9}),
+        json!({"stopBits":3}),
+        json!({"parity":"mark"}),
+        json!({"dtr":"false"}),
+        json!({"flowControl":"hardware"}),
+        json!(null),
+    ] {
+        assert!(backend.request("invoke", invoke(args)).await.is_err());
+    }
+    let status = backend
+        .request(
+            "invoke",
+            invoke(json!({
+                "baudRate":9600,"dataBits":7,"stopBits":2,"parity":"even","dtr":false,"rts":false
+            })),
+        )
+        .await?;
+    assert_eq!(status["config"]["port"], "COM6");
+    assert_eq!(status["config"]["baudRate"], 9600);
+    assert_eq!(status["config"]["dataBits"], 7);
+    assert_eq!(status["config"]["stopBits"], 2);
+    assert_eq!(status["config"]["parity"], "even");
+    assert_eq!(status["signals"]["dtr"], false);
+    assert_eq!(status["connected"], false);
+    // Patches preserve unspecified settings and do not open hardware.
+    let status = backend
+        .request("invoke", invoke(json!({"baudRate":19200})))
+        .await?;
+    assert_eq!(status["config"]["dataBits"], 7);
+    assert_eq!(status["config"]["rts"], false);
+    assert_eq!(status["connectionId"], Value::Null);
+    assert_eq!(status["txBytes"], 0);
+    let mut proposal = invoke(json!({"baudRate":38400}));
+    proposal["source"] = json!("agent");
+    proposal["dispatch"] = json!({"mode":"prepare_proposal","proposalId":"settings-proposal"});
+    backend.request("invoke", proposal).await?;
+    let status = backend
+        .request("invoke", invoke(json!({"rts":true})))
+        .await?;
+    assert_eq!(
+        status["config"]["baudRate"], 19200,
+        "preparing a proposal does not change settings"
+    );
+    assert!(!coterm_plugin_serial::backend::mcp_tools()
+        .iter()
+        .any(|tool| tool.operation.contains("configure")));
+    Ok(())
+}
+
 fn platform() -> Result<&'static str> {
     Ok(match (std::env::consts::OS, std::env::consts::ARCH) {
         ("windows", "x86_64") => "windows-x64",

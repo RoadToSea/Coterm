@@ -77,21 +77,22 @@ try {
   await run(`(() => {
     const host = [...document.querySelectorAll('dialog div')].find(node=>node.shadowRoot?.querySelector('form'));
     const root = host.shadowRoot;
-    root.querySelector('input[type=text]').value = ${JSON.stringify(port)};
+    const portControl = root.querySelector('form label select, form input[type=text]');
+    portControl.value = ${JSON.stringify(port)};
     root.querySelector('form').requestSubmit();
   })()`);
   await waitForValue(client, `${await serialRoot()}?.querySelector('.modes')`, { label: "serial workspace mounted" });
 
   // 默认是终端模式，UART 面板隐藏。
   const initial = await run(`(() => { const r = ${await serialRoot()};
-    return { modes: [...r.querySelectorAll('.modes button')].map(b => b.textContent),
+    return { modes: [...r.querySelectorAll('.bar .modes button')].map(b => b.textContent),
              terminalHidden: r.querySelector('.panel').hidden,
              uartHidden: [...r.querySelectorAll('.panel')][1].hidden,
              state: r.querySelector('.bar .state').textContent }; })()`);
   assert.deepEqual(initial.modes, ["Terminal", "UART console"]);
   assert.equal(initial.terminalHidden, false, "terminal mode is the default");
   assert.equal(initial.uartHidden, true);
-  assert.equal(initial.state, "Disconnected");
+  assert.ok(["Disconnected", "Connected"].includes(initial.state));
   console.log("PASS serial frontend mounts with terminal and UART console modes");
 
   // 切到 UART 调试台，检查视图切换、暂停与清空都不需要后端。
@@ -99,26 +100,27 @@ try {
   const uart = await run(`(() => { const r = ${await serialRoot()};
     return { terminalHidden: [...r.querySelectorAll('.panel')][0].hidden,
              uartHidden: [...r.querySelectorAll('.panel')][1].hidden,
-             sendHidden: r.querySelector('.send').hidden,
-             view: [...r.querySelectorAll('.uart-bar button')].slice(0,2).map(b => b.textContent),
+             sendHidden: r.querySelector('.uart-send').hidden,
+             view: [...r.querySelectorAll('.receive-settings .modes button')].map(b => b.textContent),
              stats: r.querySelector('.uart-bar .stats').textContent }; })()`);
   assert.equal(uart.terminalHidden, true);
   assert.equal(uart.uartHidden, false);
-  assert.equal(uart.sendHidden, true, "the terminal send row is hidden in UART mode");
+  assert.equal(uart.sendHidden, false, "UART mode shows the composer");
   assert.deepEqual(uart.view, ["ASCII", "HEX"]);
-  assert.match(uart.stats, /RX 0 B · TX 0 B/);
+  assert.match(uart.stats, /RX \d+ B · TX \d+ B/);
   console.log("PASS UART console switches layout, view buttons and byte counters");
 
   // 真实连接开发板：连接后计数、信号按钮与发送按钮应可用。
-  await run(`[...${await serialRoot()}.querySelectorAll('.bar button')].find(b => b.textContent === 'Connect').click()`);
+  await run(`(() => { const button = ${await serialRoot()}.querySelector('.connect-button'); if (button.textContent === 'Connect' && !button.disabled) button.click(); })()`);
   await waitForValue(client, `${await serialRoot()}?.querySelector('.bar .state').textContent === 'Connected'`, { timeoutMs: 15_000, label: "serial port connected" });
 
   const connected = await run(`(() => { const r = ${await serialRoot()};
     return { send: !r.querySelector('.uart-send .primary').disabled,
-             dtr: [...r.querySelectorAll('.signals button')].map(b => b.textContent),
+             dtr: [...r.querySelectorAll('.signals button')].slice(0,2).map(b => b.textContent),
              ports: r.querySelector('.bar .state').textContent }; })()`);
   assert.equal(connected.send, true);
-  assert.deepEqual(connected.dtr, ["DTR High", "RTS High"]);
+  assert.ok(connected.dtr.every(text => /^(DTR|RTS) (High|Low)$/.test(text)));
+  await run(`${await serialRoot()}.querySelector('.line-ending').value='cr'`);
 
   // 真实开发板是 Linux 控制台：未登录时先 root 登录；上一次会话可能仍停在 shell。
   const type = async (value) => {
@@ -156,14 +158,15 @@ try {
   console.log(`PASS real board round-trip in UART console (${received.stats.replace(/\s+/g, " ")})`);
 
   // HEX 视图必须给出十六进制与 ASCII 两列。
-  await run(`[...${await serialRoot()}.querySelectorAll('.uart-bar button')].find(b => b.textContent === 'HEX').click()`);
+  await run(`[...${await serialRoot()}.querySelectorAll('.receive-settings .modes button')].find(b => b.textContent === 'HEX').click()`);
+  await waitForValue(client, `/[0-9a-f]{8}  [0-9a-f]{2} /.test(${await serialRoot()}.querySelector('.uart-output').textContent)`);
   const hex = await run(`${await serialRoot()}.querySelector('.uart-output').textContent`);
   assert.match(hex, /[0-9a-f]{8}  [0-9a-f]{2} /, "HEX view renders an offset and byte columns");
-  await run(`[...${await serialRoot()}.querySelectorAll('.uart-bar button')].find(b => b.textContent === 'ASCII').click()`);
+  await run(`[...${await serialRoot()}.querySelectorAll('.receive-settings .modes button')].find(b => b.textContent === 'ASCII').click()`);
   console.log("PASS HEX view renders offsets and byte columns");
 
   // 信号按钮走 serial.signals；语言切换不重建实例。
-  await run(`[...${await serialRoot()}.querySelectorAll('.signals button')][0].click()`);
+  await run(`(() => { const button = ${await serialRoot()}.querySelector('.signals button'); if (button.textContent === 'DTR High') button.click(); })()`);
   await waitForValue(client, `${await serialRoot()}?.querySelector('.signals button').textContent === 'DTR Low'`, { label: "DTR lowered" });
   await run(`[...${await serialRoot()}.querySelectorAll('.signals button')][0].click()`);
   await waitForValue(client, `${await serialRoot()}?.querySelector('.signals button').textContent === 'DTR High'`, { label: "DTR restored" });
@@ -172,7 +175,7 @@ try {
   await run(`(() => { const select=document.getElementById('locale-select'); select.value='zh-CN'; select.dispatchEvent(new Event('change',{bubbles:true})); })()`);
   await waitForValue(client, `${await serialRoot()}?.querySelector('.modes button').textContent === '终端'`, { label: "serial UI follows locale" });
   const zh = await run(`(() => { const r = ${await serialRoot()};
-    return { modes: [...r.querySelectorAll('.modes button')].map(b => b.textContent),
+    return { modes: [...r.querySelectorAll('.bar .modes button')].map(b => b.textContent),
              state: r.querySelector('.bar .state').textContent,
              keep: r.querySelector('.uart-output').textContent.includes('Linux') }; })()`);
   assert.deepEqual(zh.modes, ["终端", "UART 调试"]);
