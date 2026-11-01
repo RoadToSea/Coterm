@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Coterm · 命令消息块</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --coterm-surface: #151a23;
+      --coterm-surface-raised: #1c232f;
+      --coterm-surface-hover: #293244;
+      --coterm-border-subtle: #343e50;
+      --coterm-text-primary: #d4deed;
+      --coterm-text-muted: #9ca9bd;
+      --coterm-text-bright: #e3edff;
+      --coterm-accent-active: #243d5c;
+      --coterm-accent-glow: #80b7ff;
+      --coterm-focus: #80b7ff;
+      --coterm-danger: #f58c86;
+      --coterm-font-sans: "Segoe UI", sans-serif;
+      --coterm-font-mono: Consolas, monospace;
+    }
+    :root[data-theme="light"] {
+      color-scheme: light;
+      --coterm-surface: #f6f8fb;
+      --coterm-surface-raised: #ffffff;
+      --coterm-surface-hover: #eaf0f7;
+      --coterm-border-subtle: #ccd5e2;
+      --coterm-text-primary: #273449;
+      --coterm-text-muted: #5d6b80;
+      --coterm-text-bright: #1c3556;
+      --coterm-accent-active: #e1edfc;
+      --coterm-accent-glow: #205ec7;
+      --coterm-focus: #205ec7;
+      --coterm-danger: #b42318;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; color: var(--coterm-text-primary); background: var(--coterm-surface); font: 13px/1.6 var(--coterm-font-sans); }
+    .demo { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; gap: 16px; max-width: 1080px; height: 100dvh; margin: auto; padding: 24px; }
+    header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
+    h1 { margin: 0; font-size: 18px; font-weight: 600; }
+    p { margin: 4px 0 0; color: var(--coterm-text-muted); }
+    nav { display: flex; flex-wrap: wrap; gap: 8px; }
+    button { padding: 6px 12px; border: 1px solid var(--coterm-border-subtle); border-radius: 6px; color: inherit; background: var(--coterm-surface-raised); font: inherit; cursor: pointer; }
+    button:hover { background: var(--coterm-surface-hover); }
+    button:active { transform: translateY(1px); }
+    button:focus-visible { outline: 2px solid var(--coterm-focus); outline-offset: 2px; }
+    #blocks { min-height: 0; overflow: hidden; border: 1px solid var(--coterm-border-subtle); border-radius: 8px; }
+    footer { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; color: var(--coterm-text-muted); font-size: 12px; }
+    @media (max-width: 480px) { .demo { padding: 12px; gap: 12px; } }
+  </style>
+</head>
+<body>
+  <div class="demo">
+    <header>
+      <div><h1>命令消息块</h1><p>组件示例数据 · 不连接设备，不执行命令</p></div>
+      <nav aria-label="演示操作"><button id="append" type="button">追加回复</button><button id="theme" type="button">切换浅色</button></nav>
+    </header>
+    <main id="blocks" aria-label="命令与回复"></main>
+    <footer><span id="selection" role="status"></span><span>点击左侧块号多选；正文可选中复制</span></footer>
+  </div>
+  <script type="module">
+    import { mountBlockList } from "../dist/browser/block-list.js";
+    let blocks = [
+      { id: "location", index: 1, command: "pwd", output: "/home/operator/coterm", actor: "human", exitCode: 0 },
+      { id: "platform", index: 2, command: "uname -sr", output: "Linux 6.6.36-riscv64", actor: "robot", exitCode: 0, selected: true },
+      { id: "service", index: 3, command: "systemctl status sensor-agent", output: "Unit sensor-agent.service could not be found.", actor: "human", exitCode: 4 },
+    ];
+    const root = document.querySelector("#blocks").attachShadow({ mode: "open" });
+    const container = document.createElement("div");
+    container.style.height = "100%";
+    root.append(container);
+    const showSelection = (ids) => {
+      document.querySelector("#selection").textContent = ids.length ? `已选择 ${ids.length} 个块：${ids.map(id => blocks.find(block => block.id === id).index).join("、")}` : "未选择块";
+      blocks = blocks.map(block => ({ ...block, selected: ids.includes(block.id) }));
+    };
+    const props = () => ({ blocks, ariaLabel: "命令消息块", emptyText: "暂无命令；由插件提供命令和回复后显示。", onSelectionChange: showSelection });
+    const view = mountBlockList(container, props());
+    showSelection(["platform"]);
+    document.querySelector("#append").addEventListener("click", () => {
+      blocks = blocks.map(block => block.id === "service" ? { ...block, output: `${block.output}\n请确认设备上是否已安装该服务。` } : block);
+      view.update(props());
+    });
+    document.querySelector("#theme").addEventListener("click", (event) => {
+      const dark = document.documentElement.dataset.theme !== "dark";
+      document.documentElement.dataset.theme = dark ? "dark" : "light";
+      event.currentTarget.textContent = dark ? "切换浅色" : "切换深色";
+    });
+    window.addEventListener("pagehide", () => view.unmount(), { once: true });
+  </script>
+</body>
+</html>

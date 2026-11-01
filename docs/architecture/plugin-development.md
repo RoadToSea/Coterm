@@ -99,7 +99,7 @@ SSH/串口配置前端在自己的 Shadow DOM 中为输入框、选择框及提�
 | `subscribeEvents/subscribe` | 可用，有界 JSON 事件 |
 | `requestText/requestSelection/requestConfirmation` | 宿主对话框；提交、拒绝、取消、超时与不可用显式区分 |
 | `requestSecret` | 宿主密码框，前端只拿到一次性秘密引用 |
-| `components.blocks` | 可选块列表；块数据、选择结果和上下文由插件管理 |
+| `components.blocks` | 可选命令及回复消息块；左侧块号多选、高亮和独立边框，数据与上下文由插件管理；见 [公共块组件](../../packages/plugin-sdk/docs/command-blocks.md) |
 | `subscribeStream` | 预留，不支持；`api.capabilities.streams === false` |
 
 `api.apiVersion === "1.0"` 是契约版本，与 npm 包版本独立。新增可选能力采用次版本并通过 `capabilities` 检测；破坏性修改升主版本，插件不应静默兼容未知主版本。

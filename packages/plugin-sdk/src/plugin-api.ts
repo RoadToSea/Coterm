@@ -97,13 +97,19 @@ export interface CommandBlock {
   id: string;
   index: number;
   command: string;
+  /** Plain-text reply belonging to this command; block boundaries remain plugin-owned. */
+  output?: string;
   actor: "human" | "robot";
   exitCode?: number | null;
+  /** When supplied on update, overrides local selection; omitted values preserve it by id. */
   selected?: boolean;
 }
 
 export interface BlockListProps {
   blocks: CommandBlock[];
+  /** Accessible list name and empty-state copy can be supplied in the plugin's language. */
+  ariaLabel?: string;
+  emptyText?: string;
   onSelectionChange?: (selectedBlockIds: string[]) => void;
 }
 

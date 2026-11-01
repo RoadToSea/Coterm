@@ -549,10 +549,10 @@ test("Browser layout, catalog diagnostics, and keyboard collapse on the current 
           successMark: rows[0].querySelector('.coterm-block-status').textContent,
         };
 
-        // 选择状态：点击第 2 行后 aria-pressed 与回调都要跟上。
-        rows[1].click();
+        // 选择只由左侧块号触发，正文保留原生文本选择。
+        rows[1].querySelector('.coterm-block-gutter').click();
         result.afterClick = {
-          pressed: [...container.querySelectorAll('.coterm-block')].map((row) => row.getAttribute('aria-pressed')),
+          pressed: [...container.querySelectorAll('.coterm-block-gutter')].map((button) => button.getAttribute('aria-pressed')),
           selections: [...selections],
         };
 
@@ -561,8 +561,8 @@ test("Browser layout, catalog diagnostics, and keyboard collapse on the current 
           { id: "b1", index: 1, command: "whoami", actor: "robot", exitCode: 0 },
           { id: "b2", index: 2, command: "cat /etc/passwd", actor: "human", exitCode: null, selected: true },
         ] });
-        result.afterUpdate = [...container.querySelectorAll('.coterm-block')]
-          .map((row) => row.getAttribute('aria-pressed'));
+        result.afterUpdate = [...container.querySelectorAll('.coterm-block-gutter')]
+          .map((button) => button.getAttribute('aria-pressed'));
 
         // 销毁：容器清空，且 disposed 之后 update 不再渲染。
         view.unmount();
@@ -572,7 +572,7 @@ test("Browser layout, catalog diagnostics, and keyboard collapse on the current 
         container.remove();
         return result;
       })()`);
-      assert.deepEqual(blockStyles.rowTagNames, ["BUTTON", "BUTTON", "BUTTON"], "real SDK rows are buttons, not divs");
+      assert.deepEqual(blockStyles.rowTagNames, ["ARTICLE", "ARTICLE", "ARTICLE"], "commands and replies are list items with separate number buttons");
       assert.equal(blockStyles.rootRole, "list", "real SDK root carries role=list");
       assert.equal(blockStyles.rootLabel, "Command blocks", "real SDK root is labelled");
       assert.equal(blockStyles.rootColor, palette.text, "SDK block-list inherits --coterm-text-primary");
@@ -583,9 +583,9 @@ test("Browser layout, catalog diagnostics, and keyboard collapse on the current 
       assert.equal(blockStyles.failureMark, "!", "SDK marks a non-zero exit");
       assert.equal(blockStyles.failureTitle, "Exit code 1", "SDK exposes the exit code as a title");
       assert.equal(blockStyles.successMark, "", "SDK leaves a zero exit unmarked");
-      assert.deepEqual(blockStyles.afterClick.pressed, ["false", "true", "false"], "clicking a row selects only that row");
+      assert.deepEqual(blockStyles.afterClick.pressed, ["false", "true", "false"], "clicking a number selects its block");
       assert.deepEqual(blockStyles.afterClick.selections, [["b2"]], "selection change reports the selected block id");
-      assert.deepEqual(blockStyles.afterUpdate, ["false", "true"], "update() rebuilds rows and adopts the declared selection");
+      assert.deepEqual(blockStyles.afterUpdate, ["false", "true"], "update() adopts explicitly declared selection");
       assert.equal(blockStyles.afterUnmount, 0, "unmount clears the container it was given");
       assert.equal(blockStyles.afterLateUpdate, 0, "a disposed view ignores further updates");
 
