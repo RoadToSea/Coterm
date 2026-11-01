@@ -54,7 +54,7 @@
 <body>
   <div class="demo">
     <header>
-      <div><h1>命令消息块</h1><p>组件示例数据 · 不连接设备，不执行命令</p></div>
+      <div><h1>命令消息块</h1><p>前端直接引用组件 · 模拟后端块快照 · 不连接设备，不执行命令</p></div>
       <nav aria-label="演示操作"><button id="append" type="button">追加回复</button><button id="theme" type="button">切换浅色</button></nav>
     </header>
     <main id="blocks" aria-label="命令与回复"></main>
@@ -62,24 +62,46 @@
   </div>
   <script type="module">
     import { mountBlockList } from "../dist/browser/block-list.js";
-    let blocks = [
-      { id: "location", index: 1, command: "pwd", output: "/home/operator/coterm", actor: "human", exitCode: 0 },
-      { id: "platform", index: 2, command: "uname -sr", output: "Linux 6.6.36-riscv64", actor: "robot", exitCode: 0, selected: true },
-      { id: "service", index: 3, command: "systemctl status sensor-agent", output: "Unit sensor-agent.service could not be found.", actor: "human", exitCode: 4 },
-    ];
+    // 仅用于静态预览的后端替身。真实插件通过 api.invoke / api.subscribeEvents
+    // 获取后端生成的块，并在自己的前端适配为组件数据；此处不定义通用块协议。
+    const demoBackend = (() => {
+      let blocks = [
+        { id: "location", index: 1, command: "pwd", output: "/home/operator/coterm", actor: "human", exitCode: 0 },
+        { id: "platform", index: 2, command: "uname -sr", output: "Linux 6.6.36-riscv64", actor: "robot", exitCode: 0 },
+        { id: "service", index: 3, command: "systemctl status sensor-agent", output: "Unit sensor-agent.service could not be found.", actor: "human", exitCode: 4 },
+      ];
+      const snapshot = () => blocks.map(block => ({ ...block }));
+      return {
+        snapshot,
+        appendReply() {
+          blocks = blocks.map(block => block.id === "service"
+            ? { ...block, output: `${block.output}\n请确认设备上是否已安装该服务。` }
+            : block);
+          return snapshot();
+        },
+      };
+    })();
+    let blocks = demoBackend.snapshot();
+    // 选择由前端维护，不写入后端块快照。
+    let selectedIds = ["platform"];
     const root = document.querySelector("#blocks").attachShadow({ mode: "open" });
     const container = document.createElement("div");
     container.style.height = "100%";
     root.append(container);
     const showSelection = (ids) => {
+      selectedIds = ids;
       document.querySelector("#selection").textContent = ids.length ? `已选择 ${ids.length} 个块：${ids.map(id => blocks.find(block => block.id === id).index).join("、")}` : "未选择块";
-      blocks = blocks.map(block => ({ ...block, selected: ids.includes(block.id) }));
     };
-    const props = () => ({ blocks, ariaLabel: "命令消息块", emptyText: "暂无命令；由插件提供命令和回复后显示。", onSelectionChange: showSelection });
+    const props = () => ({
+      blocks: blocks.map(block => ({ ...block, selected: selectedIds.includes(block.id) })),
+      ariaLabel: "命令消息块",
+      emptyText: "暂无命令；插件后端提供块后显示。",
+      onSelectionChange: showSelection,
+    });
     const view = mountBlockList(container, props());
-    showSelection(["platform"]);
+    showSelection(selectedIds);
     document.querySelector("#append").addEventListener("click", () => {
-      blocks = blocks.map(block => block.id === "service" ? { ...block, output: `${block.output}\n请确认设备上是否已安装该服务。` } : block);
+      blocks = demoBackend.appendReply();
       view.update(props());
     });
     document.querySelector("#theme").addEventListener("click", (event) => {

@@ -84,6 +84,8 @@ SSH/串口配置前端在自己的 Shadow DOM 中为输入框、选择框及提�
 
 可选前端终端可复用 SDK 的 `@coterm/plugin-sdk/components/terminal-shortcuts`，让本地复制、粘贴、选区操作与远端 Shell 控制键一致分流；`@coterm/plugin-sdk/components/terminal-search` 提供本地搜索条，接收插件自己的搜索适配接口。安装与卸载约定见[终端快捷键](terminal-shortcuts.md)。这些纯前端模块不扩展 `PluginAPI` 或后端控制协议。
 
+命令消息块由插件前端直接导入 `@coterm/plugin-sdk/components/block-list` 的 `mountBlockList`，随插件 bundle 一起构建。插件后端负责命令与回复的块数据，经已有操作结果 / 实例事件交给前端适配并展示；选择状态由前端管理。宿主不推断块边界或解析协议标记。入口、数据形状与更新约定见 [公共块组件](../../packages/plugin-sdk/docs/command-blocks.md)。
+
 ### 界面语言
 
 桌面与插件的浅色/深色适配见[桌面界面与主题](desktop-appearance.md)。优先复用继承的 `--coterm-*` 颜色变量；xterm 等独立渲染器可使用 SDK 的 `components/terminal-theme` 原地更新配色，卸载时注销观察器。
@@ -99,7 +101,7 @@ SSH/串口配置前端在自己的 Shadow DOM 中为输入框、选择框及提�
 | `subscribeEvents/subscribe` | 可用，有界 JSON 事件 |
 | `requestText/requestSelection/requestConfirmation` | 宿主对话框；提交、拒绝、取消、超时与不可用显式区分 |
 | `requestSecret` | 宿主密码框，前端只拿到一次性秘密引用 |
-| `components.blocks` | 可选命令及回复消息块；左侧块号多选、高亮和独立边框，数据与上下文由插件管理；见 [公共块组件](../../packages/plugin-sdk/docs/command-blocks.md) |
+| `components.blocks` | 兼容已有调用；新插件前端直接导入 SDK `mountBlockList`，后端提供块数据；见 [公共块组件](../../packages/plugin-sdk/docs/command-blocks.md) |
 | `subscribeStream` | 预留，不支持；`api.capabilities.streams === false` |
 
 `api.apiVersion === "1.0"` 是契约版本，与 npm 包版本独立。新增可选能力采用次版本并通过 `capabilities` 检测；破坏性修改升主版本，插件不应静默兼容未知主版本。
