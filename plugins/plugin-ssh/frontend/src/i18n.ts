@@ -1,6 +1,23 @@
 import type { PluginI18n } from "@coterm/plugin-sdk";
 
 const zhCN: Readonly<Record<string, string>> = {
+  "SSH view": "SSH 视图",
+  "Terminal": "终端",
+  "Command blocks": "消息块",
+  "completed": "已完成",
+  "unknown": "结果未知",
+  "Command preview truncated.": "命令预览已截断。",
+  "Reply preview truncated; use the terminal or job output for more.": "回复预览已截断；更多内容请查看终端或任务输出。",
+  "{count} blocks selected": "已选择 {count} 个块",
+  "Copy selected": "复制所选",
+  "Stop selected": "停止所选",
+  "Older blocks expired: {count}": "已移除较早的 {count} 个块",
+  "Command in shared terminal": "共享终端命令",
+  "Run command": "执行命令",
+  "Single-line commands share cd/export. Use Terminal for interactive programs and passwords.": "单行命令共享 cd/export；交互程序与密码输入请使用终端。",
+  "Retry": "重试",
+  "No command blocks yet. Run a command here or through MCP.": "暂无消息块，可在此执行命令或通过 MCP 运行。",
+  "Clipboard unavailable. Select and copy the block text.": "剪贴板不可用，请选中块正文后复制。",
   "Find in terminal": "在终端中查找",
   "No matches": "未找到匹配项",
   "{index} of {total}": "第 {index} / {total} 项",

@@ -20,6 +20,7 @@ use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
 use zeroize::Zeroizing;
 
+use crate::blocks::{BlockLog, BlockSpec};
 use crate::result::tool_result;
 use crate::session::{self, Config, Connection};
 
@@ -30,6 +31,7 @@ struct Instance {
     config: Config,
     connection: Option<Connection>,
     secret: Option<(SecretHandle, Zeroizing<String>)>,
+    blocks: BlockLog,
 }
 
 struct PendingInteraction {
@@ -39,12 +41,14 @@ struct PendingInteraction {
     operation: String,
     connection_id: Option<String>,
     expires: chrono::DateTime<Utc>,
+    source: OperationSource,
 }
 
 struct Proposal {
     instance_id: String,
     operation_id: String,
     operation: String,
+    source: OperationSource,
 }
 
 pub struct Backend {
@@ -75,6 +79,12 @@ pub fn decode<T: DeserializeOwned>(value: Value) -> Result<T> {
 pub fn catalog() -> Vec<OperationDescriptor> {
     let definitions = [
         ("ssh.status", OperationEffect::Read, false, json!({})),
+        (
+            "ssh.blocks",
+            OperationEffect::Read,
+            false,
+            json!({"before":{"type":"integer","minimum":1,"maximum":4_294_967_295u32}}),
+        ),
         ("ssh.probe", OperationEffect::Read, false, json!({})),
         (
             "ssh.connect",
@@ -156,7 +166,7 @@ pub fn catalog() -> Vec<OperationDescriptor> {
                 sensitive_input,
                 transient: matches!(
                     name,
-                    "ssh.read" | "ssh.read_file" | "ssh.status" | "ssh.resize" | "ssh.input" | "ssh.output"
+                    "ssh.read" | "ssh.read_file" | "ssh.status" | "ssh.resize" | "ssh.input" | "ssh.output" | "ssh.blocks"
                 ),
             },
         )
@@ -310,6 +320,20 @@ fn validate_commands(args: &Value, scripts: bool) -> Result<Vec<&str>> {
     Ok(result)
 }
 
+fn block_spec(
+    args: &Value,
+    scripts: bool,
+    mcp: bool,
+    source: OperationSource,
+) -> Result<BlockSpec> {
+    let text = if mcp {
+        validate_commands(args, scripts)?.join("\n")
+    } else {
+        command(args, scripts)?.to_owned()
+    };
+    Ok(BlockSpec { text, source })
+}
+
 fn command_sequence(commands: &[&str]) -> String {
     commands
         .iter()
@@ -362,6 +386,7 @@ impl Backend {
         args: &Value,
         operation_id: &str,
         mcp: bool,
+        source: OperationSource,
     ) -> Result<Value> {
         let text = if mcp {
             command_sequence(&validate_commands(args, false)?)
@@ -373,7 +398,12 @@ impl Backend {
             .get(id)
             .ok_or_else(|| anyhow!("SSH instance not found"))?;
         connected(instance)?
-            .command(operation_id.to_owned(), mcp, &text)
+            .command_recorded(
+                operation_id.to_owned(),
+                mcp,
+                &text,
+                block_spec(args, false, mcp, source)?,
+            )
             .await?;
         Ok(serde_json::to_value(DeferredOperation {
             operation_id: operation_id.to_owned(),
@@ -386,6 +416,7 @@ impl Backend {
         args: &Value,
         operation_id: &str,
         mcp: bool,
+        source: OperationSource,
     ) -> Result<Value> {
         let (text, use_shell) = if mcp {
             (command_sequence(&validate_commands(args, true)?), true)
@@ -402,7 +433,14 @@ impl Backend {
             .get(id)
             .ok_or_else(|| anyhow!("SSH instance not found"))?;
         connected(instance)?
-            .exec(operation_id.to_owned(), mcp, text, use_shell)
+            .exec_recorded(
+                operation_id.to_owned(),
+                mcp,
+                text,
+                use_shell,
+                None,
+                block_spec(args, true, mcp, source)?,
+            )
             .await?;
         Ok(serde_json::to_value(DeferredOperation {
             operation_id: operation_id.to_owned(),
@@ -412,7 +450,7 @@ impl Backend {
     pub fn expire_secrets(&mut self) {
         self.interactions
             .retain(|_, pending| pending.expires > Utc::now());
-        for instance in self.instances.values_mut() {
+        for (id, instance) in &mut self.instances {
             if instance
                 .secret
                 .as_ref()
@@ -420,6 +458,7 @@ impl Backend {
             {
                 instance.secret = None;
             }
+            instance.blocks.notify(id, &self.events);
         }
     }
 
@@ -473,6 +512,7 @@ impl Backend {
                         config,
                         connection: None,
                         secret: None,
+                        blocks: BlockLog::default(),
                     },
                 );
                 Ok(json!({"ok":true,"label":label}))
@@ -539,6 +579,7 @@ impl Backend {
                                     "ssh.connect",
                                     pending.args,
                                     &pending.operation_id,
+                                    pending.source,
                                 )
                                 .await?;
                             Ok(mcp_result(result))
@@ -591,6 +632,7 @@ impl Backend {
                     &proposal.operation,
                     approve.args,
                     &proposal.operation_id,
+                    proposal.source,
                 )
                 .await
             }
@@ -642,8 +684,10 @@ impl Backend {
             bail!("SSH operation context mismatch");
         }
         // Raw terminal keys can contain passwords. Agent uses the reviewed command path.
-        if (request.operation == "ssh.input" || request.operation == "ssh.connect")
-            && request.source != OperationSource::Human
+        if matches!(
+            request.operation.as_str(),
+            "ssh.input" | "ssh.connect" | "ssh.blocks"
+        ) && request.source != OperationSource::Human
         {
             bail!("This SSH operation requires human interaction");
         }
@@ -685,14 +729,21 @@ impl Backend {
                     instance_id: id,
                     operation_id: request.operation_id,
                     operation: request.operation.clone(),
+                    source: request.source,
                 },
             );
             return Ok(
                 json!({"proposalId":proposal_id,"operation":request.operation,"args":request.args}),
             );
         }
-        self.execute(&id, &request.operation, request.args, &request.operation_id)
-            .await
+        self.execute(
+            &id,
+            &request.operation,
+            request.args,
+            &request.operation_id,
+            request.source,
+        )
+        .await
     }
 
     fn request_sudo(
@@ -701,6 +752,7 @@ impl Backend {
         operation: &str,
         args: Value,
         operation_id: &str,
+        source: OperationSource,
     ) -> Result<Value> {
         if self.interactions.len() >= 32
             || self
@@ -741,6 +793,7 @@ impl Backend {
                 operation: operation.to_owned(),
                 connection_id: Some(connection_id),
                 expires: Utc::now() + chrono::Duration::seconds(60),
+                source,
             },
         );
         Ok(serde_json::to_value(DeferredInteraction {
@@ -797,12 +850,13 @@ impl Backend {
                     command(args, true)?.to_owned()
                 };
                 connection
-                    .exec_with_sudo(
+                    .exec_recorded(
                         pending.operation_id.clone(),
                         mcp,
                         text,
                         true,
                         Some(password),
+                        block_spec(args, true, mcp, pending.source)?,
                     )
                     .await?;
                 return Ok(serde_json::to_value(DeferredOperation {
@@ -835,6 +889,7 @@ impl Backend {
         operation: &str,
         args: Value,
         operation_id: &str,
+        source: OperationSource,
     ) -> Result<Value> {
         let native = operation.trim_start_matches("mcp.");
         if matches!(native, "ssh.exec" | "ssh.read_file" | "ssh.write_file")
@@ -846,7 +901,7 @@ impl Backend {
                     bail!("MCP instance argument mismatch");
                 }
             }
-            return self.request_sudo(id, operation, args, operation_id);
+            return self.request_sudo(id, operation, args, operation_id, source);
         }
         if let Some(native) = operation.strip_prefix("mcp.") {
             validate_mcp_args(operation, &args)?;
@@ -880,6 +935,7 @@ impl Backend {
                         operation: "ssh.connect".to_owned(),
                         connection_id: None,
                         expires: Utc::now() + chrono::Duration::seconds(60),
+                        source,
                     },
                 );
                 return Ok(serde_json::to_value(DeferredInteraction {
@@ -902,8 +958,12 @@ impl Backend {
                 })?);
             }
             let result = match native {
-                "ssh.command" => return self.start_command(id, &args, operation_id, true).await,
-                "ssh.exec" => return self.start_exec(id, &args, operation_id, true).await,
+                "ssh.command" => {
+                    return self
+                        .start_command(id, &args, operation_id, true, source)
+                        .await
+                }
+                "ssh.exec" => return self.start_exec(id, &args, operation_id, true, source).await,
                 "ssh.read_file" | "ssh.write_file" => {
                     let result = self.execute_domain(id, native, args, operation_id).await?;
                     return Ok(mcp_result(result));
@@ -913,8 +973,14 @@ impl Backend {
             return Ok(mcp_result(result));
         }
         match operation {
-            "ssh.command" => self.start_command(id, &args, operation_id, false).await,
-            "ssh.exec" => self.start_exec(id, &args, operation_id, false).await,
+            "ssh.command" => {
+                self.start_command(id, &args, operation_id, false, source)
+                    .await
+            }
+            "ssh.exec" => {
+                self.start_exec(id, &args, operation_id, false, source)
+                    .await
+            }
             _ => self.execute_domain(id, operation, args, operation_id).await,
         }
     }
@@ -941,6 +1007,18 @@ impl Backend {
             "ssh.status" => Ok(
                 json!({"config":instance.config,"connected":instance.connection.as_ref().is_some_and(|connection| !connection.is_closed()),"connectionId":instance.connection.as_ref().map(|c| &c.id)}),
             ),
+            "ssh.blocks" => {
+                #[derive(serde::Deserialize)]
+                #[serde(deny_unknown_fields)]
+                struct ReadBlocks {
+                    before: Option<u32>,
+                }
+                let request: ReadBlocks = decode(args)?;
+                if request.before == Some(0) {
+                    bail!("Invalid SSH block cursor");
+                }
+                instance.blocks.snapshot(request.before)
+            }
             "ssh.probe" => Ok(json!({"fingerprint":session::probe(&instance.config).await?})),
             "ssh.connect" => {
                 if instance
@@ -982,6 +1060,9 @@ impl Backend {
                     )
                     .await?,
                 );
+                if let Some(connection) = &instance.connection {
+                    instance.blocks = connection.blocks.clone();
+                }
                 let connection_id = instance.connection.as_ref().map(|c| c.id.clone());
                 let _ = self
                     .events

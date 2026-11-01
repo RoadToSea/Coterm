@@ -82,6 +82,7 @@ const style = `
     font-size: 10px;
     line-height: 18px;
   }
+  .coterm-block-state { color: var(--coterm-text-muted, #9da0a3); font-size: 10px; line-height: 20px; }
   .coterm-block-actor[data-actor="robot"] { color: var(--coterm-accent-glow, #75beff); }
   .coterm-block-status { color: var(--coterm-danger, #f48771); line-height: 20px; }
   .coterm-block-empty {
@@ -98,6 +99,7 @@ interface BlockElements {
   command: HTMLElement;
   output: HTMLElement;
   actor: HTMLElement;
+  state: HTMLElement;
   status: HTMLElement;
 }
 
@@ -129,10 +131,12 @@ function createBlock(doc: Document, id: string): BlockElements {
   actor.className = "coterm-block-actor";
   const status = doc.createElement("span");
   status.className = "coterm-block-status";
-  header.append(command, actor, status);
+  const state = doc.createElement("span");
+  state.className = "coterm-block-state";
+  header.append(command, actor, state, status);
   content.append(header, output);
   row.append(gutter, content);
-  return { row, gutter, command, output, actor, status };
+  return { row, gutter, command, output, actor, state, status };
 }
 
 function updateBlock(elements: BlockElements, block: CommandBlock, selected: boolean): void {
@@ -145,6 +149,8 @@ function updateBlock(elements: BlockElements, block: CommandBlock, selected: boo
   elements.output.hidden = block.output === undefined || block.output.length === 0;
   elements.actor.dataset.actor = block.actor;
   setText(elements.actor, block.actor === "robot" ? "Robot" : "Human");
+  setText(elements.state, block.statusText ?? "");
+  elements.state.hidden = !block.statusText;
   const failed = block.exitCode != null && block.exitCode !== 0;
   setText(elements.status, failed ? "!" : "");
   elements.status.title = failed ? `Exit code ${block.exitCode}` : "";

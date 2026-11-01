@@ -4,6 +4,7 @@
 //! an `end` marker that carries the exit code and whether static syntax validation failed.
 //! The remote shell echoes the wrapper line; that echo is dropped before it reaches the
 //! replay buffer so terminal recordings and model context stay free of protocol noise.
+use crate::blocks::{BlockHandle, BlockState};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use serde_json::{json, Value};
 
@@ -40,6 +41,7 @@ pub struct Command {
     pub deadline: tokio::time::Instant,
     pub timed_out: bool,
     pub cancelled: bool,
+    block: Option<BlockHandle>,
 }
 
 impl Command {
@@ -86,6 +88,7 @@ impl Command {
                 deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(120),
                 timed_out: false,
                 cancelled: false,
+                block: None,
             },
             wire,
         )
@@ -94,6 +97,9 @@ impl Command {
     fn capture(&mut self, bytes: &[u8], visible: &mut Vec<u8>) {
         visible.extend_from_slice(bytes);
         if self.started {
+            if let Some(block) = &self.block {
+                block.append(bytes, false);
+            }
             self.original += bytes.len();
             let remaining = MAX_CAPTURE.saturating_sub(self.output.len());
             let take = bytes.len().min(remaining);
@@ -226,6 +232,16 @@ impl Command {
 
     pub fn remaining(&mut self) -> Vec<u8> {
         std::mem::take(&mut self.pending)
+    }
+
+    pub fn track(&mut self, block: BlockHandle) {
+        self.block = Some(block);
+    }
+
+    pub fn finish_block(&self, state: BlockState, exit_code: Option<i32>) {
+        if let Some(block) = &self.block {
+            block.finish(state, exit_code);
+        }
     }
 }
 

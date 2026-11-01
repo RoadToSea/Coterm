@@ -8,6 +8,19 @@
 - `ssh.exec`、`ssh.read_file`、`ssh.write_file` 支持显式 `sudo: true`，审批后由桌面收集一次性秘密；不接受 Agent 传密码。
 - ANSI 终端文本保留控制字符并直接返回 UTF-8，二进制、无效 UTF-8 或控制字符过密时无损返回 Base64；摘要同时呈现 stdout/stderr，限制 JSON 扩张。
 - 后台任务默认单行，从新到旧排列；可展开限高列表，选中后自动收起并将选中项定位到行末。
+- 终端 / 消息块视图可切换；后端提供 PTY / exec 命令及回复快照，前端直接引用 SDK，支持块号多选、高亮、复制、停止所选和单行命令输入。
+
+## 2026-11-01：消息块首次接入
+
+- 后端新增内存块日志和仅人工前端使用的 `ssh.blocks` 分页操作；沿用现有 PTY 随机标记与 exec 通道归属回复，不记录原始按键或秘密交付。
+- 块保留真实操作 ID、获批后的命令、可信来源、通道、状态和退出码。未确认结束 / 重置 / 断线标为 unknown，取消和超时单独显示；MCP 列表按一次操作形成一个块。
+- 每连接保留最多 32 块，命令预览 1 KiB、stdout / stderr 合计预览 2 KiB，单页 JSON 小于 12 KiB；淘汰与截断可见。事件只携带 epoch / revision，在 tick 合并并处理慢消费者。
+- SSH 前端直接导入 SDK `mountBlockList`，保留完整终端、原任务行及输出视图；消息块新增共享 PTY 单行输入，焦点、文本选择、块选择在回复更新时保持。只在块视图可见时读取，错误可重试，缺口重读，成功重连清理旧 epoch。
+- 无新增依赖、宿主接口、跨平台启动方式或权限；所选上下文提交给 Agent 仍待后续接入。
+
+实现入口：[后端日志](../../plugins/plugin-ssh/src/blocks.rs)、[前端适配](../../plugins/plugin-ssh/frontend/src/blocks.ts)、[数据契约](../architecture/ssh-plugin.md#命令消息块)、[浏览器验收](../../tests/ssh-blocks-browser.test.mjs)。
+
+本次 Windows 验收：`cargo check --workspace`、`cargo fmt --package coterm-plugin-ssh -- --check`、`cargo clippy -p coterm-plugin-ssh --all-targets -- -D warnings` 通过；SSH Rust 测试 35 项通过，完整 `pnpm test` 57 项通过、0 失败、0 跳过。`pnpm build` 和 `pnpm plugin:ssh:build` 通过，开发包已更新到插件 `dist`。人工复核浅色 / 深色和 320px 窄窗口截图。SSH 端到端契约使用真实插件进程和本地测试服务器，尚未连接用户实际远端；macOS / Linux 未在本轮运行。
 
 ## 2026-10-30：使用反馈修复
 
@@ -39,6 +52,7 @@
 
 ## 限制与下次入口
 
+- 消息块只记录 `ssh.command` / `ssh.exec`，原始终端按键不自动分块；MCP 批次显示一个块。块预览有界，选择与复制已接通，向 Agent 提交上下文仍未接入。
 - 尚未连接反馈中的真实远端复测；共享 PTY 的现场空输出问题保留在[反馈](../feedback/ssh_use_feedback.md)，需要原始回放与实际返回值才能进一步归因。
 - 独立通道不复制人工 PTY 的 `sudo`/`su`、目录和环境；需要显式 sudo 或在脚本内设置环境。
 - 目前仅支持 sudo 单次密码认证和 NOPASSWD；TTY/MFA/自定义交互、Windows 远端 Shell 不在当前提权实现范围。失败或结果未知均不自动重试。

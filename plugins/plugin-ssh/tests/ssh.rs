@@ -673,6 +673,200 @@ fn create(id: &str, config: &Config) -> Value {
 }
 
 #[tokio::test]
+async fn message_blocks_follow_approved_commands_and_remain_instance_bound() -> Result<()> {
+    use coterm_core::plugin_runtime::{CallerContext, Operations, PluginRuntime, SubmitOperation};
+    use coterm_proto::runtime::{
+        message::PluginNotification,
+        operation::{ApproveProposal, OperationSource, OperationStatus},
+    };
+    let ssh = server().await?;
+    let (runtime, instance) = load_runtime(&ssh, "blocks").await?;
+    connect_instance(&runtime, &instance, &ssh).await?;
+    let caller = |source| CallerContext {
+        source,
+        session_id: instance.session_id.clone(),
+        plugin_id: Some(instance.plugin_id.clone()),
+    };
+    let operation = |name: &str, args: Value| SubmitOperation {
+        plugin_id: instance.plugin_id.clone(),
+        plugin_instance_id: Some(instance.plugin_instance_id.clone()),
+        operation: name.to_owned(),
+        args,
+        wait_timeout_ms: Some(3_000),
+    };
+    let mut events = runtime
+        .subscribe_events(&instance.plugin_instance_id)
+        .await?;
+    let proposal = runtime
+        .submit(
+            caller(OperationSource::Agent),
+            operation("ssh.command", json!({"text":"unapproved-original"})),
+        )
+        .await?;
+    assert_eq!(proposal.status, OperationStatus::AwaitingApproval);
+    let empty = runtime
+        .submit(
+            caller(OperationSource::Human),
+            operation("ssh.blocks", json!({})),
+        )
+        .await?;
+    assert_eq!(
+        empty
+            .output
+            .ok_or_else(|| anyhow::anyhow!("missing snapshot"))?["blocks"],
+        json!([])
+    );
+    let approved = runtime
+        .approve(
+            caller(OperationSource::Human),
+            ApproveProposal {
+                operation_id: proposal.operation_id.clone(),
+                proposal_id: proposal
+                    .proposal_id
+                    .ok_or_else(|| anyhow::anyhow!("missing proposal"))?,
+                plugin_instance_id: Some(instance.plugin_instance_id.clone()),
+                args: json!({"text":"approved-edited"}),
+            },
+        )
+        .await?;
+    timeout(Duration::from_secs(3), async {
+        loop {
+            let record = runtime
+                .get(caller(OperationSource::Human), &approved.operation_id)
+                .await?;
+            if record.status == OperationStatus::Completed {
+                return Ok::<_, anyhow::Error>(());
+            }
+            sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await??;
+    let exec = runtime
+        .submit(
+            caller(OperationSource::Human),
+            operation("ssh.exec", json!({"text":"echo isolated"})),
+        )
+        .await?;
+    assert_eq!(exec.status, OperationStatus::Completed);
+    // Password-like raw keys are not interpreted as a command or recorded as a block.
+    runtime
+        .submit(
+            caller(OperationSource::Human),
+            operation(
+                "ssh.input",
+                json!({"data":STANDARD.encode(b"private-input")}),
+            ),
+        )
+        .await?;
+    let result = runtime
+        .submit(
+            caller(OperationSource::Human),
+            operation("ssh.blocks", json!({})),
+        )
+        .await?;
+    assert_eq!(result.status, OperationStatus::Completed);
+    let snapshot = result
+        .output
+        .ok_or_else(|| anyhow::anyhow!("missing snapshot"))?;
+    let blocks = snapshot["blocks"]
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("missing blocks"))?;
+    assert_eq!(blocks.len(), 2);
+    assert_eq!(blocks[0]["id"], exec.operation_id);
+    assert_eq!(blocks[0]["channel"], "exec");
+    assert_eq!(blocks[0]["output"], "echo isolated");
+    assert_eq!(blocks[1]["command"], "approved-edited");
+    assert_eq!(blocks[1]["actor"], "robot");
+    assert_eq!(blocks[1]["output"], "approved-edited\n");
+    assert_eq!(blocks[1]["state"], "completed");
+    assert_eq!(blocks[1]["exitCode"], 0);
+    let encoded = serde_json::to_string(&snapshot)?;
+    for hidden in [
+        "unapproved-original",
+        "private-input",
+        "local-test-password",
+        "__coterm_src",
+        "777;coterm",
+    ] {
+        assert!(!encoded.contains(hidden), "unexpected block data: {hidden}");
+    }
+    let denied = runtime
+        .submit(
+            caller(OperationSource::Agent),
+            operation("ssh.blocks", json!({})),
+        )
+        .await;
+    assert!(
+        denied.is_err()
+            || denied
+                .as_ref()
+                .is_ok_and(|receipt| receipt.status == OperationStatus::Failed)
+    );
+    let other = runtime
+        .create_instance("coterm-plugin-ssh", serde_json::to_value(&ssh.config)?)
+        .await?;
+    let other_snapshot = runtime
+        .submit(
+            CallerContext {
+                source: OperationSource::Human,
+                session_id: other.session_id.clone(),
+                plugin_id: Some(other.plugin_id.clone()),
+            },
+            SubmitOperation {
+                plugin_id: other.plugin_id.clone(),
+                plugin_instance_id: Some(other.plugin_instance_id.clone()),
+                operation: "ssh.blocks".to_owned(),
+                args: json!({}),
+                wait_timeout_ms: None,
+            },
+        )
+        .await?
+        .output
+        .ok_or_else(|| anyhow::anyhow!("missing other snapshot"))?;
+    assert_eq!(other_snapshot["blocks"], json!([]));
+    assert_ne!(snapshot["epoch"], other_snapshot["epoch"]);
+    timeout(Duration::from_secs(3), async {
+        loop {
+            if let PluginNotification::Event { name, payload, .. } = events.recv().await? {
+                if name == "ssh.blocks.changed" {
+                    assert!(payload.get("command").is_none());
+                    return Ok::<_, anyhow::Error>(());
+                }
+            }
+        }
+    })
+    .await??;
+    runtime
+        .submit(
+            caller(OperationSource::Human),
+            operation("ssh.disconnect", json!({})),
+        )
+        .await?;
+    let retained = runtime
+        .submit(
+            caller(OperationSource::Human),
+            operation("ssh.blocks", json!({})),
+        )
+        .await?
+        .output
+        .ok_or_else(|| anyhow::anyhow!("missing retained snapshot"))?;
+    assert_eq!(retained["blocks"], snapshot["blocks"]);
+    connect_instance(&runtime, &instance, &ssh).await?;
+    let reconnected = runtime
+        .submit(
+            caller(OperationSource::Human),
+            operation("ssh.blocks", json!({})),
+        )
+        .await?
+        .output
+        .ok_or_else(|| anyhow::anyhow!("missing new snapshot"))?;
+    assert_ne!(reconnected["epoch"], snapshot["epoch"]);
+    assert_eq!(reconnected["blocks"], json!([]));
+    runtime.stop("coterm-plugin-ssh").await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn proposals_never_send_until_approved_and_secrets_are_instance_bound() -> Result<()> {
     let server = server().await?;
     let mut backend = Backend::default();

@@ -13,6 +13,7 @@ use std::{
     time::Duration,
 };
 
+use crate::blocks::{BlockHandle, BlockLog, BlockSpec, BlockState};
 use crate::command::Command;
 use crate::result::tool_result;
 use anyhow::{anyhow, bail, Result};
@@ -505,13 +506,14 @@ impl JobRegistry {
 enum Input {
     Data(Vec<u8>),
     Resize(u32, u32),
-    Command(Command, Vec<u8>),
+    Command(Command, Vec<u8>, BlockSpec),
     Exec {
         operation_id: String,
         mcp: bool,
         text: String,
         use_shell: bool,
         password: Option<Zeroizing<String>>,
+        block: BlockSpec,
     },
     Cancel(String),
     Reset,
@@ -532,6 +534,7 @@ pub struct Connection {
     actions: mpsc::Sender<Action>,
     pub output: Arc<Mutex<OutputBuffer>>,
     pub jobs: Arc<Mutex<JobRegistry>>,
+    pub(crate) blocks: BlockLog,
     handle: Arc<client::Handle<HostKey>>,
     task: JoinHandle<()>,
     pub id: String,
@@ -606,6 +609,8 @@ impl Connection {
         let (actions, mut receiver) = mpsc::channel::<Action>(64);
         let task_output = output.clone();
         let task_jobs = jobs.clone();
+        let blocks = BlockLog::default();
+        let task_blocks = blocks.clone();
         let task_handle = handle.clone();
         let connection_id = id.clone();
         let task = tokio::spawn(async move {
@@ -626,12 +631,16 @@ impl Connection {
                     action = receiver.recv() => {
                         let Some(action) = action else { break; };
                         match action.input {
-                            Input::Command(command, data) => {
+                            Input::Command(mut command, data, spec) => {
                                 if active.is_some() {
                                     let _ = action.reply.send(Err(anyhow!(
                                         "A command is still running or its completion is unknown; reset the terminal to recover"
                                     )));
                                     continue;
+                                }
+                                match task_blocks.begin(&command.operation_id, spec, "pty") {
+                                    Ok(block) => command.track(block),
+                                    Err(error) => { let _ = action.reply.send(Err(error)); continue; }
                                 }
                                 let result = timeout(IO_TIMEOUT, write.data(&data[..])).await;
                                 match result {
@@ -647,7 +656,7 @@ impl Connection {
                                     }
                                 }
                             }
-                            Input::Exec { operation_id, mcp, text, use_shell, password } => {
+                            Input::Exec { operation_id, mcp, text, use_shell, password, block } => {
                                 let (cancel, cancel_rx) = watch::channel(false);
                                 {
                                     let mut jobs = task_jobs.lock().await;
@@ -656,6 +665,14 @@ impl Connection {
                                         continue;
                                     }
                                 }
+                                let block = match task_blocks.begin(&operation_id, block, "exec") {
+                                    Ok(block) => block,
+                                    Err(error) => {
+                                        task_jobs.lock().await.remove(&operation_id);
+                                        let _ = action.reply.send(Err(error));
+                                        continue;
+                                    }
+                                };
                                 let command_text = text.clone();
                                 exec_tasks.spawn(run_exec(
                                     task_handle.clone(),
@@ -669,6 +686,7 @@ impl Connection {
                                     cancel_rx,
                                     command_text,
                                     password,
+                                    block,
                                 ));
                                 let _ = action.reply.send(Ok(json!({})));
                             }
@@ -803,6 +821,10 @@ impl Connection {
                                             let _ = pending.reply.send(Ok(json!({"outcome":"unknown"})));
                                         }
                                     }
+                                    command.finish_block(
+                                        if cancelled { BlockState::Cancelled } else { BlockState::Completed },
+                                        result["exitCode"].as_i64().and_then(|code| i32::try_from(code).ok()),
+                                    );
                                     if !command.timed_out && !cancelled {
                                         emit_completion(&events, &command, result).await;
                                     }
@@ -925,6 +947,7 @@ impl Connection {
             actions,
             output,
             jobs,
+            blocks,
             handle,
             task,
             id,
@@ -951,11 +974,27 @@ impl Connection {
     }
 
     pub async fn command(&self, operation_id: String, mcp: bool, text: &str) -> Result<()> {
+        self.command_recorded(
+            operation_id,
+            mcp,
+            text,
+            BlockSpec::new(text.to_owned(), mcp),
+        )
+        .await
+    }
+
+    pub(crate) async fn command_recorded(
+        &self,
+        operation_id: String,
+        mcp: bool,
+        text: &str,
+        block: BlockSpec,
+    ) -> Result<()> {
         let (command, wire) = Command::new(operation_id, mcp, text);
         if wire.len() > 4000 {
             bail!("Encoded command exceeds the 4000-byte shared PTY line limit; use ssh.exec for long/multiline scripts or ssh.write_file for file content");
         }
-        self.submit(Input::Command(command, wire)).await?;
+        self.submit(Input::Command(command, wire, block)).await?;
         Ok(())
     }
 
@@ -979,12 +1018,27 @@ impl Connection {
         use_shell: bool,
         password: Option<Zeroizing<String>>,
     ) -> Result<()> {
+        let block = BlockSpec::new(text.clone(), mcp);
+        self.exec_recorded(operation_id, mcp, text, use_shell, password, block)
+            .await
+    }
+
+    pub(crate) async fn exec_recorded(
+        &self,
+        operation_id: String,
+        mcp: bool,
+        text: String,
+        use_shell: bool,
+        password: Option<Zeroizing<String>>,
+        block: BlockSpec,
+    ) -> Result<()> {
         self.submit(Input::Exec {
             operation_id,
             mcp,
             text,
             use_shell,
             password,
+            block,
         })
         .await?;
         Ok(())
@@ -1496,6 +1550,14 @@ async fn fail_command(
     message: &str,
     details: Option<Value>,
 ) {
+    command.finish_block(
+        if code == "ssh_command_completion_unknown" {
+            BlockState::TimedOut
+        } else {
+            BlockState::Unknown
+        },
+        None,
+    );
     if let Some((_, sender)) = events {
         let _ = sender
             .send(PluginNotification::OperationFailed {
@@ -1546,6 +1608,7 @@ async fn run_exec(
     mut cancel: watch::Receiver<bool>,
     command_text: String,
     password: Option<Zeroizing<String>>,
+    block: BlockHandle,
 ) {
     // Announce the job before it starts so the terminal can show a running tab.
     emit_job(&events, &connection_id, &operation_id, &command_text, false).await;
@@ -1608,8 +1671,8 @@ async fn run_exec(
         loop {
             tokio::select! {
                 message = channel.wait() => match message {
-                    Some(ChannelMsg::Data { data }) => stdout.push(&data),
-                    Some(ChannelMsg::ExtendedData { data, .. }) => stderr.push(&data),
+                    Some(ChannelMsg::Data { data }) => { block.append(&data, false); stdout.push(&data); }
+                    Some(ChannelMsg::ExtendedData { data, .. }) => { block.append(&data, true); stderr.push(&data); }
                     Some(ChannelMsg::ExitStatus { exit_status }) => exit_code = Some(exit_status as i32),
                     Some(ChannelMsg::ExitSignal { signal_name, .. }) => {
                         signal = Some(format!("{signal_name:?}"));
@@ -1642,6 +1705,18 @@ async fn run_exec(
             }
         }
     }
+    block.finish(
+        if cancelled {
+            BlockState::Cancelled
+        } else if timed_out {
+            BlockState::TimedOut
+        } else if error.is_some() || signal.is_some() || exit_code.is_none() {
+            BlockState::Unknown
+        } else {
+            BlockState::Completed
+        },
+        exit_code,
+    );
     let mut cancel_reply = {
         let mut jobs = jobs.lock().await;
         jobs.finish(

@@ -99,6 +99,8 @@ export interface CommandBlock {
   command: string;
   /** Plain-text reply belonging to this command; block boundaries remain plugin-owned. */
   output?: string;
+  /** Plugin-localized execution state or channel label, shown separately from reply text. */
+  statusText?: string;
   actor: "human" | "robot";
   exitCode?: number | null;
   /** When supplied on update, overrides local selection; omitted values preserve it by id. */

@@ -5,6 +5,7 @@ import { SearchAddon } from "@xterm/addon-search";
 import terminalCSS from "@xterm/xterm/css/xterm.css?inline";
 import type { PluginAPI, PluginConfigurationAPI, PluginFrontend, OperationReceipt } from "@coterm/plugin-sdk";
 import { createTranslator } from "./i18n";
+import { mountSshBlocks } from "./blocks";
 import { attachTerminalShortcuts } from "@coterm/plugin-sdk/components/terminal-shortcuts";
 import { mountTerminalSearch, TERMINAL_SEARCH_HIGHLIGHT_LIMIT } from "@coterm/plugin-sdk/components/terminal-search";
 
@@ -62,6 +63,11 @@ const css = `
   .bar span { font-size: 11px; color: var(--coterm-text-muted, #969696); }
   .bar button { margin-left: auto; font-size: 11px; }
   .main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+  .terminal-pane { flex:1; min-height:0; display:flex; flex-direction:column; }
+  .terminal-pane[hidden] { display:none; }
+  .ssh-view-switch { display:flex; flex-wrap:wrap; gap:4px; }
+  .ssh-view-switch button { margin-left:0; }
+  .ssh-view-switch button[aria-pressed="true"] { border-color:var(--coterm-focus,#007fd4); background:var(--coterm-surface-hover,#414141); }
   .terminal { flex: 1; min-height: 0; overflow: hidden; padding: 10px 4px 0 10px; }
   .jobs {
     display: flex;
@@ -271,6 +277,20 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
   connect.textContent = t("Connect");
   connect.disabled = true;
   bar.append(label, state, connect);
+  const viewSwitch = document.createElement("div");
+  viewSwitch.className = "ssh-view-switch";
+  viewSwitch.setAttribute("role", "group");
+  viewSwitch.setAttribute("aria-label", t("SSH view"));
+  const terminalButton = document.createElement("button");
+  terminalButton.type = "button";
+  terminalButton.textContent = t("Terminal");
+  terminalButton.setAttribute("aria-pressed", "true");
+  const blocksButton = document.createElement("button");
+  blocksButton.type = "button";
+  blocksButton.textContent = t("Command blocks");
+  blocksButton.setAttribute("aria-pressed", "false");
+  viewSwitch.append(terminalButton, blocksButton);
+  bar.append(viewSwitch);
   const main = document.createElement("div");
   main.className = "main";
   const terminalContainer = document.createElement("div");
@@ -312,7 +332,12 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
   const notice = document.createElement("div");
   notice.className = "notice";
   notice.setAttribute("role", "status");
-  layout.append(bar, main, jobView, notice);
+  const terminalPane = document.createElement("div");
+  terminalPane.className = "terminal-pane";
+  terminalPane.append(main, jobView);
+  const blocksPane = document.createElement("section");
+  blocksPane.hidden = true;
+  layout.append(bar, terminalPane, blocksPane, notice);
   root.append(layout);
 
   const terminal = new Terminal({
@@ -338,6 +363,7 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
   let queuedBytes = 0;
   let inputQueue = Promise.resolve();
   const controller = new AbortController();
+  const blocksView = mountSshBlocks(blocksPane, api, t);
   const searchView = mountTerminalSearch(bar, terminal, searchAddon, t);
   const stopShortcuts = attachTerminalShortcuts(terminal, () => {
     if (!disposed) notice.textContent = t("Could not copy terminal selection. Try copying again.");
@@ -347,6 +373,7 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
   const showError = (reason: unknown) => { if (!disposed) notice.textContent = String(reason); };
   const setConnected = (next: boolean) => {
     connected = next;
+    blocksView.setConnected(next);
     stateMessage = next ? "Connected" : "Disconnected";
     state.textContent = t(stateMessage);
     connect.textContent = next ? t("Disconnect") : t("Connect");
@@ -356,6 +383,17 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
     fit.fit();
     if (connected) void invoke("ssh.resize", { cols: terminal.cols, rows: terminal.rows }).catch(showError);
   };
+  const selectView = (blocks: boolean) => {
+    terminalPane.hidden = blocks;
+    blocksPane.hidden = !blocks;
+    terminalButton.setAttribute("aria-pressed", String(!blocks));
+    blocksButton.setAttribute("aria-pressed", String(blocks));
+    blocksView.setActive(blocks);
+    searchView.close(false);
+    if (!blocks) { resize(); terminal.focus(); }
+  };
+  terminalButton.addEventListener("click", () => selectView(false), { signal: controller.signal });
+  blocksButton.addEventListener("click", () => selectView(true), { signal: controller.signal });
 
   const write = async (data: string) => {
     if (!data || disposed) return;
@@ -608,7 +646,8 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
   const startEvents = async () => {
     const cancel = await api.subscribeEvents((event) => enqueue(async () => {
       if (event.name === "runtime.closed") { setConnected(false); notice.textContent = t("Plugin connection closed."); return; }
-      if (event.name === "runtime.gap" || event.name === "ssh.status") { await refreshSnapshot(); return; }
+      if (event.name === "ssh.blocks.changed") { blocksView.invalidate(); return; }
+      if (event.name === "runtime.gap" || event.name === "ssh.status") { blocksView.invalidate(); await refreshSnapshot(); return; }
       if (event.name === "ssh.job") {
         // The plugin announces an exec operation before it finishes; tracking it here
         // is what lets the jobs row appear while the command is still running.
@@ -652,7 +691,7 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
         await invoke("ssh.connect", { fingerprint: probe.fingerprint, secret: secret.value });
         if (disposed) return;
         await enqueue(refreshSnapshot);
-        terminal.focus();
+        if (!terminalPane.hidden) terminal.focus();
       }
     } catch (reason) { showError(reason); }
     finally { if (!disposed) { working = false; connect.disabled = false; } }
@@ -673,6 +712,10 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
   });
   observer.observe(terminalContainer);
   const stopLocale = api.i18n?.subscribe(() => {
+    viewSwitch.setAttribute("aria-label", t("SSH view"));
+    terminalButton.textContent = t("Terminal");
+    blocksButton.textContent = t("Command blocks");
+    blocksView.refreshLocale();
     searchView.refreshLocale();
     jobStop.textContent = t("Stop");
     jobClose.textContent = t("Close view");
@@ -686,6 +729,7 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
   return { unmount() {
     disposed = true;
     controller.abort();
+    blocksView.unmount();
     stopLocale?.();
     unsubscribe?.();
     window.clearTimeout(resizeTimer);

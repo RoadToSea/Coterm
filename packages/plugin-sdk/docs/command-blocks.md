@@ -36,6 +36,7 @@ import type { CommandBlock } from "@coterm/plugin-sdk";
 | `index: number` | 是 | 左侧显示的块号，由插件决定起点与编号 |
 | `command: string` | 是 | 原样显示的命令文本，支持多行 |
 | `output?: string` | 否 | 该命令所属的明文回复；缺失或空字符串时隐藏回复区 |
+| `statusText?: string` | 否 | 插件本地化后的状态 / 通道标签，显示在块头部，与回复正文分开 |
 | `actor: "human" \| "robot"` | 是 | 来源标签，分别显示 Human / Robot |
 | `exitCode?: number \| null` | 否 | 非零时展示失败标记与退出码说明；组件不推断执行结果 |
 | `selected?: boolean` | 否 | 指定时覆盖本地选择；更新中省略时按 ID 保留本地选择，新块默认未选 |
@@ -89,6 +90,10 @@ function selectedBlocks() {
 插件应限制块数与每块输出大小，分页或裁剪较早数据，并明确提示数据缺口；组件只渲染当前快照，不为每次 update 额外积累历史。回复作为纯文本写入 DOM，不解释 HTML。选择刷新不重新创建当前消息节点；实际回复内容变化时浏览器原有文本选区可能自然改变，不承诺保持被改写文本的选区。
 
 返回的 view 提供 `update(props)` 和 `unmount()`。卸载会移除 DOM 及事件监听；重复卸载安全，卸载后的更新与旧控件点击无效。组件不连接或断开后端实例。
+
+### SSH 实际接入
+
+[SSH 前端适配](../../../plugins/plugin-ssh/frontend/src/blocks.ts) 直接导入该组件，通过实例绑定的 `ssh.blocks` 读取后端有界分页快照，由 `ssh.blocks.changed` 通知失效。插件后端记录真实获批的 PTY / exec 操作及其回复，前端把后端字段转换为 `CommandBlock`，并用 `statusText` 展示通道和执行状态。完整数据契约和上限见 [SSH 消息块](../../../docs/architecture/ssh-plugin.md#命令消息块)。
 
 ## 预览与验证
 
