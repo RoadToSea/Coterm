@@ -110,10 +110,18 @@ const css = `
   .signal-check input { width: auto; }
   .settings-grid [aria-disabled="true"] { opacity: .65; cursor: not-allowed; }
   .settings-grid label:has(.receive-filename) { grid-column: span 2; }
-  .toolbar-item { display: inline-flex; flex: 0 0 auto; align-items: center; }
+  .toolbar-item { position: relative; display: inline-flex; flex: 0 0 auto; align-items: center; }
   .toolbar-item[data-control="stats"] { margin-left: auto; }
-  .toolbar-customization { position: absolute; z-index: 3; inset: 0 0 auto auto; width: min(360px, 100%);
-    max-height: 100%; overflow: auto; padding: 14px; display: grid; gap: 12px;
+  .uart-bar[data-customizing="true"] .toolbar-item { cursor: grab; user-select: none;
+    outline: 1px dashed var(--coterm-border-input, #454545); outline-offset: 2px; border-radius: 3px; }
+  .uart-bar[data-customizing="true"] .toolbar-item:focus-visible { outline: 2px solid var(--coterm-focus, #007fd4); }
+  .toolbar-item[data-dragging="true"] { opacity: .5; cursor: grabbing; }
+  .toolbar-item[data-drop-side]::before { content: ""; position: absolute; top: -3px; bottom: -3px; width: 2px;
+    background: var(--coterm-focus, #007fd4); pointer-events: none; }
+  .toolbar-item[data-drop-side="before"]::before { left: -5px; }
+  .toolbar-item[data-drop-side="after"]::before { right: -5px; }
+  .toolbar-customization { position: absolute; z-index: 3; inset: var(--toolbar-height, 0px) 0 auto auto; width: min(360px, 100%);
+    max-height: calc(100% - var(--toolbar-height, 0px)); overflow: auto; padding: 14px; display: grid; gap: 12px;
     border: 1px solid var(--coterm-border-input, #454545); border-radius: 0 0 0 var(--radius, 6px);
     background: var(--coterm-surface-raised, #252526); box-shadow: 0 6px 18px #0003; }
   .toolbar-settings-list { display: grid; gap: 6px; }
@@ -552,7 +560,7 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
   historyButton.className = "history-toggle";
   historyButton.setAttribute("aria-expanded", "false");
   historyButton.setAttribute("aria-controls", "serial-send-history");
-  historyButton.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>';
+  historyButton.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 2.6-6.4L3 8M3 3v5h5M12 7v5l4 2"/></svg>';
   const historyPanel = document.createElement("div");
   historyPanel.id = "serial-send-history";
   historyPanel.className = "send-history";
@@ -694,6 +702,7 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
   };
   const setToolbarOpen = (open: boolean, restoreFocus = true) => {
     toolbar.panel.hidden = !open;
+    toolbar.setEditing(open);
     toolbarButton.setAttribute("aria-expanded", String(open));
     if (open) { setSettingsOpen(false, false); closeHistory(); toolbar.panel.querySelector("input")?.focus(); }
     else if (restoreFocus) toolbarButton.focus();
@@ -1200,7 +1209,7 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
     const path = event.composedPath();
     if (!path.includes(historyPanel) && !path.includes(historyButton)) closeHistory();
     if (settingsOpen && !path.includes(settingsPanel) && !path.includes(settingsButton) && !path.includes(layout.querySelector(".coterm-toasts")!)) setSettingsOpen(false, false);
-    if (!toolbar.panel.hidden && !path.includes(toolbar.panel) && !path.includes(toolbarButton)) setToolbarOpen(false, false);
+    if (!toolbar.panel.hidden && !path.includes(toolbar.panel) && !path.includes(toolbarButton) && !path.includes(uartBar)) setToolbarOpen(false, false);
   }, { signal: controller.signal });
 
   importButton.addEventListener("click", () => { stopRepeat(); fileInput.click(); }, { signal: controller.signal });
