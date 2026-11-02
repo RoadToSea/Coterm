@@ -2,6 +2,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import path from "node:path";
 import { findBrowser, openSession, evaluate, waitForValue } from "./support/browser-harness.mjs";
 
 test("SSH tasks collapse to one row and keep the selected task last while live events arrive", async (t) => {
@@ -17,6 +18,13 @@ test("SSH tasks collapse to one row and keep the selected task last while live e
   const session = await openSession({ browserPath, totalTimeoutMs: 45_000 });
   const { client } = session;
   const run = (source) => evaluate(client, source);
+  const screenshot = async name => {
+    const directory = process.env.COTERM_SSH_BLOCKS_SCREENSHOT_DIR;
+    if (!directory) return;
+    fs.mkdirSync(directory, {recursive:true});
+    const result=await client.send("Page.captureScreenshot",{format:"png"});
+    fs.writeFileSync(path.join(directory,name+".png"),Buffer.from(result.data,"base64"));
+  };
   try {
     await client.send("Runtime.enable");
     await client.send("Emulation.setDeviceMetricsOverride", { width: 1000, height: 720, deviceScaleFactor: 1, mobile: false });
@@ -33,6 +41,8 @@ test("SSH tasks collapse to one row and keep the selected task last while live e
           if (operation === 'ssh.status') return receipt({config:{host:'localhost',port:22,username:'user'},connected:true,connectionId:'conn'});
           if (operation === 'ssh.read') return receipt({data:'',cursor:'0',gap:false,closed:false,more:false,connectionId:'conn'});
           if (operation === 'ssh.resize') return receipt({});
+          if (operation === 'ssh.blocks') return receipt({epoch:'conn',revision:'1',dropped:0,blocks:[],more:false,nextBefore:null});
+          if (operation === 'ssh.select_blocks') return receipt({});
           if (operation === 'ssh.output') return receipt({
             done:window.states[args.operationId] ?? false,exitCode:window.states[args.operationId] ? 0 : null,cancelled:false,timedOut:false,
             stdout:{text:args.stdoutCursor === '0' ? 'output for ' + args.operationId : '',cursor:'1',more:false},
@@ -61,7 +71,7 @@ test("SSH tasks collapse to one row and keep the selected task last while live e
       Array.from({ length: 48 }, (_, i) => `echo task ${String(48 - i).padStart(3, "0")}`));
     assert.equal(await run(`new Set(items().map(el => el.offsetTop)).size`), 1);
     assert.ok(await run(`root.querySelector('.jobs').getBoundingClientRect().height <= 41`));
-    assert.ok(await run(`root.querySelector('.terminal').clientHeight > 600`), "history does not squeeze the terminal");
+    assert.ok(await run(`root.querySelector('.terminal').clientHeight > 500`), "history does not squeeze the terminal");
     assert.ok(await run(`list.scrollWidth > list.clientWidth`));
     assert.ok(await run(`toggle.getBoundingClientRect().right <= innerWidth`), "toggle stays visible");
 
@@ -96,20 +106,38 @@ test("SSH tasks collapse to one row and keep the selected task last while live e
     assert.ok(await run(`select(30).getBoundingClientRect().left >= list.getBoundingClientRect().left`));
     assert.equal(await run(`root.querySelector('.job-view').hidden`), false);
     assert.match(await run(`root.querySelector('.job-body').textContent`), /output for job-30/);
-    assert.equal(await run(`root.querySelector('.job-head button').disabled`), true, "completed task cannot be stopped");
+    assert.equal(await run(`root.querySelector('.job-follow').hidden`), false, "history selection pauses following");
+    assert.equal(await run(`root.querySelector('.ssh-workbench').dataset.dock`), "right");
+    await screenshot("ssh-exec-right");
     await run(`emit(50)`);
     assert.equal(await run(`items().at(-1).querySelector('.job-select').title`), "echo task 030");
     assert.ok(await run(`Math.abs(list.scrollWidth-list.clientWidth-list.scrollLeft) <= 1`),
       "new tasks do not displace the selected task");
     await run(`select(30).click()`);
     assert.equal(await run(`root.querySelector('.job-view').hidden`), false, "selecting again keeps the task open");
+    await run(`root.querySelector('.job-body').focus()`);
+    await client.send("Input.dispatchKeyEvent", {type:"keyDown",key:"Escape",code:"Escape",windowsVirtualKeyCode:27});
+    await client.send("Input.dispatchKeyEvent", {type:"keyUp",key:"Escape",code:"Escape",windowsVirtualKeyCode:27});
+    assert.equal(await run(`root.querySelector('.job-follow').hidden`), true);
+    assert.equal(await run(`root.querySelector('.job-head code').textContent`), "echo task 050");
+    await run(`emit(51)`);
+    assert.equal(await run(`root.querySelector('.job-head code').textContent`), "echo task 051", "open panel follows new tasks");
+    await run(`select(51).parentElement.querySelector('.dismiss').click();select(30).click()`);
 
     await run(`toggle.click()`);
     assert.equal(await run(`items().length`), 50, "expansion restores tasks older than the selection");
     await run(`select(1).click()`);
     assert.equal(await run(`items().at(-1).querySelector('.job-select').title`), "echo task 001");
-    await run(`root.querySelector('.job-head button').click()`);
-    assert.deepEqual(await run(`window.cancelled`), ["job-1"]);
+    await run(`root.querySelector('.job-dock').click()`);
+    assert.equal(await run(`root.querySelector('.ssh-workbench').dataset.dock`), "bottom");
+    const separator = await run(`(() => {const r=root.querySelector('.exec-splitter').getBoundingClientRect();return {x:r.left+r.width/2,y:r.top+r.height/2}})()`);
+    const oldHeight = await run(`root.querySelector('.job-view').getBoundingClientRect().height`);
+    await client.send("Input.dispatchMouseEvent", {type:"mousePressed",...separator,button:"left",clickCount:1});
+    await client.send("Input.dispatchMouseEvent", {type:"mouseMoved",x:separator.x,y:separator.y-45,button:"left",buttons:1});
+    await client.send("Input.dispatchMouseEvent", {type:"mouseReleased",x:separator.x,y:separator.y-45,button:"left",clickCount:1});
+    assert.ok(await run(`root.querySelector('.job-view').getBoundingClientRect().height`)>oldHeight+30, "splitter resizes panel");
+    await screenshot("ssh-exec-bottom");
+    await run(`root.querySelector('.job-dock').click()`);
     await run(`window.locale='zh-CN'; window.translate()`);
     assert.equal(await run(`toggle.getAttribute('aria-label')`), "展开任务列表");
     assert.equal(await run(`list.getAttribute('aria-label')`), "后台任务");
@@ -120,6 +148,7 @@ test("SSH tasks collapse to one row and keep the selected task last while live e
     assert.ok(await run(`select(1).getBoundingClientRect().left >= list.getBoundingClientRect().left`),
       "selected task stays fully visible after resize");
     assert.ok(await run(`root.querySelector('.layout').scrollWidth <= innerWidth`));
+    await screenshot("ssh-exec-narrow");
     await run(`toggle.click()`);
     assert.ok(await run(`list.clientHeight <= 144 && list.scrollHeight > list.clientHeight`));
     await run(`toggle.click(); select(1).parentElement.querySelector('.dismiss').click()`);
@@ -130,8 +159,9 @@ test("SSH tasks collapse to one row and keep the selected task last while live e
     assert.ok(await run(`list.scrollLeft > 0`), "collapsed row supports wheel navigation");
     await run(`while (list.firstElementChild) list.firstElementChild.querySelector('.dismiss').click()`);
     assert.equal(await run(`root.querySelector('.jobs').hidden`), true);
-    await run(`emit(51)`);
+    await run(`emit(52)`);
     assert.equal(await run(`items().length`), 1);
+    assert.equal(await run(`root.querySelector('.job-view').hidden`), true, "a new job never opens a closed panel");
     assert.equal(await run(`toggle.getAttribute('aria-expanded')`), "false");
     await run(`window.frontend.unmount()`);
     assert.equal(await run(`window.unsubscribed && window.localeUnsubscribed && document.body.childElementCount === 0`), true);

@@ -42,6 +42,7 @@ pub struct Command {
     pub timed_out: bool,
     pub cancelled: bool,
     block: Option<BlockHandle>,
+    boundaries: Vec<(usize, &'static str)>,
 }
 
 impl Command {
@@ -89,6 +90,7 @@ impl Command {
                 timed_out: false,
                 cancelled: false,
                 block: None,
+                boundaries: Vec::new(),
             },
             wire,
         )
@@ -150,6 +152,7 @@ impl Command {
         }
         self.pending.drain(..self.begin.len());
         self.started = true;
+        self.boundaries.push((visible.len(), "begin"));
         true
     }
 
@@ -191,6 +194,7 @@ impl Command {
                         .is_some_and(|fields| fields.get(1) == Some(&"syntax"));
                     self.exit_code = Some(code);
                     self.pending.drain(..=end);
+                    self.boundaries.push((visible.len(), "end"));
                     visible.append(&mut self.pending);
                     let result = self.finish();
                     return (visible, Some(result));
@@ -238,6 +242,13 @@ impl Command {
         self.block = Some(block);
     }
 
+    pub fn take_annotations(&mut self) -> Vec<(usize, Value)> {
+        std::mem::take(&mut self.boundaries)
+            .into_iter()
+            .filter_map(|(offset, kind)| Some((offset, self.block.as_ref()?.annotation(kind)?)))
+            .collect()
+    }
+
     pub fn finish_block(&self, state: BlockState, exit_code: Option<i32>) {
         if let Some(block) = &self.block {
             block.finish(state, exit_code);
@@ -265,6 +276,43 @@ pub fn encode_output(bytes: &[u8], _truncated: bool) -> (&'static str, &'static 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn trusted_ui_annotations_survive_byte_splits_without_changing_output() -> anyhow::Result<()> {
+        let log = crate::blocks::BlockLog::default();
+        let block = log.begin(
+            "tracked",
+            crate::blocks::BlockSpec::new("echo real".into(), true),
+            "pty",
+        )?;
+        let (mut command, _) = Command::new("tracked".into(), true, "echo real");
+        command.track(block);
+        let bytes = [
+            command.begin.clone(),
+            b"real\r\n".to_vec(),
+            command.end.clone(),
+            b"0;\x07".to_vec(),
+        ]
+        .concat();
+        let mut visible = Vec::new();
+        let mut boundaries = Vec::new();
+        for byte in bytes {
+            let (part, _) = command.feed(&[byte]);
+            for (offset, value) in command.take_annotations() {
+                boundaries.push((visible.len() + offset, value));
+            }
+            visible.extend(part);
+        }
+        assert_eq!(visible, b"real\r\n");
+        assert_eq!(boundaries.len(), 2);
+        assert_eq!(boundaries[0].0, 0);
+        assert_eq!(boundaries[1].0, 6);
+        assert_eq!(boundaries[0].1["actor"], "robot");
+        assert!(boundaries[0].1.get("command").is_none());
+        assert!(boundaries[0].1.get("output").is_none());
+        assert_eq!(log.snapshot(None)?["blocks"][0]["output"], "real\n");
+        Ok(())
+    }
 
     fn echo_of(wire: &[u8]) -> Vec<u8> {
         let mut echo = wire.to_vec();

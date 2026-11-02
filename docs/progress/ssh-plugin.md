@@ -8,13 +8,17 @@
 - `ssh.exec`、`ssh.read_file`、`ssh.write_file` 支持显式 `sudo: true`，审批后由桌面收集一次性秘密；不接受 Agent 传密码。
 - ANSI 终端文本保留控制字符并直接返回 UTF-8，二进制、无效 UTF-8 或控制字符过密时无损返回 Base64；摘要同时呈现 stdout/stderr，限制 JSON 扩张。
 - 后台任务默认单行，从新到旧排列；可展开限高列表，选中后自动收起并将选中项定位到行末。
-- 终端 / 消息块视图可切换；后端提供 PTY / exec 命令及回复快照，前端直接引用 SDK，支持块号多选、高亮、复制、停止所选和单行命令输入。
+- 主终端使用 SDK xterm Gutter 显示 PTY 命令块号和选中高亮；Human / Agent 标签在命令前，按钮仅有取消全选。单行 PTY 命令仍可在终端底部输入。
+- Exec 胶囊有 LED 状态、右侧 / 底部停靠、可拖动尺寸；历史选择暂停跟随，关闭面板时新任务不自动展开。
+- 块选择通过 `ssh.select_blocks` 按当前 epoch 传入插件内存；MCP `mcp.ssh.selected_blocks` 只读取人工选中的有界上下文，Agent 来源不能更改选择。
 
-## 2026-11-02：终端交互需求确认（待实现）
+## 2026-11-02：主终端块选择与 Exec 面板
 
-- 确认来源标签直接显示在命令前；命令块与主终端同屏，行号栏顶部只放「取消全选」。块选择仅用于向 Agent 传递上下文，不设置复制或终止选择工具栏。
-- 确认关闭的 Exec 面板不因新任务展开；跟随最新与历史锁定独立处理。快捷键仅在对应区域获得焦点时生效。
-- 本轮只记录产品约束，未修改前后端；既有双视图与上下文传递限制仍然存在。后续实现与验收按 [SSH 终端交互设计](../design/ssh-terminal-interaction.md) 继续。
+- 命令起止通过后端可信边界转换为有界 PTY 帧元数据（仅 ID、编号、来源，不带命令或输出），SDK 使用 xterm marker 和 decoration 定位块号；命令显示文字按需从人工块快照读取。UI 标签只写入本地终端显示，不改变 SSH 输入字节。备用屏幕隐藏 PTY 标记，scrollback 淘汰时清理 ID 与选择。
+- 块选择只通过实例 / epoch 绑定的 `ssh.select_blocks` 更新；Human MCP Tool `mcp.ssh.selected_blocks` 只读所选不可信数据、明确截断状态和分页信息。重连及卸载清空选择；历史淘汰自动修剪选择。
+- Exec 新任务只在详情面板打开且跟随最新时切换；已关闭面板不被自动展开。历史提示、局部 Esc、方向停靠、Splitter 拖动和按实例尺寸保存已接通。
+- 文档：[产品约束与验收](../design/ssh-terminal-interaction.md)、[SSH 架构契约](../architecture/ssh-plugin.md)、[SDK 终端行号栏](../../packages/plugin-sdk/docs/command-blocks.md#终端行号栏)。
+- 验收：SSH 前端真实浏览器覆盖边界、Human/Agent 标签、实例选择上下文、按键焦点、备用屏幕、scrollback 淘汰、主题、320px 布局；Exec 浏览器覆盖关闭面板、跟随/锁定/恢复、方向停靠、拖动与卸载。真实 SSH 测试覆盖 Human 写选择、Agent 只读、stale epoch 拒绝和原始按键不入上下文。
 
 ## 2026-11-01：消息块首次接入
 
@@ -58,7 +62,7 @@
 
 ## 限制与下次入口
 
-- 消息块只记录 `ssh.command` / `ssh.exec`，原始终端按键不自动分块；MCP 批次显示一个块。块预览有界，选择与复制已接通，向 Agent 提交上下文仍未接入。
+- 消息块只记录获批的 `ssh.command` / `ssh.exec`，原始终端按键不自动分块；MCP commands 批次显示一个块。Agent 必须显式调用 `mcp.ssh.selected_blocks` 读取人工选择的上下文；未经选择时不返回块。真实远程 SSH 交互仍需用户现场复测。
 - 尚未连接反馈中的真实远端复测；共享 PTY 的现场空输出问题保留在[反馈](../feedback/ssh_use_feedback.md)，需要原始回放与实际返回值才能进一步归因。
 - 独立通道不复制人工 PTY 的 `sudo`/`su`、目录和环境；需要显式 sudo 或在脚本内设置环境。
 - 目前仅支持 sudo 单次密码认证和 NOPASSWD；TTY/MFA/自定义交互、Windows 远端 Shell 不在当前提权实现范围。失败或结果未知均不自动重试。

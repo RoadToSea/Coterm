@@ -35,6 +35,8 @@ MCP 只有一个对外入口：本地 Stdio 子进程。桌面前端通过 Tauri
 | `coterm.cancel_operation` | 请求取消，结果依赖插件确认 |
 | `<pluginId>__<toolName>` | 插件显式注册的原生 Tool，例如 `coterm-plugin-ssh__ssh.command` |
 
+SSH 允许 Agent 显式调用 `coterm-plugin-ssh__ssh.selected_blocks` 读取当前实例中人工已选的块；没有选择时为空。`ssh.select_blocks` 是插件内部实例 draft 操作，不注册为 MCP Tool，Agent 不可伪造人的选择。详情和数据界限见 [SSH 消息块](ssh-plugin.md#命令消息块)。
+
 Bridge 保留插件参数和原生 `CallToolResult`，仅处理命名空间、目标路由及操作元信息。不会自动把整个内部操作目录公开为 MCP。
 
 `tools/list` 保留插件注册提供的 `inputSchema`；客户端导出界面中的 `parameters` 属于客户端转换结果。若客户端本地显示为 `null`，应对比同一连接的原始 `tools/list` 响应与客户端导出值，服务端集成测试会验证 schema 是否已发送。插件工具目录由已启动插件的握手注册；当前 manifest 只标识 MCP provider，不含静态工具 schema，因此未启动插件的工具不会出现在目录中，也没有 MCP 自动恢复工作区实例的操作。

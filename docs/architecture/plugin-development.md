@@ -116,7 +116,7 @@ SSH/串口配置前端在自己的 Shadow DOM 中为输入框、选择框及提�
 
 ## 开发与验收
 
-- 参考 [SSH](ssh-plugin.md) 或 [串口](serial-plugin.md) 组织后端、前端、manifest 和构建脚本。
+- 参考 [SSH](ssh-plugin.md)、[串口](serial-plugin.md) 或[本地终端](local-plugin.md) 组织后端、前端、manifest 和构建脚本。
 - 构建当前平台完整包到插件 `dist`，启动桌面，检查发现诊断与能力握手。
 - 至少验证双实例隔离、配置错误、审批修改/拒绝、取消/超时、秘密隔离、慢消费者与输出缺口。
 - 验证无 UI 插件仍可请求宿主交互；没有交互入口时明确失败，不能自动批准。

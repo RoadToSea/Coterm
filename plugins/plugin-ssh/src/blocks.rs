@@ -1,6 +1,6 @@
 //! Plugin-owned, in-memory command previews. Raw terminal input is never recorded here.
 use std::{
-    collections::VecDeque,
+    collections::{HashSet, VecDeque},
     sync::{Arc, Mutex, MutexGuard},
 };
 
@@ -76,6 +76,7 @@ struct Inner {
     dropped: u32,
     dirty: bool,
     entries: VecDeque<Entry>,
+    selected: HashSet<String>,
 }
 
 #[derive(Clone)]
@@ -90,6 +91,7 @@ impl Default for BlockLog {
             dropped: 0,
             dirty: false,
             entries: VecDeque::new(),
+            selected: HashSet::new(),
         })))
     }
 }
@@ -120,7 +122,9 @@ impl BlockLog {
                 .iter()
                 .position(|entry| entry.state != BlockState::Running)
                 .ok_or_else(|| anyhow!("Too many active SSH message blocks"))?;
-            inner.entries.remove(position);
+            if let Some(expired) = inner.entries.remove(position) {
+                inner.selected.remove(&expired.id);
+            }
             inner.dropped = inner.dropped.saturating_add(1);
         }
         let mut end = spec.text.len().min(COMMAND_BYTES);
@@ -155,9 +159,39 @@ impl BlockLog {
 
     /// Newest-first pages fit the host's 16 KiB operation-result budget, including escaping.
     pub fn snapshot(&self, before: Option<u32>) -> Result<Value> {
+        self.read_snapshot(before, false)
+    }
+
+    pub fn selected_snapshot(&self, before: Option<u32>) -> Result<Value> {
+        self.read_snapshot(before, true)
+    }
+
+    /// Only the human frontend may call this through the backend's source gate.
+    pub fn select(&self, epoch: &str, ids: Vec<String>) -> Result<Value> {
+        let mut inner = self.lock();
+        if epoch != inner.epoch || ids.len() > MAX_BLOCKS {
+            bail!("SSH block selection is stale or exceeds its bound");
+        }
+        let selected: HashSet<_> = ids.into_iter().collect();
+        if selected
+            .iter()
+            .any(|id| !inner.entries.iter().any(|entry| &entry.id == id))
+        {
+            bail!("Selected SSH block is unavailable");
+        }
+        if inner.selected != selected {
+            inner.selected = selected;
+            inner.revision = inner.revision.saturating_add(1);
+            inner.dirty = true;
+        }
+        Ok(json!({"epoch": inner.epoch, "selectedCount": inner.selected.len()}))
+    }
+
+    fn read_snapshot(&self, before: Option<u32>, selected_only: bool) -> Result<Value> {
         let inner = self.lock();
         let mut result = json!({"epoch": inner.epoch, "revision": inner.revision.to_string(),
-            "dropped": inner.dropped, "blocks": [], "more": false, "nextBefore": null});
+            "dropped": inner.dropped, "blocks": [], "more": false, "nextBefore": null,
+            "selectedCount": inner.selected.len()});
         let mut blocks = Vec::new();
         let mut next_before = None;
         for entry in inner
@@ -165,6 +199,7 @@ impl BlockLog {
             .iter()
             .rev()
             .filter(|entry| before.is_none_or(|index| entry.index < index))
+            .filter(|entry| !selected_only || inner.selected.contains(&entry.id))
         {
             blocks.push(entry.value());
             result["blocks"] = json!(blocks);
@@ -204,6 +239,12 @@ pub(crate) struct BlockHandle {
 }
 
 impl BlockHandle {
+    pub fn annotation(&self, kind: &str) -> Option<Value> {
+        let inner = self.log.lock();
+        let entry = inner.entries.iter().find(|entry| entry.id == self.id)?;
+        Some(json!({"kind": kind, "id": entry.id, "index": entry.index, "actor": entry.actor}))
+    }
+
     pub fn append(&self, bytes: &[u8], stderr: bool) {
         if bytes.is_empty() {
             return;
@@ -310,6 +351,51 @@ fn plain_text(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn selection_is_epoch_bound_validated_paged_and_pruned_on_eviction() -> Result<()> {
+        let log = BlockLog::default();
+        for index in 0..32 {
+            let block = log.begin(
+                &format!("chosen-{index}"),
+                BlockSpec::new("中\"".repeat(200), false),
+                "exec",
+            )?;
+            block.append(&vec![b'"'; OUTPUT_BYTES], false);
+            block.finish(BlockState::Completed, Some(0));
+        }
+        let epoch = log.snapshot(None)?["epoch"]
+            .as_str()
+            .ok_or_else(|| anyhow!("missing epoch"))?
+            .to_owned();
+        assert!(log.select("stale", vec![]).is_err());
+        assert!(log.select(&epoch, vec!["missing".into()]).is_err());
+        assert_eq!(log.selected_snapshot(None)?["blocks"], json!([]));
+        log.select(
+            &epoch,
+            (0..32).map(|index| format!("chosen-{index}")).collect(),
+        )?;
+        let mut before = None;
+        let mut count = 0;
+        loop {
+            let page = log.selected_snapshot(before)?;
+            assert!(serde_json::to_vec(&page)?.len() <= PAGE_BYTES);
+            count += page["blocks"].as_array().map_or(0, Vec::len);
+            if page["more"] == false {
+                break;
+            }
+            before = page["nextBefore"]
+                .as_u64()
+                .and_then(|n| u32::try_from(n).ok());
+            assert!(before.is_some());
+        }
+        assert_eq!(count, 32);
+        let _new = log.begin("new", BlockSpec::new("true".into(), false), "pty")?;
+        assert_eq!(log.selected_snapshot(None)?["selectedCount"], 31);
+        log.select(&epoch, vec![])?;
+        assert_eq!(log.selected_snapshot(None)?["blocks"], json!([]));
+        Ok(())
+    }
 
     #[test]
     fn previews_handle_split_utf8_and_terminal_controls() -> Result<()> {

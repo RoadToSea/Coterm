@@ -9,7 +9,7 @@
 1. 左侧选择 SSH，填写 Host、Port、Username，创建实例。
 2. 在实例中 Connect，通过可信来源核对 SHA256 指纹，再输入密码。
 3. 用户终端与 MCP 共用该 PTY；可同时创建多个实例，切换界面不关闭连接。
-4. 顶部切换「消息块」，查看本实例通过 `ssh.command` / `ssh.exec` 执行的命令和回复；左侧块号支持多选、高亮，可复制所选或停止仍在运行的所选操作。消息块底部可提交共享 PTY 单行命令。
+4. SSH 主终端使用左侧 Gutter 块号显示获批命令和回复。Human / Agent 标签在命令前，点击块号多选、高亮；顶部只有「取消全选」。Exec 胶囊可打开右侧或底部详情面板。
 
 MCP 客户端先用 `coterm.list_instances` 定位实例，再 `ssh.probe` 获取并核对指纹、`ssh.connect` 提交连接。密码由宿主交互收集，不放入工具参数；审批/密码等待后返回原操作结果。外部工具名称带插件命名空间，见 [MCP](mcp-integration.md)。
 
@@ -27,7 +27,9 @@ MCP 客户端先用 `coterm.list_instances` 定位实例，再 `ssh.probe` 获�
 | `ssh.command` | commit | 按顺序在共享 POSIX PTY 上执行 `commands` 列表并返回退出码 |
 | `ssh.exec` | commit | 在独立 exec 通道按顺序执行 `commands` 列表，stdout/stderr 分离，不走共享 PTY |
 | `ssh.output` | read | 按游标读取 `ssh.exec` 作业的有界输出与完成状态 |
-| `ssh.blocks` | read | 人工前端读取当前实例的有界命令块快照；按 `before` 分页，不向 MCP 开放 |
+| `ssh.blocks` | read | 仅人工前端分页读取块快照 |
+| `ssh.select_blocks` | draft | 仅 Human 来源设置当前 epoch 下最多 32 个块 ID；空列表清除选择 |
+| `ssh.selected_blocks` | read | MCP read Tool，仅返回人工在当前实例选中的块，按 `before` 分页 |
 | `ssh.system_info` | read | 固定只读脚本读取用户、内核、发行版等系统信息 |
 | `ssh.file_info` | read | 读取单个路径的元信息，不返回内容、不接受任意 shell |
 | `ssh.read_file` | read | 读取最多 8 KiB 的 UTF-8 文本文件 |
@@ -55,7 +57,7 @@ MCP 显式注册 status、probe、connect、disconnect、reset、command、exec�
 
 ## 命令与取消
 
-命令使用随机标记确定输出边界，通过当前 POSIX Shell 的 `eval` 执行，因此 `cd`、`export` 会保留。远端必须处于可接收命令的位置；当前不识别未完成的人工命令或 Windows Shell。
+命令使用随机标记确定输出边界，通过当前 POSIX Shell 的 `eval` 执行，因此 `cd`、`export` 会保留。人工终端通过带可信开始 / 结束标注的回放帧定位块，不从提示符或用户输出猜边界；标注只包含块 ID、编号和来源，命令显示文字按需从人工块快照读取，不放入普通输出事件。Human / Agent 标签仅在前端显示，不发送给 SSH。远端必须处于可接收命令的位置；当前不识别未完成的人工命令或 Windows Shell。
 
 - 执行前先用同一 Shell 的 `-n` 做静态语法检查。语法错误返回 `syntaxError=true` 和退出码 2，不进入 `eval`，共享 PTY 保持可用。检查只解析、不执行；依赖交互别名补全语法的写法可能被拒绝。
 - 包装命令的终端回显在进入回放前被移除；提示符和真实输出保留。远端关闭回显时不需要额外处理。
@@ -71,13 +73,15 @@ MCP 显式注册 status、probe、connect、disconnect、reset、command、exec�
 
 ## 输出与限制
 
-每连接回放缓冲 256 KiB，每块最多 4 KiB，`ssh.read` 单次最多 8 KiB；事件为 `ssh.terminal.output`、`ssh.status` 和 `ssh.job`，携带连接 ID 和游标。`ssh.job` 在 exec 作业开始和结束时各发一次，只含 `operationId`、源命令和 `done`，不携带输出；前端据此渲染终端底部的作业行，点击后在该行下方展开作业视图，通过 `ssh.output` 按游标取流。`ssh.status` 事件在重建 Shell 后带 `reset=true`；`ssh.status` 操作本身只报告当前配置与连接 ID。前端先订阅再回放，缺口时恢复；输入队列上限 16 KiB，控制队列 64 项，终端滚动缓存 3000 行。
+每连接回放缓冲 256 KiB，每块最多 4 KiB；普通 `ssh.read` 单次最多 8 KiB，终端帧模式每页一个有界帧。开始 / 结束帧可携带仅由插件边界识别器创建的元数据（ID、编号和来源，不含命令、输出或秘密）。事件为 `ssh.terminal.output`、`ssh.status` 和 `ssh.job`，携带连接 ID 和游标。`ssh.job` 仅含 `operationId`、源命令和 `done`，不携带输出；详情通过 `ssh.output` 按游标读取。`ssh.status` 重建时带 `reset=true`。前端先订阅再回放，缺口时恢复；输入队列上限 16 KiB，控制队列 64 项，终端滚动缓存 3000 行。
 
-作业选择区默认只占一行，按作业开始事件的先后从新到旧排列，完成事件不改变顺序。右侧按钮展开完整列表；列表内容高度不超过 `min(180px, 30vh)`，超过时可用滚轮上下查看。选中作业自动收起列表，折叠行只保留从最新作业到选中作业的区间，并滚动至末端，让选中作业位于最右侧；更早的作业仍可重新展开查看。折叠时滚轮可横向浏览该区间。作业状态刷新保持列表节点、键盘焦点和滚动锚点，新作业到达或窗口变窄时保持选中项可见。作业输出视图独立于列表的展开状态，仍保留原有高度上限与内部滚动。
+Exec 胶囊保留单行列表。用户查看历史任务后暂停跟随；点最新任务、恢复按钮或在面板焦点内按 `Esc` 恢复。仅已打开且跟随最新的面板随新任务更新；关闭面板时新任务不会自动展开。支持右侧 / 底部停靠、拖拽分隔条和按实例保存尺寸。
 
 ### 命令消息块
 
-块归属由 SSH 后端生成，插件前端直接引用 SDK [`mountBlockList`](../../packages/plugin-sdk/docs/command-blocks.md)。默认仍打开完整终端；切换消息块不重建终端、不重连，也不重复执行命令。块选择只存在于当前前端挂载中，复制和停止均由用户显式触发；尚未把选择自动发送给 Agent。
+块数据、来源、编号及区间由 SSH 后端生成，前端使用 SDK [`mountTerminalBlocks`](../../packages/plugin-sdk/docs/command-blocks.md#终端行号栏) 为同一 xterm 显示 Gutter 与高亮。选择限于当前实例 / 连接，页面卸载、淘汰和重连时清理。
+
+`ssh.select_blocks` 接受 `{epoch, ids}`，最多 32 个有效 ID；旧 epoch 或失效 ID 报错，空列表清除。仅 Human + 实例 + draft/transient 可调用。`mcp.ssh.selected_blocks` 是注册的 read Tool，只返回显式选中的块及 `selectedCount/more/nextBefore`，单页不超过 12 KiB；空选择返回空块。Agent 将块作为不可信数据处理。选择并不改变命令执行或审批。
 
 | 接口 | 参数 / 数据 | 约定 |
 |---|---|---|

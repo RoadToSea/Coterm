@@ -24,6 +24,29 @@ pub fn digest(domain: &Value) -> String {
 }
 
 fn digest_inner(domain: &Value) -> String {
+    if let Some(blocks) = domain.get("blocks").and_then(Value::as_array) {
+        let mut text = format!(
+            "selectedCount={} more={} nextBefore={}\n",
+            domain.get("selectedCount").unwrap_or(&Value::Null),
+            domain.get("more").unwrap_or(&Value::Null),
+            domain.get("nextBefore").unwrap_or(&Value::Null)
+        );
+        for block in blocks {
+            text.push_str(&format!(
+                "#{} [{} / {}] {}\n{}\n{}\n",
+                block.get("index").unwrap_or(&Value::Null),
+                block["actor"].as_str().unwrap_or("unknown"),
+                block["channel"].as_str().unwrap_or("unknown"),
+                block["command"].as_str().unwrap_or(""),
+                block["output"].as_str().unwrap_or(""),
+                block["stderr"].as_str().unwrap_or("")
+            ));
+            if text.len() > TEXT_PREVIEW {
+                break;
+            }
+        }
+        return text;
+    }
     if let Some(code) = domain.get("exitCode").and_then(Value::as_i64) {
         let mut summary = format!("exitCode={code}");
         for field in [

@@ -41,9 +41,16 @@
 
 `terminal-theme` 模块增加可选 `readTerminalPreferences / attachTerminalPreferences`，读取并观察宿主终端字号、行高和光标闪烁变量；旧宿主有默认回退，卸载须注销。命令块正文继承终端字号，SSH / 串口和宿主终端已接入原地更新；接口与边界见 [桌面外观](../architecture/desktop-appearance.md#语义颜色与插件)。完整前端回归 62 项通过，含观察器去重 / 注销、活跃实例实时更新和无额外连接 / 写入验证。
 
-## 限制与后续入口
+## 2026-11-02：xterm 命令行号栏
 
-- 本次交付插件可复用组件及示例；不在基座猜测 SSH、串口或本地终端的命令边界，不自动将已有终端改成块视图。
-- 每种插件的后端需从自己的协议 / 命令记录生成有界块数据，处理截断、缺口和秘密脱敏；插件前端适配为 blocks 快照，并决定选中上下文的用途。
+- 新增可选 `@coterm/plugin-sdk/components/terminal-blocks`，结构化适配 xterm marker / decoration，不让 SDK 依赖终端包。插件提供可信块边界并同步当前有界块 ID；组件绘制 Gutter、选中行背景、边框与「取消全选」，调用回调同步实例上下文。
+- 支持 buffer 视口滚动 / resize / render、Alternate Screen 隐藏、32 块上限、marker 淘汰清理和区域局部 Esc。SSH 已应用于同一主终端，没有互斥 Terminal / Command blocks Tab。
+- 示例 SDK browser bundle 加入 terminal-blocks；接口说明见 [组件文档](../../packages/plugin-sdk/docs/command-blocks.md#终端行号栏)，真实集成测试为 `tests/ssh-blocks-browser.test.mjs`。
+- SSH 终端来源标签与 Agent 上下文选择见 [SSH 交互设计](../design/ssh-terminal-interaction.md) 及 [SSH 进度](ssh-plugin.md)。
+
+验收入口：`pnpm build`，`pnpm --filter coterm-plugin-ssh-ui build`，`pnpm test:build`，以及 SSH blocks / jobs / terminal shortcuts 浏览器用例。
+
+- 不在基座猜测 SSH、串口或本地终端的命令边界，不自动将已有终端改成块视图；各插件后端仍需按协议提供可信块数据。
+- 每种插件自行处理截断、缺口和秘密脱敏；选中上下文由各插件自己的实例绑定操作提供。
 - 该组件展示纯文本，不是 xterm 替代品；已有终端仿真、认证与审批流程保持各自职责。
-- 继续开发从 `packages/plugin-sdk/src/components/block-list.ts`、对应浏览器测试及插件侧实际块数据适配开始。
+- SDK Terminal Gutter 继续入口：`packages/plugin-sdk/src/components/terminal-blocks.ts`；结构化块列表仍见 `packages/plugin-sdk/src/components/block-list.ts`。

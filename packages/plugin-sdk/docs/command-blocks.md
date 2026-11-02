@@ -97,6 +97,14 @@ function selectedBlocks() {
 
 ## 预览与验证
 
+### 终端行号栏
+
+`@coterm/plugin-sdk/components/terminal-blocks` 导出 `mountTerminalBlocks(gutter, overlay, terminal, options)`，用于已有 xterm.js 终端，不替代终端输出或协议实现。插件后端须通过可信、实例绑定的数据通知 `begin(block)` / `end(id)`；组件使用 xterm marker 定位块号，并在调用 `update(blocks)` 后仅允许当前快照中的稳定 ID 被选择。`toggle(id)` 可连接未内嵌在 PTY 网格中的任务胶囊。`onSelectionChange(ids)` 供插件把选择交给自己的后端上下文接口。按钮与高亮装饰随可见 buffer 行呈现，响应滚动、渲染、尺寸和 buffer 清理；备用屏幕隐藏 PTY 装饰。卸载注销终端监听、ResizeObserver 和键盘事件。
+
+选择区域持有 Esc 清除选择；主终端的 Esc 不被 SDK 拦截。插件负责限制块和选择数量，后端再次按实例 / epoch 校验，且只允许人工来源修改选择。不要把原始终端输入、命令秘密、输出或用户可控终端文本编码为可信边界事件。
+
+SSH 实际边界与选择接口见 [SSH 消息块](../../../docs/architecture/ssh-plugin.md#命令消息块)。浏览器集成入口：`tests/ssh-blocks-browser.test.mjs`。
+
 仓库根目录执行以下命令构建同一份真实 SDK 源码并启动本地静态服务：
 
 ```bash

@@ -1,6 +1,17 @@
 import type { PluginI18n } from "@coterm/plugin-sdk";
 
 const zhCN: Readonly<Record<string, string>> = {
+  "Clear selection": "取消全选",
+  "Resize Exec panel": "调整 Exec 面板大小",
+  "Dock bottom": "停靠底部",
+  "Dock right": "停靠右侧",
+  "Exec output": "Exec 输出",
+  "Viewing history #{index}": "正在查看历史任务 #{index}",
+  "Follow latest": "恢复跟随最新",
+  "Select block #{index} for Agent": "选择块 #{index} 供 Agent 读取",
+  "Output gap: older data expired.": "输出缺口：较早数据已过期。",
+  "success": "已成功",
+  "error": "异常",
   "SSH view": "SSH 视图",
   "Terminal": "终端",
   "Command blocks": "消息块",

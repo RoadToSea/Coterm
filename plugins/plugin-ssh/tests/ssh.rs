@@ -780,6 +780,114 @@ async fn message_blocks_follow_approved_commands_and_remain_instance_bound() -> 
     assert_eq!(blocks[1]["output"], "approved-edited\n");
     assert_eq!(blocks[1]["state"], "completed");
     assert_eq!(blocks[1]["exitCode"], 0);
+    // Agent context is an explicit human selection, never the entire block history.
+    let unselected = runtime
+        .submit(
+            caller(OperationSource::Agent),
+            operation("ssh.selected_blocks", json!({})),
+        )
+        .await?;
+    assert_eq!(
+        unselected
+            .output
+            .as_ref()
+            .and_then(|value| value.get("blocks")),
+        Some(&json!([]))
+    );
+    let chosen = runtime
+        .submit(
+            caller(OperationSource::Human),
+            operation(
+                "ssh.select_blocks",
+                json!({"epoch":snapshot["epoch"],"ids":[approved.operation_id]}),
+            ),
+        )
+        .await?;
+    assert_eq!(chosen.status, OperationStatus::Completed);
+    let selected = runtime
+        .submit(
+            caller(OperationSource::Agent),
+            operation(
+                "mcp.ssh.selected_blocks",
+                json!({"pluginInstanceId":instance.plugin_instance_id}),
+            ),
+        )
+        .await?;
+    let selected = selected
+        .output
+        .ok_or_else(|| anyhow::anyhow!("missing selected context"))?;
+    assert_eq!(
+        selected["structuredContent"]["blocks"]
+            .as_array()
+            .map(Vec::len),
+        Some(1)
+    );
+    assert_eq!(
+        selected["structuredContent"]["blocks"][0]["id"],
+        approved.operation_id
+    );
+    let denied_selection = runtime
+        .submit(
+            caller(OperationSource::Agent),
+            operation(
+                "ssh.select_blocks",
+                json!({"epoch":snapshot["epoch"],"ids":[]}),
+            ),
+        )
+        .await;
+    assert!(
+        denied_selection.is_err()
+            || denied_selection
+                .as_ref()
+                .is_ok_and(|receipt| receipt.status == OperationStatus::Failed)
+    );
+    let stale = runtime
+        .submit(
+            caller(OperationSource::Human),
+            operation("ssh.select_blocks", json!({"epoch":"stale","ids":[]})),
+        )
+        .await?;
+    assert_eq!(stale.status, OperationStatus::Failed);
+    let mut terminal_cursor = "0".to_owned();
+    let mut boundaries = Vec::new();
+    for _ in 0..256 {
+        let page = runtime
+            .submit(
+                caller(OperationSource::Human),
+                operation(
+                    "ssh.read",
+                    json!({"cursor":terminal_cursor,"terminal":true}),
+                ),
+            )
+            .await?
+            .output
+            .ok_or_else(|| anyhow::anyhow!("missing terminal frame"))?;
+        terminal_cursor = page["cursor"].as_str().unwrap_or("0").to_owned();
+        if !page["annotation"].is_null() {
+            boundaries.push(page["annotation"].clone());
+        }
+        if page["more"] == false {
+            break;
+        }
+    }
+    assert_eq!(boundaries.len(), 2);
+    assert_eq!(boundaries[0]["kind"], "begin");
+    assert_eq!(boundaries[0]["id"], approved.operation_id);
+    assert_eq!(boundaries[0]["actor"], "robot");
+    assert_eq!(boundaries[1]["kind"], "end");
+    assert_eq!(
+        runtime
+            .submit(
+                caller(OperationSource::Human),
+                operation(
+                    "ssh.select_blocks",
+                    json!({"epoch":snapshot["epoch"],"ids":[]})
+                )
+            )
+            .await?
+            .status,
+        OperationStatus::Completed
+    );
     let encoded = serde_json::to_string(&snapshot)?;
     for hidden in [
         "unapproved-original",

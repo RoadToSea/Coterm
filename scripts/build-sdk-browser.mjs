@@ -13,7 +13,7 @@ import { fileURLToPath } from "node:url";
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const outDir = path.join(rootDir, "packages/plugin-sdk/dist/browser");
 mkdirSync(outDir, { recursive: true });
-for (const component of ["block-list", "toasts"]) {
+for (const component of ["block-list", "terminal-blocks", "toasts"]) {
   const sourcePath = path.join(rootDir, `packages/plugin-sdk/src/components/${component}.ts`);
   const outPath = path.join(outDir, `${component}.js`);
   const source = readFileSync(sourcePath, "utf8");

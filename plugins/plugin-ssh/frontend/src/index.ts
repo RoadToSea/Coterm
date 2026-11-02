@@ -6,6 +6,8 @@ import terminalCSS from "@xterm/xterm/css/xterm.css?inline";
 import type { PluginAPI, PluginConfigurationAPI, PluginFrontend, OperationReceipt } from "@coterm/plugin-sdk";
 import { createTranslator } from "./i18n";
 import { mountSshBlocks } from "./blocks";
+import { mountJobs } from "./jobs";
+import { mountTerminalBlocks } from "@coterm/plugin-sdk/components/terminal-blocks";
 import { attachTerminalShortcuts } from "@coterm/plugin-sdk/components/terminal-shortcuts";
 import { mountTerminalSearch, TERMINAL_SEARCH_HIGHLIGHT_LIMIT } from "@coterm/plugin-sdk/components/terminal-search";
 
@@ -62,101 +64,16 @@ const css = `
   .bar strong { font-weight: 500; color: var(--coterm-text-primary, #cccccc); }
   .bar span { font-size: 11px; color: var(--coterm-text-muted, #969696); }
   .bar button { margin-left: auto; font-size: 11px; }
-  .main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-  .terminal-pane { flex:1; min-height:0; display:flex; flex-direction:column; }
-  .terminal-pane[hidden] { display:none; }
-  .ssh-view-switch { display:flex; flex-wrap:wrap; gap:4px; }
-  .ssh-view-switch button { margin-left:0; }
-  .ssh-view-switch button[aria-pressed="true"] { border-color:var(--coterm-focus,#007fd4); background:var(--coterm-surface-hover,#414141); }
-  .terminal { flex: 1; min-height: 0; overflow: hidden; padding: 10px 4px 0 10px; }
-  .jobs {
-    display: flex;
-    flex: 0 0 auto;
-    align-items: flex-start;
-    gap: 8px;
-    padding: 6px 10px;
-    border-top: 1px solid var(--coterm-border, #333333);
-    background: var(--coterm-surface-raised, #252526);
-    min-height: 40px;
-  }
-  .jobs[hidden] { display: none; }
-  .jobs-label { flex: none; line-height: 26px; font-size: 10px; letter-spacing: .06em; color: var(--coterm-text-muted, #969696); }
-  .jobs-list {
-    display: flex;
-    flex: 1;
-    min-width: 0;
-    gap: 6px;
-    overflow-x: auto;
-    overflow-y: hidden;
-    overflow-anchor: none;
-    overscroll-behavior: contain;
-    scrollbar-width: none;
-  }
-  .jobs[data-expanded="true"] .jobs-list {
-    flex-wrap: wrap;
-    max-height: min(180px, 30vh);
-    overflow-x: hidden;
-    overflow-y: auto;
-    scrollbar-width: thin;
-  }
-  .jobs-toggle { flex: none; width: 26px; height: 26px; padding: 0; border-radius: 4px; }
-  .job {
-    display: inline-flex;
-    flex: 0 0 auto;
-    align-items: center;
-    height: 26px;
-    border: 1px solid var(--coterm-border-input, #454545);
-    border-radius: 10px;
-    background: var(--coterm-surface, #1e1e1e);
-    padding: 0;
-    font-size: 11px;
-    max-width: min(260px, 100%);
-  }
-  .job[hidden] { display: none; }
-  .job:hover { background: var(--coterm-surface-hover, #414141); }
-  .job[data-selected="true"] {
-    border-color: var(--coterm-focus, #007fd4);
-    background: var(--coterm-surface-hover, #414141);
-  }
-  .job-select { display: flex; align-items: center; align-self: stretch; gap: 6px; min-width: 0; padding: 3px 6px 3px 10px; border: 0; border-radius: inherit; background: transparent; }
-  .job .spin { color: var(--coterm-accent, #0e639c); }
-  .job .ok { color: #6a9955; }
-  .job .bad { color: var(--coterm-danger, #f48771); }
-  .job .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 150px; }
-  .job .dismiss { flex: none; align-self: stretch; border: 0; border-radius: inherit; background: transparent; padding: 0 6px; color: var(--coterm-text-muted, #969696); }
-  .job .dismiss:hover { color: var(--coterm-accent-foreground, #ffffff); background: transparent; }
-  .job-view {
-    flex: 0 0 auto;
-    height: 45%;
-    min-height: 100px;
-    max-height: 65%;
-    display: flex;
-    flex-direction: column;
-    border-top: 1px solid var(--coterm-border-subtle, #454545);
-    background: var(--coterm-surface, #1e1e1e);
-  }
-  .job-view[hidden] { display: none; }
-  .job-head {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 5px 10px;
-    border-bottom: 1px solid var(--coterm-border, #333333);
-    font-size: 11px;
-    color: var(--coterm-text-subtle, #aaaaaa);
-  }
-  .job-head code { color: var(--coterm-text-primary, #cccccc); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .job-head button { margin-left: auto; font-size: 11px; padding: 2px 8px; }
-  .job-body { flex: 1; min-height: 0; overflow: auto; padding: 6px 10px; }
-  .job-stream { margin: 0 0 8px; }
-  .job-stream h4 { margin: 0 0 3px; font-size: 10px; letter-spacing: .06em; color: var(--coterm-text-muted, #969696); }
-  .job-stream pre {
-    margin: 0;
-    white-space: pre-wrap;
-    overflow-wrap: anywhere;
-    font: var(--coterm-terminal-font-size, 12px) var(--coterm-font-mono, Consolas, "Liberation Mono", monospace);
-    color: var(--coterm-text-primary, #cccccc);
-  }
+  .terminal-pane { flex:1; min-width:0; min-height:0; display:flex; flex-direction:column; }
+  .terminal-shell { position:relative; flex:1; min-width:0; min-height:0; display:flex; }
+  .terminal { position:relative; flex:1; min-width:0; min-height:0; overflow:hidden; padding:28px 4px 0 5px; }
+  .ssh-blocks-compose { display:grid; grid-template-columns:auto minmax(0,1fr) auto; align-items:center; gap:8px; margin:0; padding:6px 10px; border-top:1px solid var(--coterm-border,#333); }
+  .ssh-blocks-compose label { font-size:10px; }
+  .ssh-blocks-compose input { padding:4px 6px; border-radius:var(--radius,6px); font-family:var(--coterm-font-mono,monospace); }
+  .ssh-blocks-error { padding:6px 10px; font-size:11px; }
+  .ssh-blocks-error[hidden] { display:none; }
+  .ssh-block-history { padding:4px 10px; color:var(--coterm-text-muted,#969696); font-size:10px; }
+  @media(max-width:500px) { .ssh-blocks-compose label { grid-column:1 / -1; } .ssh-blocks-compose { grid-template-columns:minmax(0,1fr) auto; } }
   .notice { padding: 7px 14px; font-size: 12px; color: var(--coterm-text-subtle, #aaaaaa); overflow-wrap: anywhere; }
   .notice:empty, .approvals:empty { display: none; }
   .approvals {
@@ -244,8 +161,8 @@ export function configure(container: HTMLElement, api: PluginConfigurationAPI): 
 }
 
 interface Status { config: { host: string; port: number; username: string }; connected: boolean; connectionId: string | null }
-interface Output { data: string; cursor: string; gap: boolean; closed: boolean; more: boolean; connectionId: string }
-interface PushedOutput { data: string; cursor: string; connectionId: string }
+interface Output { data: string; cursor: string; gap: boolean; closed: boolean; more: boolean; connectionId: string; annotation?: unknown }
+interface PushedOutput { data: string; cursor: string; connectionId: string; annotation?: unknown }
 
 function output<T>(receipt: OperationReceipt<T>): T {
   if (receipt.status !== "completed" || receipt.error || receipt.output === null) throw new Error(receipt.error?.message ?? `Operation ${receipt.status}`);
@@ -277,67 +194,18 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
   connect.textContent = t("Connect");
   connect.disabled = true;
   bar.append(label, state, connect);
-  const viewSwitch = document.createElement("div");
-  viewSwitch.className = "ssh-view-switch";
-  viewSwitch.setAttribute("role", "group");
-  viewSwitch.setAttribute("aria-label", t("SSH view"));
-  const terminalButton = document.createElement("button");
-  terminalButton.type = "button";
-  terminalButton.textContent = t("Terminal");
-  terminalButton.setAttribute("aria-pressed", "true");
-  const blocksButton = document.createElement("button");
-  blocksButton.type = "button";
-  blocksButton.textContent = t("Command blocks");
-  blocksButton.setAttribute("aria-pressed", "false");
-  viewSwitch.append(terminalButton, blocksButton);
-  bar.append(viewSwitch);
-  const main = document.createElement("div");
-  main.className = "main";
-  const terminalContainer = document.createElement("div");
-  terminalContainer.className = "terminal";
+  const workbench = document.createElement("div"); workbench.className = "ssh-workbench";
+  const terminalPane = document.createElement("div"); terminalPane.className = "terminal-pane";
+  const shell = document.createElement("div"); shell.className = "terminal-shell";
+  const gutter = document.createElement("div");
+  const terminalContainer = document.createElement("div"); terminalContainer.className = "terminal";
   const jobsBar = document.createElement("div");
-  jobsBar.className = "jobs";
-  jobsBar.hidden = true;
-  const jobsLabel = document.createElement("span");
-  jobsLabel.className = "jobs-label";
-  const jobsList = document.createElement("div");
-  jobsList.className = "jobs-list";
-  jobsList.id = "ssh-jobs";
-  jobsList.setAttribute("role", "list");
-  jobsList.setAttribute("aria-label", t("Background jobs"));
-  const jobsToggle = document.createElement("button");
-  jobsToggle.type = "button";
-  jobsToggle.className = "jobs-toggle";
-  jobsToggle.setAttribute("aria-controls", jobsList.id);
-  jobsToggle.setAttribute("aria-expanded", "false");
-  jobsBar.append(jobsLabel, jobsList, jobsToggle);
-  main.append(terminalContainer, jobsBar);
-  const jobView = document.createElement("section");
-  jobView.className = "job-view";
-  jobView.hidden = true;
-  const jobHead = document.createElement("div");
-  jobHead.className = "job-head";
-  const jobCommand = document.createElement("code");
-  const jobState = document.createElement("span");
-  const jobStop = document.createElement("button");
-  jobStop.type = "button";
-  jobStop.textContent = t("Stop");
-  const jobClose = document.createElement("button");
-  jobClose.type = "button";
-  jobClose.textContent = t("Close view");
-  jobHead.append(jobCommand, jobState, jobStop, jobClose);
-  const jobBody = document.createElement("div");
-  jobBody.className = "job-body";
-  jobView.append(jobHead, jobBody);
+  const blocksControls = document.createElement("div");
+  shell.append(gutter, terminalContainer); terminalPane.append(shell, jobsBar, blocksControls); workbench.append(terminalPane);
   const notice = document.createElement("div");
   notice.className = "notice";
   notice.setAttribute("role", "status");
-  const terminalPane = document.createElement("div");
-  terminalPane.className = "terminal-pane";
-  terminalPane.append(main, jobView);
-  const blocksPane = document.createElement("section");
-  blocksPane.hidden = true;
-  layout.append(bar, terminalPane, blocksPane, notice);
+  layout.append(bar, workbench, notice);
   root.append(layout);
 
   const terminal = new Terminal({
@@ -367,7 +235,14 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
   let queuedBytes = 0;
   let inputQueue = Promise.resolve();
   const controller = new AbortController();
-  const blocksView = mountSshBlocks(blocksPane, api, t);
+  const terminalBlocks = mountTerminalBlocks(gutter, terminalContainer, terminal, {
+    cancelLabel: t("Clear selection"),
+    onSelectionChange(ids) { blocksView.select(ids); jobsView.selection(ids); },
+  });
+  const jobsView = mountJobs(workbench, terminalPane, jobsBar, api, t, id => terminalBlocks.toggle(id), reason => showError(reason));
+  const blocksView = mountSshBlocks(blocksControls, api, t, blocks => {
+    terminalBlocks.update(blocks); jobsView.setBlocks(blocks);
+  }, () => { terminalBlocks.reset(); jobsView.reset(); });
   const searchView = mountTerminalSearch(bar, terminal, searchAddon, t);
   const stopShortcuts = attachTerminalShortcuts(terminal, () => {
     if (!disposed) notice.textContent = t("Could not copy terminal selection. Try copying again.");
@@ -387,22 +262,30 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
     fit.fit();
     if (connected) void invoke("ssh.resize", { cols: terminal.cols, rows: terminal.rows }).catch(showError);
   };
-  const selectView = (blocks: boolean) => {
-    terminalPane.hidden = blocks;
-    blocksPane.hidden = !blocks;
-    terminalButton.setAttribute("aria-pressed", String(!blocks));
-    blocksButton.setAttribute("aria-pressed", String(blocks));
-    blocksView.setActive(blocks);
-    searchView.close(false);
-    if (!blocks) { resize(); terminal.focus(); }
-  };
-  terminalButton.addEventListener("click", () => selectView(false), { signal: controller.signal });
-  blocksButton.addEventListener("click", () => selectView(true), { signal: controller.signal });
-
   const write = async (data: string) => {
     if (!data || disposed) return;
     const decoded = atob(data);
     await new Promise<void>((resolve) => terminal.write(Uint8Array.from(decoded, (char) => char.charCodeAt(0)), resolve));
+  };
+  const writeFrame = async (frame: {data: string; annotation?: unknown}) => {
+    const value = frame.annotation;
+    if (value && typeof value === "object") {
+      const annotation = value as Record<string, unknown>;
+      if (typeof annotation.id !== "string" || annotation.id.length > 128
+        || typeof annotation.index !== "number" || !Number.isSafeInteger(annotation.index) || annotation.index < 1
+        || !["human", "robot"].includes(String(annotation.actor))
+        || !["begin", "end"].includes(String(annotation.kind))) throw new Error("Invalid terminal block annotation");
+      if (annotation.kind === "begin") {
+        const block = {id:annotation.id,index:annotation.index,command:"",actor:annotation.actor as "human" | "robot"};
+        terminalBlocks.begin(block);
+        const command = (await blocksView.command(block.id)).replace(/[\u0000-\u001f\u007f-\u009f]/g, " ");
+        const label = block.actor === "human" ? "[👤 Human]" : "[🤖 Agent]";
+        const prefix = block.actor === "human" ? "\x1b[38;2;52;211;153m" : "\x1b[38;2;56;189;248m";
+        // Display metadata stays local; it never goes to ssh.input.
+        await new Promise<void>(resolve => terminal.write(prefix + label + "\x1b[0m " + command + "\r\n", resolve));
+      } else terminalBlocks.end(annotation.id);
+    }
+    await write(frame.data);
   };
   const refreshSnapshot = async () => {
     const status = await invoke<Status>("ssh.status", {});
@@ -411,24 +294,25 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
     if (connectionId !== status.connectionId) {
       connectionId = status.connectionId;
       cursor = "0";
-      if (connectionId) { searchView.close(false); terminal.reset(); }
+      if (connectionId) { searchView.close(false); terminalBlocks.reset(); jobsView.reset(); terminal.reset(); }
     }
     setConnected(status.connected);
     connect.disabled = working;
     if (!connectionId) return;
     // Replay only on mount, connection change or a reported gap; never idle polling.
-    for (let batch = 0; batch < 64 && !disposed; batch++) {
-      const data = await invoke<Output>("ssh.read", { cursor });
+    for (let batch = 0; batch < 256 && !disposed; batch++) {
+      const data = await invoke<Output>("ssh.read", { cursor, terminal: true });
       if (disposed || data.connectionId !== connectionId) return;
       if (data.gap) {
-        terminal.reset();
+        terminalBlocks.reset(); terminal.reset();
         terminal.write("\r\n[Output gap: older data expired from replay buffer]\r\n");
       }
-      await write(data.data);
+      await writeFrame(data);
       cursor = data.cursor;
       if (!data.more) break;
-      if (batch === 63) notice.textContent = t("Replay limit reached; waiting for the next output event.");
+      if (batch === 255) notice.textContent = t("Replay limit reached; waiting for the next output event.");
     }
+    blocksView.invalidate();
     if (connected) resize();
   };
   const enqueue = (action: () => Promise<void>) => {
@@ -436,230 +320,24 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
     updates = next.catch(showError);
     return updates;
   };
-  interface JobView {
-    operationId: string;
-    text: string;
-    exitCode: number | null;
-    done: boolean;
-    cancelled: boolean;
-    timedOut: boolean;
-    stdout: string;
-    stderr: string;
-    stdoutCursor: string;
-    stderrCursor: string;
-    more: boolean;
-  }
-  const jobs = new Map<string, JobView>();
-  let selectedJob: string | null = null;
-  let jobsExpanded = false;
-  const jobElements = new Map<string, {
-    item: HTMLDivElement;
-    select: HTMLButtonElement;
-    icon: HTMLSpanElement;
-    name: HTMLSpanElement;
-    dismiss: HTMLButtonElement;
-  }>();
-
-  const jobLabel = (job: JobView) => {
-    const first = job.text.trim().split(String.fromCharCode(10))[0] ?? "";
-    return first.length > 48 ? `${first.slice(0, 48)}…` : first || job.operationId;
-  };
-  const jobIcon = (job: JobView) => {
-    if (!job.done) return "●";
-    if (job.cancelled) return "■";
-    if (job.timedOut || (job.exitCode ?? 0) !== 0) return "✕";
-    return "✓";
-  };
-  const renderJobs = (alignSelection = false) => {
-    if (disposed) return;
-    const wasExpanded = jobsBar.dataset.expanded === "true";
-    const viewport = jobsList.getBoundingClientRect();
-    const atEnd = jobsList.scrollWidth - jobsList.clientWidth - jobsList.scrollLeft < 2;
-    // Keep the item at the viewport edge in place when live events prepend jobs.
-    const anchor = Array.from(jobsList.children).find((element) => {
-      if (!(element instanceof HTMLElement) || element.hidden) return false;
-      const bounds = element.getBoundingClientRect();
-      return wasExpanded ? bounds.bottom > viewport.top : bounds.right > viewport.left;
-    });
-    const anchorBefore = anchor?.getBoundingClientRect();
-    jobsBar.hidden = jobs.size === 0;
-    if (jobs.size === 0) { jobsExpanded = false; jobView.hidden = true; }
-    jobsBar.dataset.expanded = String(jobsExpanded);
-    jobsLabel.textContent = `${t("JOBS")} ${jobs.size}`;
-    jobsList.setAttribute("aria-label", t("Background jobs"));
-    jobsToggle.textContent = jobsExpanded ? "▴" : "▾";
-    jobsToggle.title = t(jobsExpanded ? "Collapse jobs" : "Expand jobs");
-    jobsToggle.setAttribute("aria-label", jobsToggle.title);
-    jobsToggle.setAttribute("aria-expanded", String(jobsExpanded));
-    for (const [id, elements] of jobElements) {
-      if (jobs.has(id)) continue;
-      elements.item.remove();
-      jobElements.delete(id);
-    }
-    let afterSelection = false;
-    let next = jobsList.firstElementChild;
-    // Job-start events arrive in order; completion updates must not reorder them.
-    for (const job of [...jobs.values()].reverse()) {
-      let elements = jobElements.get(job.operationId);
-      if (!elements) {
-        const item = document.createElement("div");
-        item.className = "job";
-        item.setAttribute("role", "listitem");
-        const select = document.createElement("button");
-        select.type = "button";
-        select.className = "job-select";
-        const icon = document.createElement("span");
-        icon.setAttribute("aria-hidden", "true");
-        const name = document.createElement("span");
-        name.className = "name";
-        const dismiss = document.createElement("button");
-        dismiss.type = "button";
-        dismiss.className = "dismiss";
-        dismiss.textContent = "×";
-        dismiss.addEventListener("click", () => {
-          const removedSelection = selectedJob === job.operationId;
-          jobs.delete(job.operationId);
-          if (removedSelection) selectedJob = null;
-          renderJobs(removedSelection);
-          renderJobView();
-          if (root.activeElement === null) jobsToggle.focus();
-        });
-        select.addEventListener("click", () => {
-          selectedJob = job.operationId;
-          jobsExpanded = false;
-          renderJobs(true);
-          renderJobView();
-        });
-        select.append(icon, name);
-        item.append(select, dismiss);
-        elements = { item, select, icon, name, dismiss };
-        jobElements.set(job.operationId, elements);
-      }
-      const { item, select, icon, name, dismiss } = elements;
-      item.hidden = !jobsExpanded && afterSelection;
-      item.dataset.selected = String(selectedJob === job.operationId);
-      select.setAttribute("aria-current", String(selectedJob === job.operationId));
-      select.title = job.text;
-      icon.textContent = jobIcon(job);
-      icon.className = !job.done ? "spin" : (job.cancelled || job.timedOut || (job.exitCode ?? 0) !== 0) ? "bad" : "ok";
-      name.textContent = jobLabel(job);
-      dismiss.setAttribute("aria-label", `${t("Remove job from list")}: ${jobLabel(job)}`);
-      if (item !== next) jobsList.insertBefore(item, next);
-      next = item.nextElementSibling;
-      if (selectedJob === job.operationId) afterSelection = true;
-    }
-    if (!jobsExpanded && (alignSelection || (selectedJob !== null && atEnd))) {
-      jobsList.scrollLeft = selectedJob ? jobsList.scrollWidth : 0;
-      jobsList.scrollTop = 0;
-    } else if (jobsExpanded !== wasExpanded) {
-      const item = selectedJob ? jobElements.get(selectedJob)?.item : undefined;
-      jobsList.scrollTop = item ? item.getBoundingClientRect().top - jobsList.getBoundingClientRect().top : 0;
-    } else if (anchor instanceof HTMLElement && !anchor.hidden && anchorBefore) {
-      const bounds = anchor.getBoundingClientRect();
-      if (jobsExpanded) jobsList.scrollTop += bounds.top - anchorBefore.top;
-      else jobsList.scrollLeft += bounds.left - anchorBefore.left;
-    }
-  };
-  const renderJobView = () => {
-    const job = selectedJob ? jobs.get(selectedJob) : undefined;
-    if (!job) { jobView.hidden = true; return; }
-    jobView.hidden = false;
-    jobCommand.textContent = job.text;
-    jobState.textContent = job.done
-      ? job.cancelled
-        ? t("cancelled")
-        : job.timedOut
-          ? t("timed out")
-          : t("exit {code}", { code: job.exitCode ?? "?" })
-      : t("running");
-    jobStop.disabled = job.done;
-    jobBody.replaceChildren();
-    for (const [name, value] of [["stdout", job.stdout], ["stderr", job.stderr]] as const) {
-      if (!value) continue;
-      const block = document.createElement("div");
-      block.className = "job-stream";
-      const heading = document.createElement("h4");
-      heading.textContent = name.toUpperCase();
-      const pre = document.createElement("pre");
-      pre.textContent = value;
-      block.append(heading, pre);
-      jobBody.append(block);
-    }
-  };
-  const readJob = async (job: JobView) => {
-    let more = true;
-    for (let batch = 0; batch < 32 && more; batch++) {
-      const view = await invoke<{
-        done: boolean;
-        exitCode: number | null;
-        cancelled: boolean;
-        timedOut: boolean;
-        stdout: { text?: string; data?: string; cursor: string; more: boolean };
-        stderr: { text?: string; data?: string; cursor: string; more: boolean };
-      }>("ssh.output", { operationId: job.operationId, stdoutCursor: job.stdoutCursor, stderrCursor: job.stderrCursor });
-      const decode = (stream: { text?: string; data?: string }) =>
-        stream.text ?? (stream.data ? new TextDecoder().decode(Uint8Array.from(atob(stream.data), (c) => c.charCodeAt(0))) : "");
-      job.stdout += decode(view.stdout);
-      job.stderr += decode(view.stderr);
-      job.stdoutCursor = view.stdout.cursor;
-      job.stderrCursor = view.stderr.cursor;
-      job.done = view.done;
-      job.exitCode = view.exitCode;
-      job.cancelled = view.cancelled;
-      job.timedOut = view.timedOut;
-      more = view.stdout.more || view.stderr.more;
-      if (job.stdout.length > 64 * 1024) job.stdout = job.stdout.slice(-64 * 1024);
-      if (job.stderr.length > 64 * 1024) job.stderr = job.stderr.slice(-64 * 1024);
-    }
-    renderJobs();
-    renderJobView();
-  };
-  const trackJob = (operationId: string, text: string) => {
-    if (jobs.has(operationId)) return;
-    jobs.set(operationId, {
-      operationId, text, exitCode: null, done: false, cancelled: false, timedOut: false,
-      stdout: "", stderr: "", stdoutCursor: "0", stderrCursor: "0", more: false,
-    });
-    renderJobs();
-  };
-
-  jobsToggle.addEventListener("click", () => {
-    jobsExpanded = !jobsExpanded;
-    renderJobs(!jobsExpanded);
-  }, { signal: controller.signal });
-  jobsList.addEventListener("wheel", (event) => {
-    if (jobsExpanded || event.ctrlKey || jobsList.scrollWidth <= jobsList.clientWidth) return;
-    const delta = Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY;
-    const scale = event.deltaMode === WheelEvent.DOM_DELTA_LINE ? 26
-      : event.deltaMode === WheelEvent.DOM_DELTA_PAGE ? jobsList.clientWidth : 1;
-    jobsList.scrollLeft += delta * scale;
-    event.preventDefault();
-  }, { passive: false, signal: controller.signal });
-  const jobsObserver = new ResizeObserver(() => {
-    if (!disposed && !jobsExpanded && selectedJob) jobsList.scrollLeft = jobsList.scrollWidth;
-  });
-  jobsObserver.observe(jobsList);
-  jobClose.addEventListener("click", () => { selectedJob = null; renderJobs(true); renderJobView(); });
-  jobStop.addEventListener("click", async () => {
-    const job = selectedJob ? jobs.get(selectedJob) : undefined;
-    if (!job || job.done) return;
-    try { await api.cancelOperation(job.operationId); }
-    catch (reason) { showError(reason); }
-  });
-
   const startEvents = async () => {
     const cancel = await api.subscribeEvents((event) => enqueue(async () => {
-      if (event.name === "runtime.closed") { setConnected(false); notice.textContent = t("Plugin connection closed."); return; }
+      if (event.name === "runtime.closed") { setConnected(false); jobsView.closed(); notice.textContent = t("Plugin connection closed."); return; }
       if (event.name === "ssh.blocks.changed") { blocksView.invalidate(); return; }
-      if (event.name === "runtime.gap" || event.name === "ssh.status") { blocksView.invalidate(); await refreshSnapshot(); return; }
+      if (event.name === "runtime.gap" || event.name === "ssh.status") {
+        if(event.name === "ssh.status" && (event.payload as {reset?:boolean}).reset) {
+          searchView.close(false); terminalBlocks.reset(); terminal.reset();
+          const value = (event.payload as {cursor?:unknown}).cursor;
+          if(typeof value === "string" && /^\d+$/.test(value)) cursor=value;
+        }
+        blocksView.invalidate(); await refreshSnapshot(); return;
+      }
       if (event.name === "ssh.job") {
         // The plugin announces an exec operation before it finishes; tracking it here
         // is what lets the jobs row appear while the command is still running.
         const payload = event.payload as { operationId?: string; text?: string; done?: boolean };
         if (!payload.operationId) return;
-        trackJob(payload.operationId, payload.text ?? payload.operationId);
-        const job = jobs.get(payload.operationId);
-        if (job) await readJob(job);
+        await jobsView.event(payload);
         return;
       }
       if (event.name !== "ssh.terminal.output") return;
@@ -668,7 +346,7 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
       if (data.connectionId !== connectionId) await refreshSnapshot();
       if (data.connectionId !== connectionId || BigInt(data.cursor) <= BigInt(cursor)) return;
       if (BigInt(data.cursor) !== BigInt(cursor) + 1n) { await refreshSnapshot(); return; }
-      await write(data.data);
+      await writeFrame(data);
       cursor = data.cursor;
     }));
     if (disposed) { cancel(); return; }
@@ -716,17 +394,13 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
   });
   observer.observe(terminalContainer);
   const stopLocale = api.i18n?.subscribe(() => {
-    viewSwitch.setAttribute("aria-label", t("SSH view"));
-    terminalButton.textContent = t("Terminal");
-    blocksButton.textContent = t("Command blocks");
+    terminalBlocks.refreshLocale(t("Clear selection"));
     blocksView.refreshLocale();
     searchView.refreshLocale();
-    jobStop.textContent = t("Stop");
-    jobClose.textContent = t("Close view");
+    jobsView.refreshLocale();
     state.textContent = t(stateMessage);
     connect.textContent = t(connected ? "Disconnect" : "Connect");
-    renderJobs();
-    renderJobView();
+
   });
   void startEvents().catch(showError);
 
@@ -738,7 +412,8 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
     unsubscribe?.();
     window.clearTimeout(resizeTimer);
     observer.disconnect();
-    jobsObserver.disconnect();
+    jobsView.unmount();
+    terminalBlocks.unmount();
     onData.dispose();
     stopShortcuts();
     searchView.dispose();

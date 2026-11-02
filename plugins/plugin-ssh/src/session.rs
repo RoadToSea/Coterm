@@ -238,6 +238,7 @@ pub async fn probe(config: &Config) -> Result<String> {
 /// Bounded byte stream with a monotonic cursor. Used for terminal replay and exec jobs.
 pub struct OutputBuffer {
     chunks: VecDeque<(u64, Vec<u8>)>,
+    annotations: HashMap<u64, Value>,
     bytes: usize,
     sequence: u64,
     limit: usize,
@@ -256,6 +257,7 @@ impl OutputBuffer {
     pub fn new(limit: usize) -> Self {
         Self {
             chunks: VecDeque::new(),
+            annotations: HashMap::new(),
             bytes: 0,
             sequence: 0,
             limit,
@@ -271,8 +273,9 @@ impl OutputBuffer {
             self.total += part.len();
             self.chunks.push_back((self.sequence, part.to_vec()));
             self.bytes += part.len();
-            while self.bytes > self.limit {
-                if let Some((_, data)) = self.chunks.pop_front() {
+            while self.bytes > self.limit || self.chunks.len() > 256 {
+                if let Some((sequence, data)) = self.chunks.pop_front() {
+                    self.annotations.remove(&sequence);
                     self.bytes -= data.len();
                     self.dropped += data.len();
                 }
@@ -309,6 +312,46 @@ impl OutputBuffer {
         Ok(
             json!({"data": STANDARD.encode(data), "cursor": next.to_string(), "gap": gap, "closed": self.closed, "more": more}),
         )
+    }
+
+    /// One trusted terminal frame per page; metadata never comes from remote bytes.
+    pub fn read_terminal(&self, after: u64) -> Result<Value> {
+        if after > self.sequence {
+            bail!("Output cursor is ahead of the connection");
+        }
+        let first = self
+            .chunks
+            .front()
+            .map_or(self.sequence + 1, |chunk| chunk.0);
+        let gap = after.saturating_add(1) < first;
+        let next = self.chunks.iter().find(|(sequence, _)| *sequence > after);
+        let (cursor, data) = next.map_or((self.sequence, &[][..]), |(sequence, bytes)| {
+            (*sequence, bytes.as_slice())
+        });
+        let annotation = next.and_then(|(sequence, _)| self.annotations.get(sequence));
+        Ok(
+            json!({"data": STANDARD.encode(data), "cursor": cursor.to_string(), "gap": gap,
+            "closed": self.closed, "more": cursor < self.sequence, "annotation": annotation}),
+        )
+    }
+
+    fn push_terminal(&mut self, bytes: &[u8], annotation: Option<&Value>) {
+        if bytes.is_empty() {
+            self.sequence += 1;
+            self.chunks.push_back((self.sequence, Vec::new()));
+            while self.chunks.len() > 256 {
+                if let Some((sequence, data)) = self.chunks.pop_front() {
+                    self.annotations.remove(&sequence);
+                    self.bytes -= data.len();
+                    self.dropped += data.len();
+                }
+            }
+        } else {
+            self.push(bytes);
+        }
+        if let Some(annotation) = annotation {
+            self.annotations.insert(self.sequence, annotation.clone());
+        }
     }
 
     /// Reads a job stream with a readable representation when the bytes are safe text.
@@ -805,7 +848,14 @@ impl Connection {
                                 Some(command) => command.feed(&data),
                                 None => (data.to_vec(), None),
                             };
-                            push_output(&task_output, &events, &connection_id, &visible).await;
+                            let annotations = active.as_mut().map(Command::take_annotations).unwrap_or_default();
+                            let mut offset = 0;
+                            for (boundary, annotation) in annotations {
+                                push_output(&task_output, &events, &connection_id, &visible[offset..boundary]).await;
+                                push_terminal_frame(&task_output, &events, &connection_id, &[], Some(&annotation)).await;
+                                offset = boundary;
+                            }
+                            push_output(&task_output, &events, &connection_id, &visible[offset..]).await;
                             if let Some(result) = completed {
                                 if let Some(command) = active.take() {
                                     let cancelled = pending_cancel
@@ -1478,24 +1528,30 @@ async fn push_output(
     bytes: &[u8],
 ) {
     for part in bytes.chunks(OUTPUT_CHUNK_BYTES) {
-        let cursor = {
-            let mut output = output.lock().await;
-            output.push(part);
-            output.sequence().to_string()
-        };
-        if let Some((instance, sender)) = events {
-            if sender
+        push_terminal_frame(output, events, connection_id, part, None).await;
+    }
+}
+
+async fn push_terminal_frame(
+    output: &Arc<Mutex<OutputBuffer>>,
+    events: &Option<(String, mpsc::Sender<PluginNotification>)>,
+    connection_id: &str,
+    bytes: &[u8],
+    annotation: Option<&Value>,
+) {
+    let cursor = {
+        let mut output = output.lock().await;
+        output.push_terminal(bytes, annotation);
+        output.sequence().to_string()
+    };
+    if let Some((instance, sender)) = events {
+        let _ = sender
                 .send(PluginNotification::Event {
                     plugin_instance_id: instance.clone(),
                     name: "ssh.terminal.output".into(),
-                    payload: json!({"connectionId":connection_id,"data":STANDARD.encode(part),"cursor":cursor}),
+                    payload: json!({"connectionId":connection_id,"data":STANDARD.encode(bytes),"cursor":cursor,"annotation":annotation}),
                 })
-                .await
-                .is_err()
-            {
-                break;
-            }
-        }
+                .await;
     }
 }
 
@@ -1882,6 +1938,27 @@ pub fn parse_fields(bytes: &[u8]) -> Map<String, Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn terminal_frames_are_trusted_bounded_and_do_not_repeat_annotations() -> Result<()> {
+        let mut buffer = OutputBuffer::new(8192);
+        let annotation = json!({"kind":"begin","id":"op","index":1,"actor":"human"});
+        buffer.push_terminal(&[], Some(&annotation));
+        assert_eq!(buffer.read_terminal(0)?["annotation"], annotation);
+        assert!(buffer.read_terminal(1)?["annotation"].is_null());
+        buffer.push(b"remote output, no fabricated metadata");
+        assert!(buffer.read_terminal(1)?["annotation"].is_null());
+        for _ in 0..300 {
+            buffer.push_terminal(&[], Some(&annotation));
+        }
+        assert_eq!(buffer.chunks.len(), 256);
+        assert_eq!(buffer.annotations.len(), 256);
+        let page = buffer.read_terminal(0)?;
+        assert_eq!(page["gap"], true);
+        assert!(serde_json::to_vec(&page)?.len() < 8192);
+        assert!(buffer.read_terminal(buffer.sequence + 1).is_err());
+        Ok(())
+    }
 
     #[test]
     fn encoded_job_pages_advance_and_fit_the_host_record_budget() -> Result<()> {

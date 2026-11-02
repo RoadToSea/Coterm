@@ -15,6 +15,7 @@ for (const protocol of ["serial", "ssh"]) {
       new URL(`../plugins/plugin-${protocol}/frontend/src/i18n.ts`, import.meta.url),
       new URL("../packages/plugin-sdk/src/components/terminal-shortcuts.ts", import.meta.url),
       new URL("../packages/plugin-sdk/src/components/terminal-search.ts", import.meta.url),
+      ...(protocol === "ssh" ? [new URL("../packages/plugin-sdk/src/components/terminal-blocks.ts", import.meta.url)] : []),
     ]) assert.ok(built >= fs.statSync(source).mtimeMs, `rebuild plugin:${protocol}:build before testing`);
     const moduleURL = `data:text/javascript;base64,${fs.readFileSync(artifact).toString("base64")}`;
     const session = await openSession({ browserPath, totalTimeoutMs:30_000 });
@@ -54,6 +55,8 @@ for (const protocol of ["serial", "ssh"]) {
             if (operation === 'serial.write') return receipt({bytes:new TextEncoder().encode(args.text).length});
             if (operation === 'ssh.input') return receipt({bytes:atob(args.data).length});
             if (operation === 'ssh.resize') return receipt({});
+            if (operation === 'ssh.blocks') return receipt({epoch:'conn',revision:'1',dropped:0,blocks:[],more:false,nextBefore:null});
+            if (operation === 'ssh.select_blocks') return receipt({});
             throw new Error(operation);
           },
           async subscribeEvents(fn) { window.event = fn; return () => { window.unsubscribed = true; }; },

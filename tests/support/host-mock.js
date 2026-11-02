@@ -267,6 +267,22 @@ export function makeHostMockSource(initial) {
       list_operations: () => scenario.operations ?? [],
       recent_operations: () => scenario.history ?? [],
       recent_plugin_operations: () => scenario.history ?? [],
+      invoke_plugin_operation: ({ pluginId, operation }) => {
+        if (operation === "serial.plugin_info") {
+          return {
+            status: "completed",
+            output: {
+              pluginId: "serial",
+              instanceCount: scenario.instances.filter(x => x.pluginId === "serial").length,
+              ports: [
+                { portName: "COM1", portType: { kind: "usb", product: "USB Serial" } },
+                { portName: "COM2", portType: { kind: "usb", product: "USB Serial" } },
+              ],
+            },
+          };
+        }
+        return { status: "completed", output: {} };
+      },
       host_attention: () => attention,
       plugin_frontend_source: ({ pluginId }) => pluginId === "ssh" ? scenario.sshFrontendSource : pluginId === "serial" ? scenario.serialFrontendSource : null,
       invoke_operation: ({ operation, args }) => {

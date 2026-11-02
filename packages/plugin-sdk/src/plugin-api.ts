@@ -166,6 +166,8 @@ export interface PluginConfigurationAPI {
   readonly i18n?: PluginI18n;
   /** Completes plugin-owned configuration; the host starts/creates the instance. */
   submit(config: unknown): Promise<void>;
+  /** Optional plugin-level operation invocation (e.g. querying device ports). */
+  invoke?<T = unknown>(operation: string, args?: unknown, options?: InvokeOptions): Promise<OperationReceipt<T>>;
 }
 
 export interface PluginI18n {
