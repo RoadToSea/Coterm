@@ -325,6 +325,81 @@ impl ProcessPluginRuntime {
         }
     }
 
+    pub async fn create_instance_with_name(
+        &self,
+        plugin_id: &str,
+        config: Value,
+        name: Option<String>,
+    ) -> Result<InstanceInfo, RuntimeError> {
+        let name = match name {
+            Some(name) => {
+                let name = name.trim();
+                if name.len() > 256 || name.chars().any(char::is_control) {
+                    return Err(runtime_error(
+                        ErrorCategory::InvalidRequest,
+                        "instance_name_invalid",
+                    ));
+                }
+                (!name.is_empty()).then(|| name.to_owned())
+            }
+            None => None,
+        };
+        let mut state = self.state.lock().await;
+        self.ensure_accepting()?;
+        let package = state
+            .packages
+            .get(plugin_id)
+            .ok_or_else(|| runtime_error(ErrorCategory::NotFound, "plugin_not_loaded"))?;
+        if !package.manifest.instances.multiple {
+            return Err(runtime_error(
+                ErrorCategory::Unsupported,
+                "plugin_multi_instance_unsupported",
+            ));
+        }
+        let process = state
+            .processes
+            .get(plugin_id)
+            .ok_or_else(|| runtime_error(ErrorCategory::Conflict, "plugin_not_started"))?;
+        let instance_id = uuid::Uuid::new_v4().to_string();
+        let instance = InstanceInfo {
+            plugin_id: plugin_id.to_owned(),
+            plugin_instance_id: instance_id.clone(),
+            session_id: uuid::Uuid::new_v4().to_string(),
+            label: format!("{} {instance_id}", package.manifest.name),
+            status: InstanceStatus::Starting,
+        };
+        let created = process
+            .request(HostCommand::CreateInstance(CreateInstance {
+                instance: instance.clone(),
+                config,
+            }))
+            .await?;
+        let requested_label = name
+            .or_else(|| {
+                created
+                    .get("label")
+                    .and_then(Value::as_str)
+                    .filter(|label| {
+                        !label.trim().is_empty()
+                            && label.len() <= 256
+                            && !label.chars().any(char::is_control)
+                    })
+                    .map(str::to_owned)
+            })
+            .unwrap_or(instance.label);
+        let label = unique_instance_label(
+            &requested_label,
+            state.instances.values().map(|item| item.label.as_str()),
+        );
+        let ready = InstanceInfo {
+            label,
+            status: InstanceStatus::Ready,
+            ..instance
+        };
+        state.instances.insert(instance_id, ready.clone());
+        Ok(ready)
+    }
+
     fn ensure_accepting(&self) -> Result<(), RuntimeError> {
         if self
             .shutting_down
@@ -1486,61 +1561,7 @@ impl PluginRuntime for ProcessPluginRuntime {
         plugin_id: &'a str,
         config: Value,
     ) -> RuntimeFuture<'a, InstanceInfo> {
-        Box::pin(async move {
-            let mut state = self.state.lock().await;
-            self.ensure_accepting()?;
-            let package = state
-                .packages
-                .get(plugin_id)
-                .ok_or_else(|| runtime_error(ErrorCategory::NotFound, "plugin_not_loaded"))?;
-            if !package.manifest.instances.multiple {
-                return Err(runtime_error(
-                    ErrorCategory::Unsupported,
-                    "plugin_multi_instance_unsupported",
-                ));
-            }
-            let process = state
-                .processes
-                .get(plugin_id)
-                .ok_or_else(|| runtime_error(ErrorCategory::Conflict, "plugin_not_started"))?;
-            let instance_id = uuid::Uuid::new_v4().to_string();
-            let instance = InstanceInfo {
-                plugin_id: plugin_id.to_owned(),
-                plugin_instance_id: instance_id.clone(),
-                session_id: uuid::Uuid::new_v4().to_string(),
-                label: format!("{} {instance_id}", package.manifest.name),
-                status: InstanceStatus::Starting,
-            };
-            let created = process
-                .request(HostCommand::CreateInstance(CreateInstance {
-                    instance: instance.clone(),
-                    config,
-                }))
-                .await?;
-            let requested_label = created
-                .get("label")
-                .and_then(Value::as_str)
-                .filter(|label| {
-                    !label.trim().is_empty()
-                        && label.len() <= 256
-                        && !label.chars().any(char::is_control)
-                })
-                .map(str::to_owned)
-                .unwrap_or(instance.label);
-            let mut label = requested_label.clone();
-            let mut suffix = 2;
-            while state.instances.values().any(|item| item.label == label) {
-                label = format!("{requested_label} ({suffix})");
-                suffix += 1;
-            }
-            let ready = InstanceInfo {
-                label,
-                status: InstanceStatus::Ready,
-                ..instance
-            };
-            state.instances.insert(instance_id, ready.clone());
-            Ok(ready)
-        })
+        Box::pin(self.create_instance_with_name(plugin_id, config, None))
     }
 
     fn destroy_instance<'a>(&'a self, instance_id: &'a str) -> RuntimeFuture<'a, ()> {
@@ -2321,6 +2342,29 @@ fn runtime_error(category: ErrorCategory, code: &str) -> RuntimeError {
     runtime_error_with(category, code, code.replace('_', " "))
 }
 
+fn unique_instance_label<'a>(requested: &str, existing: impl Iterator<Item = &'a str>) -> String {
+    let existing = existing.collect::<std::collections::HashSet<_>>();
+    if !existing.contains(requested) {
+        return requested.to_owned();
+    }
+    for suffix in 2u64.. {
+        let suffix = format!(" ({suffix})");
+        let max_prefix_bytes = 256usize.saturating_sub(suffix.len());
+        let mut prefix = String::new();
+        for character in requested.chars() {
+            if prefix.len() + character.len_utf8() > max_prefix_bytes {
+                break;
+            }
+            prefix.push(character);
+        }
+        let candidate = format!("{prefix}{suffix}");
+        if !existing.contains(candidate.as_str()) {
+            return candidate;
+        }
+    }
+    requested.to_owned()
+}
+
 fn runtime_error_with(category: ErrorCategory, code: &str, message: String) -> RuntimeError {
     RuntimeError {
         category,
@@ -2338,6 +2382,7 @@ mod tests {
 
     use super::{
         failure_status, operation_args_error, requires_proposal, schema_is_valid,
+        unique_instance_label,
         validate_plugin_authority, validate_scope_target, ProcessPluginRuntime,
     };
     use coterm_proto::runtime::interaction::{InteractionKind, InteractionRequest};
@@ -2345,6 +2390,15 @@ mod tests {
     use serde_json::json;
     use std::sync::Arc;
     use std::time::Duration;
+
+    #[test]
+    fn duplicate_instance_label_suffix_stays_within_utf8_limit() {
+        let long = "名".repeat(85);
+        let label = unique_instance_label(&long, [long.as_str()].into_iter());
+        assert!(label.ends_with(" (2)"));
+        assert!(label.len() <= 256);
+        assert!(label.is_char_boundary(label.len()));
+    }
 
     fn runtime() -> ProcessPluginRuntime {
         ProcessPluginRuntime::new(

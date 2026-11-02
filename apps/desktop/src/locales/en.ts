@@ -1,5 +1,8 @@
 /** Stable host error codes get readable text; third-party diagnostics keep their source text. */
 export const en: Readonly<Record<string, string>> = {
+  "Instance name (optional)": "Instance name (optional)",
+  "Leave empty to use the plugin default": "Leave empty to use the plugin default",
+  "Instance name must be at most 256 UTF-8 bytes and contain no control characters.": "Instance name must be at most 256 UTF-8 bytes and contain no control characters.",
   workspace_group_name_invalid: "Use a workspace name of 1–64 characters without control characters.",
   workspace_group_name_exists: "A workspace with this name already exists.",
   workspace_group_capacity: "The limit of 32 workspaces has been reached.",

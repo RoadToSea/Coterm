@@ -115,7 +115,7 @@ pub async fn restore_saved_instance(
     }
     let instance = state
         .plugin_runtime
-        .create_instance(&entry.plugin_id, entry.config)
+        .create_instance_with_name(&entry.plugin_id, entry.config, Some(entry.label))
         .await?;
     let id = instance.plugin_instance_id.clone();
     let label = instance.label.clone();

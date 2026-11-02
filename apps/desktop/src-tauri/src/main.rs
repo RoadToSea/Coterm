@@ -447,12 +447,13 @@ async fn create_instance(
     plugin_id: String,
     config: Value,
     workspace_id: Option<String>,
+    name: Option<String>,
     state: tauri::State<'_, AppState>,
 ) -> Result<InstanceInfo, String> {
     let _guard = state.workspace_actions.lock().await;
     let instance = state
         .plugin_runtime
-        .create_instance(&plugin_id, config.clone())
+        .create_instance_with_name(&plugin_id, config.clone(), name)
         .await
         .map_err(|error| format!("{}: {}", error.code, error.message))?;
     let id = instance.plugin_instance_id.clone();

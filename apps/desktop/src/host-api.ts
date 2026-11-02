@@ -146,7 +146,7 @@ export interface HostAPI {
   startPlugin(pluginId: string): Promise<void>;
   stopPlugin(pluginId: string): Promise<void>;
   listInstances(pluginId?: string): Promise<InstanceInfo[]>;
-  createInstance(pluginId: string, config: unknown, workspaceId?: string): Promise<InstanceInfo>;
+  createInstance(pluginId: string, config: unknown, workspaceId?: string, name?: string): Promise<InstanceInfo>;
   destroyInstance(pluginInstanceId: string): Promise<void>;
   listOperations(pluginId: string): Promise<OperationDescriptor[]>;
   invokeOperation<T = unknown>(
@@ -376,8 +376,8 @@ export const hostAPI: HostAPI = {
   startPlugin: (pluginId) => invoke<void>("start_plugin", { pluginId }),
   stopPlugin: (pluginId) => invoke<void>("stop_plugin", { pluginId }),
   listInstances: (pluginId) => invoke<InstanceInfo[]>("list_instances", { pluginId }),
-  createInstance: (pluginId, config, workspaceId) =>
-    invoke<InstanceInfo>("create_instance", { pluginId, config, workspaceId }),
+  createInstance: (pluginId, config, workspaceId, name) =>
+    invoke<InstanceInfo>("create_instance", { pluginId, config, workspaceId, ...(name ? { name } : {}) }),
   destroyInstance: (pluginInstanceId) =>
     invoke<void>("destroy_instance", { pluginInstanceId }),
   listOperations: (pluginId) => invoke<OperationDescriptor[]>("list_operations", { pluginId }),

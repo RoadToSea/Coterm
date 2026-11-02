@@ -49,3 +49,10 @@
 另从 Git 暂存区提取宿主、SDK 与 SSH / 串口源码独立构建，设置、偏好和宿主布局 / 语言 / 安装 / 审批定向用例共 9 项通过，确认提交不依赖工作区其他未提交修改。
 
 继续入口：[设置界面](../../apps/desktop/src/components/settings/AppSettings.tsx)、[显示偏好](../../apps/desktop/src/preferences.ts)、[浏览器验收](../../tests/settings-browser.test.mjs)；方案见 [应用设置](../design/app-settings.md)，稳定规则见 [桌面外观](../architecture/desktop-appearance.md)。
+
+## 2026-11-02：创建时自定义实例名称
+
+- 基座在所有插件的内联创建表单提供可选实例名称；名称作为独立宿主元数据传递，不写入插件配置或插件运行时协议。
+- 运行时校验名称不超过 256 个 UTF-8 字节且无控制字符；去除首尾空白，冲突标签添加序号并保持长度限制。留空沿用插件返回标签/基座默认名。
+- 工作区已有标签字段用于持久化；恢复时显式传回存储标签，确保自定义名称在退出后仍保留。
+- 继续入口：[统一配置表单](../../apps/desktop/src/components/plugins/PluginConfiguration.tsx)、[运行时创建](../../crates/coterm-core/src/plugin_manager.rs)、[工作区恢复](../../apps/desktop/src-tauri/src/workspace_commands.rs)。

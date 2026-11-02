@@ -219,7 +219,7 @@ export default function App() {
     }
   };
 
-  const createConfiguredInstance = async (pluginId: string, config: unknown) => {
+  const createConfiguredInstance = async (pluginId: string, config: unknown, name?: string) => {
     setBusyId(pluginId);
     setError(null);
     try {
@@ -479,7 +479,7 @@ export default function App() {
               </div>
               {selectedPlugin.hasFrontend
                 ? <PluginConfiguration key={selectedPlugin.id} pluginId={selectedPlugin.id}
-                    disabled={busyId !== null} onSubmit={config => createConfiguredInstance(selectedPlugin.id, config)} />
+                    disabled={busyId !== null} onSubmit={(config, name) => createConfiguredInstance(selectedPlugin.id, config, name)} />
                 : <p role="status" className="text-sm text-muted-foreground">{t("This plugin does not provide a connection configuration screen.")}</p>}
             </div>
           </section>}

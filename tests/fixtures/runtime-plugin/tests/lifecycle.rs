@@ -88,6 +88,37 @@ async fn submit(
 }
 
 #[tokio::test]
+async fn custom_instance_names_override_plugin_labels_and_are_validated() -> Result<()> {
+    let root = package()?;
+    let runtime = runtime();
+    runtime.load(&root).await?;
+    runtime.start(ID).await?;
+
+    let first = runtime
+        .create_instance_with_name(
+            ID,
+            json!({"label":"Plugin label"}),
+            Some("  Lab server  ".into()),
+        )
+        .await?;
+    assert_eq!(first.label, "Lab server");
+    let second = runtime
+        .create_instance_with_name(ID, json!({}), Some("Lab server".into()))
+        .await?;
+    assert_eq!(second.label, "Lab server (2)");
+
+    let invalid = runtime
+        .create_instance_with_name(ID, json!({}), Some("名".repeat(86)))
+        .await;
+    assert_eq!(
+        invalid.err().map(|error| error.code),
+        Some("instance_name_invalid".into())
+    );
+    assert_eq!(runtime.list_instances(None).await?.len(), 2);
+    Ok(())
+}
+
+#[tokio::test]
 async fn crash_converges_all_scopes_clears_attention_and_allows_restart_without_replay(
 ) -> Result<()> {
     let root = package()?;

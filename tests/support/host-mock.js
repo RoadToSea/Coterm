@@ -236,11 +236,11 @@ export function makeHostMockSource(initial) {
         scenario.workspace.entries = scenario.workspace.entries.filter(entry => entry.instanceId !== pluginInstanceId);
         return null;
       },
-      create_instance: ({pluginId,config,workspaceId}) => {
+      create_instance: ({pluginId,config,workspaceId,name}) => {
         const plugin = scenario.catalog.plugins.find(item => item.id === pluginId);
         if (!plugin?.running) throw new Error("plugin_not_running");
         const instance = {pluginId,pluginInstanceId:"created-" + ++nextInstance,sessionId:"session-" + nextInstance,
-          label:config.host ? config.username + "@" + config.host : config.port ?? plugin.name,status:"ready"};
+          label:name?.trim() || (config.host ? config.username + "@" + config.host : config.port ?? plugin.name),status:"ready"};
         scenario.instances = [...scenario.instances,instance];
         scenario.workspace.entries = [...scenario.workspace.entries,{configRef:"created-ref-" + nextInstance,
           pluginId,instanceId:instance.pluginInstanceId,label:instance.label,workspaceId:workspaceId ?? "default"}];
