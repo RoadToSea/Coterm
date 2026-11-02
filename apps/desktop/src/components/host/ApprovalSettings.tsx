@@ -1,153 +1,113 @@
 import { t } from "../../i18n";
 import { useI18n } from "../../use-i18n";
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { hostAPI, type PluginSummary } from "../../host-api";
+import { useEffect, useRef, useState } from "react";
+import { Plus, Trash2 } from "lucide-react";
+import { hostAPI, type ApprovalPolicy } from "../../host-api";
 import { Modal } from "../ui/Modal";
+import { Button } from "../ui/button";
+import { ToggleGroup, ToggleGroupItem } from "../ui/toggle-group";
+import { Alert, AlertDescription } from "../ui/alert";
+import { Separator } from "../ui/separator";
 
-/**
- * Agent 审批放行。基座只比对操作名：放行跳过审批，但不改变 effect、不绕过插件
- * 校验、不允许 Agent 自批。默认只放行基座内置的只读依赖查询。
- */
-export function ApprovalSettings({ plugins, onClose }: { plugins: PluginSummary[]; onClose: () => void }) {
+const DEFAULT_POLICY: ApprovalPolicy = { mode: "allow_matches", patterns: [] };
+const inputClass = "w-full min-w-0 rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring";
+function errorText(reason: unknown): string {
+  return typeof reason === "object" && reason !== null && "message" in reason
+    ? String(reason.message) : String(reason);
+}
+
+export function ApprovalSettings({ onClose }: { onClose: () => void }) {
   useI18n();
-  const [allowed, setAllowed] = useState<string[]>([]);
-  const [operations, setOperations] = useState<string[]>([]);
+  const [policy, setPolicy] = useState<ApprovalPolicy>(DEFAULT_POLICY);
+  const [saved, setSaved] = useState<ApprovalPolicy | null>(null);
   const [custom, setCustom] = useState("");
+  const [text, setText] = useState("");
+  const [preview, setPreview] = useState<boolean | null>(null);
   const [error, setError] = useState("");
-  const [busy, setBusy] = useState(false);
-
-  const refresh = useCallback(async () => {
-    try {
-      const [current, catalogs] = await Promise.all([
-        hostAPI.getAllowedOperations(),
-        Promise.all(
-          plugins.filter((plugin) => plugin.running).map(async (plugin) => ({
-            plugin,
-            operations: await hostAPI.listOperations(plugin.id),
-          })),
-        ),
-      ]);
-      setAllowed(current);
-      const names = catalogs.flatMap(({ plugin, operations }) =>
-        operations
-          .filter((operation) => operation.effect === "commit" || operation.effect === "read")
-          .map((operation) => `${plugin.id} :: ${operation.name}`),
-      );
-      setOperations([...new Set(names)].sort());
-    } catch (reason) {
-      setError(String(reason));
-    }
-  }, [plugins]);
+  const [busy, setBusy] = useState(true);
+  const [retry, setRetry] = useState(0);
+  const action = useRef(false);
+  const dirty = JSON.stringify(saved) !== JSON.stringify(policy);
 
   useEffect(() => {
-    void refresh();
-  }, [refresh]);
-
-  const save = async (next: string[]) => {
+    let disposed = false;
     setBusy(true);
-    try {
-      const stored = await hostAPI.setAllowedOperations(next);
-      setAllowed(stored);
-      setError("");
-    } catch (reason) {
-      setError(String(reason));
-    } finally {
-      setBusy(false);
-    }
+    void hostAPI.getApprovalPolicy().then(current => {
+      if (!disposed) { setPolicy(current); setSaved(current); setError(""); }
+    }).catch(reason => { if (!disposed) setError(errorText(reason)); })
+      .finally(() => { if (!disposed) setBusy(false); });
+    return () => { disposed = true; };
+  }, [retry]);
+
+  const update = (next: ApprovalPolicy) => { setPolicy(next); setPreview(null); setError(""); };
+  const add = (pattern: string) => {
+    if (!pattern.trim() || policy.patterns.includes(pattern)) return;
+    update({ ...policy, patterns: [...policy.patterns, pattern] });
+    setCustom("");
+  };
+  const perform = async (task: () => Promise<void>) => {
+    if (action.current) return;
+    action.current = true;
+    setBusy(true);
+    setError("");
+    try { await task(); } catch (reason) { setError(errorText(reason)); }
+    finally { action.current = false; setBusy(false); }
   };
 
-  const toggle = (name: string) => {
-    const next = allowed.includes(name)
-      ? allowed.filter((entry) => entry !== name)
-      : [...allowed, name];
-    void save(next);
-  };
-
-  const suggestions = useMemo(
-    () => operations.filter((operation) => !allowed.includes(operation.split(" :: ")[1])),
-    [operations, allowed],
-  );
-
-  return (
-    <Modal title={t("Agent approval")} onClose={onClose}>
-      <p className="mb-3 text-xs text-coterm-text-subtle">
-        {t("An Agent operation normally waits for human approval. Adding an operation here lets that operation skip the prompt. Approval is only the host-side gate: plugin checks, secret input and protocol authentication still apply, and an Agent can never approve its own proposal.")}
-      </p>
-      <p className="mb-4 text-[11px] text-coterm-text-muted">
-        {t("Read-only operations are not listed: they are already exempt because they cannot change state.")}
-      </p>
-      {error && <p role="alert">{error}</p>}
-      <section>
-        <h3 className="mb-2 text-xs font-medium">{t("Allowed operations ({count})", { count: allowed.length })}</h3>
-        {allowed.length === 0 ? (
-          <p className="text-[11px] text-coterm-text-muted">{t("No operation is allowed yet.")}</p>
-        ) : (
-          <ul className="mb-4 divide-y divide-coterm-border-subtle border border-coterm-border-subtle">
-            {allowed.map((name) => (
-              <li key={name} className="flex items-center gap-3 px-3 py-2">
-                <code className="min-w-0 flex-1 truncate text-[11px]">{name}</code>
-                <button
-                  type="button"
-                  disabled={busy}
-                  onClick={() => toggle(name)}
-                  className="border border-coterm-border-input px-2 py-1 text-[11px] disabled:opacity-50"
-                >
-                  {t("Remove")}
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
+  return <Modal id="approval-settings-dialog" title={t("Agent approval")} onClose={onClose}>
+    <p className="mb-4 text-sm text-muted-foreground">{t("Match the actual command text, such as ls or cd. Changes take effect after saving.")}</p>
+    {error && <Alert variant="destructive" className="mb-4"><AlertDescription>{error}</AlertDescription></Alert>}
+    {!saved ? <Button variant="outline" disabled={busy} onClick={() => setRetry(value => value + 1)}>{t(busy ? "Loading…" : "Retry")}</Button> :
+    <fieldset disabled={busy} aria-busy={busy} className="m-0 flex min-w-0 flex-col gap-5 border-0 p-0">
+      <section aria-label={t("Matching mode")} className="flex flex-col gap-2">
+        <h3 className="text-sm font-medium">{t("Matching mode")}</h3>
+        <ToggleGroup type="single" value={policy.mode} variant="outline" className="justify-start flex-wrap"
+          onValueChange={value => { if (value === "allow_matches" || value === "approve_matches") update({ ...policy, mode: value }); }}>
+          <ToggleGroupItem value="allow_matches">{t("Allow matching commands")}</ToggleGroupItem>
+          <ToggleGroupItem value="approve_matches">{t("Intercept matching commands")}</ToggleGroupItem>
+        </ToggleGroup>
+        <p className="text-xs text-muted-foreground">{t(policy.mode === "allow_matches"
+          ? "Matching commands skip approval; other commands require approval."
+          : "Matching commands require approval; other commands skip approval.")}</p>
       </section>
-      <section>
-        <h3 className="mb-2 text-xs font-medium">{t("Add an operation")}</h3>
-        <div className="mb-3 flex gap-2">
-          <input
-            aria-label={t("Operation name")}
-            value={custom}
-            spellCheck={false}
-            placeholder="plugin.operation"
-            onChange={(event) => setCustom(event.target.value)}
-            className="min-w-0 flex-1 border border-coterm-border-input bg-coterm-surface p-2 font-mono text-[11px]"
-          />
-          <button
-            type="button"
-            disabled={busy || custom.trim() === ""}
-            onClick={() => {
-              void save([...allowed, custom.trim()]);
-              setCustom("");
-            }}
-            className="border border-coterm-border-input px-3 text-[11px] disabled:opacity-50"
-          >
-            {t("Allow")}
-          </button>
+      <section className="flex flex-col gap-3" aria-label={t("Regular expression rules")}>
+        <h3 className="text-sm font-medium">{t("Regular expression rules")} ({policy.patterns.length}/128)</h3>
+        <p className="text-xs text-muted-foreground">{t("Rules match any position. Use ^ and $ for a whole command. A command list is checked entry by entry; multiline scripts are matched as submitted. Lookaround and backreferences are unsupported.")}</p>
+        {policy.patterns.length === 0 ? <p className="text-xs text-muted-foreground">{t("No rules yet.")}</p> :
+          <ul className="flex max-h-52 flex-col gap-2 overflow-y-auto">
+            {policy.patterns.map((pattern, index) => <li key={index} className="flex min-w-0 items-center gap-2 rounded-md border border-border p-2">
+              <code className="min-w-0 flex-1 break-all text-xs">{pattern}</code>
+              <Button variant="ghost" size="icon" type="button" aria-label={t("Remove rule {number}", { number: index + 1 })}
+                onClick={() => update({ ...policy, patterns: policy.patterns.filter((_, position) => position !== index) })}><Trash2 /></Button>
+            </li>)}
+          </ul>}
+        <label className="flex flex-col gap-2 text-sm" htmlFor="approval-pattern">{t("Add a regular expression")}
+          <input id="approval-pattern" value={custom} onChange={event => setCustom(event.target.value)}
+            onKeyDown={event => { if (event.key === "Enter" && !event.nativeEvent.isComposing) { event.preventDefault(); add(custom); } }}
+            placeholder="^ls$" spellCheck={false} maxLength={2048} className={inputClass} />
+        </label>
+        <div className="flex flex-wrap gap-2">
+          <Button type="button" variant="outline" size="sm" disabled={!custom.trim() || policy.patterns.length >= 128} onClick={() => add(custom)}><Plus data-icon="inline-start" />{t("Add rule")}</Button>
+          {["ls", "cd"].map(command => <Button key={command} type="button" variant="ghost" size="sm" disabled={policy.patterns.length >= 128}
+            onClick={() => add(`^${command}$`)}>{t("Add {command} example", { command })}</Button>)}
         </div>
-        {suggestions.length > 0 && (
-          <>
-            <p className="mb-2 text-[11px] text-coterm-text-muted">{t("From running plugins:")}</p>
-            <ul className="max-h-48 overflow-auto border border-coterm-border-subtle">
-              {suggestions.map((entry) => {
-                const [pluginId, name] = entry.split(" :: ");
-                return (
-                  <li key={entry} className="flex items-center gap-2 px-3 py-1.5">
-                    <span className="min-w-0 flex-1 truncate text-[11px]">
-                      <span className="text-coterm-text-muted">{pluginId}</span> {name}
-                    </span>
-                    <button
-                      type="button"
-                      disabled={busy}
-                      onClick={() => toggle(name)}
-                      className="border border-coterm-border-input px-2 py-0.5 text-[11px] disabled:opacity-50"
-                    >
-                      {t("Allow")}
-                    </button>
-                  </li>
-                );
-              })}
-            </ul>
-          </>
-        )}
       </section>
-    </Modal>
-  );
+      <Separator />
+      <section className="flex flex-col gap-3">
+        <label className="flex flex-col gap-2 text-sm" htmlFor="approval-preview">{t("Test a command")}
+          <textarea id="approval-preview" rows={3} value={text} maxLength={65536}
+            onChange={event => { setText(event.target.value); setPreview(null); }} className={inputClass} placeholder="ls -la" />
+        </label>
+        <Button type="button" variant="outline" size="sm" className="self-start" disabled={!text}
+          onClick={() => void perform(async () => { setPreview(await hostAPI.previewApprovalPolicy(policy, text)); })}>{t("Test matching")}</Button>
+        <p role="status" className="text-sm">{preview === null ? "" : t(preview ? "Requires human approval" : "Skips human approval")}</p>
+      </section>
+      <p className="text-xs text-muted-foreground">{t("Rules apply to Agent command submissions with approval enabled. Operations without command text keep their normal approval behavior. Protocol authentication still applies.")}</p>
+      <div className="flex items-center justify-between gap-3">
+        <p role="status" className="text-xs text-muted-foreground">{t(custom.trim() ? "Add the typed rule before saving." : dirty ? "Unsaved changes" : "Saved")}</p>
+        <Button type="button" disabled={!dirty || !!custom.trim()} title={custom.trim() ? t("Add the typed rule before saving.") : undefined}
+          onClick={() => void perform(async () => { const stored = await hostAPI.setApprovalPolicy(policy); setPolicy(stored); setSaved(stored); })}>{t("Save rules")}</Button>
+      </div>
+    </fieldset>}
+  </Modal>;
 }

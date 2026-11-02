@@ -52,7 +52,11 @@ fn descriptor(name: &str, scope: OperationScope, effect: OperationEffect) -> Ope
         name: name.into(),
         scope,
         effect,
-        input_schema: json!({"type":"object","properties":{},"additionalProperties":false}),
+        input_schema: if name == "fixture.commit" {
+            json!({"type":"object","properties":{"commands":{"type":"array","items":{"type":"string"}}},"additionalProperties":false,"x-coterm-approval-text":"/commands"})
+        } else {
+            json!({"type":"object","properties":{},"additionalProperties":false})
+        },
         output_schema: None,
         sensitive_input: false,
         transient: false,

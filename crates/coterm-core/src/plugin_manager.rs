@@ -30,6 +30,7 @@ use serde_json::Value;
 use tokio::sync::Mutex;
 
 use crate::{
+    approval_policy::{ApprovalPolicy, CompiledApprovalPolicy},
     operation_history::{OperationHistory, OperationHistoryError},
     plugin_process::{
         resolve_backend_entry, resolve_package_file, validate_manifest, JsonRpcPluginProcess,
@@ -302,8 +303,8 @@ pub struct ProcessPluginRuntime {
     state: Arc<Mutex<State>>,
     history: Arc<OperationHistory>,
     bypass: Arc<tokio::sync::RwLock<bool>>,
-    /// 用户显式放行的操作名（精确匹配）。放行只跳过审批，不改变 effect 或插件校验。
-    allowed_operations: Arc<tokio::sync::RwLock<HashSet<String>>>,
+    /// User-owned compiled command rules. None retains approval for every commit.
+    approval_policy: Arc<tokio::sync::RwLock<Option<CompiledApprovalPolicy>>>,
     /// 仅承载版本号；快照内容以 `state` 为准，二者在同一把锁内推进。
     attention: Arc<std::sync::Mutex<u64>>,
     children: Arc<std::sync::Mutex<HashMap<String, std::sync::Weak<JsonRpcPluginProcess>>>>,
@@ -318,7 +319,7 @@ impl ProcessPluginRuntime {
             state: Arc::new(Mutex::new(State::default())),
             history: Arc::new(OperationHistory::new(100, 16 * 1024).with_output_limit(192 * 1024)),
             bypass: Arc::new(tokio::sync::RwLock::new(false)),
-            allowed_operations: Arc::new(tokio::sync::RwLock::new(HashSet::new())),
+            approval_policy: Arc::new(tokio::sync::RwLock::new(None)),
             attention: Arc::new(std::sync::Mutex::new(0)),
             children: Arc::new(std::sync::Mutex::new(HashMap::new())),
             shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -663,31 +664,19 @@ impl ProcessPluginRuntime {
         *self.bypass.read().await
     }
 
-    /// Replaces the explicit allowlist. Names are `operation` values exactly as the
-    /// plugin catalog reports them; a pattern is never matched against command text.
-    pub async fn set_allowed_operations(&self, operations: Vec<String>) -> Result<(), RuntimeError> {
-        let mut allowed = HashSet::new();
-        for operation in operations {
-            let operation = operation.trim();
-            if operation.is_empty()
-                || operation.len() > 128
-                || operation.chars().any(char::is_control)
-            {
-                return Err(runtime_error(
-                    ErrorCategory::InvalidRequest,
-                    "allowed_operation_invalid",
-                ));
-            }
-            allowed.insert(operation.to_owned());
-        }
-        *self.allowed_operations.write().await = allowed;
+    pub async fn set_approval_policy(&self, policy: ApprovalPolicy) -> Result<(), RuntimeError> {
+        let compiled = policy.compile()?;
+        *self.approval_policy.write().await = Some(compiled);
         Ok(())
     }
 
-    pub async fn allowed_operations(&self) -> Vec<String> {
-        let mut allowed: Vec<_> = self.allowed_operations.read().await.iter().cloned().collect();
-        allowed.sort();
-        allowed
+    pub async fn approval_policy(&self) -> ApprovalPolicy {
+        self.approval_policy
+            .read()
+            .await
+            .as_ref()
+            .map(CompiledApprovalPolicy::policy)
+            .unwrap_or_default()
     }
 
     pub async fn operation_catalog(&self, plugin_id: &str) -> Vec<OperationDescriptor> {
@@ -1628,11 +1617,6 @@ impl ProcessPluginRuntime {
         Box::pin(async move {
             let bypass = *self.bypass.read().await;
             let state = self.state.lock().await;
-            let explicitly_allowed = self
-                .allowed_operations
-                .read()
-                .await
-                .contains(&request.operation);
             self.ensure_accepting()?;
             let descriptor = state
                 .operation_catalog
@@ -1674,6 +1658,12 @@ impl ProcessPluginRuntime {
                 return Err(runtime_error(ErrorCategory::Conflict, "plugin_not_started"));
             }
             let operation_id = uuid::Uuid::new_v4().to_string();
+            let explicitly_allowed = self
+                .approval_policy
+                .read()
+                .await
+                .as_ref()
+                .is_some_and(|policy| policy.allows(&descriptor, &request.args));
             let proposal_id =
                 requires_proposal(caller.source, &descriptor, bypass, explicitly_allowed)
                     .then(|| uuid::Uuid::new_v4().to_string());
@@ -2316,7 +2306,7 @@ fn validate_schema(schema: &Value, value: &Value) -> Result<(), ()> {
 ///
 /// A read-only operation with no sensitive input only observes state, so it does not
 /// need a proposal. Everything else still does, unless the user enabled Bypass or
-/// explicitly allowed that operation by name. Neither path can change `effect`, bypass
+/// matched the user command approval policy. Neither path can change `effect`, bypass
 /// plugin-side checks, or let an Agent approve its own proposal.
 fn requires_proposal(
     source: OperationSource,
@@ -2382,8 +2372,8 @@ mod tests {
 
     use super::{
         failure_status, operation_args_error, requires_proposal, schema_is_valid,
-        unique_instance_label,
-        validate_plugin_authority, validate_scope_target, ProcessPluginRuntime,
+        unique_instance_label, validate_plugin_authority, validate_scope_target,
+        ProcessPluginRuntime,
     };
     use coterm_proto::runtime::interaction::{InteractionKind, InteractionRequest};
     use coterm_proto::runtime::lifecycle::{InstanceInfo, InstanceStatus, RuntimeLimits};
@@ -2683,7 +2673,7 @@ mod tests {
     }
 
     #[test]
-    fn agent_commit_requires_approval_unless_bypass_or_allowlisted() {
+    fn agent_commit_requires_approval_unless_bypass_or_command_rules_allow() {
         let commit = descriptor(OperationEffect::Commit, false);
         let draft = descriptor(OperationEffect::Draft, false);
         let read = descriptor(OperationEffect::Read, false);
@@ -2723,7 +2713,7 @@ mod tests {
             false,
             false
         ));
-        // An explicit allowlist entry must never be able to weaken a human-only path:
+        // A command rule must never be able to weaken a human-only path:
         // the caller source is checked first.
         assert!(!requires_proposal(
             OperationSource::Human,

@@ -36,6 +36,8 @@ pub struct OperationDescriptor {
     pub name: String,
     pub scope: OperationScope,
     pub effect: OperationEffect,
+    /// Optional `x-coterm-approval-text` is a JSON Pointer to submitted command text
+    /// or a string array. The host may apply user command approval rules to it.
     pub input_schema: Value,
     pub output_schema: Option<Value>,
     /// Suppress raw inputs in the public ledger (e.g. interactive terminal keys).

@@ -70,6 +70,8 @@ Rust 插件实现 `coterm_proto::runtime::backend::PluginBackend`，通过 `tran
 
 Agent commit 默认先准备提案；准备阶段不能产生发送副作用，批准后执行用户确认的参数快照。Bypass 仅跳过宿主提交审批，仍需协议认证。只有确认未提交或已停止，才可报告取消成功。
 
+用户可按实际命令文本配置正向放行或反向拦截正则。插件通过 operation `inputSchema` 的可选 `x-coterm-approval-text` JSON Pointer 声明命令文本字段；未声明或无效字段沿用默认审批；原有敏感输入脱敏规则保持有效。字段含义、数组聚合及例子见 [命令审批规则](command-approval.md)。插件不得自行解释用户的审批正则。
+
 MCP Tools 需单独注册 descriptor 与内部 operation 的映射；不会自动暴露整个操作目录。参数、结果及协议领域语义由插件定义，接入规则见 [MCP](mcp-integration.md)。
 
 ## 前端

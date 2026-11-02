@@ -166,10 +166,10 @@ pub async fn reset_saved_workspace(state: tauri::State<'_, AppState>) -> Result<
     .map_err(|_| workspace::error("workspace_task_failed"))?
 }
 
-/// Persists the approval allowlist without touching instance entries.
-pub async fn store_allowed_operations(
+/// Persists command approval settings without touching instance entries.
+pub async fn store_approval_policy(
     state: &tauri::State<'_, AppState>,
-    allowed: Vec<String>,
+    policy: coterm_core::approval_policy::ApprovalPolicy,
 ) -> Result<(), coterm_proto::runtime::RuntimeError> {
-    access(state, move |store| store.save_allowed_operations(allowed)).await
+    access(state, move |store| store.save_approval_policy(policy)).await
 }

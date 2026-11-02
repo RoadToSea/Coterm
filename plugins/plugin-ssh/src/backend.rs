@@ -205,6 +205,16 @@ pub fn catalog() -> Vec<OperationDescriptor> {
             });
         }
     }
+    for operation in &mut operations {
+        let pointer = match operation.name.as_str() {
+            "ssh.command" | "ssh.exec" => Some("/text"),
+            "mcp.ssh.command" | "mcp.ssh.exec" => Some("/commands"),
+            _ => None,
+        };
+        if let Some(pointer) = pointer {
+            operation.input_schema["x-coterm-approval-text"] = json!(pointer);
+        }
+    }
     operations
 }
 
@@ -1288,6 +1298,25 @@ fn truncate(text: &str, limit: usize) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn command_approval_annotations_cover_native_and_mcp_inputs() {
+        for (name, pointer) in [
+            ("ssh.command", "/text"),
+            ("ssh.exec", "/text"),
+            ("mcp.ssh.command", "/commands"),
+            ("mcp.ssh.exec", "/commands"),
+        ] {
+            assert!(super::catalog()
+                .iter()
+                .any(|item| item.name == name
+                    && item.input_schema["x-coterm-approval-text"] == pointer));
+        }
+        assert!(super::catalog()
+            .iter()
+            .filter(|item| item.name.contains("write_file") || item.sensitive_input)
+            .all(|item| item.input_schema.get("x-coterm-approval-text").is_none()));
+    }
+
     use serde_json::json;
 
     use super::{command_sequence, mcp_tools, session, validate_mcp_args};

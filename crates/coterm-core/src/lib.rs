@@ -1,3 +1,4 @@
+pub mod approval_policy;
 pub mod arbiter;
 pub mod block_parser;
 pub mod guardrail;

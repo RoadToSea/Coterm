@@ -774,28 +774,35 @@ async fn get_bypass(state: tauri::State<'_, AppState>) -> Result<bool, String> {
     Ok(state.plugin_runtime.bypass_enabled().await)
 }
 
-/// 放行列表只在人工操作下修改；它跳过审批，但不改变 effect、不绕过插件校验。
+/// Only the host settings UI can change the command approval policy.
 #[tauri::command]
-async fn set_allowed_operations(
-    operations: Vec<String>,
+async fn set_approval_policy(
+    policy: coterm_core::approval_policy::ApprovalPolicy,
     state: tauri::State<'_, AppState>,
-) -> Result<Vec<String>, String> {
+) -> Result<coterm_core::approval_policy::ApprovalPolicy, coterm_proto::runtime::RuntimeError> {
     let _guard = state.workspace_actions.lock().await;
+    policy.compile()?;
+    workspace_commands::store_approval_policy(&state, policy.clone()).await?;
     state
         .plugin_runtime
-        .set_allowed_operations(operations)
-        .await
-        .map_err(|error| format!("{}: {}", error.code, error.message))?;
-    let allowed = state.plugin_runtime.allowed_operations().await;
-    if let Err(error) = workspace_commands::store_allowed_operations(&state, allowed.clone()).await {
-        return Err(format!("{}: {}", error.code, error.message));
-    }
-    Ok(allowed)
+        .set_approval_policy(policy.clone())
+        .await?;
+    Ok(policy)
 }
 
 #[tauri::command]
-async fn get_allowed_operations(state: tauri::State<'_, AppState>) -> Result<Vec<String>, String> {
-    Ok(state.plugin_runtime.allowed_operations().await)
+async fn get_approval_policy(
+    state: tauri::State<'_, AppState>,
+) -> Result<coterm_core::approval_policy::ApprovalPolicy, String> {
+    Ok(state.plugin_runtime.approval_policy().await)
+}
+
+#[tauri::command]
+fn preview_approval_policy(
+    policy: coterm_core::approval_policy::ApprovalPolicy,
+    text: String,
+) -> Result<bool, coterm_proto::runtime::RuntimeError> {
+    Ok(policy.compile()?.requires_approval(&[&text]))
 }
 
 async fn summary(state: &AppState, manifest: PluginManifest) -> PluginSummary {
@@ -864,10 +871,10 @@ fn main() {
                 current_platform(),
                 runtime_limits,
             ));
-            // Restore the approval allowlist before any client can submit work.
+            // Restore command rules before any client can submit work; legacy interface grants are discarded.
             if let Ok(store) = &workspace {
                 tauri::async_runtime::block_on(
-                    plugin_runtime.set_allowed_operations(store.snapshot().allowed_operations),
+                    plugin_runtime.set_approval_policy(store.snapshot().approval_policy),
                 )
                 .ok();
             }
@@ -954,8 +961,9 @@ fn main() {
             cancel_operation,
             set_bypass,
             get_bypass,
-            set_allowed_operations,
-            get_allowed_operations
+            set_approval_policy,
+            get_approval_policy,
+            preview_approval_policy
         ])
         .build(tauri::generate_context!());
     let application = match application {

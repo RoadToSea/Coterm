@@ -174,6 +174,15 @@ pub fn catalog() -> Vec<OperationDescriptor> {
             });
         }
     }
+    for operation in &mut operations {
+        let pointer = match operation.name.as_str() {
+            "serial.command" | "mcp.serial.command" => Some("/commands"),
+            _ => None,
+        };
+        if let Some(pointer) = pointer {
+            operation.input_schema["x-coterm-approval-text"] = json!(pointer);
+        }
+    }
     operations
 }
 
@@ -807,6 +816,36 @@ fn optional_bool(args: &Value, field: &str) -> Result<Option<bool>> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn only_text_commands_opt_into_command_approval_rules() {
+        for name in ["serial.command", "mcp.serial.command"] {
+            assert!(super::catalog().iter().any(|item| item.name == name
+                && item.input_schema["x-coterm-approval-text"] == "/commands"));
+        }
+        assert!(super::catalog()
+            .iter()
+            .filter(|item| item.name.contains("hex") || item.name.contains("write"))
+            .all(|item| item.input_schema.get("x-coterm-approval-text").is_none()));
+    }
+
+    #[test]
+    fn redacted_serial_commands_can_use_host_rules_without_unredacting_the_catalog() -> Result<()> {
+        use coterm_core::approval_policy::{ApprovalMode, ApprovalPolicy};
+        let policy = ApprovalPolicy {
+            mode: ApprovalMode::AllowMatches,
+            patterns: vec![r"^ls$".into()],
+        }
+        .compile()?;
+        let descriptor = super::catalog()
+            .into_iter()
+            .find(|item| item.name == "mcp.serial.command")
+            .ok_or_else(|| anyhow!("Missing command operation"))?;
+        assert!(descriptor.sensitive_input);
+        assert!(policy.allows(&descriptor, &json!({"commands":["ls"]})));
+        assert!(!policy.allows(&descriptor, &json!({"commands":["ls", "rm x"]})));
+        Ok(())
+    }
+
     use super::*;
 
     fn payload(data: &[u8], ending: Option<&str>) -> Result<Vec<u8>> {

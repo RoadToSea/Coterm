@@ -50,7 +50,7 @@ Bridge 保留插件参数和原生 `CallToolResult`，仅处理命名空间、�
 - 所有外部调用固定为 Agent 来源；Agent 不能自行批准、伪造来源或开启 Bypass。
 - 工具结果的机器可读副本是 `structuredContent`；Bridge 自己生成的 `content[].text` 是有界摘要，插件原生文本块保持原样，串口工具在其中提供可直接阅读的有界设备回显。`_meta["coterm/operation"]` 只含操作收据，`output` 已替换为大小标记，避免在元信息中再次重复负载。
 - Agent commit 默认经过人工审批。Bypass 只跳过提交审批，仍需协议认证及秘密输入。
-- 放行（allowlist）在桌面「Agent approval」面板按操作名显式添加，保存在加密工作区。它同样只跳过审批：effect、插件校验、秘密交互和来源限制都不变，Agent 不能放行、不能自批。
+- 命令审批在桌面「Agent approval」面板配置实际命令文本的正则规则，支持正向放行与反向拦截，保存在加密工作区。规则仅影响宿主审批，不改变 effect、插件校验、秘密交互或来源限制；Agent 不能修改规则或自批。列表聚合、无命令文本时的回退与插件接入见 [命令审批规则](command-approval.md)。
 - `effect=read` 且不涉及敏感输入的操作不需要审批；它们只观察状态，不能修改远端。
 
 SSH 认证步骤和工具边界见 [SSH](ssh-plugin.md)，串口可用工具见 [串口](serial-plugin.md)。

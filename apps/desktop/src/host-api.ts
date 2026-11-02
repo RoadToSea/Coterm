@@ -101,7 +101,7 @@ export interface SavedWorkspace {
   groups: WorkspaceGroup[];
   layout: { activeConfigRef: string | null; instancesCollapsed: boolean; activeWorkspaceId: string };
   /** Agent 审批放行的操作名；持久化在加密工作区内。 */
-  allowedOperations: string[];
+  approvalPolicy: ApprovalPolicy;
   historyPolicy: "session_only";
   persistence: "windows_dpapi" | "memory_only";
 }
@@ -123,6 +123,11 @@ export interface McpStdioStatus {
   command: string | null;
   address: string | null;
   clientConfig: string | null;
+}
+
+export interface ApprovalPolicy {
+  mode: "allow_matches" | "approve_matches";
+  patterns: string[];
 }
 
 export interface HostAPI {
@@ -171,8 +176,9 @@ export interface HostAPI {
   setBypass(enabled: boolean): Promise<void>;
   getBypass(): Promise<boolean>;
   /** 放行列表只跳过 Agent 审批；不改变 effect、不绕过插件校验。 */
-  setAllowedOperations(operations: string[]): Promise<string[]>;
-  getAllowedOperations(): Promise<string[]>;
+  setApprovalPolicy(policy: ApprovalPolicy): Promise<ApprovalPolicy>;
+  getApprovalPolicy(): Promise<ApprovalPolicy>;
+  previewApprovalPolicy(policy: ApprovalPolicy, text: string): Promise<boolean>;
   frontendSource(pluginId: string): Promise<string | null>;
   provideSecret(pluginInstanceId: string, purpose: string, value: string): Promise<SecretHandle>;
   /** 一次取回全部实例级与插件级待处理项，替代逐实例扫描历史。 */
@@ -415,9 +421,9 @@ export const hostAPI: HostAPI = {
     invoke<OperationReceipt>("cancel_operation", { pluginInstanceId, operationId }),
   setBypass: (enabled) => invoke<void>("set_bypass", { enabled }),
   getBypass: () => invoke<boolean>("get_bypass"),
-  setAllowedOperations: (operations) =>
-    invoke<string[]>("set_allowed_operations", { operations }),
-  getAllowedOperations: () => invoke<string[]>("get_allowed_operations"),
+  setApprovalPolicy: (policy) => invoke<ApprovalPolicy>("set_approval_policy", { policy }),
+  getApprovalPolicy: () => invoke<ApprovalPolicy>("get_approval_policy"),
+  previewApprovalPolicy: (policy, text) => invoke<boolean>("preview_approval_policy", { policy, text }),
 };
 
 /** Binds plugin-facing calls to one instance; unsupported event features fail explicitly. */

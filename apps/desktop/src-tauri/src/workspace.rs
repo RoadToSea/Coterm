@@ -1,5 +1,6 @@
 //! Versioned workspace metadata and configuration references. The entire file is
 //! protected by the current Windows user's DPAPI key; no plaintext fallback.
+use coterm_core::approval_policy::ApprovalPolicy;
 use coterm_proto::runtime::{ErrorCategory, RuntimeError};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -87,9 +88,11 @@ struct Document {
     version: u32,
     entries: Vec<Entry>,
     layout: Layout,
-    /// Operations the user allowed to skip Agent approval. Empty by default.
-    #[serde(default)]
+    /// Legacy interface allowlist is accepted but never restored as command rules.
+    #[serde(default, skip_serializing)]
     allowed_operations: Vec<String>,
+    #[serde(default)]
+    approval_policy: ApprovalPolicy,
     #[serde(default = "default_groups")]
     groups: Vec<WorkspaceGroup>,
 }
@@ -100,7 +103,7 @@ pub struct Snapshot {
     pub entries: Vec<SavedInstance>,
     pub layout: Layout,
     pub groups: Vec<WorkspaceGroup>,
-    pub allowed_operations: Vec<String>,
+    pub approval_policy: ApprovalPolicy,
     pub history_policy: &'static str,
     pub persistence: &'static str,
 }
@@ -110,7 +113,7 @@ pub struct WorkspaceStore {
     path: PathBuf,
     entries: Vec<SavedInstance>,
     layout: Layout,
-    allowed_operations: Vec<String>,
+    approval_policy: ApprovalPolicy,
     groups: Vec<WorkspaceGroup>,
     // Keep the previous session available for recovery in memory, but once this
     // session has instances, only this session is written to the next snapshot.
@@ -126,7 +129,7 @@ impl WorkspaceStore {
             path,
             entries: Vec::new(),
             layout: Layout::default(),
-            allowed_operations: Vec::new(),
+            approval_policy: ApprovalPolicy::default(),
             groups: default_groups(),
             session_started: false,
         }
@@ -185,10 +188,11 @@ impl WorkspaceStore {
         {
             return Err(error("workspace_invalid"));
         }
+        doc.approval_policy.compile()?;
         Ok(Self {
             #[cfg(windows)]
             path,
-            allowed_operations: doc.allowed_operations,
+            approval_policy: doc.approval_policy,
             layout: doc.layout,
             groups: doc.groups,
             session_started: false,
@@ -212,7 +216,7 @@ impl WorkspaceStore {
             entries: self.entries.clone(),
             layout: self.layout.clone(),
             groups: self.groups.clone(),
-            allowed_operations: self.allowed_operations.clone(),
+            approval_policy: self.approval_policy.clone(),
             history_policy: "session_only",
             persistence: if cfg!(windows) {
                 "windows_dpapi"
@@ -366,7 +370,8 @@ impl WorkspaceStore {
                 })
                 .collect(),
             layout: saved_layout,
-            allowed_operations: self.allowed_operations.clone(),
+            allowed_operations: Vec::new(),
+            approval_policy: self.approval_policy.clone(),
             groups: groups.clone(),
         };
         let mut bytes = serde_json::to_vec(&doc).map_err(|_| error("workspace_invalid"))?;
@@ -458,30 +463,12 @@ impl WorkspaceStore {
         self.commit(entries, self.layout.clone())
     }
 
-    /// Persists the approval allowlist. The list is stored inside the same encrypted
-    /// envelope as instance configuration and never crosses the MCP boundary.
-    pub fn save_allowed_operations(&mut self, allowed: Vec<String>) -> Result<(), RuntimeError> {
-        if allowed.len() > MAX_ENTRIES {
-            return Err(error("workspace_capacity"));
-        }
-        let mut normalized = Vec::new();
-        for operation in allowed {
-            let operation = operation.trim().to_owned();
-            if operation.is_empty()
-                || operation.len() > 128
-                || operation.chars().any(char::is_control)
-            {
-                return Err(error("workspace_invalid"));
-            }
-            if !normalized.contains(&operation) {
-                normalized.push(operation);
-            }
-        }
-        normalized.sort();
-        let entries = self.entries.clone();
-        let previous = std::mem::replace(&mut self.allowed_operations, normalized);
-        if let Err(error) = self.commit(entries, self.layout.clone()) {
-            self.allowed_operations = previous;
+    /// Commit disk state before publishing the new runtime policy.
+    pub fn save_approval_policy(&mut self, policy: ApprovalPolicy) -> Result<(), RuntimeError> {
+        policy.compile()?;
+        let previous = std::mem::replace(&mut self.approval_policy, policy);
+        if let Err(error) = self.commit(self.entries.clone(), self.layout.clone()) {
+            self.approval_policy = previous;
             return Err(error);
         }
         Ok(())

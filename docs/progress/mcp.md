@@ -6,6 +6,18 @@
 - 对外目录使用扁平 `coterm_<plugin>_<tool>`；`coterm.status` 提供有界健康 / 连接快照，实例工具在唯一确认已连接且无未知状态时可省略 `name`。
 - 插件可声明工具 descriptor 的 `_meta["coterm/returnOnApproval"]`，复用运行时状态订阅，在人工审批就绪时返回；未声明的工具和普通运行时提交保持原有等待行为。
 - 串口命令可在一次调用中发送文本并收集提示符前的回显，结果同时提供可读文本与结构化字段；近期输出另有无状态快照接口。
+- Agent 命令审批支持用户自定义正则：正向放行匹配命令，反向拦截匹配命令；编辑器支持追加/删除、试匹配和显式保存。规则作用于实际命令文本，旧接口级放行不再生效。
+
+## 2026-11-02：命令文本正则审批
+
+- 宿主使用独立策略模块编译、限额和匹配正则；模式为 `allow_matches` / `approve_matches`。列表逐项检查，正向全部匹配才放行，反向任意匹配即进入人工审批；多行原文整体匹配，不拆分 Shell 语法。
+- SSH command/exec 与串口文本 command 通过 inputSchema 的可选 `x-coterm-approval-text` 声明命令路径；宿主不写死协议字段。无声明、无效或缺失参数保留原审批；串口文本保持账本脱敏，HEX/原始写入和文件写入不接入文本匹配。
+- 新策略进入加密工作区，保存失败保留原运行时策略和编辑内容。旧 `allowedOperations` 兼容读取但不再授予放行，不将操作名转换为正则；已等待的提案不会因规则变化自动执行。
+- 前端改为两种模式、规则列表、ls/cd 示例及宿主试匹配；不再获取/展示接口目录。中文和 420px 窄屏目视核对通过，截图在忽略的 `target/approval-settings-narrow.png`。
+- 验证通过：`pnpm build`；审批、工作区和实例名称浏览器测试 3 项；Core 策略 3 项、运行时模块 21 项；真实进程 lifecycle 4 项；桌面单元 10 项（串行执行）；SSH/MCP/串口相关回归通过，串口真实设备用例仍需显式设备。桌面首次并行测试出现一次已有工作区写盘失败，单项复测及完整串行复测通过。
+- 继续入口：[规则契约与示例](../architecture/command-approval.md)、[策略模块](../../crates/coterm-core/src/approval_policy.rs)、[设置 UI](../../apps/desktop/src/components/host/ApprovalSettings.tsx)、[浏览器验收](../../tests/approval-settings-browser.test.mjs)。不修改协议认证、Bypass 开关或现有提案的人工批准权限。
+- `cargo check --workspace`、Core/MCP/SSH/Serial 全目标 Clippy（警告视为错误）通过；SSH、Serial 开发包均已重建。重启基座后需让 MCP 客户端重连，使用新握手目录中的命令字段声明。
+- 将暂存区单独导出后，宿主 TypeScript 检查与 `cargo check --workspace --locked` 通过，确认提交不依赖工作区其他未提交的 SDK、Local 插件或配置修改；新增文档链接和暂存差异检查通过。
 
 ## 2026-11-02：Agent 健康检查、默认路由与扁平工具名
 

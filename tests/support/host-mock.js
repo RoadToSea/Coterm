@@ -42,7 +42,7 @@ export function makeHostMockSource(initial) {
     const scenario = ${JSON.stringify(initial)};
     const defaultLayout = { activeConfigRef:null, instancesCollapsed:innerWidth < 900, activeWorkspaceId:"default" };
     scenario.workspace = {
-      groups:[{id:"default",name:"Default workspace"}], allowedOperations:[], historyPolicy:"session_only", persistence:"windows_dpapi",
+      groups:[{id:"default",name:"Default workspace"}], approvalPolicy:{mode:"allow_matches",patterns:[]}, historyPolicy:"session_only", persistence:"windows_dpapi",
       ...scenario.workspace,
       entries:(scenario.workspace?.entries ?? scenario.instances.map(instance => ({
         configRef:"ref-" + instance.pluginInstanceId, pluginId:instance.pluginId,label:instance.label,instanceId:instance.pluginInstanceId,
@@ -252,6 +252,13 @@ export function makeHostMockSource(initial) {
       },
       provide_secret: ({ pluginInstanceId, purpose }) => ({ id: "secret-test", pluginInstanceId, purpose, expiresAt: "2099-01-01T00:00:00Z" }),
       list_plugins: () => scenario.catalog,
+      get_approval_policy: () => scenario.workspace.approvalPolicy,
+      set_approval_policy: ({policy}) => {
+        scenario.workspace.approvalPolicy = structuredClone(policy);
+        return scenario.workspace.approvalPolicy;
+      },
+      // Matching semantics are tested against the Rust matcher, not a JS reimplementation.
+      preview_approval_policy: ({text}) => scenario.approvalPreview?.[text] ?? true,
       prepare_plugin_install: () => scenario.installPreview ?? null,
       install_plugin_package: ({ token }) => {
         if (!scenario.installPreview || token !== scenario.installPreview.token) throw new Error("plugin_install_unavailable");

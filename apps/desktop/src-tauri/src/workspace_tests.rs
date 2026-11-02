@@ -1,5 +1,34 @@
 use super::*;
 
+#[cfg(windows)]
+#[test]
+fn approval_rules_roundtrip_and_failed_writes_preserve_the_saved_policy() -> anyhow::Result<()> {
+    use coterm_core::approval_policy::{ApprovalMode, ApprovalPolicy};
+    let fixture = Fixture::new()?;
+    let legacy = serde_json::json!({"version":1,"entries":[],"layout":{"activeConfigRef":null,"instancesCollapsed":false},"allowedOperations":["ssh.exec"]});
+    fs::write(
+        fixture.path(),
+        protect(&serde_json::to_vec(&legacy)?, true)?,
+    )?;
+    let mut store = fixture.store()?;
+    assert_eq!(store.snapshot().approval_policy, ApprovalPolicy::default());
+    let policy = ApprovalPolicy {
+        mode: ApprovalMode::ApproveMatches,
+        patterns: vec![r"\brm\b".into()],
+    };
+    store.save_approval_policy(policy.clone())?;
+    assert_eq!(fixture.store()?.snapshot().approval_policy, policy);
+    let serialized = serde_json::to_value(store.snapshot())?;
+    assert!(serialized.get("allowedOperations").is_none());
+    store.path = fixture.0.join("missing").join("workspace.bin");
+    assert!(store
+        .save_approval_policy(ApprovalPolicy::default())
+        .is_err());
+    assert_eq!(store.snapshot().approval_policy, policy);
+    assert_eq!(fixture.store()?.snapshot().approval_policy, policy);
+    Ok(())
+}
+
 struct Fixture(PathBuf);
 
 impl Fixture {

@@ -119,6 +119,85 @@ async fn custom_instance_names_override_plugin_labels_and_are_validated() -> Res
 }
 
 #[tokio::test]
+async fn command_rules_control_real_agent_dispatch_and_preserve_pending_approvals() -> Result<()> {
+    use coterm_core::approval_policy::{ApprovalMode, ApprovalPolicy};
+    let root = package()?;
+    let runtime = runtime();
+    runtime.load(&root).await?;
+    runtime.start(ID).await?;
+    let instance = runtime.create_instance(ID, json!({})).await?;
+    let allow = ApprovalPolicy {
+        mode: ApprovalMode::AllowMatches,
+        patterns: vec![r"^ls$".into(), r"^cd /tmp$".into()],
+    };
+    runtime.set_approval_policy(allow.clone()).await?;
+    for (mode, commands, expected) in [
+        (
+            ApprovalMode::AllowMatches,
+            vec!["ls", "cd /tmp"],
+            OperationStatus::Completed,
+        ),
+        (
+            ApprovalMode::AllowMatches,
+            vec!["ls", "rm x"],
+            OperationStatus::AwaitingApproval,
+        ),
+        (
+            ApprovalMode::AllowMatches,
+            vec!["ls; rm x"],
+            OperationStatus::AwaitingApproval,
+        ),
+        (
+            ApprovalMode::ApproveMatches,
+            vec!["rm x"],
+            OperationStatus::Completed,
+        ),
+        (
+            ApprovalMode::ApproveMatches,
+            vec!["ls", "rm x"],
+            OperationStatus::AwaitingApproval,
+        ),
+    ] {
+        runtime
+            .set_approval_policy(ApprovalPolicy {
+                mode,
+                ..allow.clone()
+            })
+            .await?;
+        let receipt = runtime
+            .submit_until_approval(
+                CallerContext {
+                    source: OperationSource::Agent,
+                    session_id: instance.session_id.clone(),
+                    plugin_id: Some(ID.into()),
+                },
+                SubmitOperation {
+                    plugin_id: ID.into(),
+                    plugin_instance_id: Some(instance.plugin_instance_id.clone()),
+                    operation: "fixture.commit".into(),
+                    args: json!({"commands":commands}),
+                    wait_timeout_ms: Some(1000),
+                },
+            )
+            .await?;
+        assert_eq!(receipt.status, expected);
+    }
+    // An invalid replacement cannot weaken the last valid configuration.
+    let before = runtime.approval_policy().await;
+    assert!(runtime
+        .set_approval_policy(ApprovalPolicy {
+            mode: ApprovalMode::AllowMatches,
+            patterns: vec!["[".into()]
+        })
+        .await
+        .is_err());
+    assert_eq!(runtime.approval_policy().await, before);
+    assert_eq!(runtime.attention_snapshot().await.approvals.len(), 3);
+    runtime.stop(ID).await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn crash_converges_all_scopes_clears_attention_and_allows_restart_without_replay(
 ) -> Result<()> {
     let root = package()?;

@@ -19,7 +19,7 @@ test("workspace groups manage and move live/saved instances without reconnecting
       {configRef:"ref-live",pluginId:"ssh",instanceId:"inst-1",label:"Prod-Server",workspaceId:"default"},
       {configRef:"ref-saved",pluginId:"ssh",instanceId:null,label:"Standby",workspaceId:"default"},
     ], layout:{activeConfigRef:"ref-live",instancesCollapsed:false,activeWorkspaceId:"default"},
-    allowedOperations:[],historyPolicy:"session_only",persistence:"windows_dpapi",
+    approvalPolicy:{mode:"allow_matches",patterns:[]},historyPolicy:"session_only",persistence:"windows_dpapi",
   };
   const server = await startStaticServer();
   const session = await openSession({ browserPath, totalTimeoutMs:60_000 });

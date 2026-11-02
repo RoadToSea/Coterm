@@ -34,7 +34,7 @@ import { promptForConfirmation, promptForText } from "./secret-input";
 const EMPTY_WORKSPACE: SavedWorkspace = {
   entries: [], groups: [{ id: "default", name: "Default workspace" }],
   layout: { activeConfigRef: null, instancesCollapsed: false, activeWorkspaceId: "default" },
-  allowedOperations: [], historyPolicy: "session_only", persistence: "memory_only",
+  approvalPolicy: { mode: "allow_matches", patterns: [] }, historyPolicy: "session_only", persistence: "memory_only",
 };
 
 export default function App() {
@@ -226,7 +226,7 @@ export default function App() {
       if (!plugins.find((plugin) => plugin.id === pluginId)?.running) {
         await hostAPI.startPlugin(pluginId);
       }
-      const instance = await hostAPI.createInstance(pluginId, config, activeWorkspaceId);
+      const instance = await hostAPI.createInstance(pluginId, config, activeWorkspaceId, name);
       await refresh();
       await refreshWorkspace();
       views.open(instance.pluginInstanceId);
@@ -354,7 +354,7 @@ export default function App() {
         }}>{t("Reset saved workspace")}</button>}
       </div>}
       {pluginIssueNotice}
-      {approvalOpen && <ApprovalSettings plugins={plugins} onClose={() => setApprovalOpen(false)} />}
+      {approvalOpen && <ApprovalSettings onClose={() => setApprovalOpen(false)} />}
       {installerOpen && <PluginInstaller onClose={() => setInstallerOpen(false)} onInstalled={refresh} />}
 
       <div className="flex min-h-0 flex-1">
@@ -405,7 +405,7 @@ export default function App() {
             </Button>
             <Button variant="ghost" size="icon"
               type="button"
-              title={t("Choose which Agent operations skip approval")}
+              title={t("Configure command approval rules")}
               aria-label={t("Open approval settings")}
               onClick={() => setApprovalOpen(true)}
             >

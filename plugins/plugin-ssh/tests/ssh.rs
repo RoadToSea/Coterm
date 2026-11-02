@@ -2397,7 +2397,7 @@ async fn explicit_reset_abandons_an_unknown_command_and_keeps_exec_available() -
 }
 
 #[tokio::test]
-async fn explicit_allowlist_skips_approval_without_changing_effect_or_checks() -> Result<()> {
+async fn command_regex_rules_control_approval_without_changing_effect_or_checks() -> Result<()> {
     use coterm_core::plugin_runtime::{CallerContext, Operations, PluginRuntime, SubmitOperation};
     use coterm_proto::runtime::operation::{OperationSource, OperationStatus};
     let ssh = server().await?;
@@ -2420,7 +2420,7 @@ async fn explicit_allowlist_skips_approval_without_changing_effect_or_checks() -
         args: json!({"pluginInstanceId":instance.plugin_instance_id,"commands":["echo allowed"]}),
         wait_timeout_ms: Some(3_000),
     };
-    // Without an allowlist entry an Agent commit still becomes a proposal.
+    // Without command rules an Agent commit still becomes a proposal.
     let proposal = runtime.submit(agent.clone(), exec()).await?;
     assert_eq!(proposal.status, OperationStatus::AwaitingApproval);
     // Rejection is a human action; the Agent cannot clear its own proposal.
@@ -2445,28 +2445,51 @@ async fn explicit_allowlist_skips_approval_without_changing_effect_or_checks() -
                 .ok_or_else(|| anyhow::anyhow!("no proposal"))?,
         )
         .await?;
-    // The allowlist is matched by operation name, not by command text.
+    // Command text is matched independently of the operation name.
     runtime
-        .set_allowed_operations(vec!["mcp.ssh.exec".to_owned()])
+        .set_approval_policy(coterm_core::approval_policy::ApprovalPolicy {
+            mode: coterm_core::approval_policy::ApprovalMode::AllowMatches,
+            patterns: vec![r"^echo allowed$".to_owned()],
+        })
         .await?;
     let receipt = runtime.submit(agent.clone(), exec()).await?;
     assert_eq!(receipt.status, OperationStatus::Completed, "{receipt:?}");
-    // Effect is still commit in the ledger: the allowlist skipped approval only.
+    // Effect is still commit in the ledger: command rules skipped approval only.
     let record = runtime.get(agent.clone(), &receipt.operation_id).await?;
     assert!(matches!(
         record.effect,
         coterm_proto::runtime::operation::OperationEffect::Commit
     ));
-    // A similar-looking operation that was not allowlisted still needs approval.
+    // A command not matched by the new rule still needs approval.
     runtime
-        .set_allowed_operations(vec!["mcp.ssh.other".to_owned()])
+        .set_approval_policy(coterm_core::approval_policy::ApprovalPolicy {
+            mode: coterm_core::approval_policy::ApprovalMode::AllowMatches,
+            patterns: vec![r"^ls$".to_owned()],
+        })
         .await?;
     let proposal = runtime.submit(agent.clone(), exec()).await?;
     assert_eq!(proposal.status, OperationStatus::AwaitingApproval);
-    // Human-only operations remain human-only regardless of the allowlist.
+    // Reverse mode intercepts matching text and allows the other commands.
     runtime
-        .set_allowed_operations(vec!["mcp.ssh.input".to_owned()])
+        .set_approval_policy(coterm_core::approval_policy::ApprovalPolicy {
+            mode: coterm_core::approval_policy::ApprovalMode::ApproveMatches,
+            patterns: vec![r"^echo allowed$".to_owned()],
+        })
         .await?;
+    assert_eq!(
+        runtime.submit(agent.clone(), exec()).await?.status,
+        OperationStatus::AwaitingApproval
+    );
+    runtime
+        .set_approval_policy(coterm_core::approval_policy::ApprovalPolicy {
+            mode: coterm_core::approval_policy::ApprovalMode::ApproveMatches,
+            patterns: vec![r"^rm".to_owned()],
+        })
+        .await?;
+    assert_eq!(
+        runtime.submit(agent.clone(), exec()).await?.status,
+        OperationStatus::Completed
+    );
     runtime.stop("coterm-plugin-ssh").await?;
     Ok(())
 }
@@ -2561,7 +2584,10 @@ async fn real_mcp_file_tools_and_multiline_exec_preserve_content_and_stop_on_fai
         .await?;
     assert_eq!(read["structuredContent"]["text"], content, "{read}");
     runtime
-        .set_allowed_operations(vec!["mcp.ssh.exec".to_owned()])
+        .set_approval_policy(coterm_core::approval_policy::ApprovalPolicy {
+            mode: coterm_core::approval_policy::ApprovalMode::AllowMatches,
+            patterns: vec![r"(?s).*".to_owned()],
+        })
         .await?;
     let result = client
         .rpc(

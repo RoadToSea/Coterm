@@ -47,7 +47,7 @@ MCP 显式注册 status、probe、connect、disconnect、reset、command、exec�
 - MCP `ssh.exec` 默认支持管道、重定向、here-document 和多行脚本，不提供也不需要 `useShell` 参数；内部单条 `ssh.exec` operation 仍可用 `useShell` 选择 Shell 模式。插件通过 stdin 传递整个列表脚本，固定 Shell 入口完整接收后再执行，不把脚本塞入 exec 参数。列表项之间保留 `cd`/`export`，但不继承共享 PTY 的目录、环境或提权状态。非交互式检查和文件查看优先用 exec / 文件工具。
 - `ssh.system_info`、`ssh.file_info` 使用固定脚本，效果为 read，不进入审批；它们不执行调用方提供的任意命令。`ssh.system_info` 返回 `user/uid/gid/groups/hostname/kernel/arch/shell/home/cwd/os/uptime` 字段，`ssh.file_info` 只返回存在性、类型、大小、权限、属主、mtime 和符号链接目标。
 - `ssh.read_file` / `ssh.write_file` 只接收显式远端路径，不提供目录枚举或任意本地文件访问。读写通过独立 SSH exec 通道完成，超时 15 秒；读取最多 8 KiB，拒绝非 UTF-8 文件；写入最多 64 KiB，先写同目录随机临时文件、设置 mode 后原子替换。mode 仅允许 `0600/0640/0644/0700/0750/0755`。写入是 commit，Agent 走基座审批；默认以 SSH 登录用户权限执行。
-- 需要放行其他命令时，由基座的「Agent approval」面板按操作名显式添加；不要在插件里依据命令字符串判断安全性。
+- 命令由基座「Agent approval」面板按命令文本正则决定放行或进入审批。SSH 目录声明 `x-coterm-approval-text`：内部 command/exec 使用 `/text`，MCP command/exec 使用 `/commands`；文件写入和原始输入不参与命令规则。规则由宿主统一匹配，插件继续负责参数、认证与执行校验，见 [命令审批规则](command-approval.md)。
 
 ### 显式 sudo
 
