@@ -2,6 +2,7 @@ import type { PluginI18n } from "@coterm/plugin-sdk";
 
 const zhCN: Readonly<Record<string, string>> = {
   "Clear selection": "取消全选",
+  "SSH plugin backend is outdated. Rebuild and restart the plugin.": "SSH 插件后端版本过旧，请重新构建并重启插件。",
   "Resize Exec panel": "调整 Exec 面板大小",
   "Dock bottom": "停靠底部",
   "Dock right": "停靠右侧",

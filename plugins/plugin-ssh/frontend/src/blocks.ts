@@ -75,7 +75,10 @@ export function mountSshBlocks(container: HTMLElement, api: PluginAPI, t: Return
   let timer = 0;
   const controller = new AbortController();
   const failure = (reason: unknown) => { if (!disposed) {
-    error.textContent = reason instanceof Error ? reason.message : String(reason);
+    const message = reason instanceof Error ? reason.message : String(reason);
+    const staleBackend = message.includes("operation_not_found") || message.toLowerCase().includes("operation not found");
+    error.textContent = staleBackend ? t("SSH plugin backend is outdated. Rebuild and restart the plugin.") : message;
+    retry.hidden = staleBackend;
     errors.hidden = false;
   } };
   const controls = () => {
@@ -158,6 +161,7 @@ export function mountSshBlocks(container: HTMLElement, api: PluginAPI, t: Return
         selectionDirty = true;
       selected = kept;
       errors.hidden = true;
+      retry.hidden = false;
       onBlocks(blocks);
       controls();
       void syncSelection();

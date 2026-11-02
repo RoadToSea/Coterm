@@ -41,7 +41,9 @@ export function mountTerminalBlocks(gutter: HTMLElement, container: HTMLElement,
   const style = document.createElement("style");
   style.textContent = `
   .coterm-terminal-gutter { position:relative; flex:none; width:66px; min-width:66px; border-right:1px solid var(--coterm-border,#333); }
-  .coterm-terminal-clear { position:absolute; top:2px; left:2px; width:60px; padding:3px 1px; font-size:10px; z-index:2; }
+  .coterm-terminal-clear { position:absolute; top:3px; left:3px; display:grid; place-items:center; width:22px; height:22px; padding:0; border:1px solid var(--coterm-border-input,#454545); border-radius:4px; background:var(--coterm-surface,#1e1e1e); color:var(--coterm-text-muted,#969696); font:16px/1 sans-serif; cursor:pointer; z-index:2; }
+  .coterm-terminal-clear:hover:not(:disabled) { color:var(--coterm-text-primary,#ccc); background:var(--coterm-surface-hover,#414141); }
+  .coterm-terminal-clear:disabled { opacity:.45; cursor:default; }
   .coterm-terminal-number { position:absolute; left:2px; width:60px; padding:0 3px; border:0; background:transparent; font:11px var(--coterm-font-mono,Consolas,monospace); color:var(--coterm-text-muted,#969696); }
   .coterm-terminal-number[aria-pressed="true"] { color:var(--coterm-focus,#38bdf8); background:var(--coterm-selection,rgba(56,189,248,.15)); }
   .coterm-terminal-frames { position:absolute; inset:0; pointer-events:none; overflow:hidden; }
@@ -123,7 +125,9 @@ export function mountTerminalBlocks(gutter: HTMLElement, container: HTMLElement,
     }
     if (changed)
       notify();
-    clear.textContent = label;
+    clear.textContent = "×";
+    clear.title = label;
+    clear.setAttribute("aria-label", label);
   };
   const schedule = () => { if (!disposed && !scheduled)
     scheduled = requestAnimationFrame(render); };
@@ -149,7 +153,9 @@ export function mountTerminalBlocks(gutter: HTMLElement, container: HTMLElement,
   const observer = new ResizeObserver(schedule);
   observer.observe(container);
   clear.disabled = true;
-  clear.textContent = label;
+  clear.textContent = "×";
+  clear.title = label;
+  clear.setAttribute("aria-label", label);
   return {
     begin(block: CommandBlock) {
       if (disposed || entries.has(block.id))
@@ -211,7 +217,7 @@ export function mountTerminalBlocks(gutter: HTMLElement, container: HTMLElement,
     },
     toggle,
     clear: cancel,
-    refreshLocale(next: string) { label = next; clear.textContent = label; schedule(); },
+    refreshLocale(next: string) { label = next; clear.title = label; clear.setAttribute("aria-label", label); schedule(); },
     reset() { available.clear(); for (const id of entries.keys())
       remove(id); cancel(); },
     unmount() {

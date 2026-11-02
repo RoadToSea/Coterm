@@ -49,7 +49,7 @@ test("SSH integrates command blocks into the real terminal and publishes only hu
       "if(window.changeOnPage&&args.before!==undefined){version++;window.changeOnPage=false;}"+
       "const matches=backend.filter(b=>args.before===undefined||b.index<args.before).sort((a,b)=>b.index-a.index);const page=matches.slice(0,1);"+
       "return receipt({epoch,revision:String(version),dropped:window.dropped??0,blocks:page,more:matches.length>1,nextBefore:matches.length>1?page[0].index:null});}"+
-      "if(operation==='ssh.select_blocks'){window.context=args.ids;return receipt({selectedCount:context.length});}"+
+      "if(operation==='ssh.select_blocks'){if(window.missingSelect)throw new Error('operation_not_found: operation not found');window.context=args.ids;return receipt({selectedCount:context.length});}"+
       "if(operation==='ssh.output')return receipt({done:false,exitCode:null,cancelled:false,timedOut:false,stdout:{text:args.stdoutCursor==='0'?'streaming exec output\\n':'',cursor:'1',more:false},stderr:{text:'',cursor:'0',more:false}});"+
       "if(operation==='ssh.command'){backend.push(block('submitted',4,{command:args.text,state:'running',exitCode:null}));version++;return {...receipt(null),operationId:'submitted',status:'running'};}"+
       "throw new Error('Unexpected operation '+operation);},"+
@@ -64,6 +64,7 @@ test("SSH integrates command blocks into the real terminal and publishes only hu
     assert.deepEqual(await run("gutters().map(b=>b.textContent)"),["#1","#2"]);
     assert.equal(await run("root.querySelectorAll('.coterm-terminal-gutter > button:not(.coterm-terminal-number)').length"),1);
     assert.equal(await run("root.querySelector('.coterm-terminal-clear').disabled"),true);
+    assert.deepEqual(await run("(()=>{const b=root.querySelector('.coterm-terminal-clear');const r=b.getBoundingClientRect();return [b.textContent,b.getAttribute('aria-label'),Math.round(r.width),Math.round(r.height)]})()"),["×","Clear selection",22,22]);
     await run("gutters()[0].click();gutters()[1].click();window.keptButton=gutters()[1];keptButton.focus()");
     await waitForValue(client,"context.length===2");
     assert.deepEqual(await run("context"),["one","two"]);
@@ -91,7 +92,14 @@ test("SSH integrates command blocks into the real terminal and publishes only hu
     await run("root.querySelector('.coterm-terminal-clear').click()");
     await waitForValue(client,"context.length===0");
     await run("window.locale='zh-CN';window.translate()");
-    assert.equal(await run("root.querySelector('.coterm-terminal-clear').textContent"),"取消全选");
+    assert.deepEqual(await run("(()=>{const b=root.querySelector('.coterm-terminal-clear');return [b.textContent,b.title,b.getAttribute('aria-label')]})()"),["×","取消全选","取消全选"]);
+    await run("window.missingSelect=true;gutters()[0].click()");
+    await waitForValue(client,"!root.querySelector('.ssh-blocks-error').hidden");
+    assert.deepEqual(await run("[root.querySelector('.ssh-blocks-error .error').textContent,root.querySelector('.ssh-blocks-error button').hidden]"),["SSH 插件后端版本过旧，请重新构建并重启插件。",true]);
+    await run("window.missingSelect=false;event({name:'ssh.blocks.changed',payload:{}})");
+    await waitForValue(client,"root.querySelector('.ssh-blocks-error').hidden && context.length===1");
+    await run("root.querySelector('.coterm-terminal-clear').click()");
+    await waitForValue(client,"context.length===0");
     await run("root.querySelector('.ssh-blocks-compose input').value='echo from-ui';root.querySelector('.ssh-blocks-compose').requestSubmit()");
     await waitForValue(client,"calls.some(c=>c.operation==='ssh.command')");
     assert.deepEqual(await run("calls.filter(c=>c.operation==='ssh.command').map(c=>({args:c.args,options:c.options}))"),[{args:{text:"echo from-ui"},options:{waitTimeoutMs:0}}]);
