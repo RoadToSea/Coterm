@@ -75,7 +75,7 @@ MCP 显式注册 status、probe、connect、disconnect、reset、command、exec�
 
 ## 输出与限制
 
-每连接回放缓冲 256 KiB，每块最多 4 KiB；普通 `ssh.read` 单次最多 8 KiB，终端帧模式每页一个有界帧。开始 / 结束帧可携带仅由插件边界识别器创建的元数据（ID、编号和来源，不含命令、输出或秘密）。事件为 `ssh.terminal.output`、`ssh.status` 和 `ssh.job`，携带连接 ID 和游标。`ssh.job` 仅含 `operationId`、源命令和 `done`，不携带输出；详情通过 `ssh.output` 按游标读取。`ssh.status` 重建时带 `reset=true`。前端先订阅再回放，缺口时恢复；输入队列上限 16 KiB，控制队列 64 项，终端滚动缓存 3000 行。
+每连接回放缓冲 256 KiB，每块最多 4 KiB；普通 `ssh.read` 单次最多 8 KiB，终端帧模式每页一个有界帧。开始 / 结束帧由插件生成，包含 ID、编号、来源和 `boundary=verified/observed`；人工观察的开始帧另含 `lineOffset`，不含命令、输出或秘密。事件为 `ssh.terminal.output`、`ssh.status` 和 `ssh.job`，携带连接 ID 和游标。`ssh.job` 仅含 `operationId`、源命令和 `done`，不携带输出；详情通过 `ssh.output` 按游标读取。`ssh.status` 重建时带 `reset=true`。前端先订阅再回放，缺口时恢复；输入队列上限 16 KiB，控制队列 64 项，终端滚动缓存 3000 行。
 
 Exec 胶囊保留单行列表。用户查看历史任务后暂停跟随；点最新任务、恢复按钮或在面板焦点内按 `Esc` 恢复。仅已打开且跟随最新的面板随新任务更新；关闭面板时新任务不会自动展开。支持右侧 / 底部停靠、拖拽分隔条和按实例保存尺寸。
 
@@ -92,6 +92,7 @@ Exec 胶囊保留单行列表。用户查看历史任务后暂停跟随；点最
 | 接口 | 参数 / 数据 | 约定 |
 |---|---|---|
 | `ssh.blocks` | `{before?: number}`；正整数，最大 `4294967295` | 仅 Human 来源、实例 scope、read、transient；省略时从最新块读取，后续传上一页 `nextBefore` |
+| `ssh.input` | `{data, connectionId?, observation?: {text, lineOffset}}` | 仍为 Human-only、sensitive、transient；`data` 为原始 Base64 按键。带观察时必须指定当前连接 ID，数据必须恰好是 `\r`；`text` 为 1–4096 UTF-8 字节可见文本，无控制字符；`lineOffset` 为 -64 至 0 的起始行相对偏移。旧调用仅传 `data` 仍兼容 |
 | 快照结果 | `epoch / revision / dropped / blocks / more / nextBefore` | `revision` 是十进制字符串；同一 epoch 内递增。块按编号从新到旧分页，前端合并后按编号升序显示 |
 | `ssh.blocks.changed` | `{epoch, revision}` | 轻量失效通知，不携带命令或回复。运行时 tick 合并变化，通知队列满时保留待通知标志，下次 tick 重试 |
 
@@ -99,25 +100,34 @@ Exec 胶囊保留单行列表。用户查看历史任务后暂停跟随；点最
 
 | 字段 | 含义 |
 |---|---|
-| `id / index` | 当前操作 ID 与连接内块号；ID 稳定，可交给既有 `cancelOperation` |
-| `command / actor / channel` | 实际获批的源命令预览；`actor=human/robot` 来自宿主可信来源，Agent / System 显示 Robot；通道为 `pty/exec` |
+| `id / index` | 稳定块 ID 与连接内统一块号；API 块使用操作 ID，人工观察块由后端分配 UUID，后者不是可取消的操作 |
+| `command / actor / channel` | API 块为实际获批的源命令，人工观察块为已回显的命令行预览；`actor=human/robot` 来自宿主来源门禁，通道为 `pty/exec` |
+| `boundary` | `verified` 表示命令包装器 / exec 通道边界；`observed` 表示人工前端观察，不能据此断言实际执行范围或成功状态 |
 | `output / stderr` | 后端解析命令归属后的纯文本预览；PTY 只有合并输出，exec 保留 stderr。剔除 ANSI CSI / OSC 等控制序列，不模拟光标或全屏程序 |
 | `state / exitCode` | `running/completed/cancelled/timed_out/unknown`；有远端退出码才填写 `exitCode`，非零完成也仍是 completed 并显示失败标记 |
 | `commandTruncated / outputTruncated` | 命令或回复预览是否截断，前端明确提示 |
 
 - 每个 `ssh.command` / `ssh.exec` 操作形成一个块；MCP `commands` 批次按一个获批操作显示，源命令用换行连接，不伪造批次内逐项输出边界。仅执行阶段登记块，准备审批、拒绝或秘密交互取消不会创建已执行块。
-- 使用现有随机 PTY 边界和独立 exec 通道归属回复；不从提示符、静默时间或前端按键猜测命令。原始 `ssh.input` 不进入块记录，密码及交互程序继续在完整终端中使用；宿主秘密句柄和值不进入块。
+- API 操作使用随机 PTY 边界和独立 exec 通道归属回复。人工 Enter 观察另见下节；原始 `ssh.input.data` 从不作为块文本保存，宿主秘密句柄和值不进入块。
 - 每连接最多保留 32 个块，优先移除最早的已终结块，保留运行中的块；`dropped` 记录淘汰数量。每块命令预览最多 1 KiB UTF-8，stdout / stderr 合计保留前 2 KiB 原始字节。原始字节经有损纯文本展示，完整终端回放与 `ssh.output` 仍保留原有上限。
 - 消息块单页 JSON 仍按实际序列化结果限制在 12 KiB 内，不随 exec 预算扩大；预览限制与序列化规则在 Windows / macOS / Linux 一致，没有新增平台进程、权限或依赖。
 - 记录只在插件内存中保存。关闭前端后可重新读取；断开连接仍可查看最近快照，成功重连使用新的 epoch 并清空旧历史 / 选择。重置共享 Shell 保留当前连接历史，将未确认命令标为 unknown。
 - 前端先安装实例事件订阅，再在打开消息块视图时读快照；仅当前可见视图响应失效通知，并以 100ms 合并读取。分页中 epoch / revision 改变时重新读取；事件缺口触发恢复。卸载注销订阅、取消计时器，晚到结果不再操作 DOM。
 
+#### 人工 Enter 观察
+
+前端在普通 buffer 的常见 Shell 提示符（以 `$ `、`# `、`% ` 结束）后首次输入时保存 marker 和起始列；Enter 前读取 xterm 中已经回显的可见行，支持历史召回、行内编辑和最多 64 行软折行。回显尚未到达时最多等待 180ms；读取的是可见预览，不积累密码敏感的按键历史。空行、无回显输入、备用屏幕、批量多行粘贴和中断输入不创建块。自定义提示符、回显延迟超过等待上限、复杂多行编辑不能保证识别，应使用 API 操作获取可靠边界。
+
+前端把观察附在原始 Enter 的 `ssh.input` 上，后端先分配统一块号、发出 `boundary=observed` 开始帧，再原样发送 Enter；不会额外执行 `ssh.command`、向远端注入标记或修改 Shell 配置。SDK 以相对行偏移将块号锚定到命令首行。此时命令已存在于终端，前端不插入来源标签打乱 readline 光标，Human 来源可从块号可访问名称及块快照读取。观察帧和 API 帧均可回放重建块号。
+
+每连接最多一个进行中的人工观察，保留后续 PTY 输出的有界预览；下一次原始输入、API PTY 命令、重置或断线结束它。结束前状态为 `running`，结束后为 `unknown`，退出码始终为 null；这只是观察窗口，不是 Shell 完成状态，输出可能包含提示符 / 异步通知。新原始输入在写入前关闭观察，避免交互输入的回显被归入上一条命令。人工块与 API 块共用原有快照、淘汰和显式选择接口，Agent 读取时必须保留 `boundary` 的不确定性。
+
 连接错误带稳定阶段：`tcp`、`handshake`、`host_key`、`auth`、`channel`、`pty`、`shell`、`connect`。指纹不匹配使用 `ssh_host_key_mismatch`；远端 Shell 退出使用 `ssh_remote_shell_exited` 并附退出码，网络中断使用 `ssh_connection_lost_before_completion`。
 
-指纹每次连接确认，不持久化。尚无私钥、ssh-agent、MFA、SFTP、端口转发、自动重连和凭据保存；消息块已支持本地选择与复制，向 Agent 提交所选上下文的链路尚未接通。秘密和背压规则见 [运行时通信](runtime-communication.md)。
+指纹每次连接确认，不持久化。尚无私钥、ssh-agent、MFA、SFTP、端口转发、自动重连和凭据保存；消息块通过 `mcp.ssh.selected_blocks` 向 Agent 提供人工明确选择的上下文。秘密和背压规则见 [运行时通信](runtime-communication.md)。
 
 ## 验证
 
 `cargo test -p coterm-plugin-ssh` 使用本地测试 SSH 服务，覆盖指纹/密码失败、多实例、真实插件进程、审批、秘密隔离、共享 PTY、输出缺口和 MCP。远程服务器及真实桌面验收需单独执行，最近验证范围见 [SSH 开发进度](../progress/ssh-plugin.md)。
 
-块界面回归：先执行 `pnpm --filter coterm-plugin-ssh-ui build`，再运行 `node --import ./scripts/test-ts-loader.mjs --test tests/ssh-blocks-browser.test.mjs tests/ssh-jobs-browser.test.mjs`。真实 SSH 进程契约包含审批编辑、可信来源、原始按键隔离、事件、断开保留和重连恢复；内存日志测试覆盖 UTF-8 / ANSI 分片、截断、分页预算及慢消费者。
+块界面回归：先执行 `pnpm --filter coterm-plugin-ssh-ui build`，再运行 `node --import ./scripts/test-ts-loader.mjs --test tests/ssh-blocks-browser.test.mjs tests/ssh-human-blocks-browser.test.mjs tests/ssh-jobs-browser.test.mjs`。真实 SSH 进程契约包含人工 Enter 观察与 MCP 选择、审批编辑、可信来源、原始按键隔离、事件、断开保留和重连恢复；内存日志测试覆盖 UTF-8 / ANSI 分片、截断、分页预算及慢消费者。

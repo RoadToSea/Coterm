@@ -1,4 +1,4 @@
-//! Plugin-owned, in-memory command previews. Raw terminal input is never recorded here.
+//! Plugin-owned, in-memory command previews. Raw terminal keys are never recorded here.
 use std::{
     collections::{HashSet, VecDeque},
     sync::{Arc, Mutex, MutexGuard},
@@ -18,12 +18,14 @@ const PAGE_BYTES: usize = 12 * 1024;
 pub(crate) struct BlockSpec {
     pub text: String,
     pub source: OperationSource,
+    pub observed: bool,
 }
 
 impl BlockSpec {
     pub fn new(text: String, mcp: bool) -> Self {
         Self {
             text,
+            observed: false,
             source: if mcp {
                 OperationSource::Agent
             } else {
@@ -55,6 +57,7 @@ struct Entry {
     stderr: Vec<u8>,
     command_truncated: bool,
     output_truncated: bool,
+    observed: bool,
 }
 
 impl Entry {
@@ -65,6 +68,7 @@ impl Entry {
             "exitCode": self.exit_code, "output": plain_text(&self.stdout),
             "stderr": plain_text(&self.stderr), "commandTruncated": self.command_truncated,
             "outputTruncated": self.output_truncated,
+            "boundary": if self.observed { "observed" } else { "verified" },
         })
     }
 }
@@ -147,6 +151,7 @@ impl BlockLog {
             stderr: Vec::new(),
             command_truncated: end < spec.text.len(),
             output_truncated: false,
+            observed: spec.observed,
         });
         inner.next_index = index;
         inner.revision = inner.revision.saturating_add(1);
@@ -242,7 +247,10 @@ impl BlockHandle {
     pub fn annotation(&self, kind: &str) -> Option<Value> {
         let inner = self.log.lock();
         let entry = inner.entries.iter().find(|entry| entry.id == self.id)?;
-        Some(json!({"kind": kind, "id": entry.id, "index": entry.index, "actor": entry.actor}))
+        Some(
+            json!({"kind": kind, "id": entry.id, "index": entry.index, "actor": entry.actor,
+            "boundary": if entry.observed { "observed" } else { "verified" }}),
+        )
     }
 
     pub fn append(&self, bytes: &[u8], stderr: bool) {

@@ -546,8 +546,16 @@ impl JobRegistry {
     }
 }
 
+/// Frontend observation of an echoed shell line, never a parsed raw-key history.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct ObservedInput {
+    text: String,
+    line_offset: i32,
+}
+
 enum Input {
-    Data(Vec<u8>),
+    Data(Vec<u8>, Option<ObservedInput>),
     Resize(u32, u32),
     Command(Command, Vec<u8>, BlockSpec),
     Exec {
@@ -660,6 +668,7 @@ impl Connection {
             let mut read = read;
             let mut write = write;
             let mut active: Option<Command> = None;
+            let mut observed: Option<BlockHandle> = None;
             let mut pending_cancel: Option<PendingCancel> = None;
             let mut cancel_deadline: Option<Instant> = None;
             let mut shell_exit: Option<u32> = None;
@@ -681,6 +690,7 @@ impl Connection {
                                     )));
                                     continue;
                                 }
+                                end_observed(&mut observed, &task_output, &events, &connection_id).await;
                                 match task_blocks.begin(&command.operation_id, spec, "pty") {
                                     Ok(block) => command.track(block),
                                     Err(error) => { let _ = action.reply.send(Err(error)); continue; }
@@ -771,6 +781,7 @@ impl Connection {
                                     .send(Ok(json!({"outcome":"unsupported"})));
                             }
                             Input::Reset => {
+                                end_observed(&mut observed, &task_output, &events, &connection_id).await;
                                 let reply = action.reply;
                                 match reset_terminal(
                                     &task_handle,
@@ -815,7 +826,22 @@ impl Connection {
                                 let _ = action.reply.send(Ok(json!({"connected":false})));
                                 break;
                             }
-                            Input::Data(data) => {
+                            Input::Data(data, observation) => {
+                                // Any new keyboard input ends the previous observation, including
+                                // stdin for interactive programs. Never append raw keys to the log.
+                                end_observed(&mut observed, &task_output, &events, &connection_id).await;
+                                if let Some(observation) = observation.filter(|_| active.is_none()) {
+                                    let mut spec = BlockSpec::new(observation.text, false);
+                                    spec.observed = true;
+                                    // Observation failure must not swallow the user's Enter.
+                                    if let Ok(block) = task_blocks.begin(&uuid::Uuid::new_v4().to_string(), spec, "pty") {
+                                        if let Some(mut annotation) = block.annotation("begin") {
+                                            annotation["lineOffset"] = json!(observation.line_offset);
+                                            push_terminal_frame(&task_output, &events, &connection_id, &[], Some(&annotation)).await;
+                                        }
+                                        observed = Some(block);
+                                    }
+                                }
                                 let result = timeout(IO_TIMEOUT, write.data(&data[..])).await;
                                 let failed = !matches!(result, Ok(Ok(())));
                                 let _ = action.reply.send(if failed {
@@ -848,6 +874,9 @@ impl Connection {
                                 Some(command) => command.feed(&data),
                                 None => (data.to_vec(), None),
                             };
+                            if let Some(block) = &observed {
+                                block.append(&visible, false);
+                            }
                             let annotations = active.as_mut().map(Command::take_annotations).unwrap_or_default();
                             let mut offset = 0;
                             for (boundary, annotation) in annotations {
@@ -955,6 +984,7 @@ impl Connection {
                 }
             }
             exec_tasks.abort_all();
+            end_observed(&mut observed, &task_output, &events, &connection_id).await;
             let closed_by_transport = task_handle.is_closed();
             if let Some(mut command) = active {
                 push_output(&task_output, &events, &connection_id, &command.remaining()).await;
@@ -1016,10 +1046,28 @@ impl Connection {
     }
 
     pub async fn input(&self, data: Vec<u8>) -> Result<()> {
+        self.input_observed(data, None).await
+    }
+
+    pub(crate) async fn input_observed(
+        &self,
+        data: Vec<u8>,
+        observation: Option<ObservedInput>,
+    ) -> Result<()> {
         if data.is_empty() || data.len() > 16 * 1024 {
             bail!("SSH input must contain 1 to 16384 bytes");
         }
-        self.submit(Input::Data(data)).await?;
+        if let Some(observation) = &observation {
+            if data != b"\r"
+                || observation.text.trim().is_empty()
+                || observation.text.len() > 4096
+                || observation.text.chars().any(char::is_control)
+                || !(-64..=0).contains(&observation.line_offset)
+            {
+                bail!("Invalid echoed SSH command observation");
+            }
+        }
+        self.submit(Input::Data(data, observation)).await?;
         Ok(())
     }
 
@@ -1529,6 +1577,20 @@ async fn push_output(
 ) {
     for part in bytes.chunks(OUTPUT_CHUNK_BYTES) {
         push_terminal_frame(output, events, connection_id, part, None).await;
+    }
+}
+
+async fn end_observed(
+    observed: &mut Option<BlockHandle>,
+    output: &Arc<Mutex<OutputBuffer>>,
+    events: &Option<(String, mpsc::Sender<PluginNotification>)>,
+    connection_id: &str,
+) {
+    if let Some(block) = observed.take() {
+        block.finish(BlockState::Unknown, None);
+        if let Some(annotation) = block.annotation("end") {
+            push_terminal_frame(output, events, connection_id, &[], Some(&annotation)).await;
+        }
     }
 }
 

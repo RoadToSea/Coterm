@@ -148,7 +148,7 @@ test("SSH tasks collapse to one row and keep the selected task last while live e
     await run(`window.locale='zh-CN'; window.translate()`);
     assert.equal(await run(`toggle.getAttribute('aria-label')`), "展开任务列表");
     assert.equal(await run(`list.getAttribute('aria-label')`), "后台任务");
-    assert.ok(await run(`Math.abs(list.scrollWidth-list.clientWidth-list.scrollLeft) <= 1`));
+    await waitForValue(client, `Math.abs(list.scrollWidth-list.clientWidth-list.scrollLeft) <= 1`, {label:"locale render restores the task scroll position"});
 
     await client.send("Emulation.setDeviceMetricsOverride", { width: 320, height: 480, deviceScaleFactor: 1, mobile: false });
     await waitForValue(client, `root.querySelector('.ssh-workbench').dataset.dock === 'bottom' && list.clientWidth > 0 && root.querySelector('.jobs').clientWidth <= 320 && Math.abs(list.scrollWidth-list.clientWidth-list.scrollLeft) <= 1`);

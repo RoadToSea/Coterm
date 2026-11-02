@@ -99,11 +99,11 @@ function selectedBlocks() {
 
 ### 终端行号栏
 
-`@coterm/plugin-sdk/components/terminal-blocks` 导出 `mountTerminalBlocks(gutter, overlay, terminal, options)`，用于已有 xterm.js 终端，不替代终端输出或协议实现。插件后端须通过可信、实例绑定的数据通知 `begin(block)` / `end(id)`；组件使用 xterm marker 定位块号，并在调用 `update(blocks)` 后仅允许当前快照中的稳定 ID 被选择。`toggle(id)` 可连接未内嵌在 PTY 网格中的任务胶囊。`onSelectionChange(ids)` 供插件把选择交给自己的后端上下文接口。按钮与高亮装饰随可见 buffer 行呈现，响应滚动、渲染、尺寸和 buffer 清理；备用屏幕隐藏 PTY 装饰。卸载注销终端监听、ResizeObserver 和键盘事件。
+`@coterm/plugin-sdk/components/terminal-blocks` 导出 `mountTerminalBlocks(gutter, overlay, terminal, options)`，用于已有 xterm.js 终端，不替代终端输出或协议实现。插件通过实例绑定的数据通知 `begin(block, lineOffset = 0)` / `end(id)`；`lineOffset` 是相对当前光标行的 marker 偏移，可将已回显并软折行的人工命令锚定至首行。组件不识别提示符或判断执行边界，插件须区分可靠执行边界与前端观察。组件使用 xterm marker 定位块号，并在调用 `update(blocks)` 后仅允许当前快照中的稳定 ID 被选择。`toggle(id)` 可连接未内嵌在 PTY 网格中的任务胶囊。`onSelectionChange(ids)` 供插件把选择交给自己的后端上下文接口。按钮与高亮装饰随可见 buffer 行呈现，响应滚动、渲染、尺寸和 buffer 清理；备用屏幕隐藏 PTY 装饰。卸载注销终端监听、ResizeObserver 和键盘事件。
 
 行号栏宽度按当前有效 PTY 块号最大字符数伸缩，最小 28px，包含 `#` 前缀与水平留白；使用行号栏自身的等宽字体计算，淘汰、更新及重置时同步收缩。顶部的红色圆形叉号用于取消全选（16px），`cancelLabel` / `refreshLocale(label)` 更新 tooltip 与可访问名称；空选择时禁用并保留红色，按钮具有键盘焦点样式。
 
-选择区域持有 Esc 清除选择；主终端的 Esc 不被 SDK 拦截。插件负责限制块和选择数量，后端再次按实例 / epoch 校验，且只允许人工来源修改选择。不要把原始终端输入、命令秘密、输出或用户可控终端文本编码为可信边界事件。
+选择区域持有 Esc 清除选择；主终端的 Esc 不被 SDK 拦截。插件负责限制块和选择数量，后端再次按实例 / epoch 校验，且只允许人工来源修改选择。不要把原始终端输入、命令秘密、输出或用户可控终端文本编码为可信执行边界。SSH 人工 Enter 使用单独的 `boundary=observed` 观察语义，不能据此推断执行结果；命令和回复仍只通过人工明确选择后交给 Agent。
 
 SSH 实际边界与选择接口见 [SSH 消息块](../../../docs/architecture/ssh-plugin.md#命令消息块)。浏览器集成入口：`tests/ssh-blocks-browser.test.mjs`。
 

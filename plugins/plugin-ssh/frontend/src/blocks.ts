@@ -128,7 +128,9 @@ export function mountSshBlocks(container: HTMLElement, api: PluginAPI, t: Return
           throw new Error("Invalid SSH block pagination");
         before = snapshot.nextBefore;
       }
-      if (!first)
+      // A begin frame can arrive while an older snapshot is in flight. Applying
+      // that snapshot would delete its new marker; a later update cannot recreate it.
+      if (!first || dirty)
         return;
       const previousEpoch = epoch;
       epoch = first.epoch;

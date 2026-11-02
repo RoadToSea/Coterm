@@ -36,7 +36,7 @@ export interface TerminalBlockOptions {
   onSelectionChange(ids: string[]): void;
   cancelLabel: string;
 }
-/** Trusted command boundaries anchor to real buffer markers, never prompt/text matching. */
+/** Plugin-supplied boundaries anchor to real buffer markers; the SDK never parses prompts. */
 export function mountTerminalBlocks(gutter: HTMLElement, container: HTMLElement, terminal: BlockTerminal, options: TerminalBlockOptions) {
   const style = document.createElement("style");
   style.textContent = `
@@ -167,7 +167,7 @@ export function mountTerminalBlocks(gutter: HTMLElement, container: HTMLElement,
   clear.title = label;
   clear.setAttribute("aria-label", label);
   return {
-    begin(block: CommandBlock) {
+    begin(block: CommandBlock, lineOffset = 0) {
       if (disposed || entries.has(block.id))
         return;
       while (entries.size >= 32) {
@@ -177,7 +177,7 @@ export function mountTerminalBlocks(gutter: HTMLElement, container: HTMLElement,
         remove(oldest);
         if (changed) notify();
       }
-      const marker = terminal.registerMarker(0);
+      const marker = terminal.registerMarker(lineOffset);
       if (!marker)
         return;
       const button = document.createElement("button");

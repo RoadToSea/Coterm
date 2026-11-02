@@ -116,7 +116,11 @@ pub fn catalog() -> Vec<OperationDescriptor> {
             "ssh.input",
             OperationEffect::Commit,
             true,
-            json!({"data":{"type":"string","contentEncoding":"base64"}}),
+            json!({"data":{"type":"string","contentEncoding":"base64"},
+                "connectionId":{"type":"string","minLength":1,"maxLength":128},
+                "observation":{"type":"object","additionalProperties":false,"required":["text","lineOffset"],
+                    "properties":{"text":{"type":"string","minLength":1,"maxLength":4096},
+                        "lineOffset":{"type":"integer","minimum":-64,"maximum":0}}}}),
         ),
         (
             "ssh.command",
@@ -357,7 +361,11 @@ fn block_spec(
     } else {
         command(args, scripts)?.to_owned()
     };
-    Ok(BlockSpec { text, source })
+    Ok(BlockSpec {
+        text,
+        source,
+        observed: false,
+    })
 }
 
 fn command_sequence(commands: &[&str]) -> String {
@@ -1207,7 +1215,17 @@ impl Backend {
                 let data = STANDARD
                     .decode(data)
                     .map_err(|_| anyhow!("SSH input must use base64 encoding"))?;
-                connected(instance)?.input(data).await?;
+                let connection = connected(instance)?;
+                if let Some(id) = args.get("connectionId") {
+                    if id.as_str() != Some(connection.id.as_str()) {
+                        bail!("SSH input belongs to a stale connection");
+                    }
+                }
+                let observation = args.get("observation").cloned().map(decode).transpose()?;
+                if observation.is_some() && args.get("connectionId").is_none() {
+                    bail!("Observed SSH commands require a connection ID");
+                }
+                connection.input_observed(data, observation).await?;
                 Ok(json!({"submitted":true}))
             }
             "ssh.resize" => {

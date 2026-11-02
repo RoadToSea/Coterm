@@ -514,6 +514,9 @@ path={target}
             if !text.contains("never-completes") {
                 session.data(channel, end.into_bytes())?;
             }
+        } else if data == b"\r" {
+            // A human Enter on the fixture PTY produces an ordinary unmarked reply.
+            session.data(channel, b"\r\nfile.txt\r\nshell$ ".to_vec())?;
         } else {
             session.data(channel, data.to_vec())?;
         }
@@ -970,6 +973,175 @@ async fn message_blocks_follow_approved_commands_and_remain_instance_bound() -> 
         .ok_or_else(|| anyhow::anyhow!("missing new snapshot"))?;
     assert_ne!(reconnected["epoch"], snapshot["epoch"]);
     assert_eq!(reconnected["blocks"], json!([]));
+    runtime.stop("coterm-plugin-ssh").await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn human_enter_observations_reach_selected_agent_context_without_recording_raw_keys(
+) -> Result<()> {
+    use coterm_core::plugin_runtime::{CallerContext, Operations, PluginRuntime, SubmitOperation};
+    use coterm_proto::runtime::operation::{OperationSource, OperationStatus};
+    let ssh = server().await?;
+    let (runtime, instance) = load_runtime(&ssh, "human-blocks").await?;
+    connect_instance(&runtime, &instance, &ssh).await?;
+    let caller = |source| CallerContext {
+        source,
+        session_id: instance.session_id.clone(),
+        plugin_id: Some(instance.plugin_id.clone()),
+    };
+    let operation = |name: &str, args: Value| SubmitOperation {
+        plugin_id: instance.plugin_id.clone(),
+        plugin_instance_id: Some(instance.plugin_instance_id.clone()),
+        operation: name.to_owned(),
+        args,
+        wait_timeout_ms: Some(3000),
+    };
+    let status = runtime
+        .submit(
+            caller(OperationSource::Human),
+            operation("ssh.status", json!({})),
+        )
+        .await?
+        .output
+        .ok_or_else(|| anyhow::anyhow!("missing status"))?;
+    let connection_id = &status["connectionId"];
+    // A stale frontend or malformed observation cannot submit to the current shell.
+    for args in [
+        json!({"data":STANDARD.encode(b"\r"),"connectionId":"stale","observation":{"text":"ls","lineOffset":0}}),
+        json!({"data":STANDARD.encode(b"x"),"connectionId":connection_id,"observation":{"text":"ls","lineOffset":0}}),
+        json!({"data":STANDARD.encode(b"\r"),"connectionId":connection_id,"observation":{"text":"ls\nsecret","lineOffset":0}}),
+        json!({"data":STANDARD.encode(b"\r"),"observation":{"text":"ls","lineOffset":0}}),
+    ] {
+        let receipt = runtime
+            .submit(caller(OperationSource::Human), operation("ssh.input", args))
+            .await?;
+        assert_eq!(receipt.status, OperationStatus::Failed);
+    }
+    let input = json!({"data":STANDARD.encode(b"\r"),"connectionId":connection_id,"observation":{"text":"ls","lineOffset":-1}});
+    // The raw-input gate applies even when Agent bypass is on.
+    runtime.set_bypass(true).await;
+    let denied = runtime
+        .submit(
+            caller(OperationSource::Agent),
+            operation("ssh.input", input.clone()),
+        )
+        .await;
+    assert!(denied.is_err() || denied.is_ok_and(|r| r.status == OperationStatus::Failed));
+    let receipt = runtime
+        .submit(
+            caller(OperationSource::Human),
+            operation("ssh.input", input),
+        )
+        .await?;
+    assert_eq!(receipt.status, OperationStatus::Completed);
+    let snapshot = timeout(Duration::from_secs(3), async {
+        loop {
+            let snapshot = runtime
+                .submit(
+                    caller(OperationSource::Human),
+                    operation("ssh.blocks", json!({})),
+                )
+                .await?
+                .output
+                .ok_or_else(|| anyhow::anyhow!("missing block snapshot"))?;
+            if snapshot["blocks"][0]["output"]
+                .as_str()
+                .is_some_and(|s| s.contains("file.txt"))
+            {
+                return Ok::<_, anyhow::Error>(snapshot);
+            }
+            sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await??;
+    assert_eq!(snapshot["blocks"].as_array().map(Vec::len), Some(1));
+    let block = &snapshot["blocks"][0];
+    assert_eq!(block["command"], "ls");
+    assert_eq!(block["actor"], "human");
+    assert_eq!(block["boundary"], "observed");
+    assert_eq!(block["exitCode"], Value::Null);
+    let unselected = runtime
+        .submit(
+            caller(OperationSource::Agent),
+            operation("ssh.selected_blocks", json!({})),
+        )
+        .await?;
+    assert_eq!(
+        unselected.output.as_ref().map(|v| &v["blocks"]),
+        Some(&json!([]))
+    );
+    runtime
+        .submit(
+            caller(OperationSource::Human),
+            operation(
+                "ssh.select_blocks",
+                json!({"epoch":snapshot["epoch"],"ids":[block["id"]]}),
+            ),
+        )
+        .await?;
+    // The next raw input closes the observation before its echo can enter context.
+    runtime
+        .submit(
+            caller(OperationSource::Human),
+            operation(
+                "ssh.input",
+                json!({"data":STANDARD.encode(b"private-not-context")}),
+            ),
+        )
+        .await?;
+    let selected = runtime
+        .submit(
+            caller(OperationSource::Agent),
+            operation(
+                "mcp.ssh.selected_blocks",
+                json!({"pluginInstanceId":instance.plugin_instance_id}),
+            ),
+        )
+        .await?
+        .output
+        .ok_or_else(|| anyhow::anyhow!("missing selected context"))?;
+    let chosen = &selected["structuredContent"]["blocks"][0];
+    assert_eq!(chosen["command"], "ls");
+    assert_eq!(chosen["state"], "unknown");
+    assert!(chosen["output"]
+        .as_str()
+        .is_some_and(|s| s.contains("file.txt") && !s.contains("private-not-context")));
+    // Boundaries are retained for replay, without putting command text in events.
+    let mut cursor = "0".to_owned();
+    let mut boundaries = Vec::new();
+    for _ in 0..64 {
+        let frame = runtime
+            .submit(
+                caller(OperationSource::Human),
+                operation("ssh.read", json!({"cursor":cursor,"terminal":true})),
+            )
+            .await?
+            .output
+            .ok_or_else(|| anyhow::anyhow!("missing terminal frame"))?;
+        if frame["annotation"].is_object() {
+            boundaries.push(frame["annotation"].clone());
+        }
+        cursor = frame["cursor"].as_str().unwrap_or("0").to_owned();
+        if frame["more"] == false {
+            break;
+        }
+    }
+    assert_eq!(boundaries.len(), 2);
+    assert_eq!(boundaries[0]["boundary"], "observed");
+    assert_eq!(boundaries[0]["lineOffset"], -1);
+    assert_eq!(boundaries[1]["kind"], "end");
+    assert!(boundaries
+        .iter()
+        .all(|b| b.get("text").is_none() && b.get("command").is_none()));
+    let recent = runtime
+        .recent(
+            caller(OperationSource::Human),
+            &instance.plugin_instance_id,
+            100,
+        )
+        .await?;
+    assert!(recent.iter().all(|r| r.operation != "ssh.input"));
     runtime.stop("coterm-plugin-ssh").await?;
     Ok(())
 }

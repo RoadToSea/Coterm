@@ -7,6 +7,7 @@ import type { PluginAPI, PluginConfigurationAPI, PluginFrontend, OperationReceip
 import { createTranslator } from "./i18n";
 import { mountSshBlocks } from "./blocks";
 import { mountJobs } from "./jobs";
+import { observeHumanCommands } from "./human-commands";
 import { mountTerminalBlocks } from "@coterm/plugin-sdk/components/terminal-blocks";
 import { attachTerminalShortcuts } from "@coterm/plugin-sdk/components/terminal-shortcuts";
 import { mountTerminalSearch, TERMINAL_SEARCH_HIGHLIGHT_LIMIT } from "@coterm/plugin-sdk/components/terminal-search";
@@ -218,6 +219,7 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
   const searchAddon = new SearchAddon({ highlightLimit: TERMINAL_SEARCH_HIGHLIGHT_LIMIT });
   terminal.loadAddon(searchAddon);
   terminal.open(terminalContainer);
+  const humanCommands = observeHumanCommands(terminal);
   const stopTheme = attachTerminalTheme(terminalContainer, (theme) => { terminal.options.theme = theme; });
   const stopPreferences = attachTerminalPreferences(terminalContainer, (preferences) => {
     Object.assign(terminal.options, preferences);
@@ -250,6 +252,7 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
   const invoke = async <T = unknown>(operation: string, args: unknown): Promise<T> => output(await api.invoke<T>(operation, args));
   const showError = (reason: unknown) => { if (!disposed) notice.textContent = String(reason); };
   const setConnected = (next: boolean) => {
+    if (!next) humanCommands.suspend(false);
     connected = next;
     stateMessage = next ? "Connected" : "Disconnected";
     state.textContent = t(stateMessage);
@@ -275,13 +278,27 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
         || !["begin", "end"].includes(String(annotation.kind))) throw new Error("Invalid terminal block annotation");
       if (annotation.kind === "begin") {
         const block = {id:annotation.id,index:annotation.index,command:"",actor:annotation.actor as "human" | "robot"};
-        terminalBlocks.begin(block);
+        const observed = annotation.boundary === "observed";
+        const offset = observed ? annotation.lineOffset : 0;
+        if (typeof offset !== "number" || !Number.isInteger(offset) || offset > 0 || offset < -64) throw new Error("Invalid terminal block offset");
+        terminalBlocks.begin(block, offset);
+        blocksView.invalidate();
+        if (observed) {
+          // The command is already echoed on this row. Adding a label here would
+          // alter the prompt/cursor and corrupt readline editing or replay.
+          await write(frame.data);
+          return;
+        }
+        humanCommands.suspend(true);
         const command = (await blocksView.command(block.id)).replace(/[\u0000-\u001f\u007f-\u009f]/g, " ");
         const label = block.actor === "human" ? "[👤 Human]" : "[🤖 Agent]";
         const prefix = block.actor === "human" ? "\x1b[38;2;52;211;153m" : "\x1b[38;2;56;189;248m";
         // Display metadata stays local; it never goes to ssh.input.
         await new Promise<void>(resolve => terminal.write(prefix + label + "\x1b[0m " + command + "\r\n", resolve));
-      } else terminalBlocks.end(annotation.id);
+      } else {
+        terminalBlocks.end(annotation.id);
+        if (annotation.boundary !== "observed") humanCommands.suspend(false);
+      }
     }
     await write(frame.data);
   };
@@ -290,6 +307,7 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
     if (disposed) return;
     label.textContent = `${status.config.username}@${status.config.host}:${status.config.port}`;
     if (connectionId !== status.connectionId) {
+      humanCommands.suspend(false);
       connectionId = status.connectionId;
       cursor = "0";
       if (connectionId) { searchView.close(false); terminalBlocks.reset(); jobsView.reset(); terminal.reset(); }
@@ -302,6 +320,7 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
       const data = await invoke<Output>("ssh.read", { cursor, terminal: true });
       if (disposed || data.connectionId !== connectionId) return;
       if (data.gap) {
+        humanCommands.suspend(false);
         terminalBlocks.reset(); terminal.reset();
         terminal.write("\r\n[Output gap: older data expired from replay buffer]\r\n");
       }
@@ -324,6 +343,7 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
       if (event.name === "ssh.blocks.changed") { blocksView.invalidate(); return; }
       if (event.name === "runtime.gap" || event.name === "ssh.status") {
         if(event.name === "ssh.status" && (event.payload as {reset?:boolean}).reset) {
+          humanCommands.suspend(false);
           searchView.close(false); terminalBlocks.reset(); terminal.reset();
           const value = (event.payload as {cursor?:unknown}).cursor;
           if(typeof value === "string" && /^\d+$/.test(value)) cursor=value;
@@ -382,8 +402,14 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
     const data = new TextEncoder().encode(text);
     if (queuedBytes + data.length > 16 * 1024) { notice.textContent = t("Input queue is full. Wait before typing or pasting more."); return; }
     queuedBytes += data.length;
+    const targetConnection = connectionId;
     inputQueue = inputQueue.then(async () => {
-      if (!disposed && connected) await invoke("ssh.input", { data: base64(data) });
+      if (disposed || !connected || targetConnection !== connectionId) return;
+      await updates;
+      const observation = await humanCommands.beforeInput(text);
+      if (disposed || !connected || targetConnection !== connectionId) return;
+      humanCommands.sent();
+      await invoke("ssh.input", { data: base64(data), connectionId: targetConnection, ...(observation ? { observation } : {}) });
     }).catch(showError).finally(() => { queuedBytes -= data.length; });
   });
   const observer = new ResizeObserver(() => {
@@ -412,6 +438,7 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
     observer.disconnect();
     jobsView.unmount();
     terminalBlocks.unmount();
+    humanCommands.dispose();
     onData.dispose();
     stopShortcuts();
     searchView.dispose();
