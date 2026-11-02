@@ -12,6 +12,14 @@
 - Exec 胶囊有 LED 状态、右侧 / 底部停靠、可拖动尺寸；历史选择暂停跟随，关闭面板时新任务不自动展开。
 - 块选择通过 `ssh.select_blocks` 按当前 epoch 传入插件内存；MCP `mcp.ssh.selected_blocks` 只读取人工选中的有界上下文，Agent 来源不能更改选择。
 
+## 2026-11-02：主终端底部裁切修复
+
+- 浏览器回归复现终端画布比自身容器底部多出约 24px。根因是 xterm 根节点也带 `.terminal` 类，无范围样式给外层容器与内层终端重复添加顶部留白，而 FitAddon 只扣除内层留白。
+- 将容器 flex / overflow 样式限定为 `.terminal-shell` 的直接子元素，留白仅作用于 xterm 根节点，行数计算与实际可用高度一致。
+- 新增真实桌面 + SSH bundle + 基座 footer 回归：连续写入 100 行后，确认最后一行提示符完整留在终端容器及基座底栏上方。覆盖 1280×800 / 13px、1024×600 / 20px、768×480 / 16px；Exec 回归另检查右侧 / 底部停靠、拖拽及 320px 窄窗口。
+- 本轮 5 项浏览器集成测试通过，包含底部边界、明暗主题、语言与安装状态、命令块选择、Exec 任务交互。`pnpm build` 和 SSH 前端构建通过，`dist/frontend/index.js` 已更新；完整 `pnpm plugin:ssh:build` 在复制后端 exe 时因运行中的插件占用而报 EBUSY，未停止用户会话。未修改 Rust、宿主权限或协议，退出旧桌面后可重跑完整打包。
+- 回归入口：`node --import ./scripts/test-ts-loader.mjs --test --test-concurrency=1 --test-name-pattern="SSH|appearance switches live" tests/browser-layout.test.mjs tests/ssh-blocks-browser.test.mjs tests/ssh-jobs-browser.test.mjs`。截图保存在 `target/ssh-bottom-layout-*.png`，不覆盖既有布局截图；原问题在修复前测试失败、修复后通过。
+
 ## 2026-11-02：Agent MCP 使用反馈
 
 - 修复审批导致首次 MCP 调用等待 60 秒：SSH descriptor 声明 `returnOnApproval`，进入审批时即时返回 `pending_approval` 和原操作 ID。集成测试改为批准后查询同一操作，继续覆盖并发状态查询、秘密输入、取消和无重放。

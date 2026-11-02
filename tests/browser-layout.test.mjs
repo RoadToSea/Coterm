@@ -69,6 +69,57 @@ async function openPage(session, scenario = defaultScenario, viewport = { width:
 let serverUrl;
 let server;
 
+test("SSH terminal bottom row stays inside the workspace above the host footer", async (t) => {
+  if (!browserPath) { t.skip("No browser; SSH bottom row was not verified"); return; }
+  assertFreshBuild();
+  const staticServer = await startStaticServer();
+  serverUrl = staticServer.url;
+  const session = await openSession({ browserPath, totalTimeoutMs: 45_000 });
+  let page;
+  try {
+    page = await openPage(session, {
+      ...defaultScenario,
+      catalog: { ...defaultScenario.catalog, issues: [] },
+      sshOutput: Array.from({ length: 100 }, (_, i) => `output line ${i}\r\n`).join("") + "BOTTOM ROW VISIBLE > ",
+    });
+    await waitForValue({ send: page.send }, `(() => {
+      window.sshHost = [...document.querySelectorAll('main div')].find(node => node.shadowRoot?.querySelector('.xterm-screen'));
+      window.sshRoot = sshHost?.shadowRoot;
+      return sshRoot?.querySelector('.bar span')?.textContent === 'Connected';
+    })()`);
+    for (const [width, height, fontSize] of [[1280, 800, 13], [1024, 600, 20], [768, 480, 16]]) {
+      await page.evaluate(`document.documentElement.style.setProperty('--coterm-terminal-font-size', '${fontSize}px')`);
+      await page.resize(width, height);
+      const geometry = await page.evaluate(`(() => {
+        const rect = element => { const r=element.getBoundingClientRect(); return {top:r.top,bottom:r.bottom,height:r.height}; };
+        return {
+          viewport:innerHeight,
+          footer:rect(document.querySelector('footer')),
+          workspace:rect(sshHost.closest('[role="tabpanel"]')),
+          terminal:rect(sshRoot.querySelector('.terminal')),
+          screen:rect(sshRoot.querySelector('.xterm-screen')),
+        };
+      })()`);
+      const shot = await page.send("Page.captureScreenshot", { format: "png" });
+      fs.mkdirSync(path.join(rootDir, "target"), { recursive: true });
+      fs.writeFileSync(path.join(rootDir, "target", `ssh-bottom-layout-${width}x${height}.png`), Buffer.from(shot.data, "base64"));
+      assert.ok(geometry.screen.height > 0, "real terminal rows are rendered");
+      assert.equal(await page.evaluate(`sshRoot.querySelector('.xterm-rows').lastElementChild.textContent.includes('BOTTOM ROW VISIBLE')`), true,
+        "the prompt is rendered on the final terminal row after scrolling");
+      assert.ok(geometry.footer.bottom <= height + 1, "host footer stays inside the window");
+      assert.ok(geometry.workspace.bottom <= geometry.footer.top + 1, "workspace stays above the host footer");
+      assert.ok(geometry.screen.bottom <= geometry.terminal.bottom + 1,
+        `the terminal's last row must not be clipped by its container at ${width}x${height}: ${JSON.stringify(geometry)}`);
+      assert.ok(geometry.screen.bottom <= geometry.footer.top + 1,
+        "the terminal's last row stays above the host footer");
+    }
+  } finally {
+    await page?.close();
+    await session.close();
+    await new Promise(resolve => staticServer.server.close(resolve));
+  }
+});
+
 test("appearance switches live SSH and serial renderers, persists, and follows system changes", async (t) => {
   if (!browserPath) { t.skip("No Chrome/Edge binary; live theme verification did not run"); return; }
   assertFreshBuild();

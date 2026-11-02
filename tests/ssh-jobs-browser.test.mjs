@@ -18,6 +18,11 @@ test("SSH tasks collapse to one row and keep the selected task last while live e
   const session = await openSession({ browserPath, totalTimeoutMs: 45_000 });
   const { client } = session;
   const run = (source) => evaluate(client, source);
+  const assertTerminalFits = () => waitForValue(client, `(() => {
+    const screen=root.querySelector('.xterm-screen').getBoundingClientRect();
+    const terminal=root.querySelector('.terminal').getBoundingClientRect();
+    return screen.height>0 && screen.bottom<=terminal.bottom+1 && screen.bottom<=innerHeight;
+  })()`, {label:"terminal bottom row fits after Exec layout changes"});
   const screenshot = async name => {
     const directory = process.env.COTERM_SSH_BLOCKS_SCREENSHOT_DIR;
     if (!directory) return;
@@ -108,6 +113,7 @@ test("SSH tasks collapse to one row and keep the selected task last while live e
     assert.match(await run(`root.querySelector('.job-body').textContent`), /output for job-30/);
     assert.equal(await run(`root.querySelector('.job-follow').hidden`), false, "history selection pauses following");
     assert.equal(await run(`root.querySelector('.ssh-workbench').dataset.dock`), "right");
+    await assertTerminalFits();
     await screenshot("ssh-exec-right");
     await run(`emit(50)`);
     assert.equal(await run(`items().at(-1).querySelector('.job-select').title`), "echo task 030");
@@ -136,6 +142,7 @@ test("SSH tasks collapse to one row and keep the selected task last while live e
     await client.send("Input.dispatchMouseEvent", {type:"mouseMoved",x:separator.x,y:separator.y-45,button:"left",buttons:1});
     await client.send("Input.dispatchMouseEvent", {type:"mouseReleased",x:separator.x,y:separator.y-45,button:"left",clickCount:1});
     assert.ok(await run(`root.querySelector('.job-view').getBoundingClientRect().height`)>oldHeight+30, "splitter resizes panel");
+    await assertTerminalFits();
     await screenshot("ssh-exec-bottom");
     await run(`root.querySelector('.job-dock').click()`);
     await run(`window.locale='zh-CN'; window.translate()`);
@@ -145,6 +152,7 @@ test("SSH tasks collapse to one row and keep the selected task last while live e
 
     await client.send("Emulation.setDeviceMetricsOverride", { width: 320, height: 480, deviceScaleFactor: 1, mobile: false });
     await waitForValue(client, `root.querySelector('.ssh-workbench').dataset.dock === 'bottom' && list.clientWidth > 0 && root.querySelector('.jobs').clientWidth <= 320 && Math.abs(list.scrollWidth-list.clientWidth-list.scrollLeft) <= 1`);
+    await assertTerminalFits();
     assert.ok(await run(`select(1).getBoundingClientRect().left >= list.getBoundingClientRect().left`),
       "selected task stays fully visible after resize");
     assert.ok(await run(`root.querySelector('.layout').scrollWidth <= innerWidth`));

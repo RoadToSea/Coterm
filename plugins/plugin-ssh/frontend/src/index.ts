@@ -66,7 +66,9 @@ const css = `
   .bar button { margin-left: auto; font-size: 11px; }
   .terminal-pane { flex:1; min-width:0; min-height:0; display:flex; flex-direction:column; }
   .terminal-shell { position:relative; flex:1; min-width:0; min-height:0; display:flex; }
-  .terminal { position:relative; flex:1; min-width:0; min-height:0; overflow:hidden; padding:28px 4px 0 5px; }
+  /* xterm also uses .terminal; its own padding is measured by FitAddon. */
+  .terminal-shell > .terminal { position:relative; flex:1; min-width:0; min-height:0; overflow:hidden; }
+  .terminal-shell > .terminal > .xterm { padding:28px 4px 0 5px; }
   .ssh-blocks-error { padding:6px 10px; font-size:11px; }
   .ssh-blocks-error[hidden] { display:none; }
   .ssh-block-history { padding:4px 10px; color:var(--coterm-text-muted,#969696); font-size:10px; }

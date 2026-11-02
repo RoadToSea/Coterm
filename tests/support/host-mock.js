@@ -302,11 +302,14 @@ export function makeHostMockSource(initial) {
             output: {
               connectionId: "conn-1",
               cursor: "0",
-              data: btoa("Connected to Prod-Server (SSH)\\r\\nLast login: Thu Oct 22 20:00:00 2026 from 192.168.1.2\\r\\nroot@prod:~# "),
+              data: btoa(scenario.sshOutput ?? "Connected to Prod-Server (SSH)\\r\\nLast login: Thu Oct 22 20:00:00 2026 from 192.168.1.2\\r\\nroot@prod:~# "),
               more: false,
               gap: false,
             },
           };
+        }
+        if (operation === "ssh.blocks") {
+          return {status:"completed",output:{epoch:"conn-1",revision:"1",dropped:0,blocks:[],more:false,nextBefore:null}};
         }
         if (operation === "serial.status") return {status:"completed",output:{config:{port:"COM1",baudRate:115200,dtr:true,rts:true},
           connected:true,connectionId:"serial-conn",signals:{dtr:true,rts:true},rxBytes:0,txBytes:0,commandQueue:0}};

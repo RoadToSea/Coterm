@@ -79,6 +79,8 @@ MCP 显式注册 status、probe、connect、disconnect、reset、command、exec�
 
 Exec 胶囊保留单行列表。用户查看历史任务后暂停跟随；点最新任务、恢复按钮或在面板焦点内按 `Esc` 恢复。仅已打开且跟随最新的面板随新任务更新；关闭面板时新任务不会自动展开。支持右侧 / 底部停靠、拖拽分隔条和按实例保存尺寸。
 
+主终端的 flex / 裁切样式只作用于 `.terminal-shell` 的直接容器；xterm 根节点自身也带 `.terminal` 类，不能用该类的无范围选择器同时设置两层留白。顶部块选择控件需要的留白放在 xterm 根节点上，由 FitAddon 计入可用行数。窗口、字号和 Exec 停靠变化后，最后一行及光标必须完整位于插件工作区内、基座底栏上方。
+
 ### 命令消息块
 
 块数据、来源、编号及区间由 SSH 后端生成，前端使用 SDK [`mountTerminalBlocks`](../../packages/plugin-sdk/docs/command-blocks.md#终端行号栏) 为同一 xterm 显示 Gutter 与高亮。选择限于当前实例 / 连接，页面卸载、淘汰和重连时清理。
