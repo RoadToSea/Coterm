@@ -40,11 +40,13 @@ export interface TerminalBlockOptions {
 export function mountTerminalBlocks(gutter: HTMLElement, container: HTMLElement, terminal: BlockTerminal, options: TerminalBlockOptions) {
   const style = document.createElement("style");
   style.textContent = `
-  .coterm-terminal-gutter { position:relative; flex:none; width:66px; min-width:66px; border-right:1px solid var(--coterm-border,#333); }
-  .coterm-terminal-clear { position:absolute; top:3px; left:3px; display:grid; place-items:center; width:22px; height:22px; padding:0; border:1px solid var(--coterm-border-input,#454545); border-radius:4px; background:var(--coterm-surface,#1e1e1e); color:var(--coterm-text-muted,#969696); font:16px/1 sans-serif; cursor:pointer; z-index:2; }
-  .coterm-terminal-clear:hover:not(:disabled) { color:var(--coterm-text-primary,#ccc); background:var(--coterm-surface-hover,#414141); }
-  .coterm-terminal-clear:disabled { opacity:.45; cursor:default; }
-  .coterm-terminal-number { position:absolute; left:2px; width:60px; padding:0 3px; border:0; background:transparent; font:11px var(--coterm-font-mono,Consolas,monospace); color:var(--coterm-text-muted,#969696); }
+  .coterm-terminal-gutter { position:relative; flex:none; box-sizing:border-box; width:max(28px,calc(var(--coterm-terminal-number-chars,2) * 1ch + 12px)); min-width:28px; border-right:1px solid var(--coterm-border,#333); font:11px var(--coterm-font-mono,Consolas,monospace); }
+  .coterm-terminal-clear { position:absolute; top:5px; left:50%; transform:translateX(-50%); display:grid; place-items:center; box-sizing:border-box; width:16px; height:16px; padding:0; border:1px solid #df4740; border-radius:50%; background:#ff5f57; color:#711c17; box-shadow:inset 0 1px 0 rgba(255,255,255,.3); font:14px/1 sans-serif; cursor:pointer; z-index:2; }
+  .coterm-terminal-clear:hover:not(:disabled) { background:#ff746d; color:#47110e; }
+  .coterm-terminal-clear:active:not(:disabled) { transform:translateX(-50%) scale(.92); }
+  .coterm-terminal-clear:focus-visible { outline:2px solid var(--coterm-focus,#007fd4); outline-offset:2px; }
+  .coterm-terminal-clear:disabled { opacity:1; color:rgba(113,28,23,.45); cursor:default; }
+  .coterm-terminal-number { position:absolute; left:2px; box-sizing:border-box; width:calc(100% - 4px); padding:0 2px; border:0; background:transparent; text-align:right; font:inherit; color:var(--coterm-text-muted,#969696); }
   .coterm-terminal-number[aria-pressed="true"] { color:var(--coterm-focus,#38bdf8); background:var(--coterm-selection,rgba(56,189,248,.15)); }
   .coterm-terminal-frames { position:absolute; inset:0; pointer-events:none; overflow:hidden; }
   .coterm-terminal-frame { position:absolute; border:1px solid var(--coterm-border-subtle,#454545); border-radius:3px; pointer-events:none; }
@@ -96,6 +98,14 @@ export function mountTerminalBlocks(gutter: HTMLElement, container: HTMLElement,
     const screen = terminal.element?.querySelector<HTMLElement>(".xterm-screen");
     if (!screen)
       return;
+    let numberChars = 2;
+    for (const entry of entries.values()) {
+      if (!entry.start.isDisposed)
+        numberChars = Math.max(numberChars, String(entry.block.index).length + 1);
+    }
+    const width = String(numberChars);
+    if (gutter.style.getPropertyValue("--coterm-terminal-number-chars") !== width)
+      gutter.style.setProperty("--coterm-terminal-number-chars", width);
     const bounds = screen.getBoundingClientRect();
     const origin = container.getBoundingClientRect();
     const gutterBounds = gutter.getBoundingClientRect();
@@ -231,6 +241,7 @@ export function mountTerminalBlocks(gutter: HTMLElement, container: HTMLElement,
         remove(id);
       selected.clear();
       frames.remove();
+      gutter.style.removeProperty("--coterm-terminal-number-chars");
       gutter.replaceChildren();
     },
   };

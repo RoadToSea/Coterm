@@ -67,13 +67,10 @@ const css = `
   .terminal-pane { flex:1; min-width:0; min-height:0; display:flex; flex-direction:column; }
   .terminal-shell { position:relative; flex:1; min-width:0; min-height:0; display:flex; }
   .terminal { position:relative; flex:1; min-width:0; min-height:0; overflow:hidden; padding:28px 4px 0 5px; }
-  .ssh-blocks-compose { display:grid; grid-template-columns:auto minmax(0,1fr) auto; align-items:center; gap:8px; margin:0; padding:6px 10px; border-top:1px solid var(--coterm-border,#333); }
-  .ssh-blocks-compose label { font-size:10px; }
-  .ssh-blocks-compose input { padding:4px 6px; border-radius:var(--radius,6px); font-family:var(--coterm-font-mono,monospace); }
   .ssh-blocks-error { padding:6px 10px; font-size:11px; }
   .ssh-blocks-error[hidden] { display:none; }
   .ssh-block-history { padding:4px 10px; color:var(--coterm-text-muted,#969696); font-size:10px; }
-  @media(max-width:500px) { .ssh-blocks-compose label { grid-column:1 / -1; } .ssh-blocks-compose { grid-template-columns:minmax(0,1fr) auto; } }
+  .ssh-block-history[hidden] { display:none; }
   .notice { padding: 7px 14px; font-size: 12px; color: var(--coterm-text-subtle, #aaaaaa); overflow-wrap: anywhere; }
   .notice:empty, .approvals:empty { display: none; }
   .approvals {
@@ -252,7 +249,6 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
   const showError = (reason: unknown) => { if (!disposed) notice.textContent = String(reason); };
   const setConnected = (next: boolean) => {
     connected = next;
-    blocksView.setConnected(next);
     stateMessage = next ? "Connected" : "Disconnected";
     state.textContent = t(stateMessage);
     connect.textContent = next ? t("Disconnect") : t("Connect");

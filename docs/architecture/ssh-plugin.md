@@ -81,6 +81,8 @@ Exec 胶囊保留单行列表。用户查看历史任务后暂停跟随；点最
 
 块数据、来源、编号及区间由 SSH 后端生成，前端使用 SDK [`mountTerminalBlocks`](../../packages/plugin-sdk/docs/command-blocks.md#终端行号栏) 为同一 xterm 显示 Gutter 与高亮。选择限于当前实例 / 连接，页面卸载、淘汰和重连时清理。
 
+人工直接在主终端输入，通过既有 `ssh.input` 进入共享 PTY；前端不再提供额外的「共享终端命令」输入栏。行号栏按当前有效 PTY 块号的最大字符数自适应宽度，最小 28px；顶部为红色圆形取消全选图标，保留本地化 tooltip、可访问名称与键盘焦点样式。该按钮只清除上下文选择，不终止命令或关闭会话。
+
 `ssh.select_blocks` 接受 `{epoch, ids}`，最多 32 个有效 ID；旧 epoch 或失效 ID 报错，空列表清除。仅 Human + 实例 + draft/transient 可调用。`mcp.ssh.selected_blocks` 是注册的 read Tool，只返回显式选中的块及 `selectedCount/more/nextBefore`，单页不超过 12 KiB；空选择返回空块。Agent 将块作为不可信数据处理。选择并不改变命令执行或审批。
 
 | 接口 | 参数 / 数据 | 约定 |

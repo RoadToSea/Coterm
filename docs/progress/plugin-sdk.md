@@ -43,6 +43,7 @@
 
 ## 2026-11-02：xterm 命令行号栏
 
+- 现场界面调整：行号栏按有效 PTY 块号最大字符数自适应宽度（最小 28px），数字缩短或清空后恢复紧凑宽度；顶部取消全选为 16px 红色圆形叉号，保留本地化 tooltip、可访问名称、键盘焦点与禁用状态。明暗主题均保留红色辨识。
 - 新增可选 `@coterm/plugin-sdk/components/terminal-blocks`，结构化适配 xterm marker / decoration，不让 SDK 依赖终端包。插件提供可信块边界并同步当前有界块 ID；组件绘制 Gutter、选中行背景、边框与「取消全选」，调用回调同步实例上下文。
 - 支持 buffer 视口滚动 / resize / render、Alternate Screen 隐藏、32 块上限、marker 淘汰清理和区域局部 Esc。SSH 已应用于同一主终端，没有互斥 Terminal / Command blocks Tab。
 - 示例 SDK browser bundle 加入 terminal-blocks；接口说明见 [组件文档](../../packages/plugin-sdk/docs/command-blocks.md#终端行号栏)，真实集成测试为 `tests/ssh-blocks-browser.test.mjs`。

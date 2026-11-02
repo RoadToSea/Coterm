@@ -48,26 +48,12 @@ export function mountSshBlocks(container: HTMLElement, api: PluginAPI, t: Return
   errors.append(error, retry);
   const history = document.createElement("div");
   history.className = "ssh-block-history";
-  const form = document.createElement("form");
-  form.className = "ssh-blocks-compose";
-  const caption = document.createElement("label");
-  caption.htmlFor = "ssh-block-command";
-  const input = document.createElement("input");
-  input.id = caption.htmlFor;
-  input.maxLength = 4096;
-  input.autocomplete = "off";
-  input.spellcheck = false;
-  const submit = document.createElement("button");
-  submit.type = "submit";
-  form.append(caption, input, submit);
-  container.append(errors, history, form);
+  container.append(errors, history);
   let blocks: SshBlock[] = [];
   let epoch: string | null = null;
   let selected: string[] = [];
   let dropped = 0;
-  let connected = false;
   let disposed = false;
-  let submitting = false;
   let fetching = false;
   let syncing = false;
   let selectionDirty = false;
@@ -83,11 +69,8 @@ export function mountSshBlocks(container: HTMLElement, api: PluginAPI, t: Return
   } };
   const controls = () => {
     retry.textContent = t("Retry");
-    caption.textContent = t("Command in shared terminal");
-    submit.textContent = t("Run command");
-    input.disabled = !connected || submitting;
-    submit.disabled = !connected || submitting || blocks.some(block => block.channel === "pty" && block.state === "running");
     history.textContent = dropped ? t("Older blocks expired: {count}", { count: dropped }) : "";
+    history.hidden = dropped === 0;
   };
   const syncSelection = async () => {
     if (disposed || !epoch || syncing || !selectionDirty)
@@ -185,34 +168,6 @@ export function mountSshBlocks(container: HTMLElement, api: PluginAPI, t: Return
     schedule();
   } };
   retry.addEventListener("click", () => { invalidate(); void syncSelection(); }, { signal: controller.signal });
-  form.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    if (disposed || submit.disabled || !input.value.trim())
-      return;
-    const text = input.value;
-    submitting = true;
-    controls();
-    try {
-      const receipt = await api.invoke("ssh.command", { text }, { waitTimeoutMs: 0 });
-      if (disposed)
-        return;
-      if (receipt.error || ["failed", "rejected", "cancelled", "unknown"].includes(receipt.status))
-        throw new Error(receipt.error?.message ?? `Operation ${receipt.status}`);
-      if (input.value === text)
-        input.value = "";
-      invalidate();
-    }
-    catch (reason) {
-      failure(reason);
-    }
-    finally {
-      if (!disposed) {
-        submitting = false;
-        controls();
-        input.focus();
-      }
-    }
-  }, { signal: controller.signal });
   controls();
   // Wait until mount has installed the terminal and its callbacks.
   schedule();
@@ -228,7 +183,6 @@ export function mountSshBlocks(container: HTMLElement, api: PluginAPI, t: Return
     },
     invalidate,
     select(ids: string[]) { selected = ids; selectionDirty = true; void syncSelection(); },
-    setConnected(value: boolean) { connected = value; controls(); },
     refreshLocale: controls,
     unmount() {
       disposed = true;

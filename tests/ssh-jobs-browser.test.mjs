@@ -144,7 +144,7 @@ test("SSH tasks collapse to one row and keep the selected task last while live e
     assert.ok(await run(`Math.abs(list.scrollWidth-list.clientWidth-list.scrollLeft) <= 1`));
 
     await client.send("Emulation.setDeviceMetricsOverride", { width: 320, height: 480, deviceScaleFactor: 1, mobile: false });
-    await waitForValue(client, `root.querySelector('.jobs').clientWidth <= 320 && Math.abs(list.scrollWidth-list.clientWidth-list.scrollLeft) <= 1`);
+    await waitForValue(client, `root.querySelector('.ssh-workbench').dataset.dock === 'bottom' && list.clientWidth > 0 && root.querySelector('.jobs').clientWidth <= 320 && Math.abs(list.scrollWidth-list.clientWidth-list.scrollLeft) <= 1`);
     assert.ok(await run(`select(1).getBoundingClientRect().left >= list.getBoundingClientRect().left`),
       "selected task stays fully visible after resize");
     assert.ok(await run(`root.querySelector('.layout').scrollWidth <= innerWidth`));
