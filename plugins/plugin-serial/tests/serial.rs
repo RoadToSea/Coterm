@@ -384,7 +384,7 @@ async fn process_host_loads_the_serial_package_and_validates_mcp_tools() -> Resu
         .and_then(|tools| {
             tools
                 .iter()
-                .find(|tool| tool["name"] == "coterm-plugin-serial__serial.command_hex")
+                .find(|tool| tool["name"] == "coterm_serial_command_hex")
         })
         .ok_or_else(|| anyhow::anyhow!("Missing public HEX tool"))?;
     assert!(tool["inputSchema"]["properties"]
@@ -392,13 +392,13 @@ async fn process_host_loads_the_serial_package_and_validates_mcp_tools() -> Resu
         .is_none());
     assert!(tool["inputSchema"]["required"]
         .as_array()
-        .is_some_and(|required| required.contains(&json!("name"))));
+        .is_some_and(|required| !required.contains(&json!("name"))));
     let command_tool = tools["tools"]
         .as_array()
         .and_then(|tools| {
             tools
                 .iter()
-                .find(|tool| tool["name"] == "coterm-plugin-serial__serial.command")
+                .find(|tool| tool["name"] == "coterm_serial_command")
         })
         .ok_or_else(|| anyhow::anyhow!("Missing public text tool"))?;
     assert_eq!(
@@ -423,7 +423,7 @@ async fn process_host_loads_the_serial_package_and_validates_mcp_tools() -> Resu
         .and_then(|tools| {
             tools
                 .iter()
-                .find(|tool| tool["name"] == "coterm-plugin-serial__serial.read")
+                .find(|tool| tool["name"] == "coterm_serial_read")
         })
         .ok_or_else(|| anyhow::anyhow!("Missing public read tool"))?;
     assert_eq!(
@@ -435,7 +435,7 @@ async fn process_host_loads_the_serial_package_and_validates_mcp_tools() -> Resu
         .and_then(|tools| {
             tools
                 .iter()
-                .find(|tool| tool["name"] == "coterm-plugin-serial__serial.get_recent")
+                .find(|tool| tool["name"] == "coterm_serial_get_recent")
         })
         .ok_or_else(|| anyhow::anyhow!("Missing public recent-output tool"))?;
     assert_eq!(
@@ -449,16 +449,24 @@ async fn process_host_loads_the_serial_package_and_validates_mcp_tools() -> Resu
     );
     let missing_name = coterm_mcp::server::call_tool(
         &runtime,
-        &json!({"name":"coterm-plugin-serial__serial.status","arguments":{}}),
+        &json!({"name":"coterm_serial_status","arguments":{}}),
     )
     .await
     .expect_err("instance-scoped tools must explain their routing argument");
     assert!(missing_name.to_string().contains("name"));
-    assert!(missing_name.to_string().contains("instanceName"));
+    let health =
+        coterm_mcp::server::call_tool(&runtime, &json!({"name":"coterm.status","arguments":{}}))
+            .await?;
+    assert_eq!(health["structuredContent"]["connectedInstances"], 0);
+    assert_eq!(
+        health["structuredContent"]["instances"][0]["connected"],
+        false
+    );
+    assert!(!health.to_string().contains(&instance.plugin_instance_id));
     let invalid_field = coterm_mcp::server::call_tool(
         &runtime,
         &json!({
-            "name":"coterm-plugin-serial__serial.command",
+            "name":"coterm_serial_command",
             "arguments":{
                 "name":instance.label,
                 "commands":["secret-command-value"],
@@ -474,7 +482,7 @@ async fn process_host_loads_the_serial_package_and_validates_mcp_tools() -> Resu
         let status = coterm_mcp::server::call_tool(
             &runtime,
             &json!({
-                "name":"coterm-plugin-serial__serial.status",
+                "name":"coterm_serial_status",
                 "arguments":{field:instance.label}
             }),
         )
@@ -485,7 +493,7 @@ async fn process_host_loads_the_serial_package_and_validates_mcp_tools() -> Resu
     let duplicate_names = coterm_mcp::server::call_tool(
         &runtime,
         &json!({
-            "name":"coterm-plugin-serial__serial.status",
+            "name":"coterm_serial_status",
             "arguments":{"name":instance.label,"instance":"different"}
         }),
     )
@@ -497,7 +505,7 @@ async fn process_host_loads_the_serial_package_and_validates_mcp_tools() -> Resu
         coterm_mcp::server::call_tool(
             &runtime,
             &json!({
-                "name":"coterm-plugin-serial__serial.connect",
+                "name":"coterm_serial_connect",
                 "arguments":{"instanceName":instance.label}
             }),
         ),

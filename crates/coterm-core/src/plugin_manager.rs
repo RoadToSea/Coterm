@@ -316,7 +316,7 @@ impl ProcessPluginRuntime {
             platform: platform.into(),
             limits,
             state: Arc::new(Mutex::new(State::default())),
-            history: Arc::new(OperationHistory::new(100, 16 * 1024)),
+            history: Arc::new(OperationHistory::new(100, 16 * 1024).with_output_limit(192 * 1024)),
             bypass: Arc::new(tokio::sync::RwLock::new(false)),
             allowed_operations: Arc::new(tokio::sync::RwLock::new(HashSet::new())),
             attention: Arc::new(std::sync::Mutex::new(0)),

@@ -197,7 +197,7 @@ pub fn mcp_tools() -> Vec<McpToolRegistration> {
         required.push("pluginInstanceId");
         McpToolRegistration {
             operation: format!("mcp.{name}"),
-            descriptor: json!({"name":name,"description":description,"inputSchema":{"type":"object","properties":properties,"required":required,"additionalProperties":false},"_meta":{"coterm/returnOnApproval":true}}),
+            descriptor: json!({"name":name,"description":description,"inputSchema":{"type":"object","properties":properties,"required":required,"additionalProperties":false},"_meta":{"coterm/returnOnApproval":true,"coterm/connectionStatus":name == "serial.status"}}),
         }
     })
     .collect();

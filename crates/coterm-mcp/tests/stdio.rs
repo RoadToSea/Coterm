@@ -85,6 +85,19 @@ async fn real_stdio_adapter_routes_to_desktop_runtime() -> anyhow::Result<()> {
         instances["result"]["structuredContent"],
         json!({"instances":[]})
     );
+    write_frame(&mut input, &json!({"jsonrpc":"2.0","id":"health","method":"tools/call","params":{"name":"coterm.status","arguments":{}}})).await?;
+    let health: Value = serde_json::from_slice(
+        &timeout(Duration::from_secs(2), read_frame(&mut output))
+            .await??
+            .ok_or_else(|| anyhow::anyhow!("No health response"))?,
+    )?;
+    assert_eq!(health["id"], "health");
+    assert_eq!(health["result"]["structuredContent"]["desktopAlive"], true);
+    assert_eq!(
+        health["result"]["structuredContent"]["connectedInstances"],
+        0
+    );
+    assert_eq!(health["result"]["structuredContent"]["activeInstances"], 0);
     input.shutdown().await?;
     drop(input);
     assert!(timeout(Duration::from_secs(5), child.wait())

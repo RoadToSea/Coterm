@@ -1,14 +1,16 @@
 //! Tools-only MCP MVP: explicit plugin tools and host operation queries.
-use std::{net::SocketAddr, sync::Arc, time::Duration};
+use std::{collections::HashSet, net::SocketAddr, sync::Arc, time::Duration};
 
 use coterm_core::{
     plugin_manager::ProcessPluginRuntime,
     plugin_runtime::{CallerContext, Operations, PluginRuntime, SubmitOperation},
 };
 use coterm_proto::runtime::{
-    lifecycle::InstanceInfo,
-    operation::{OperationReceipt, OperationSource, OperationStatus},
-    RuntimeError,
+    lifecycle::{InstanceInfo, InstanceStatus},
+    operation::{
+        OperationEffect, OperationReceipt, OperationScope, OperationSource, OperationStatus,
+    },
+    ErrorCategory, RuntimeError,
 };
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -217,7 +219,7 @@ pub(crate) fn initialize_result(params: &Value) -> Result<Value, (i32, String)> 
         "protocolVersion": version,
         "capabilities": {"tools": {"listChanged": true}},
         "serverInfo": {"name": "Coterm", "version": env!("CARGO_PKG_VERSION")},
-        "instructions": "Instance-scoped tools use the public instance name from coterm.list_instances; UUIDs are internal and must not be supplied. Tools wait up to 60s including approval and human interaction. Serial tools return as soon as a write enters approval, with status pending_approval; use coterm.get_operation to query its final result. Set tools/call.params._meta['coterm/waitTimeoutMs'] to 0 for an immediate receipt, or 1..300000 to bound waiting. Only query coterm.get_operation after a pending/expired receipt; never pass credentials or replay writes automatically. Agent commit operations require approval unless the user has enabled Bypass or an explicit allowlist entry."
+        "instructions": "Use coterm.status for quick desktop and connection health. Plugin tools use flat names such as coterm_ssh_exec. Instance name is optional only with exactly one confirmed connected instance of the target plugin and no unknown connection states; otherwise use name from coterm.list_instances. UUIDs are internal and must not be supplied. SSH and Serial tools return as soon as a write enters approval, with status pending_approval; use coterm.get_operation to query its final result. Set tools/call.params._meta['coterm/waitTimeoutMs'] to 0 for an immediate receipt, or 1..300000 to bound waiting. Only query coterm.get_operation after a pending/expired receipt; never pass credentials or replay writes automatically. Agent commit operations require approval unless the user has enabled Bypass or an explicit allowlist entry."
     }))
 }
 
@@ -254,17 +256,40 @@ pub(crate) fn rpc_error(id: Value, code: i32, message: &str) -> Value {
 pub async fn tools_list(runtime: &ProcessPluginRuntime) -> Result<Value, RuntimeError> {
     let mut tools = vec![
         json!({"name":"coterm.list_instances","description":"List existing shared plugin instances. Each instance has a unique public name; internal UUIDs are not exposed.","inputSchema":{"type":"object","properties":{},"additionalProperties":false}}),
-        json!({"name":"coterm.get_operation","description":"Query an operation using its instance name or plugin scope.","inputSchema":{"type":"object","properties":{"name":{"type":"string","minLength":1},"pluginId":{"type":"string","minLength":1},"operationId":{"type":"string","minLength":1}},"required":["operationId"],"oneOf":[{"required":["name"],"not":{"required":["pluginId"]}},{"required":["pluginId"],"not":{"required":["name"]}}],"additionalProperties":false}}),
-        json!({"name":"coterm.cancel_operation","description":"Request cancellation using an instance name or plugin scope. The result can be cancelled, unknown, or unsupported depending on protocol confirmation.","inputSchema":{"type":"object","properties":{"name":{"type":"string","minLength":1},"pluginId":{"type":"string","minLength":1},"operationId":{"type":"string","minLength":1}},"required":["operationId"],"oneOf":[{"required":["name"],"not":{"required":["pluginId"]}},{"required":["pluginId"],"not":{"required":["name"]}}],"additionalProperties":false}}),
+        json!({"name":"coterm.status","description":"Quick desktop/bridge health and instance connection snapshot (at most 64 instances, 1 second). connected=null means unknown; ready alone does not mean connected. Requires no SSH approval or authentication.","inputSchema":{"type":"object","properties":{},"additionalProperties":false}}),
+        json!({"name":"coterm.get_operation","description":"Query an operation using name or pluginId; omit both only for one confirmed connected default instance.","inputSchema":{"type":"object","properties":{"name":{"type":"string","minLength":1},"pluginId":{"type":"string","minLength":1},"operationId":{"type":"string","minLength":1}},"required":["operationId"],"not":{"required":["name","pluginId"]},"additionalProperties":false}}),
+        json!({"name":"coterm.cancel_operation","description":"Request cancellation using name or pluginId; omit both only for one confirmed connected default instance. The result can be cancelled, unknown, or unsupported depending on protocol confirmation.","inputSchema":{"type":"object","properties":{"name":{"type":"string","minLength":1},"pluginId":{"type":"string","minLength":1},"operationId":{"type":"string","minLength":1}},"required":["operationId"],"not":{"required":["name","pluginId"]},"additionalProperties":false}}),
     ];
+    let mut names = HashSet::new();
     for (plugin, registration) in runtime.native_mcp_tools().await {
         let mut descriptor = public_tool_descriptor(registration.descriptor);
         if let Some(name) = descriptor["name"].as_str() {
-            descriptor["name"] = json!(format!("{plugin}__{name}"));
+            let name = public_tool_name(&plugin, name);
+            if !names.insert(name.clone()) {
+                return Err(RuntimeError {
+                    category: ErrorCategory::Conflict,
+                    code: "mcp_tool_name_conflict".into(),
+                    message: "Plugin MCP tool names conflict after normalization".into(),
+                    details: None,
+                });
+            }
+            descriptor["name"] = json!(name);
         }
         tools.push(descriptor);
     }
     Ok(json!({"tools":tools}))
+}
+
+fn public_tool_name(plugin: &str, native: &str) -> String {
+    let plugin = plugin.strip_prefix("coterm-plugin-").unwrap_or(plugin);
+    let native = native.strip_prefix(&format!("{plugin}.")).unwrap_or(native);
+    let normalize = |value: &str| {
+        value
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+            .collect::<String>()
+    };
+    format!("coterm_{}_{}", normalize(plugin), normalize(native))
 }
 
 /// Hide the runtime routing key from the MCP contract. The bridge resolves `name`
@@ -284,15 +309,11 @@ fn public_tool_descriptor(mut descriptor: Value) -> Value {
         json!({
             "type":"string",
             "minLength":1,
-            "description":"Required public instance name returned by coterm.list_instances. The bridge also accepts instance, instanceName, or instance_name as compatibility aliases."
+            "description":"Public instance name from coterm.list_instances. Optional only when this plugin has exactly one confirmed connected instance and no unknown connection states. Otherwise specify name. Also accepts instance, instanceName, or instance_name as compatibility aliases."
         }),
     );
     if let Some(required) = schema.get_mut("required").and_then(Value::as_array_mut) {
-        for entry in required {
-            if entry.as_str() == Some("pluginInstanceId") {
-                *entry = json!("name");
-            }
-        }
+        required.retain(|entry| entry.as_str() != Some("pluginInstanceId"));
     }
     descriptor
 }
@@ -303,6 +324,135 @@ fn public_instance(instance: &InstanceInfo) -> Value {
         "pluginId": instance.plugin_id,
         "status": instance.status,
     })
+}
+
+struct ConnectionSnapshot {
+    instances: Vec<(InstanceInfo, Option<bool>)>,
+    total: usize,
+}
+
+/// Connection knowledge is opt-in plugin metadata, never guessed from a ready UI
+/// instance or a protocol-specific operation name. Probes cannot commit or prompt.
+async fn connection_snapshot(
+    runtime: &ProcessPluginRuntime,
+    plugin: Option<&str>,
+) -> anyhow::Result<ConnectionSnapshot> {
+    let all = runtime.list_instances(plugin).await?;
+    let total = all.len();
+    let mut instances: Vec<_> = all
+        .into_iter()
+        .take(64)
+        .map(|instance| {
+            let connected = if instance.status == InstanceStatus::Ready {
+                None
+            } else {
+                Some(false)
+            };
+            (instance, connected)
+        })
+        .collect();
+    let tools = runtime.native_mcp_tools().await;
+    let slots = Arc::new(tokio::sync::Semaphore::new(8));
+    let mut probes = JoinSet::new();
+    for (index, (instance, connected)) in instances.iter().enumerate() {
+        if connected.is_some() {
+            continue;
+        }
+        let declared: Vec<_> = tools
+            .iter()
+            .filter(|(plugin, tool)| {
+                plugin == &instance.plugin_id
+                    && tool.descriptor["_meta"]["coterm/connectionStatus"] == true
+            })
+            .collect();
+        let [(_, registration)] = declared.as_slice() else {
+            continue;
+        };
+        let operation = runtime
+            .operation_catalog(&instance.plugin_id)
+            .await
+            .into_iter()
+            .find(|op| op.name == registration.operation);
+        let Some(operation) = operation.filter(|op| {
+            op.effect == OperationEffect::Read
+                && op.scope == OperationScope::Instance
+                && !op.sensitive_input
+                && op.transient
+        }) else {
+            continue;
+        };
+        let runtime = runtime.clone();
+        let instance = instance.clone();
+        let slots = slots.clone();
+        probes.spawn(async move {
+            let Ok(_permit) = slots.acquire_owned().await else {
+                return (index, None);
+            };
+            let receipt = runtime
+                .submit(
+                    CallerContext {
+                        source: OperationSource::Agent,
+                        session_id: instance.session_id,
+                        plugin_id: Some(instance.plugin_id.clone()),
+                    },
+                    SubmitOperation {
+                        plugin_id: instance.plugin_id,
+                        plugin_instance_id: Some(instance.plugin_instance_id.clone()),
+                        operation: operation.name,
+                        args: json!({"pluginInstanceId":instance.plugin_instance_id}),
+                        wait_timeout_ms: Some(500),
+                    },
+                )
+                .await;
+            let connected = receipt
+                .ok()
+                .filter(|receipt| receipt.status == OperationStatus::Completed)
+                .and_then(|receipt| receipt.output)
+                .and_then(|output| {
+                    output
+                        .pointer("/structuredContent/connected")
+                        .and_then(Value::as_bool)
+                });
+            (index, connected)
+        });
+    }
+    let _ = tokio::time::timeout(Duration::from_secs(1), async {
+        while let Some(result) = probes.join_next().await {
+            if let Ok((index, connected)) = result {
+                instances[index].1 = connected;
+            }
+        }
+    })
+    .await;
+    // Dropping the JoinSet cancels only our read waiters, never user operations.
+    Ok(ConnectionSnapshot { instances, total })
+}
+
+async fn default_instance(
+    runtime: &ProcessPluginRuntime,
+    plugin: Option<&str>,
+) -> anyhow::Result<InstanceInfo> {
+    let snapshot = connection_snapshot(runtime, plugin).await?;
+    if snapshot.total != snapshot.instances.len()
+        || snapshot
+            .instances
+            .iter()
+            .any(|(_, connected)| connected.is_none())
+    {
+        anyhow::bail!("Connection state is unavailable; specify name from coterm.list_instances");
+    }
+    let mut connected = snapshot
+        .instances
+        .into_iter()
+        .filter(|(_, connected)| *connected == Some(true))
+        .map(|(instance, _)| instance);
+    let Some(instance) = connected.next() else {
+        anyhow::bail!("No connected default instance; specify name from coterm.list_instances and connect it first");
+    };
+    if connected.next().is_some() {
+        anyhow::bail!("Multiple connected instances; specify name from coterm.list_instances");
+    }
+    Ok(instance)
 }
 
 fn hide_internal_instance_ids(value: &mut Value) {
@@ -417,6 +567,34 @@ pub async fn call_tool(runtime: &ProcessPluginRuntime, params: &Value) -> anyhow
     if !args.is_object() {
         anyhow::bail!("Tool arguments must be an object");
     }
+    if name == "coterm.status" {
+        if args.as_object().is_none_or(|args| !args.is_empty()) {
+            anyhow::bail!("coterm.status takes no arguments");
+        }
+        let snapshot = connection_snapshot(runtime, None).await?;
+        let active = snapshot
+            .instances
+            .iter()
+            .filter(|(instance, _)| instance.status == InstanceStatus::Ready)
+            .count();
+        let connected = snapshot
+            .instances
+            .iter()
+            .filter(|(_, connected)| *connected == Some(true))
+            .count();
+        let instances: Vec<_> = snapshot
+            .instances
+            .iter()
+            .map(|(instance, connected)| {
+                let mut value = public_instance(instance);
+                value["connected"] = json!(connected);
+                value
+            })
+            .collect();
+        return Ok(text_result(
+            json!({"desktopAlive":true,"bridgeEnabled":true,"totalInstances":snapshot.total,"activeInstances":active,"connectedInstances":connected,"instances":instances,"truncated":snapshot.total > snapshot.instances.len()}),
+        ));
+    }
     if name == "coterm.list_instances" {
         let instances = runtime
             .list_instances(None)
@@ -427,10 +605,28 @@ pub async fn call_tool(runtime: &ProcessPluginRuntime, params: &Value) -> anyhow
         return Ok(text_result(json!({"instances":instances})));
     }
     if name == "coterm.get_operation" || name == "coterm.cancel_operation" {
-        let instance_name = args["name"].as_str();
-        let plugin_id = args["pluginId"].as_str();
-        if instance_name.is_some() == plugin_id.is_some() {
-            anyhow::bail!("Specify exactly one name or pluginId");
+        if let Some(field) = args.as_object().and_then(|args| {
+            args.keys()
+                .find(|field| !matches!(field.as_str(), "name" | "pluginId" | "operationId"))
+        }) {
+            anyhow::bail!("Unknown argument {field}; use name or pluginId and operationId");
+        }
+        let instance_name = args
+            .get("name")
+            .map(|name| {
+                name.as_str()
+                    .ok_or_else(|| anyhow::anyhow!("name must be a string"))
+            })
+            .transpose()?;
+        let plugin_id = args
+            .get("pluginId")
+            .map(|id| {
+                id.as_str()
+                    .ok_or_else(|| anyhow::anyhow!("pluginId must be a string"))
+            })
+            .transpose()?;
+        if instance_name.is_some() && plugin_id.is_some() {
+            anyhow::bail!("Specify at most one name or pluginId");
         }
         let (authorized_plugin, session_id, instance_id) =
             if let Some(instance_name) = instance_name {
@@ -440,11 +636,14 @@ pub async fn call_tool(runtime: &ProcessPluginRuntime, params: &Value) -> anyhow
                     instance.session_id,
                     Some(instance.plugin_instance_id),
                 )
+            } else if let Some(plugin_id) = plugin_id {
+                (plugin_id.to_owned(), String::new(), None)
             } else {
+                let instance = default_instance(runtime, None).await?;
                 (
-                    plugin_id.unwrap_or_default().to_owned(),
-                    String::new(),
-                    None,
+                    instance.plugin_id,
+                    instance.session_id,
+                    Some(instance.plugin_instance_id),
                 )
             };
         let id = args["operationId"]
@@ -470,14 +669,22 @@ pub async fn call_tool(runtime: &ProcessPluginRuntime, params: &Value) -> anyhow
         };
     }
     let native = runtime.native_mcp_tools().await;
-    let (plugin, tool) = native
+    let matching: Vec<_> = native
         .into_iter()
-        .find(|(plugin, tool)| {
-            tool.descriptor["name"]
-                .as_str()
-                .is_some_and(|native| format!("{plugin}__{native}") == name)
+        .filter(|(plugin, tool)| {
+            tool.descriptor["name"].as_str().is_some_and(|native| {
+                public_tool_name(plugin, native) == name || format!("{plugin}__{native}") == name
+            })
         })
-        .ok_or_else(|| anyhow::anyhow!("Tool not found"))?;
+        .collect();
+    let (plugin, tool) = match matching.len() {
+        0 => anyhow::bail!("Tool not found"),
+        1 => matching
+            .into_iter()
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("Tool not found"))?,
+        _ => anyhow::bail!("Tool name is ambiguous; conflicting plugin registrations"),
+    };
     let descriptor = runtime
         .operation_catalog(&plugin)
         .await
@@ -491,15 +698,22 @@ pub async fn call_tool(runtime: &ProcessPluginRuntime, params: &Value) -> anyhow
             .into_iter()
             .filter(|field| args.get(*field).is_some())
             .collect::<Vec<_>>();
-        if target_fields.len() != 1 {
+        if target_fields.len() > 1 {
             anyhow::bail!(
                 "Provide exactly one instance name using name, instance, instanceName, or instance_name"
             );
         }
-        let public_name = args[target_fields[0]]
-            .as_str()
-            .ok_or_else(|| anyhow::anyhow!("Instance name must be a string"))?;
-        let instance = resolve_instance_name(runtime, Some(&plugin), public_name).await?;
+        if args.get("pluginInstanceId").is_some() {
+            anyhow::bail!("pluginInstanceId is internal; use name from coterm.list_instances");
+        }
+        let instance = if let Some(field) = target_fields.first() {
+            let public_name = args[*field]
+                .as_str()
+                .ok_or_else(|| anyhow::anyhow!("Instance name must be a string"))?;
+            resolve_instance_name(runtime, Some(&plugin), public_name).await?
+        } else {
+            default_instance(runtime, Some(&plugin)).await?
+        };
         let instance_id = instance.plugin_instance_id.clone();
         let object = args
             .as_object_mut()
@@ -544,7 +758,8 @@ pub async fn call_tool(runtime: &ProcessPluginRuntime, params: &Value) -> anyhow
     } else {
         runtime.submit(caller, request).await?
     };
-    let public_status = if return_on_approval && receipt.status == OperationStatus::AwaitingApproval {
+    let public_status = if return_on_approval && receipt.status == OperationStatus::AwaitingApproval
+    {
         json!("pending_approval")
     } else {
         serde_json::to_value(receipt.status)?
@@ -584,6 +799,28 @@ pub fn loopback_address(value: &str) -> anyhow::Result<SocketAddr> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn flat_names_do_not_repeat_plugin_namespaces() {
+        assert_eq!(
+            public_tool_name("coterm-plugin-ssh", "ssh.exec"),
+            "coterm_ssh_exec"
+        );
+        assert_eq!(
+            public_tool_name("coterm-plugin-serial", "serial.command_hex"),
+            "coterm_serial_command_hex"
+        );
+        assert_ne!(
+            public_tool_name("coterm-plugin-ssh", "ssh.exec"),
+            public_tool_name("coterm-plugin-local", "local.exec")
+        );
+        // The directory and dispatcher detect collisions rather than routing the
+        // normalized name to whichever plugin happens to have been registered first.
+        assert_eq!(
+            public_tool_name("a-b", "read"),
+            public_tool_name("a_b", "read")
+        );
+    }
 
     #[tokio::test]
     async fn bridge_rejects_non_loopback_bind_addresses() {
@@ -672,7 +909,7 @@ mod tests {
         assert!(descriptor["inputSchema"]["properties"]
             .get("pluginInstanceId")
             .is_none());
-        assert_eq!(descriptor["inputSchema"]["required"], json!(["name"]));
+        assert_eq!(descriptor["inputSchema"]["required"], json!([]));
         assert_eq!(
             descriptor["inputSchema"]["properties"]["name"]["type"],
             "string"

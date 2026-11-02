@@ -3,7 +3,7 @@
 ## 当前能力
 
 - 多实例 SSH、共享 PTY、人机共用终端、独立 exec 作业、按游标读取输出。
-- MCP 以实例 `name` 路由；文件读写作为显式实例工具发布；人工终端不使用 Agent 命令列表界面。
+- MCP 对外使用 `coterm_ssh_*`；以实例 `name` 路由，唯一确认已连接且无未知状态时可省略；文件读写作为显式实例工具发布。
 - `ssh.exec` 的 `commands` 接受多行脚本，总量 64 KiB UTF-8 字节，通过 stdin 交付，列表项共享目录/环境，首个非零状态停止。
 - `ssh.exec`、`ssh.read_file`、`ssh.write_file` 支持显式 `sudo: true`，审批后由桌面收集一次性秘密；不接受 Agent 传密码。
 - ANSI 终端文本保留控制字符并直接返回 UTF-8，二进制、无效 UTF-8 或控制字符过密时无损返回 Base64；摘要同时呈现 stdout/stderr，限制 JSON 扩张。
@@ -11,6 +11,16 @@
 - 主终端使用 SDK xterm Gutter 显示 PTY 命令块号和选中高亮；Human / Agent 标签在命令前，按钮仅有取消全选。人工直接在主终端输入，不另设底部命令栏。
 - Exec 胶囊有 LED 状态、右侧 / 底部停靠、可拖动尺寸；历史选择暂停跟随，关闭面板时新任务不自动展开。
 - 块选择通过 `ssh.select_blocks` 按当前 epoch 传入插件内存；MCP `mcp.ssh.selected_blocks` 只读取人工选中的有界上下文，Agent 来源不能更改选择。
+
+## 2026-11-02：Agent MCP 使用反馈
+
+- 修复审批导致首次 MCP 调用等待 60 秒：SSH descriptor 声明 `returnOnApproval`，进入审批时即时返回 `pending_approval` 和原操作 ID。集成测试改为批准后查询同一操作，继续覆盖并发状态查询、秘密输入、取消和无重放。
+- exec 完成预览 / `ssh.output` 每流每页由 4 KiB 增至 32 KiB。普通文本摘要可保留两条流，整体按 JSON 成本限 68 KiB；两流和结构化内容容纳于宿主独立的 192 KiB 输出预算。每流保留 64 KiB、最多 8 作业、输入预算、PTY / 消息块限额不变。
+- 状态工具声明连接知识，接入 `coterm.status`；单个确认已连接 SSH 可直接省略 `name`，多个连接或未知时拒绝默认提交。已断开 / 未连接的实例仍可通过显式名称查询和连接。
+- 对外工具名扁平化为 `coterm_ssh_exec` 等，旧名保留兼容；插件内部 `ssh.*` / `mcp.ssh.*` 不变。
+- 回归先复现旧 4 KiB 截断和审批不在 500ms 内返回，再验证修复。本地真实 POSIX Shell + MCP 连接验证 32 KiB 输出完整出现在首次结果、可读文本和操作查询；另测 ANSI、UTF-8 / 二进制两流预算、默认目标、多连接拒绝和旧名称。
+- 本轮 SSH Rust 42 项通过（23 单元 + 19 进程集成），工作区 check、相关 all-targets Clippy 和 SSH / Serial 开发包构建通过。Core 存在与当前 Local manifest 对应的 5 项安装 fixture 失败，完整说明见 [MCP 进度](mcp.md#2026-11-02agent-健康检查默认路由与扁平工具名)。尚未连接用户实际远端或运行 macOS / Linux 实机验收。
+- 决策：[Agent 调用体验](../design/mcp-agent-experience.md)；稳定接口：[MCP](../architecture/mcp-integration.md)、[exec 输出](../architecture/ssh-plugin.md#exec-输出与进度)。重启桌面及 MCP 连接后使用新实现。
 
 ## 2026-11-02：主终端块选择与 Exec 面板
 

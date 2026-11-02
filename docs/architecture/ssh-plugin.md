@@ -11,7 +11,7 @@
 3. 用户终端与 MCP 共用该 PTY；可同时创建多个实例，切换界面不关闭连接。
 4. SSH 主终端使用左侧 Gutter 块号显示获批命令和回复。Human / Agent 标签在命令前，点击块号多选、高亮；顶部只有「取消全选」。Exec 胶囊可打开右侧或底部详情面板。
 
-MCP 客户端先用 `coterm.list_instances` 定位实例，再 `ssh.probe` 获取并核对指纹、`ssh.connect` 提交连接。密码由宿主交互收集，不放入工具参数；审批/密码等待后返回原操作结果。外部工具名称带插件命名空间，见 [MCP](mcp-integration.md)。
+MCP 客户端可先用 `coterm.status` 检查桌面与实例连接状态。未连接实例通过 `coterm.list_instances` 获取名称，显式传 `name` 调用 `coterm_ssh_probe` 核对指纹，再用 `coterm_ssh_connect` 提交连接。目标插件仅有一个确认已连接实例且无未知状态时，后续工具可省略 `name`。密码由宿主交互收集，不放入参数；进入审批立即返回 `pending_approval`，批准后用同一 `operationId` 查询结果，不重提。外部名称使用 `coterm_ssh_*`，内部 `ssh.*` / `mcp.ssh.*` 不变，见 [MCP](mcp-integration.md)。
 
 人工终端与串口 Shell 采用同一套[终端快捷键](terminal-shortcuts.md)：Ctrl+C 有选区时复制、无选区时发送中断；Ctrl+F 搜索当前终端输出，Enter/Shift+Enter 跳转、Esc 关闭；Ctrl+V 等组合走本地粘贴，Ctrl+Shift+A 全选终端内容，Esc 优先清除选区；Ctrl+A/E、Ctrl+R 等保留 Shell 语义。焦点在其他输入框时保留输入框原生行为。
 
@@ -69,7 +69,9 @@ MCP 显式注册 status、probe、connect、disconnect、reset、command、exec�
 
 ### exec 输出与进度
 
-`ssh.exec` 的结果包含 `exitCode`、`signal`、`timedOut`、`cancelled`，以及最多 4 KiB 的 `stdout`/`stderr` 预览。MCP 文本摘要包含两条流的有界预览，不因存在退出码而漏掉 stdout/stderr；整体摘要按 JSON 转义成本限制为约 2 KiB。完整流保存在有界作业缓冲中（每流 64 KiB、最多 8 个作业），通过 `ssh.output` 用 `stdoutCursor`/`stderrCursor` 读取，每流每次最多 4 KiB，返回 `done`、`exitCode`、`gap`、`more`。取消会关闭通道；通道关闭确认后返回 `stopped`，否则 `unknown`。作业缓冲随连接销毁。
+`ssh.exec` 的结果包含 `exitCode`、`signal`、`timedOut`、`cancelled`，以及每流最多 32 KiB 的 `stdout`/`stderr` 预览。MCP 文本摘要包含两条流的可读预览，每流按 JSON 转义成本最多 34 KiB、整体最多 68 KiB；日常 32 KiB 普通文本无需额外分页。机器可读副本始终在 `structuredContent`，不可读字节或 JSON 扩张过大时无损返回 base64，普通非 exec 摘要仍限 2 KiB。
+
+流保存在有界作业缓冲中（每流 64 KiB、最多 8 个作业），超出保留容量会淘汰旧块，不承诺保存全部历史。通过 `coterm_ssh_output` 用 `stdoutCursor`/`stderrCursor` 读取，每流每次最多 32 KiB，返回 `done`、`exitCode`、`gap`、`more`。超过预览的输出仍需分页，遇到 `gap` 必须向使用者说明缺口。宿主输入记录预算保持 16 KiB，输出独立为 192 KiB，容纳两流、文本摘要和 JSON/base64 扩张；MCP 单帧仍限 1 MiB。取消会关闭通道；通道关闭确认后返回 `stopped`，否则 `unknown`。作业缓冲随连接销毁。
 
 ## 输出与限制
 
@@ -104,7 +106,7 @@ Exec 胶囊保留单行列表。用户查看历史任务后暂停跟随；点最
 - 每个 `ssh.command` / `ssh.exec` 操作形成一个块；MCP `commands` 批次按一个获批操作显示，源命令用换行连接，不伪造批次内逐项输出边界。仅执行阶段登记块，准备审批、拒绝或秘密交互取消不会创建已执行块。
 - 使用现有随机 PTY 边界和独立 exec 通道归属回复；不从提示符、静默时间或前端按键猜测命令。原始 `ssh.input` 不进入块记录，密码及交互程序继续在完整终端中使用；宿主秘密句柄和值不进入块。
 - 每连接最多保留 32 个块，优先移除最早的已终结块，保留运行中的块；`dropped` 记录淘汰数量。每块命令预览最多 1 KiB UTF-8，stdout / stderr 合计保留前 2 KiB 原始字节。原始字节经有损纯文本展示，完整终端回放与 `ssh.output` 仍保留原有上限。
-- 单页 JSON 按实际序列化结果限制在 12 KiB 内，适配宿主 16 KiB 操作记录预算；预览限制与序列化规则在 Windows / macOS / Linux 一致，没有新增平台进程、权限或依赖。
+- 消息块单页 JSON 仍按实际序列化结果限制在 12 KiB 内，不随 exec 预算扩大；预览限制与序列化规则在 Windows / macOS / Linux 一致，没有新增平台进程、权限或依赖。
 - 记录只在插件内存中保存。关闭前端后可重新读取；断开连接仍可查看最近快照，成功重连使用新的 epoch 并清空旧历史 / 选择。重置共享 Shell 保留当前连接历史，将未确认命令标为 unknown。
 - 前端先安装实例事件订阅，再在打开消息块视图时读快照；仅当前可见视图响应失效通知，并以 100ms 合并读取。分页中 epoch / revision 改变时重新读取；事件缺口触发恢复。卸载注销订阅、取消计时器，晚到结果不再操作 DOM。
 

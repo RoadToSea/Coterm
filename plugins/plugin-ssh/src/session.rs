@@ -40,7 +40,7 @@ const CANCEL_GRACE: Duration = Duration::from_secs(2);
 /// Exec output retained for `ssh.output` polling, per stream and per job.
 const EXEC_OUTPUT_LIMIT: usize = 64 * 1024;
 /// Exec preview returned with the operation result; larger reads use `ssh.output`.
-const EXEC_RESULT_LIMIT: usize = 4 * 1024;
+const EXEC_RESULT_LIMIT: usize = 32 * 1024;
 const MAX_EXEC_JOBS: usize = 8;
 const EXEC_MAX_DURATION: Duration = Duration::from_secs(30 * 60);
 const QUERY_LIMIT: usize = 8 * 1024;
@@ -356,8 +356,8 @@ impl OutputBuffer {
 
     /// Reads a job stream with a readable representation when the bytes are safe text.
     pub fn read_encoded(&self, after: u64) -> Result<Value> {
-        // A job response contains two streams plus a digest; bound their combined
-        // JSON/Base64 expansion below the 16 KiB host record limit.
+        // Two 32 KiB streams plus their readable digest fit the 192 KiB host result
+        // budget, including JSON/base64 expansion.
         self.read_encoded_limit(after, EXEC_RESULT_LIMIT)
     }
 
@@ -1963,7 +1963,7 @@ mod tests {
     #[test]
     fn encoded_job_pages_advance_and_fit_the_host_record_budget() -> Result<()> {
         let mut buffer = OutputBuffer::new(EXEC_OUTPUT_LIMIT);
-        let bytes = b"\x1b[0m".repeat(4096);
+        let bytes = b"\x1b[0m".repeat(EXEC_RESULT_LIMIT / 2);
         buffer.push(&bytes);
         let first = buffer.read_encoded(0)?;
         let cursor: u64 = first["cursor"].as_str().unwrap_or_default().parse()?;
@@ -1976,7 +1976,39 @@ mod tests {
         let next = buffer.read_encoded(cursor)?;
         assert!(next["cursor"].as_str().unwrap_or_default().parse::<u64>()? > cursor);
         let domain = json!({"exitCode":0,"stdout":first,"stderr":next});
-        assert!(serde_json::to_vec(&tool_result(&domain))?.len() <= 16 * 1024);
+        assert!(serde_json::to_vec(&tool_result(&domain))?.len() <= 192 * 1024);
+        Ok(())
+    }
+
+    #[test]
+    fn full_exec_streams_fit_the_result_budget_for_text_and_binary() -> Result<()> {
+        for bytes in [
+            vec![b'x'; EXEC_RESULT_LIMIT],
+            "中\"\\\n".repeat(EXEC_RESULT_LIMIT / 6).into_bytes(),
+            vec![0xff; EXEC_RESULT_LIMIT],
+        ] {
+            let mut buffer = OutputBuffer::new(EXEC_OUTPUT_LIMIT);
+            buffer.push(&bytes);
+            let preview = buffer.preview(EXEC_RESULT_LIMIT);
+            assert_eq!(preview["bytes"], bytes.len());
+            assert_eq!(preview["truncated"], false);
+            let page = buffer.read_encoded(0)?;
+            assert_eq!(page["more"], false);
+            for stream in [preview, page] {
+                let decoded = if let Some(text) = stream["text"].as_str() {
+                    text.as_bytes().to_vec()
+                } else {
+                    STANDARD.decode(stream["data"].as_str().unwrap_or_default())?
+                };
+                assert_eq!(decoded, bytes);
+                let result = tool_result(&json!({"exitCode":0,"stdout":stream,"stderr":stream}));
+                assert!(serde_json::to_vec(&result)?.len() <= 192 * 1024);
+                if bytes.iter().all(|byte| *byte == b'x') {
+                    let summary = result["content"][0]["text"].as_str().unwrap_or_default();
+                    assert_eq!(summary.matches(&"x".repeat(EXEC_RESULT_LIMIT)).count(), 2);
+                }
+            }
+        }
         Ok(())
     }
 }

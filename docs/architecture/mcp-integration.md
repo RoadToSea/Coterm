@@ -31,19 +31,22 @@ MCP 只有一个对外入口：本地 Stdio 子进程。桌面前端通过 Tauri
 | 工具 | 用途 |
 |---|---|
 | `coterm.list_instances` | 获取桌面已创建的实例名称、插件和状态；内部 UUID 不对 MCP 暴露 |
+| `coterm.status` | 无参数、只读的桌面 / Bridge 与实例连接快照；区分 ready、已连接和未知 |
 | `coterm.get_operation` | 查询审批、交互和执行结果 |
 | `coterm.cancel_operation` | 请求取消，结果依赖插件确认 |
-| `<pluginId>__<toolName>` | 插件显式注册的原生 Tool，例如 `coterm-plugin-ssh__ssh.command` |
+| `coterm_<plugin>_<tool>` | 插件显式注册的原生 Tool，例如 `coterm_ssh_exec`、`coterm_serial_command` |
 
-SSH 允许 Agent 显式调用 `coterm-plugin-ssh__ssh.selected_blocks` 读取当前实例中人工已选的块；没有选择时为空。`ssh.select_blocks` 是插件内部实例 draft 操作，不注册为 MCP Tool，Agent 不可伪造人的选择。详情和数据界限见 [SSH 消息块](ssh-plugin.md#命令消息块)。
+SSH 允许 Agent 显式调用 `coterm_ssh_selected_blocks` 读取当前实例中人工已选的块；没有选择时为空。`ssh.select_blocks` 是插件内部实例 draft 操作，不注册为 MCP Tool，Agent 不可伪造人的选择。详情和数据界限见 [SSH 消息块](ssh-plugin.md#命令消息块)。
+
+工具名映射先去掉插件 ID 的 `coterm-plugin-` 前缀，再去掉原生工具名重复的 `<plugin>.` 前缀，非 ASCII 字母数字统一替换为 `_`，最后添加 `coterm_`。例如 `coterm-plugin-ssh` + `ssh.exec` → `coterm_ssh_exec`。`tools/list` 只发布新名称；旧 `<pluginId>__<toolName>` 仍作为未列出的兼容别名接受，不重复发布。映射碰撞时目录明确报 `mcp_tool_name_conflict`，调用歧义名称也拒绝，绝不按注册顺序任选插件。内部操作名与进程协议不变。
 
 Bridge 保留插件参数和原生 `CallToolResult`，仅处理命名空间、目标路由及操作元信息。不会自动把整个内部操作目录公开为 MCP。
 
 `tools/list` 保留插件注册提供的 `inputSchema`；客户端导出界面中的 `parameters` 属于客户端转换结果。若客户端本地显示为 `null`，应对比同一连接的原始 `tools/list` 响应与客户端导出值，服务端集成测试会验证 schema 是否已发送。插件工具目录由已启动插件的握手注册；当前 manifest 只标识 MCP provider，不含静态工具 schema，因此未启动插件的工具不会出现在目录中，也没有 MCP 自动恢复工作区实例的操作。
 
-- 实例级工具的 schema 要求字符串 `name`，字段描述明确指向 `coterm.list_instances` 返回的唯一实例名称。Bridge 兼容 `instance`、`instanceName`、`instance_name`，但一个调用只能提供一种名称字段；缺少或冲突时提示字段名。Bridge 在内部解析为 UUID 后再路由，插件不会跨实例搜索。
+- 实例级工具的公共 schema 中 `name` 可选，显式传入时必须是 `coterm.list_instances` 返回的有效名称。仅目标插件恰有一个确认已连接的实例、无未知状态且快照未截断时，省略 `name` 才能自动路由；第二个未连接实例不妨碍唯一已连接目标。零个 / 多个已连接、未知或超限时提示指定 `name`，不提交原操作。Bridge 兼容 `instance`、`instanceName`、`instance_name`，一个调用只能提供一种名称字段；空值、错误类型、冲突别名和显式无效名称不会退回默认目标。Bridge 仅在内部解析为 UUID，调用方不能传 `pluginInstanceId`。
 - 插件级工具不绑定实例；插件授权域由已注册工具名称确定。
-- 查询/取消公共工具使用 `name` 或 `pluginId` 定位记录授权域；UUID 只存在于 Bridge 和运行时内部。
+- 查询/取消公共工具使用 `name` 或 `pluginId` 定位记录授权域；不能同时传两者。都省略时要求所有插件中恰有一个确认已连接的默认实例且无未知状态，仍验证操作所属插件和实例。实例断开、默认目标改变或存在未知状态时，查询旧操作请显式传原 `name`。UUID 只存在于 Bridge 和运行时内部。
 - 所有外部调用固定为 Agent 来源；Agent 不能自行批准、伪造来源或开启 Bypass。
 - 工具结果的机器可读副本是 `structuredContent`；Bridge 自己生成的 `content[].text` 是有界摘要，插件原生文本块保持原样，串口工具在其中提供可直接阅读的有界设备回显。`_meta["coterm/operation"]` 只含操作收据，`output` 已替换为大小标记，避免在元信息中再次重复负载。
 - Agent commit 默认经过人工审批。Bypass 只跳过提交审批，仍需协议认证及秘密输入。
@@ -52,9 +55,17 @@ Bridge 保留插件参数和原生 `CallToolResult`，仅处理命名空间、�
 
 SSH 认证步骤和工具边界见 [SSH](ssh-plugin.md)，串口可用工具见 [串口](serial-plugin.md)。
 
+### 健康与默认实例
+
+`coterm.status({})` 返回 `desktopAlive`、`bridgeEnabled`、`totalInstances`、`activeInstances`、`connectedInstances`、`instances` 和 `truncated`。每个实例仅有 `name/pluginId/status/connected`；`activeInstances` 是本次快照中 ready 的数量，不代表协议已认证。`connected=true/false/null` 分别表示确认已连接、未连接、未知。最多采样 64 个实例，数量统计针对采样项，`totalInstances` 是总数；超限设置 `truncated=true`，禁止默认路由。
+
+连接状态由插件原生 MCP descriptor 的 `_meta["coterm/connectionStatus"]: true` 声明，每插件最多选择一个状态工具；对应操作必须是实例级、read、非敏感且 transient，结果提供 `structuredContent.connected: boolean`。SSH 的 status 和 Serial 的 status 已声明；未声明、声明歧义、不安全或失败返回未知。基座不猜测协议名称、不执行 connect/probe，不申请认证或写操作审批。探测最多 8 并发，每次等待至多 500ms，整体收集至多 1 秒；慢读不能拖住整个健康检查。
+
+该工具需要已建立的 MCP 连接：返回成功证明桌面与 Bridge 当时可达，不能通过关闭的 Bridge 返回 `desktopAlive:false`。桌面关闭 / Bridge 未启用时仍由 Stdio 适配器在 stderr 明确报连接失败，不能把服务离线理解成健康工具返回的未知实例状态。
+
 ## 等待、结果与取消
 
-默认最多等待 60 秒，覆盖审批、秘密交互及执行。串口提交操作会在进入人工审批时立即返回 `structuredContent.status` 为 `pending_approval` 的结果；调用方可用 `coterm.get_operation` 查询，不必等用户点击后才得到首次响应。调用完成直接返回插件结果，`_meta["coterm/operation"]` 附操作收据。立即返回或等待到期时返回 pending，最终结果可通过查询记录的 `output` 获取。
+默认最多等待 60 秒，覆盖秘密交互及执行。SSH 和串口实例工具在进入人工审批时立即返回 `structuredContent.status` 为 `pending_approval` 的结果，带 `operationId/proposalId`；调用方提示用户到桌面审批，再用 `coterm.get_operation` 查询原操作，不重提写入。调用完成直接返回插件结果，`_meta["coterm/operation"]` 附操作收据。立即返回或等待到期时返回当前状态，最终结果可通过查询记录的 `output` 获取。
 
 插件可在注册的工具 descriptor（不是调用参数）中声明 `_meta["coterm/returnOnApproval"]: true`。Bridge 使用运行时已有的状态订阅，在终态或 `awaiting_approval` 时结束本次等待；不轮询账本，不在基座硬编码插件 ID，也不改变普通 `Operations.submit` 的等待行为。未声明的工具仍等待审批、交互和执行直到终态或本次期限。此扩展只影响等待，不能授予审批权限或改变操作的 effect，前端和跨进程调用消息无需变更。
 
@@ -62,7 +73,7 @@ SSH 认证步骤和工具边界见 [SSH](ssh-plugin.md)，串口可用工具见 
 
 ```json
 {
-  "name": "coterm-plugin-ssh__ssh.command",
+  "name": "coterm_ssh_command",
   "arguments": {"name": "user@example.com:22", "commands": ["pwd"]},
   "_meta": {"coterm/waitTimeoutMs": 0}
 }
@@ -70,7 +81,7 @@ SSH 认证步骤和工具边界见 [SSH](ssh-plugin.md)，串口可用工具见 
 
 `0` 表示立即返回，`1..300000` 指定毫秒上限。等待超时或客户端断开均不代表底层操作取消，也不触发重放。取消仅在插件确认未提交或已停止时成功，否则可能为 unknown。
 
-部分客户端只向模型暴露 `arguments`，无法设置协议级 `_meta`。这类客户端应省略 `_meta`，使用默认 60 秒等待；收到 `pending`、`expired` 或客户端本地超时的收据后，使用同一工具返回的 `operationId` 调用 `coterm.get_operation` 查询，不能把 `_meta` 塞进领域参数。服务端保持严格的 `additionalProperties:false` 校验，未知字段会返回 `operation_args_invalid` 并指出未知或缺失的字段名，不回显参数值。
+部分客户端只向模型暴露 `arguments`，无法设置协议级 `_meta`。这类客户端应省略 `_meta`；SSH / 串口仍会在进入审批时及时返回，其余等待使用默认 60 秒上限。收到 `pending_approval`、运行中或等待到期收据后，使用同一工具返回的 `operationId` 调用 `coterm.get_operation` 查询，不能把 `_meta` 塞进领域参数。服务端保持严格的 `additionalProperties:false` 校验，未知字段会返回 `operation_args_invalid` 并指出未知或缺失的字段名，不回显参数值。
 
 ## 适配器传输
 

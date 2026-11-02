@@ -1237,16 +1237,9 @@ async fn external_mcp_uses_shared_ssh_and_host_secret_and_approval_paths() -> Re
     let tools = tools["tools"]
         .as_array()
         .ok_or_else(|| anyhow::anyhow!("Missing tools"))?;
-    assert!(tools
-        .iter()
-        .any(|t| t["name"] == "coterm-plugin-ssh__ssh.command"));
-    assert!(tools
-        .iter()
-        .any(|t| t["name"] == "coterm-plugin-ssh__ssh.plugin_info"));
-    for name in [
-        "coterm-plugin-ssh__ssh.read_file",
-        "coterm-plugin-ssh__ssh.write_file",
-    ] {
+    assert!(tools.iter().any(|t| t["name"] == "coterm_ssh_command"));
+    assert!(tools.iter().any(|t| t["name"] == "coterm_ssh_plugin_info"));
+    for name in ["coterm_ssh_read_file", "coterm_ssh_write_file"] {
         let tool = tools
             .iter()
             .find(|tool| tool["name"] == name)
@@ -1257,18 +1250,14 @@ async fn external_mcp_uses_shared_ssh_and_host_secret_and_approval_paths() -> Re
             .get("pluginInstanceId")
             .is_none());
     }
-    assert!(!tools
-        .iter()
-        .any(|t| t["name"] == "coterm-plugin-ssh__ssh.input"));
-    let plugin_info = client
-        .tool("coterm-plugin-ssh__ssh.plugin_info", json!({}))
-        .await?;
+    assert!(!tools.iter().any(|t| t["name"] == "coterm_ssh_input"));
+    let plugin_info = client.tool("coterm_ssh_plugin_info", json!({})).await?;
     let plugin_info = &plugin_info["structuredContent"];
     assert_eq!(plugin_info["instanceCount"], 2);
     let connect_args =
         json!({"pluginInstanceId":instance.plugin_instance_id,"fingerprint":ssh.fingerprint});
     let proposed = client
-        .tool("coterm-plugin-ssh__ssh.connect", connect_args.clone())
+        .tool("coterm_ssh_connect", connect_args.clone())
         .await?;
     let receipt = &proposed["_meta"]["coterm/operation"];
     assert_eq!(receipt["status"], "awaiting_approval");
@@ -1303,7 +1292,7 @@ async fn external_mcp_uses_shared_ssh_and_host_secret_and_approval_paths() -> Re
     assert_eq!(requests[0].plugin_instance_id, instance.plugin_instance_id);
     let status = client
         .tool(
-            "coterm-plugin-ssh__ssh.status",
+            "coterm_ssh_status",
             json!({"pluginInstanceId":instance.plugin_instance_id}),
         )
         .await?;
@@ -1337,8 +1326,8 @@ async fn external_mcp_uses_shared_ssh_and_host_secret_and_approval_paths() -> Re
         )
         .await?;
     assert_eq!(mismatched["isError"], true);
-    // The original MCP request waits across approval and returns the plugin result.
-    // A second call on the SAME connection must still be served while it waits.
+    // Approval is immediately visible to the Agent. A second call on the SAME
+    // connection remains usable, and the original operation is queried after approval.
     let mut pushed = runtime
         .subscribe_events(&instance.plugin_instance_id)
         .await?;
@@ -1346,18 +1335,24 @@ async fn external_mcp_uses_shared_ssh_and_host_secret_and_approval_paths() -> Re
     let waiting_id = client.next_id;
     coterm_mcp::transport::write_frame(&mut client.writer, &json!({
         "jsonrpc":"2.0","id":waiting_id,"method":"tools/call","params":{
-            "name":"coterm-plugin-ssh__ssh.command","arguments":{"name":instance.label,"commands":["original-waiting-command"]}
+            "name":"coterm_ssh_command","arguments":{"name":instance.label,"commands":["original-waiting-command"]}
         }
     })).await?;
-    assert!(timeout(
-        Duration::from_millis(50),
-        coterm_mcp::transport::read_frame(&mut client.reader)
+    let pending = timeout(
+        Duration::from_millis(500),
+        coterm_mcp::transport::read_frame(&mut client.reader),
     )
-    .await
-    .is_err());
+    .await??
+    .ok_or_else(|| anyhow::anyhow!("No approval receipt"))?;
+    let pending: Value = serde_json::from_slice(&pending)?;
+    assert_eq!(pending["id"], waiting_id);
+    assert_eq!(
+        pending["result"]["structuredContent"]["status"],
+        "pending_approval"
+    );
     let status = client
         .tool(
-            "coterm-plugin-ssh__ssh.status",
+            "coterm_ssh_status",
             json!({"pluginInstanceId":instance.plugin_instance_id}),
         )
         .await?;
@@ -1374,26 +1369,23 @@ async fn external_mcp_uses_shared_ssh_and_host_secret_and_approval_paths() -> Re
         plugin_instance_id:Some(instance.plugin_instance_id.clone()),
         args:json!({"pluginInstanceId":instance.plugin_instance_id,"commands":["approved-default-wait false"]}),
     }).await?;
-    let frame = timeout(
-        Duration::from_secs(3),
-        coterm_mcp::transport::read_frame(&mut client.reader),
-    )
-    .await??
-    .ok_or_else(|| anyhow::anyhow!("No waiting response"))?;
-    let response: Value = serde_json::from_slice(&frame)?;
-    assert_eq!(response["id"], waiting_id);
-    assert_eq!(
-        response["result"]["_meta"]["coterm/operation"]["status"],
-        "completed"
-    );
-    let domain = &response["result"]["structuredContent"];
+    wait_for_test_operation(&runtime, human(), &result_id).await?;
+    let response = client
+        .tool(
+            "coterm.get_operation",
+            json!({"name":instance.label,"operationId":result_id}),
+        )
+        .await?;
+    assert_eq!(response["structuredContent"]["status"], "completed");
+    let output = &response["structuredContent"]["output"];
+    let domain = &output["structuredContent"];
     assert_eq!(domain["exitCode"], 1);
-    assert_eq!(response["result"]["isError"], true);
+    assert_eq!(output["isError"], true);
     assert!(domain["text"]
         .as_str()
         .is_some_and(|text| text.contains("approved-default-wait false")));
-    // A second MCP client shares the same SSH instance and waits on
-    // approval. Closing that client must never approve, cancel, or replay a write.
+    // A second MCP client gets its own approval receipt for the same SSH instance.
+    // Closing that client must never approve, cancel, or replay a write.
     let second_bridge =
         coterm_mcp::server::BridgeServer::bind_at(runtime.clone(), "127.0.0.1:0".parse()?).await?;
     let mut second = McpWire::connect(
@@ -1406,7 +1398,7 @@ async fn external_mcp_uses_shared_ssh_and_host_secret_and_approval_paths() -> Re
     coterm_mcp::transport::write_frame(
         &mut second.writer,
         &json!({"jsonrpc":"2.0","id":second_waiting_id,"method":"tools/call","params":{
-            "name":"coterm-plugin-ssh__ssh.command",
+            "name":"coterm_ssh_command",
             "arguments":{"name":instance.label,"commands":["second-client-command"]}
         }}),
     )
@@ -1414,16 +1406,19 @@ async fn external_mcp_uses_shared_ssh_and_host_secret_and_approval_paths() -> Re
     {
         let waiting = coterm_mcp::transport::read_frame(&mut second.reader);
         tokio::pin!(waiting);
-        assert!(
-            timeout(Duration::from_millis(50), &mut waiting)
-                .await
-                .is_err(),
-            "a pending approval keeps the second client waiting"
+        let frame = timeout(Duration::from_millis(500), &mut waiting)
+            .await??
+            .ok_or_else(|| anyhow::anyhow!("Missing second-client approval receipt"))?;
+        let response: Value = serde_json::from_slice(&frame)?;
+        assert_eq!(response["id"], second_waiting_id);
+        assert_eq!(
+            response["result"]["structuredContent"]["status"],
+            "pending_approval"
         );
     }
     let status = second
         .tool(
-            "coterm-plugin-ssh__ssh.status",
+            "coterm_ssh_status",
             json!({"pluginInstanceId":instance.plugin_instance_id}),
         )
         .await?;
@@ -1434,6 +1429,7 @@ async fn external_mcp_uses_shared_ssh_and_host_secret_and_approval_paths() -> Re
         .into_iter()
         .find(|r| r.status == OperationStatus::AwaitingApproval)
         .ok_or_else(|| anyhow::anyhow!("No second-client approval proposal"))?;
+    let second_operation = proposal.operation_id.clone();
     runtime
         .approve(
             human(),
@@ -1447,20 +1443,17 @@ async fn external_mcp_uses_shared_ssh_and_host_secret_and_approval_paths() -> Re
             },
         )
         .await?;
-    let frame = timeout(
-        Duration::from_secs(3),
-        coterm_mcp::transport::read_frame(&mut second.reader),
-    )
-    .await??
-    .ok_or_else(|| anyhow::anyhow!("No second-client response"))?;
-    let response: Value = serde_json::from_slice(&frame)?;
-    assert_eq!(response["id"], second_waiting_id);
-    assert_eq!(response["result"]["isError"], true);
-    assert_eq!(
-        response["result"]["_meta"]["coterm/operation"]["status"],
-        "completed"
-    );
-    let domain = &response["result"]["structuredContent"];
+    wait_for_test_operation(&runtime, human(), &second_operation).await?;
+    let response = second
+        .tool(
+            "coterm.get_operation",
+            json!({"name":instance.label,"operationId":second_operation}),
+        )
+        .await?;
+    assert_eq!(response["structuredContent"]["status"], "completed");
+    let output = &response["structuredContent"]["output"];
+    assert_eq!(output["isError"], true);
+    let domain = &output["structuredContent"];
     assert_eq!(domain["exitCode"], 1);
     assert!(domain["text"]
         .as_str()
@@ -1470,7 +1463,7 @@ async fn external_mcp_uses_shared_ssh_and_host_secret_and_approval_paths() -> Re
         .rpc(
             "tools/call",
             json!({
-                "name":"coterm-plugin-ssh__ssh.command",
+                "name":"coterm_ssh_command",
                 "arguments":{"name":instance.label,"commands":["second-must-not-replay"]},
                 "_meta":{"coterm/waitTimeoutMs":0}
             }),
@@ -1572,7 +1565,7 @@ async fn external_mcp_uses_shared_ssh_and_host_secret_and_approval_paths() -> Re
     let immediate = client
         .rpc(
             "tools/call",
-            json!({"name":"coterm-plugin-ssh__ssh.command", "arguments":{
+            json!({"name":"coterm_ssh_command", "arguments":{
         "name":instance.label,"commands":["must-not-run"]},"_meta":{"coterm/waitTimeoutMs":0}}),
         )
         .await?;
@@ -1589,7 +1582,7 @@ async fn external_mcp_uses_shared_ssh_and_host_secret_and_approval_paths() -> Re
     assert_eq!(cancelled["structuredContent"]["status"], "cancelled");
     let pending = client
         .tool(
-            "coterm-plugin-ssh__ssh.command",
+            "coterm_ssh_command",
             json!({"pluginInstanceId":instance.plugin_instance_id,"commands":["not-approved-original"]}),
         )
         .await?;
@@ -1617,7 +1610,7 @@ async fn external_mcp_uses_shared_ssh_and_host_secret_and_approval_paths() -> Re
         loop {
             let output = client
                 .tool(
-                    "coterm-plugin-ssh__ssh.read",
+                    "coterm_ssh_read",
                     json!({"pluginInstanceId":instance.plugin_instance_id,"cursor":"0"}),
                 )
                 .await?;
@@ -1636,7 +1629,7 @@ async fn external_mcp_uses_shared_ssh_and_host_secret_and_approval_paths() -> Re
     runtime.set_bypass(true).await;
     let waiting = client
         .tool(
-            "coterm-plugin-ssh__ssh.connect",
+            "coterm_ssh_connect",
             json!({"pluginInstanceId":other.plugin_instance_id,"fingerprint":ssh.fingerprint}),
         )
         .await?;
@@ -1662,7 +1655,7 @@ async fn external_mcp_uses_shared_ssh_and_host_secret_and_approval_paths() -> Re
     // Destroying an instance withdraws its outstanding interaction and rejects late input.
     client
         .tool(
-            "coterm-plugin-ssh__ssh.connect",
+            "coterm_ssh_connect",
             json!({"pluginInstanceId":other.plugin_instance_id,"fingerprint":ssh.fingerprint}),
         )
         .await?;
@@ -1690,7 +1683,7 @@ async fn external_mcp_uses_shared_ssh_and_host_secret_and_approval_paths() -> Re
     client.next_id += 1;
     let interrupted_id = client.next_id;
     coterm_mcp::transport::write_frame(&mut client.writer, &json!({"jsonrpc":"2.0","id":interrupted_id,"method":"tools/call","params":{
-        "name":"coterm-plugin-ssh__ssh.command","arguments":{"name":instance.label,"commands":["never-completes"]}
+        "name":"coterm_ssh_command","arguments":{"name":instance.label,"commands":["never-completes"]}
     }})).await?;
     timeout(Duration::from_secs(3), async {
         loop {
@@ -1891,6 +1884,193 @@ async fn syntax_errors_are_rejected_without_killing_the_shared_shell() -> Result
         status.output.as_ref().map(|value| &value["connected"]),
         Some(&json!(true))
     );
+    runtime.stop("coterm-plugin-ssh").await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn agent_feedback_approval_returns_without_waiting_for_the_human() -> Result<()> {
+    use coterm_core::plugin_runtime::PluginRuntime;
+    let ssh = server().await?;
+    let (runtime, instance) = load_runtime(&ssh, "agent-approval").await?;
+    connect_instance(&runtime, &instance, &ssh).await?;
+    let first = timeout(
+        Duration::from_millis(500),
+        coterm_mcp::server::call_tool(
+            &runtime,
+            &json!({
+                "name":"coterm_ssh_exec",
+                "arguments":{"name":instance.label,"commands":["approval-feedback"]}
+            }),
+        ),
+    )
+    .await;
+    runtime.stop("coterm-plugin-ssh").await?;
+    let receipt = first
+        .map_err(|_| anyhow::anyhow!("approval must return immediately, not wait for a human"))??;
+    assert_eq!(receipt["structuredContent"]["status"], "pending_approval");
+    assert!(receipt["structuredContent"]["operationId"].is_string());
+    Ok(())
+}
+
+#[tokio::test]
+async fn agent_feedback_exec_keeps_32k_in_one_result() -> Result<()> {
+    use coterm_core::plugin_runtime::{CallerContext, Operations, PluginRuntime, SubmitOperation};
+    use coterm_proto::runtime::operation::OperationSource;
+    let ssh = server().await?;
+    let (runtime, instance) = load_runtime(&ssh, "agent-output").await?;
+    connect_instance(&runtime, &instance, &ssh).await?;
+    let source = "x".repeat(32 * 1024);
+    let receipt = runtime
+        .submit(
+            CallerContext {
+                source: OperationSource::Human,
+                session_id: instance.session_id.clone(),
+                plugin_id: Some(instance.plugin_id.clone()),
+            },
+            SubmitOperation {
+                plugin_id: instance.plugin_id.clone(),
+                plugin_instance_id: Some(instance.plugin_instance_id.clone()),
+                operation: "ssh.exec".into(),
+                args: json!({"text":source}),
+                wait_timeout_ms: Some(3000),
+            },
+        )
+        .await?;
+    runtime.stop("coterm-plugin-ssh").await?;
+    let output = receipt
+        .output
+        .ok_or_else(|| anyhow::anyhow!("missing output"))?;
+    assert_eq!(output["stdout"]["bytes"], 32 * 1024);
+    assert_eq!(output["stdout"]["truncated"], false);
+    assert_eq!(output["stdout"]["text"].as_str(), Some(source.as_str()));
+    // Verify the complete Agent path too: native MCP result, readable text and
+    // retained operation record must all survive the host's result budget.
+    let ssh = server_mode(true).await?;
+    let (runtime, instance) = load_runtime(&ssh, "agent-mcp-output").await?;
+    connect_instance(&runtime, &instance, &ssh).await?;
+    runtime.set_bypass(true).await;
+    let bridge =
+        coterm_mcp::server::BridgeServer::bind_at(runtime.clone(), "127.0.0.1:0".parse()?).await?;
+    let mut client =
+        McpWire::connect(bridge.connection_info(), std::slice::from_ref(&instance)).await?;
+    let source = "0".repeat(32 * 1024);
+    let result = client
+        .rpc(
+            "tools/call",
+            json!({"name":"coterm_ssh_exec","arguments":{"commands":["printf '%032768d' 0"]}}),
+        )
+        .await?;
+    assert_eq!(
+        result["structuredContent"]["stdout"]["text"].as_str(),
+        Some(source.as_str())
+    );
+    assert_eq!(result["structuredContent"]["stdout"]["truncated"], false);
+    assert!(result["content"][0]["text"]
+        .as_str()
+        .is_some_and(|text| text.contains(&source)));
+    assert!(serde_json::to_vec(&result)?.len() < coterm_mcp::transport::MAX_FRAME_BYTES);
+    let queried = client
+        .tool(
+            "coterm.get_operation",
+            json!({"operationId":result["_meta"]["coterm/operation"]["operationId"]}),
+        )
+        .await?;
+    assert_eq!(
+        queried["structuredContent"]["output"]["structuredContent"]["stdout"]["text"].as_str(),
+        Some(source.as_str())
+    );
+    runtime.stop("coterm-plugin-ssh").await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn agent_feedback_health_default_routing_and_legacy_aliases() -> Result<()> {
+    use coterm_core::plugin_runtime::PluginRuntime;
+    let ssh = server().await?;
+    let (runtime, instance) = load_runtime(&ssh, "agent-routing").await?;
+    let call = |name: &str, arguments: Value| json!({"name":name,"arguments":arguments});
+    let no_connection =
+        coterm_mcp::server::call_tool(&runtime, &call("coterm_ssh_status", json!({}))).await;
+    assert!(no_connection.is_err(), "ready does not mean connected");
+    let explicit = coterm_mcp::server::call_tool(
+        &runtime,
+        &call("coterm_ssh_status", json!({"name":instance.label})),
+    )
+    .await?;
+    assert_eq!(explicit["structuredContent"]["connected"], false);
+    connect_instance(&runtime, &instance, &ssh).await?;
+    let connected =
+        coterm_mcp::server::call_tool(&runtime, &call("coterm_ssh_status", json!({}))).await?;
+    assert_eq!(connected["structuredContent"]["connected"], true);
+    let other = runtime
+        .create_instance("coterm-plugin-ssh", serde_json::to_value(&ssh.config)?)
+        .await?;
+    let one =
+        coterm_mcp::server::call_tool(&runtime, &call("coterm_ssh_status", json!({}))).await?;
+    assert_eq!(
+        one["structuredContent"]["connected"], true,
+        "a disconnected second instance is not a candidate"
+    );
+    let health = coterm_mcp::server::call_tool(&runtime, &call("coterm.status", json!({}))).await?;
+    assert_eq!(health["structuredContent"]["desktopAlive"], true);
+    assert_eq!(health["structuredContent"]["connectedInstances"], 1);
+    assert_eq!(health["structuredContent"]["activeInstances"], 2);
+    assert!(!health.to_string().contains(&instance.plugin_instance_id));
+    for tool in ["coterm.get_operation", "coterm.cancel_operation"] {
+        let private_target = coterm_mcp::server::call_tool(
+            &runtime,
+            &call(
+                tool,
+                json!({"pluginInstanceId":instance.plugin_instance_id,"operationId":"unused"}),
+            ),
+        )
+        .await;
+        assert!(private_target.is_err_and(|error| error.to_string().contains("Unknown argument")));
+    }
+    let tools = coterm_mcp::server::tools_list(&runtime).await?;
+    let tools = tools["tools"]
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("missing tools"))?;
+    let exec = tools
+        .iter()
+        .find(|tool| tool["name"] == "coterm_ssh_exec")
+        .ok_or_else(|| anyhow::anyhow!("missing exec"))?;
+    assert_eq!(exec["_meta"]["coterm/returnOnApproval"], true);
+    assert!(!exec["inputSchema"]["required"]
+        .as_array()
+        .is_some_and(|required| required.contains(&json!("name"))));
+    assert!(tools.iter().all(|tool| !tool["name"]
+        .as_str()
+        .is_some_and(|name| name.contains("__"))));
+    let legacy = coterm_mcp::server::call_tool(
+        &runtime,
+        &call(
+            "coterm-plugin-ssh__ssh.status",
+            json!({"name":instance.label}),
+        ),
+    )
+    .await?;
+    assert_eq!(legacy["structuredContent"]["connected"], true);
+    for args in [
+        json!({"name":null}),
+        json!({"name":instance.label,"instanceName":instance.label}),
+        json!({"pluginInstanceId":instance.plugin_instance_id}),
+    ] {
+        assert!(
+            coterm_mcp::server::call_tool(&runtime, &call("coterm_ssh_status", args))
+                .await
+                .is_err()
+        );
+    }
+    connect_instance(&runtime, &other, &ssh).await?;
+    let ambiguous = coterm_mcp::server::call_tool(
+        &runtime,
+        &call("coterm_ssh_exec", json!({"commands":["must-not-run"]})),
+    )
+    .await;
+    assert!(ambiguous.is_err_and(|error| error.to_string().contains("Multiple connected")));
+    assert!(runtime.pending_interactions().await.is_empty());
     runtime.stop("coterm-plugin-ssh").await?;
     Ok(())
 }
@@ -2341,9 +2521,7 @@ async fn real_mcp_file_tools_and_multiline_exec_preserve_content_and_stop_on_fai
     let content = "setting='hello world'\n".repeat(260);
     let args =
         json!({"pluginInstanceId":instance.plugin_instance_id,"path":path,"content":content});
-    let proposal = client
-        .tool("coterm-plugin-ssh__ssh.write_file", args.clone())
-        .await?;
+    let proposal = client.tool("coterm_ssh_write_file", args.clone()).await?;
     assert_eq!(
         proposal["_meta"]["coterm/operation"]["status"], "awaiting_approval",
         "{proposal}"
@@ -2372,10 +2550,15 @@ async fn real_mcp_file_tools_and_multiline_exec_preserve_content_and_stop_on_fai
         std::fs::read_to_string(directory.join("config.txt"))?,
         content
     );
-    let read = client.rpc("tools/call", json!({
-        "name":"coterm-plugin-ssh__ssh.read_file", "arguments":{"name":instance.label,"path":path},
-        "_meta":{"coterm/waitTimeoutMs":5000}
-    })).await?;
+    let read = client
+        .rpc(
+            "tools/call",
+            json!({
+                "name":"coterm_ssh_read_file", "arguments":{"name":instance.label,"path":path},
+                "_meta":{"coterm/waitTimeoutMs":5000}
+            }),
+        )
+        .await?;
     assert_eq!(read["structuredContent"]["text"], content, "{read}");
     runtime
         .set_allowed_operations(vec!["mcp.ssh.exec".to_owned()])
@@ -2384,7 +2567,7 @@ async fn real_mcp_file_tools_and_multiline_exec_preserve_content_and_stop_on_fai
         .rpc(
             "tools/call",
             json!({
-                "name":"coterm-plugin-ssh__ssh.exec",
+                "name":"coterm_ssh_exec",
                 "arguments":{"name":instance.label,"commands":[
                     format!("cd '{}'\nexport COTERM_VALUE='a b'", remote.replace('\'', "'\\''")),
                     format!("cat <<'EOF' > composed.conf\n{content}EOF"),
@@ -2416,7 +2599,7 @@ async fn real_mcp_file_tools_and_multiline_exec_preserve_content_and_stop_on_fai
         .rpc(
             "tools/call",
             json!({
-                "name":"coterm-plugin-ssh__ssh.exec",
+                "name":"coterm_ssh_exec",
                 "arguments":{"name":instance.label,"commands":[script]},
                 "_meta":{"coterm/waitTimeoutMs":5000}
             }),

@@ -42,9 +42,11 @@ pnpm tauri:dev
 ## MCP 调用流程
 
 1. 在桌面创建实例，连接 MCP 后调用 `coterm.list_instances` 获取真实名称；MCP 不提供创建或自动恢复实例的工具。
-2. 按需调用 `coterm-plugin-serial__serial.probe` 检查配置和端口，再调用 `coterm-plugin-serial__serial.connect` 连接。
+2. 按需调用 `coterm_serial_probe` 检查配置和端口，再调用 `coterm_serial_connect` 连接。
 3. 调用文本或 HEX 命令工具；若返回 `pending_approval`，等待用户批准后查询原操作，不重提写入。
 4. 查看命令捕获结果，或使用 `get_recent` / `read` / `read_hex` 读取输出。
+
+也可先调用无参数 `coterm.status` 查看连接状态。恰有一个确认已连接的串口实例且无未知状态时，后续实例工具可省略 `name`；连接前或多连接时仍使用真实名称。审批后查询建议保留原实例名称，避免连接状态变化影响默认路由。
 
 下面是 JSON-RPC `tools/call` 的 params 对象。示例名称 `COM6@115200` 仅用于说明，必须替换成 `coterm.list_instances` 的实际返回值。
 
@@ -52,7 +54,7 @@ pnpm tauri:dev
 
 ```json
 {
-  "name": "coterm-plugin-serial__serial.command",
+  "name": "coterm_serial_command",
   "arguments": {
     "name": "COM6@115200",
     "commands": ["pwd"],
@@ -71,9 +73,9 @@ pnpm tauri:dev
 
 | 工具 | arguments 示例 | 实际发送 |
 |---|---|---|
-| `coterm-plugin-serial__serial.command` | `{"name":"COM6@115200","commands":["\u0003"],"lineEnding":"none"}` | 仅 Ctrl+C，不额外提交 CR |
-| `coterm-plugin-serial__serial.command` | `{"name":"COM6@115200","commands":["pwd\r","\u001b[A\r"],"lineEnding":"none","intervalMs":100}` | 原样发送含回车及方向键的片段 |
-| `coterm-plugin-serial__serial.command_hex` | `{"name":"COM6@115200","commands":["00 80 FF","0d0a"],"intervalMs":100}` | 两次发送原始字节，不把 HEX 当文本 |
+| `coterm_serial_command` | `{"name":"COM6@115200","commands":["\u0003"],"lineEnding":"none"}` | 仅 Ctrl+C，不额外提交 CR |
+| `coterm_serial_command` | `{"name":"COM6@115200","commands":["pwd\r","\u001b[A\r"],"lineEnding":"none","intervalMs":100}` | 原样发送含回车及方向键的片段 |
+| `coterm_serial_command_hex` | `{"name":"COM6@115200","commands":["00 80 FF","0d0a"],"intervalMs":100}` | 两次发送原始字节，不把 HEX 当文本 |
 
 不要同时在文本中写回车又使用默认 CR，除非确实要发送两次回车。登录密码和秘密应通过人工交互输入，不放进 MCP 命令列表。
 
@@ -81,9 +83,9 @@ pnpm tauri:dev
 
 | 工具 | arguments 示例 | 适用场景 |
 |---|---|---|
-| `coterm-plugin-serial__serial.get_recent` | `{"name":"COM6@115200","lines":50}` | 直接查看最近文本，无需保存游标；重复调用可能看到相同内容 |
-| `coterm-plugin-serial__serial.read` | `{"name":"COM6@115200","cursor":0}` | 从当前缓冲开头分页读文本，之后传上次返回的 cursor |
-| `coterm-plugin-serial__serial.read_hex` | `{"name":"COM6@115200","cursor":0}` | 原字节分页读取，返回小写 HEX 字符串 |
+| `coterm_serial_get_recent` | `{"name":"COM6@115200","lines":50}` | 直接查看最近文本，无需保存游标；重复调用可能看到相同内容 |
+| `coterm_serial_read` | `{"name":"COM6@115200","cursor":0}` | 从当前缓冲开头分页读文本，之后传上次返回的 cursor |
+| `coterm_serial_read_hex` | `{"name":"COM6@115200","cursor":0}` | 原字节分页读取，返回小写 HEX 字符串 |
 
 `more:true` 时继续读取下一页。`gap:true` 表示早期数据已被淘汰，不能当作完整日志；`truncated:true` 表示快照或捕获结果达到预算。连接 ID 变化后重新建立游标，不复用旧连接的 cursor。MCP 客户端通过读取工具查询，没有这些事件的订阅；前端通知推送丢失时从回放缓冲恢复。
 
@@ -102,7 +104,7 @@ pnpm tauri:dev
 
 ```json
 {
-  "name": "coterm-plugin-serial__serial.command",
+  "name": "coterm_serial_command",
   "arguments": {
     "name": "COM6@115200",
     "commands": ["pwd"],

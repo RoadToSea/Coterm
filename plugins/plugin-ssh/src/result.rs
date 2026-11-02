@@ -6,6 +6,7 @@
 use serde_json::{json, Value};
 
 const TEXT_PREVIEW: usize = 2048;
+const EXEC_TEXT_PREVIEW: usize = 68 * 1024;
 
 pub fn tool_result(domain: &Value) -> Value {
     let is_error = domain
@@ -20,7 +21,12 @@ pub fn tool_result(domain: &Value) -> Value {
 }
 
 pub fn digest(domain: &Value) -> String {
-    preview(&digest_inner(domain))
+    let limit = if domain.get("stdout").is_some() {
+        EXEC_TEXT_PREVIEW
+    } else {
+        TEXT_PREVIEW
+    };
+    preview_limit(&digest_inner(domain), limit)
 }
 
 fn digest_inner(domain: &Value) -> String {
@@ -77,7 +83,7 @@ fn digest_inner(domain: &Value) -> String {
                 summary.push('\n');
                 summary.push_str(field);
                 summary.push_str(":\n");
-                summary.push_str(&preview_limit(text, TEXT_PREVIEW / 3));
+                summary.push_str(&preview_limit(text, 34 * 1024));
             }
         }
         return summary;
@@ -97,7 +103,7 @@ fn digest_inner(domain: &Value) -> String {
                 .map_or_else(|| "0".into(), Value::to_string)
         );
         summary.push('\n');
-        summary.push_str(&preview(stdout));
+        summary.push_str(&preview_limit(stdout, 34 * 1024));
         return summary;
     }
     let encoded = domain.to_string();
@@ -157,6 +163,6 @@ mod tests {
         );
         assert!(summary.contains("out"));
         assert!(summary.contains("important-error"));
-        assert!(serde_json::to_string(&summary).is_ok_and(|text| text.len() <= TEXT_PREVIEW));
+        assert!(serde_json::to_string(&summary).is_ok_and(|text| text.len() <= EXEC_TEXT_PREVIEW));
     }
 }

@@ -30,6 +30,7 @@ struct State {
 pub struct OperationHistory {
     capacity: usize,
     max_value_bytes: usize,
+    max_output_bytes: usize,
     state: Mutex<State>,
 }
 
@@ -38,8 +39,15 @@ impl OperationHistory {
         Self {
             capacity,
             max_value_bytes,
+            max_output_bytes: max_value_bytes,
             state: Mutex::new(State::default()),
         }
+    }
+
+    /// Keep request retention small while allowing bounded, larger operation results.
+    pub fn with_output_limit(mut self, max_output_bytes: usize) -> Self {
+        self.max_output_bytes = max_output_bytes;
+        self
     }
 
     pub async fn begin(&self, mut record: OperationRecord) -> Result<(), OperationHistoryError> {
@@ -60,7 +68,7 @@ impl OperationHistory {
         record.error = record.error.map(redact_error);
         bound_value(&mut record.input, self.max_value_bytes);
         if let Some(output) = &mut record.output {
-            bound_value(output, self.max_value_bytes);
+            bound_value(output, self.max_output_bytes);
         }
 
         let bucket = bucket_key(&record);
@@ -258,7 +266,7 @@ impl OperationHistory {
         record.status = status;
         record.output = output.map(redact_value);
         if let Some(output) = &mut record.output {
-            bound_value(output, self.max_value_bytes);
+            bound_value(output, self.max_output_bytes);
         }
         record.error = error;
         record.error = record.error.take().map(redact_error);
@@ -626,5 +634,48 @@ mod tests {
         history.begin(small).await.unwrap();
         let stored = history.get("op-2").await.unwrap();
         assert_eq!(stored.input, serde_json::json!({"password": "[REDACTED]"}));
+    }
+
+    #[tokio::test]
+    async fn output_budget_is_independent_of_request_budget_and_still_bounded(
+    ) -> Result<(), OperationHistoryError> {
+        let history = OperationHistory::new(2, 64).with_output_limit(192 * 1024);
+        let mut entry = record("larger-result", Some("instance-a"));
+        entry.input = serde_json::json!({"text":"x".repeat(128)});
+        history.begin(entry).await?;
+        history
+            .transition("larger-result", OperationStatus::Dispatched, None, None)
+            .await?;
+        let stored = history
+            .transition(
+                "larger-result",
+                OperationStatus::Completed,
+                Some(serde_json::json!({"text":"y".repeat(64 * 1024),"password":"never-retain"})),
+                None,
+            )
+            .await?;
+        assert_eq!(stored.input["_coterm_truncated"], true);
+        let output = stored.output.ok_or(OperationHistoryError::NotFound)?;
+        assert_eq!(output["text"].as_str().map(str::len), Some(64 * 1024));
+        assert_eq!(output["password"], "[REDACTED]");
+        let mut entry = record("too-large", Some("instance-a"));
+        entry.input = serde_json::json!({});
+        history.begin(entry).await?;
+        history
+            .transition("too-large", OperationStatus::Dispatched, None, None)
+            .await?;
+        let stored = history
+            .transition(
+                "too-large",
+                OperationStatus::Completed,
+                Some(serde_json::json!({"text":"z".repeat(192 * 1024)})),
+                None,
+            )
+            .await?;
+        assert_eq!(
+            stored.output,
+            Some(serde_json::json!({"_coterm_truncated":true}))
+        );
+        Ok(())
     }
 }

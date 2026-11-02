@@ -7,14 +7,14 @@
 | 调用方 | 入口与路由 | 参数与结果约定 |
 |---|---|---|
 | 插件前端 | 基座 `api.invoke(operation, args)`；宿主绑定当前实例 | 业务参数不携带实例名称；返回通用操作收据，业务结果在 `output` |
-| MCP 客户端 | `coterm-plugin-serial__serial.*` | 除 `plugin_info` 外必填公共实例名称 `name`；Bridge 解析实例并调用内部 `mcp.serial.*` 操作 |
+| MCP 客户端 | `coterm_serial_*` | 实例工具通过公共名称 `name` 路由；唯一确认已连接且无未知状态时可省略，`plugin_info` 不绑定实例；内部操作仍为 `mcp.serial.*` |
 | 插件进程 | 宿主通用生命周期、操作和通知协议 | `initialize/create_instance/destroy_instance/invoke/approve/reject/cancel/shutdown` 沿用基座协议，不作为 Serial MCP 工具开放 |
 
-`name` 必须取自 `coterm.list_instances`，不能传内部 UUID。Bridge 运行时兼容 `instance`、`instanceName`、`instance_name`，一次调用只能提供一种名称字段；公开 schema 的规范字段仍是 `name`。参数采用严格 schema，未知字段会被拒绝。
+显式 `name` 必须取自 `coterm.list_instances`，不能传内部 UUID。Serial 的 status 已声明连接状态，只在恰有一个确认已连接的串口实例、无未知状态且快照未超限时允许省略 `name`；未连接实例的 probe / connect 仍显式指定名称。Bridge 兼容 `instance`、`instanceName`、`instance_name`，一次调用只能提供一种名称字段；公开 schema 的规范字段仍是 `name`。参数采用严格 schema，未知字段会被拒绝。旧 `coterm-plugin-serial__serial.*` 仅保留为未列出的兼容调用名称；完整默认路由与健康契约见 [MCP 接入](../../../docs/architecture/mcp-integration.md)。
 
 ## 操作总表
 
-共 14 个业务操作，其中 10 个向 MCP 开放。下表省略 MCP 实例工具公共参数 `name`；`?` 表示可选。MCP 实际工具名需在表中操作名前加 `coterm-plugin-serial__`。
+共 14 个业务操作，其中 10 个向 MCP 开放。下表省略 MCP 实例工具公共参数 `name`；`?` 表示可选。MCP 实际名称将表中 `serial.` 替换为 `coterm_serial_`，例如 `serial.command_hex` → `coterm_serial_command_hex`。
 
 | 操作 | MCP | effect | 业务参数 | 业务结果 / 用途 |
 |---|:---:|---|---|---|
@@ -108,7 +108,7 @@ MCP 完成结果的机器可读副本位于 `structuredContent`，文本块包�
 |---|---|
 | 每连接输出缓冲 | 256 KiB 原始数据及有界文本副本 |
 | 单块 / 单次增量读取 | 最多 1 KiB 原始数据 |
-| 回显与近期快照 | JSON 转义后文本预算 6 KiB，保留文本和结构化两份后满足宿主 16 KiB 结果上限；截断时标记 `truncated` |
+| 回显与近期快照 | JSON 转义后文本预算仍为 6 KiB，文本和结构化两份保持有界；宿主输出记录现独立限 192 KiB，不改变本插件预览限制；截断时标记 `truncated` |
 | 每实例在途列表 | 最多 16 个，文本 / HEX 共用 FIFO；列表之间不交叉发送 |
 | 写入 actor / 前端输入队列 | 64 槽 / 16 KiB；有在途列表时拒绝人工写入及信号修改 |
 | 打开端口 / 每项驱动写入 | 阻塞线程池执行，等待上限分别为 5 秒 / 2 秒 |
