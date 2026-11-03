@@ -83,13 +83,13 @@ test("inline protocol configuration and instance tabs preserve live frontends an
 
     // Serial uses its own rounded form, starts the stopped plugin and creates the chosen config.
     await run(`document.querySelector('button[aria-label="Manage Serial"]').click()`);
-    await wait(`!!configuration()?.querySelector('select')`, "serial inline protocol fields");
+    await wait(`!!configuration()?.querySelector('option[value="COM2"]')`, "serial inline protocol fields and detected ports");
     assert.ok(await run(`[...configuration().querySelectorAll('input:not([type=checkbox]),select,button')].every(el=>parseFloat(getComputedStyle(el).borderRadius)>0)`));
     assert.equal(await run(`configuration().querySelectorAll('textarea').length`), 0);
-    await run(`configuration().querySelector('input').value='COM2';configuration().querySelector('form').requestSubmit()`);
+    await run(`configuration().querySelector('select').value='COM2';configuration().querySelector('form').requestSubmit()`);
     await wait(`document.querySelectorAll('[role=tab]').length===3 && document.getElementById('instance-tab-created-2')?.getAttribute('aria-selected')==='true'`, "serial created and selected");
     await wait(`__cotermTest.countCalls('subscribe_plugin_events')===3`, "serial frontend mounted");
-    assert.equal(await run(`__cotermTest.countCalls('start_plugin')`), 1);
+    assert.equal(await run(`__cotermTest.countCalls('start_plugin')`), 2, "configuration lookup starts the plugin; creation safely repeats the idempotent start");
     assert.deepEqual(await run(`__cotermTest.invocations.filter(x=>x.command==='create_instance').at(-1).args.config`),
       {port:"COM2",baudRate:115200,dataBits:8,stopBits:1,parity:"none",dtr:true,rts:true});
 
@@ -107,7 +107,7 @@ test("inline protocol configuration and instance tabs preserve live frontends an
     await wait(`document.getElementById('instance-tab-created-2').getAttribute('aria-selected')==='true'`, "End selects last tab");
     await keyboard("Home", "Home", 36);
     await wait(`document.activeElement.id==='instance-tab-inst-1'`, "Home restores first tab focus");
-    await client.send("Emulation.setDeviceMetricsOverride", {width:520,height:650,deviceScaleFactor:1,mobile:false});
+    await client.send("Emulation.setDeviceMetricsOverride", {width:360,height:650,deviceScaleFactor:1,mobile:false});
     await selectTab("created-2");
     await wait(`document.querySelector('[role=tablist]').scrollLeft>0`, "selected last tab scrolls into view");
     assert.equal(await run(`document.documentElement.scrollWidth<=innerWidth`), true);

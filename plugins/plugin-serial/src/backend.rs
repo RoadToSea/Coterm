@@ -477,7 +477,11 @@ impl Backend {
             if request.plugin_instance_id.is_some() || request.effect != OperationEffect::Read {
                 bail!("Serial plugin operation context mismatch");
             }
-            let info = json!({"pluginId":PLUGIN_ID,"instanceCount":self.instances.len()});
+            let info = json!({
+                "pluginId": PLUGIN_ID,
+                "instanceCount": self.instances.len(),
+                "ports": available_ports(),
+            });
             return Ok(if request.operation.starts_with("mcp.") {
                 mcp_result(info)
             } else {

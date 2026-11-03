@@ -22,6 +22,13 @@ const zhCN: Readonly<Record<string, string>> = {
   "Port names come from the operating system, e.g. COM6 or /dev/ttyUSB0.": "端口名由操作系统提供，例如 COM6 或 /dev/ttyUSB0。",
   "Some boards reset when DTR changes; clear it if the device reboots unexpectedly.": "部分开发板会因 DTR 变化复位；设备意外重启时可取消勾选。",
   "Open serial port": "打开串口",
+  "Loading ports…": "正在加载端口…",
+  "No serial ports detected": "未检测到串口",
+  "Refresh ports": "刷新端口",
+  "Could not load serial ports": "串口列表加载失败",
+  "Could not load serial ports: {reason}": "串口列表加载失败：{reason}",
+  "Serial port discovery is unavailable.": "当前宿主不支持查询串口列表。",
+  "Serial backend does not support port discovery. Rebuild the plugin.": "串口后端不支持查询端口列表，请重新构建插件。",
   "A serial port name is required.": "请填写串口名。",
   "DTR and RTS default to high; clear them for boards that reset on open.": "DTR 与 RTS 默认置高；会在打开时复位的板子请取消勾选。",
 

@@ -275,13 +275,16 @@ export function makeHostMockSource(initial) {
       recent_operations: () => scenario.history ?? [],
       recent_plugin_operations: () => scenario.history ?? [],
       invoke_plugin_operation: ({ pluginId, operation }) => {
+        if (!scenario.catalog.plugins.some(plugin => plugin.id === pluginId && plugin.running)) {
+          throw new Error("plugin_not_started");
+        }
         if (operation === "serial.plugin_info") {
           return {
             status: "completed",
             output: {
               pluginId: "serial",
               instanceCount: scenario.instances.filter(x => x.pluginId === "serial").length,
-              ports: [
+              ports: scenario.serialPorts ?? [
                 { portName: "COM1", portType: { kind: "usb", product: "USB Serial" } },
                 { portName: "COM2", portType: { kind: "usb", product: "USB Serial" } },
               ],

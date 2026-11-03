@@ -18,7 +18,7 @@
 
 | 操作 | MCP | effect | 业务参数 | 业务结果 / 用途 |
 |---|:---:|---|---|---|
-| `serial.plugin_info` | 是 | read | 无 | `pluginId / instanceCount`；插件级操作，不绑定实例 |
+| `serial.plugin_info` | 是 | read | 无 | `pluginId / instanceCount / ports`；插件级操作，不绑定实例，无实例时也可枚举本机端口；`ports` 项结构同 probe |
 | `serial.status` | 是 | read | 无 | `config / connected / connectionId / signals / rxBytes / txBytes / commandQueue` |
 | `serial.probe` | 是 | read | 无 | status 结果及 `ports`；端口项含 `portName / portType`，USB 类型可带 VID/PID、厂商、产品与序列号 |
 | `serial.connect` | 是 | commit | 无 | 按实例配置打开端口，返回 `connected:true`；已连接时拒绝重复打开 |

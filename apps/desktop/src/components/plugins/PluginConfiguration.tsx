@@ -1,7 +1,8 @@
+import { hostAPI } from "../../host-api";
 import { t } from "../../i18n";
 import { useI18n } from "../../use-i18n";
 import { useEffect, useRef, useState } from "react";
-import type { PluginFrontend } from "@coterm/plugin-sdk";
+import type { InvokeOptions, PluginFrontend } from "@coterm/plugin-sdk";
 import { loadPluginFrontend } from "../../plugin-loader";
 import { pluginI18n } from "../../i18n";
 
@@ -34,6 +35,14 @@ export function PluginConfiguration({ pluginId, onSubmit, disabled = false }: { 
           }
           setNameError(null);
           return submitRef.current(config, trimmedName || undefined);
+        },
+        invoke: async <T,>(operation: string, args?: unknown, options?: InvokeOptions) => {
+          if (disposed) throw new Error("plugin_configuration_closed");
+          // Configuration can need backend data before the first instance exists.
+          // Runtime start is idempotent and completes the operation-catalog handshake.
+          await hostAPI.startPlugin(pluginId);
+          if (disposed) throw new Error("plugin_configuration_closed");
+          return hostAPI.invokePluginOperation<T>(pluginId, operation, args ?? {}, options?.waitTimeoutMs);
         },
         i18n: {
           get locale() { return pluginI18n.locale; },

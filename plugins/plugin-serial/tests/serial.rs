@@ -8,6 +8,35 @@ use serde_json::{json, Value};
 const PLUGIN_ID: &str = "coterm-plugin-serial";
 
 #[tokio::test]
+async fn plugin_info_lists_ports_before_any_instance_exists() -> Result<()> {
+    let mut backend = Backend::default();
+    let info = backend
+        .request(
+            "invoke",
+            json!({
+                "operationId":"discover-ports", "operation":"serial.plugin_info", "effect":"read",
+                "source":"human", "dispatch":{"mode":"execute"}, "args":{}
+            }),
+        )
+        .await?;
+    assert_eq!(info["pluginId"], PLUGIN_ID);
+    assert_eq!(info["instanceCount"], 0);
+    let ports = info["ports"].as_array().ok_or_else(|| {
+        anyhow::anyhow!("Plugin discovery must return a ports array, including when empty")
+    })?;
+    for port in ports {
+        assert!(port["portName"]
+            .as_str()
+            .is_some_and(|name| !name.is_empty()));
+        assert!(matches!(
+            port["portType"]["kind"].as_str(),
+            Some("usb" | "pci" | "bluetooth" | "unknown")
+        ));
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn disconnected_configuration_is_validated_and_keeps_the_instance_port() -> Result<()> {
     let mut backend = Backend::default();
     backend.request("create_instance", json!({

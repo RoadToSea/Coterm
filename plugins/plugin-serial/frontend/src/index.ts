@@ -53,6 +53,10 @@ const css = `
   textarea { resize: none; font-family: var(--coterm-font-mono, Consolas, monospace); min-height: 68px; }
   [hidden] { display: none !important; }
   .pair { display: grid; grid-template-columns: minmax(0, 1fr) 130px; gap: 12px; }
+  .port-controls { display: flex; gap: 6px; min-width: 0; }
+  .port-controls select { flex: 1; }
+  .port-controls button { flex: none; }
+  @media (max-width: 560px) { .pair { grid-template-columns: minmax(0, 1fr); } }
   .triple { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
   .checks { display: flex; flex-wrap: wrap; gap: 16px; }
   .checks label { display: flex; align-items: center; gap: 7px; color: var(--coterm-text-primary, #cccccc); }
@@ -260,6 +264,7 @@ function retitle(label: HTMLLabelElement, text: string) {
   else label.prepend(document.createTextNode(text));
 }
 
+interface PortEntry { portName: string; portType: { kind: string; product?: string | null } }
 type Config = SerialConfig;
 interface Status {
   config: Config; connected: boolean; connectionId: string | null;
@@ -289,12 +294,48 @@ export function configure(container: HTMLElement, api: PluginConfigurationAPI): 
   const form = document.createElement("form");
 
   const portLabel = caption(t("Port"));
-  const port = document.createElement("input");
-  port.type = "text";
+  const port = document.createElement("select");
+  const refreshPorts = document.createElement("button");
+  refreshPorts.type = "button";
+  refreshPorts.className = "icon-button refresh-ports";
+  refreshPorts.title = t("Refresh ports");
+  refreshPorts.setAttribute("aria-label", refreshPorts.title);
+  refreshPorts.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5M6 7a7 7 0 0 1 12-1l2 3M4 15l2 3a7 7 0 0 0 12-1"/></svg>';
+  let portPlaceholder: string | null = "Loading ports…";
+  let portLoadError: string | null = null;
+
+  const showPortPlaceholder = (message: string) => {
+    portPlaceholder = message;
+    const placeholder = option("", t(message));
+    placeholder.disabled = true;
+    placeholder.selected = true;
+    port.replaceChildren(placeholder);
+  };
+
   port.required = true;
-  port.placeholder = "COM6";
-  port.spellcheck = false;
-  portLabel.append(port);
+  showPortPlaceholder("Loading ports…");
+
+  const populatePortOptions = (list: PortEntry[]) => {
+    const currentVal = port.value;
+    port.replaceChildren();
+    if (list.length > 0) {
+      portPlaceholder = null;
+      for (const item of list) {
+        const desc = item.portType?.product ? `${item.portName} (${item.portType.product})` : item.portName;
+        port.append(option(item.portName, desc));
+      }
+      if (currentVal && list.some(item => item.portName === currentVal)) {
+        port.value = currentVal;
+      }
+    } else {
+      showPortPlaceholder("No serial ports detected");
+    }
+  };
+
+  const portControls = document.createElement("div");
+  portControls.className = "port-controls";
+  portControls.append(port, refreshPorts);
+  portLabel.append(portControls);
 
   const baudLabel = caption(t("Baud rate"));
   const baud = document.createElement("input");
@@ -377,20 +418,62 @@ export function configure(container: HTMLElement, api: PluginConfigurationAPI): 
     rtsLabelText.textContent = next("RTS high on open");
     hint.textContent = next("Port names come from the operating system, e.g. COM6 or /dev/ttyUSB0.");
     lineHint.textContent = next("Some boards reset when DTR changes; clear it if the device reboots unexpectedly.");
+    refreshPorts.title = next("Refresh ports");
+    refreshPorts.setAttribute("aria-label", refreshPorts.title);
+    if (portPlaceholder && port.options[0]) {
+      port.options[0].textContent = next(portPlaceholder);
+    }
+    if (portLoadError) error.textContent = next("Could not load serial ports: {reason}", {reason:portLoadError});
+
     submit.textContent = next("Open serial port");
   });
 
   let disposed = false;
   let busy = false;
+  let loading = false;
   const controller = new AbortController();
+
+  const syncActions = () => {
+    port.disabled = loading || busy;
+    refreshPorts.disabled = loading || busy;
+    submit.disabled = loading || busy || !port.value;
+    form.setAttribute("aria-busy", String(loading || busy));
+  };
+  const loadPorts = async () => {
+    if (disposed || loading || busy) return;
+    loading = true;
+    portLoadError = null;
+    error.textContent = "";
+    if (!port.value) showPortPlaceholder("Loading ports…");
+    syncActions();
+    try {
+      if (!api.invoke) throw new Error(t("Serial port discovery is unavailable."));
+      const info = output(await api.invoke<{ ports?: PortEntry[] }>("serial.plugin_info", {}));
+      if (disposed) return;
+      if (!Array.isArray(info.ports)) {
+        throw new Error(t("Serial backend does not support port discovery. Rebuild the plugin."));
+      }
+      populatePortOptions(info.ports);
+    } catch (reason) {
+      if (disposed) return;
+      portLoadError = String(reason);
+      showPortPlaceholder("Could not load serial ports");
+      error.textContent = t("Could not load serial ports: {reason}", {reason:portLoadError});
+    } finally {
+      if (!disposed) { loading = false; syncActions(); }
+    }
+  };
+  refreshPorts.addEventListener("click", () => void loadPorts(), {signal:controller.signal});
+  port.addEventListener("change", syncActions, {signal:controller.signal});
+  void loadPorts();
 
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
-    if (busy || disposed) return;
+    if (busy || loading || disposed) return;
     const name = port.value.trim();
     if (!name) { error.textContent = t("A serial port name is required."); return; }
     busy = true;
-    submit.disabled = true;
+    syncActions();
     try {
       await api.submit({
         port: name,
@@ -404,7 +487,7 @@ export function configure(container: HTMLElement, api: PluginConfigurationAPI): 
     } catch (reason) {
       if (!disposed) error.textContent = String(reason);
     } finally {
-      if (!disposed) { busy = false; submit.disabled = false; }
+      if (!disposed) { busy = false; syncActions(); }
     }
   }, { signal: controller.signal });
 
