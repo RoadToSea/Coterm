@@ -55,7 +55,6 @@ export function ApprovalSettings({ onClose }: { onClose: () => void }) {
   };
 
   return <Modal id="approval-settings-dialog" title={t("Agent approval")} onClose={onClose}>
-    <p className="mb-4 text-sm text-muted-foreground">{t("Match the actual command text, such as ls or cd. Changes take effect after saving.")}</p>
     {error && <Alert variant="destructive" className="mb-4"><AlertDescription>{error}</AlertDescription></Alert>}
     {!saved ? <Button variant="outline" disabled={busy} onClick={() => setRetry(value => value + 1)}>{t(busy ? "Loading…" : "Retry")}</Button> :
     <fieldset disabled={busy} aria-busy={busy} className="m-0 flex min-w-0 flex-col gap-5 border-0 p-0">
@@ -66,13 +65,9 @@ export function ApprovalSettings({ onClose }: { onClose: () => void }) {
           <ToggleGroupItem value="allow_matches">{t("Allow matching commands")}</ToggleGroupItem>
           <ToggleGroupItem value="approve_matches">{t("Intercept matching commands")}</ToggleGroupItem>
         </ToggleGroup>
-        <p className="text-xs text-muted-foreground">{t(policy.mode === "allow_matches"
-          ? "Matching commands skip approval; other commands require approval."
-          : "Matching commands require approval; other commands skip approval.")}</p>
       </section>
       <section className="flex flex-col gap-3" aria-label={t("Regular expression rules")}>
-        <h3 className="text-sm font-medium">{t("Regular expression rules")} ({policy.patterns.length}/128)</h3>
-        <p className="text-xs text-muted-foreground">{t("Rules match any position. Use ^ and $ for a whole command. A command list is checked entry by entry; multiline scripts are matched as submitted. Lookaround and backreferences are unsupported.")}</p>
+        <h3 className="text-sm font-medium">{t("Regular expression rules")}</h3>
         {policy.patterns.length === 0 ? <p className="text-xs text-muted-foreground">{t("No rules yet.")}</p> :
           <ul className="flex max-h-52 flex-col gap-2 overflow-y-auto">
             {policy.patterns.map((pattern, index) => <li key={index} className="flex min-w-0 items-center gap-2 rounded-md border border-border p-2">
@@ -88,8 +83,6 @@ export function ApprovalSettings({ onClose }: { onClose: () => void }) {
         </label>
         <div className="flex flex-wrap gap-2">
           <Button type="button" variant="outline" size="sm" disabled={!custom.trim() || policy.patterns.length >= 128} onClick={() => add(custom)}><Plus data-icon="inline-start" />{t("Add rule")}</Button>
-          {["ls", "cd"].map(command => <Button key={command} type="button" variant="ghost" size="sm" disabled={policy.patterns.length >= 128}
-            onClick={() => add(`^${command}$`)}>{t("Add {command} example", { command })}</Button>)}
         </div>
       </section>
       <Separator />
@@ -102,7 +95,6 @@ export function ApprovalSettings({ onClose }: { onClose: () => void }) {
           onClick={() => void perform(async () => { setPreview(await hostAPI.previewApprovalPolicy(policy, text)); })}>{t("Test matching")}</Button>
         <p role="status" className="text-sm">{preview === null ? "" : t(preview ? "Requires human approval" : "Skips human approval")}</p>
       </section>
-      <p className="text-xs text-muted-foreground">{t("Rules apply to Agent command submissions with approval enabled. Operations without command text keep their normal approval behavior. Protocol authentication still applies.")}</p>
       <div className="flex items-center justify-between gap-3">
         <p role="status" className="text-xs text-muted-foreground">{t(custom.trim() ? "Add the typed rule before saving." : dirty ? "Unsaved changes" : "Saved")}</p>
         <Button type="button" disabled={!dirty || !!custom.trim()} title={custom.trim() ? t("Add the typed rule before saving.") : undefined}

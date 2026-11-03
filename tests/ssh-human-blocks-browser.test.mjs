@@ -1,13 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import path from "node:path";
 import { findBrowser, openSession, evaluate, waitForValue } from "./support/browser-harness.mjs";
 
 test("echoed human terminal commands create selectable blocks", async t => {
   const browserPath = findBrowser();
   if (!browserPath) { t.skip("No browser available"); return; }
   const artifact = new URL("../plugins/plugin-ssh/dist/frontend/index.js", import.meta.url);
-  for (const file of ["index.ts", "human-commands.ts"]) {
+  for (const file of ["index.ts", "human-commands.ts", "observed-boundaries.ts"]) {
     assert.ok(fs.statSync(artifact).mtimeMs >= fs.statSync(new URL("../plugins/plugin-ssh/frontend/src/" + file, import.meta.url)).mtimeMs, "build SSH first");
   }
   const moduleURL = "data:text/javascript;base64," + fs.readFileSync(artifact).toString("base64");
@@ -18,7 +19,7 @@ test("echoed human terminal commands create selectable blocks", async t => {
     await run(`(async () => {
       document.body.style.cssText = 'margin:0;height:100vh;width:100vw';
       window.calls = []; window.frames = []; window.blocks = []; window.selected = [];
-      window.sequence = 0; window.observed = null; window.version = 0;
+      window.sequence = 0; window.observed = null; window.version = 0; window.prompt = 'operator@host:~$ ';
       window.emit = (text, annotation = null) => {
         if (observed && text) { observed.output += text; version++; }
         const frame = { data:btoa(text), annotation, cursor:String(++sequence), connectionId:'human-connection' };
@@ -57,7 +58,10 @@ test("echoed human terminal commands create selectable blocks", async t => {
               if (window.noEcho) { if (text==='\\r') emit('\\r\\noperator@host:~$ '); return; }
               if (text === '\\x1b[A') emit('\\r\\x1b[2Koperator@host:~$ echo recalled');
               else if (text === '\\x7f') emit('\\b \\b');
-              else if (text === '\\r') emit('\\r\\nfile.txt\\r\\noperator@host:~$ ');
+              else if (text === '\\r') {
+                if (args.observation?.text === 'cd /') { window.prompt = 'operator@host:/$ '; emit('\\r\\n' + window.prompt); }
+                else { emit('\\r\\nfile.txt\\r\\n'); emit(window.prompt.slice(0,5)); emit(window.prompt.slice(5)); }
+              }
               else emit(text.replaceAll('\\x1b[200~','').replaceAll('\\x1b[201~',''));
             };
             if (window.echoDelay && text !== '\\r') setTimeout(echo, window.echoDelay); else echo();
@@ -89,6 +93,16 @@ test("echoed human terminal commands create selectable blocks", async t => {
     assert.equal(await run("gutters().length"), 1, "manual Enter must create a gutter block without ssh.command or API annotation");
     await run("window.releaseBlocks();window.releaseBlocks=null");
     await waitForValue(client, "gutters()[0].getAttribute('aria-label').includes('Human · ls')");
+    await run("new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))");
+    const firstRange = await run(`(() => {
+      const screen=root.querySelector('.xterm-screen').getBoundingClientRect();
+      const frame=root.querySelector('.coterm-terminal-frame').getBoundingClientRect();
+      return {height:frame.height,lineHeight:root.querySelector('.xterm-rows > div').getBoundingClientRect().height,screenRight:screen.right,right:frame.right};
+    })()`);
+    // The fixture writes one command row, one reply row, then a fresh prompt.
+    assert.ok(Math.abs(firstRange.height - 2 * firstRange.lineHeight) <= 1, "the command frame must end before the next prompt row");
+    assert.ok(firstRange.right <= firstRange.screenRight + 0.5, "frame borders fit inside the terminal grid");
+    assert.equal(await run("root.querySelectorAll('.coterm-command-start').length"), 0, "a block has one frame, no duplicate xterm border decoration");
     await run("gutters()[0].click()");
     await waitForValue(client, "selected.length===1");
     assert.deepEqual(await run("blocks.filter(b=>selected.includes(b.id)).map(b=>[b.command,b.boundary,b.exitCode,b.output.includes('file.txt')])"), [["ls", "observed", null, true]]);
@@ -161,10 +175,37 @@ test("echoed human terminal commands create selectable blocks", async t => {
     await run("new Promise(resolve=>setTimeout(resolve,200))");
     assert.equal(await run("blocks.length"), 6);
 
+    // A changed-directory prompt still closes the visual block; cd has no reply.
+    await client.send("Input.insertText", {text:"cd /"});
+    await key("Enter", "Enter", 13);
+    await waitForValue(client, "gutters().length===7");
+    await waitForValue(client, `(() => {
+      const frame = root.querySelector('.coterm-terminal-frame[data-block-id="human-7"]').getBoundingClientRect();
+      return Math.abs(frame.height - root.querySelector('.xterm-rows > div').getBoundingClientRect().height) <= 1;
+    })()`);
+
+    // All rectangles use the same grid edge and never overlap the following block,
+    // including after terminal font/column changes and soft-wrap reflow.
+    for (const [width, size] of [[1100,13], [768,20], [320,16]]) {
+      await client.send("Emulation.setDeviceMetricsOverride", {width,height:760,deviceScaleFactor:1,mobile:false});
+      await run(`document.documentElement.style.setProperty('--coterm-terminal-font-size', '${size}px')`);
+      await waitForValue(client, `(() => {
+        const screen = root.querySelector('.xterm-screen').getBoundingClientRect();
+        const frames = [...root.querySelectorAll('.coterm-terminal-frame:not([hidden])')].map(el=>el.getBoundingClientRect());
+        return frames.length && frames.every((r,i)=>Math.abs(r.right-screen.right)<=0.5 && (i===0 || r.top>=frames[i-1].bottom-0.5));
+      })()`, {label:"one aligned, non-overlapping frame per command after reflow"});
+    }
+    if (process.env.COTERM_SSH_BLOCKS_SCREENSHOT_DIR) {
+      const directory = process.env.COTERM_SSH_BLOCKS_SCREENSHOT_DIR;
+      fs.mkdirSync(directory, {recursive:true});
+      const shot = await client.send("Page.captureScreenshot", {format:"png"});
+      fs.writeFileSync(path.join(directory,"ssh-human-boundaries.png"),Buffer.from(shot.data,"base64"));
+    }
+
     // Backend annotations recreate the same numbers on a frontend remount.
     await run("window.frontend.unmount();window.mount()");
-    await waitForValue(client, "gutters().length===6");
-    assert.deepEqual(await run("gutters().map(b=>b.textContent)"), ["#1", "#2", "#3", "#4", "#5", "#6"]);
+    await waitForValue(client, "gutters().length===7 && gutters().every(b=>b.textContent)");
+    assert.deepEqual(await run("gutters().map(b=>b.textContent)"), ["1", "2", "3", "4", "5", "6", "7"]);
     await run("gutters()[4].click()");
     await waitForValue(client, "selected.includes('human-5')");
     await run("window.frontend.unmount()");

@@ -49,9 +49,8 @@ export function mountTerminalBlocks(gutter: HTMLElement, container: HTMLElement,
   .coterm-terminal-number { position:absolute; left:2px; box-sizing:border-box; width:calc(100% - 4px); padding:0 2px; border:0; background:transparent; text-align:right; font:inherit; color:var(--coterm-text-muted,#969696); }
   .coterm-terminal-number[aria-pressed="true"] { color:var(--coterm-focus,#38bdf8); background:var(--coterm-selection,rgba(56,189,248,.15)); }
   .coterm-terminal-frames { position:absolute; inset:0; pointer-events:none; overflow:hidden; }
-  .coterm-terminal-frame { position:absolute; border:1px solid var(--coterm-border-subtle,#454545); border-radius:3px; pointer-events:none; }
+  .coterm-terminal-frame { position:absolute; box-sizing:border-box; border:1px solid var(--coterm-border-subtle,#454545); border-radius:3px; pointer-events:none; }
   .coterm-terminal-frame[data-selected="true"] { border-color:var(--coterm-focus,#38bdf8); background:color-mix(in srgb,var(--coterm-focus,#38bdf8) 10%,transparent); }
-  .coterm-command-start { border-top:1px solid var(--coterm-border-subtle,#454545); pointer-events:none; }
   `;
   gutter.classList.add("coterm-terminal-gutter");
   const clear = document.createElement("button");
@@ -65,7 +64,6 @@ export function mountTerminalBlocks(gutter: HTMLElement, container: HTMLElement,
     block: CommandBlock;
     start: Marker;
     end?: Marker;
-    decoration?: Disposable;
     button: HTMLButtonElement;
     frame: HTMLDivElement;
   };
@@ -84,7 +82,6 @@ export function mountTerminalBlocks(gutter: HTMLElement, container: HTMLElement,
     const entry = entries.get(id);
     if (!entry)
       return;
-    entry.decoration?.dispose();
     entry.start.dispose();
     entry.end?.dispose();
     entry.button.remove();
@@ -98,10 +95,10 @@ export function mountTerminalBlocks(gutter: HTMLElement, container: HTMLElement,
     const screen = terminal.element?.querySelector<HTMLElement>(".xterm-screen");
     if (!screen)
       return;
-    let numberChars = 2;
+    let numberChars = 1;
     for (const entry of entries.values()) {
       if (!entry.start.isDisposed)
-        numberChars = Math.max(numberChars, String(entry.block.index).length + 1);
+        numberChars = Math.max(numberChars, String(entry.block.index).length);
     }
     const width = String(numberChars);
     if (gutter.style.getPropertyValue("--coterm-terminal-number-chars") !== width)
@@ -112,21 +109,26 @@ export function mountTerminalBlocks(gutter: HTMLElement, container: HTMLElement,
     const buffer = terminal.buffer.active;
     const lineHeight = bounds.height / terminal.rows;
     let changed = false;
-    for (const [id, entry] of entries) {
+    const ordered = [...entries.entries()].sort((a, b) => a[1].start.line - b[1].start.line);
+    for (const [position, [id, entry]] of ordered.entries()) {
       if (entry.start.isDisposed) {
         changed = selected.delete(id) || changed;
         remove(id);
         continue;
       }
       const start = entry.start.line;
-      const end = entry.end && !entry.end.isDisposed ? entry.end.line : buffer.baseY + buffer.cursorY;
+      const following = ordered[position + 1]?.[1].start;
+      const end = Math.min(
+        entry.end && !entry.end.isDisposed ? entry.end.line : buffer.baseY + buffer.cursorY,
+        following && !following.isDisposed ? following.line - 1 : Infinity,
+      );
       const first = Math.max(start, buffer.viewportY);
       const last = Math.min(Math.max(start, end), buffer.viewportY + terminal.rows - 1);
       const hidden = buffer.type !== "normal" || first > last;
       entry.button.hidden = entry.frame.hidden = hidden;
-      entry.button.textContent = `#${entry.block.index}`;
+      entry.button.textContent = String(entry.block.index);
       entry.button.title = entry.block.command;
-      entry.button.setAttribute("aria-label", `#${entry.block.index} · ${entry.block.actor === "human" ? "Human" : "Agent"} · ${entry.block.command}`);
+      entry.button.setAttribute("aria-label", `${entry.block.index} · ${entry.block.actor === "human" ? "Human" : "Agent"} · ${entry.block.command}`);
       entry.button.setAttribute("aria-pressed", String(selected.has(id)));
       entry.frame.dataset.selected = String(selected.has(id));
       entry.button.style.top = `${bounds.top - gutterBounds.top + (first - buffer.viewportY) * lineHeight}px`;
@@ -188,17 +190,15 @@ export function mountTerminalBlocks(gutter: HTMLElement, container: HTMLElement,
       const frame = document.createElement("div");
       frame.className = "coterm-terminal-frame";
       frame.dataset.blockId = block.id;
-      const decoration = terminal.registerDecoration({ marker, width: terminal.cols, layer: "bottom" });
-      decoration?.onRender(element => { element.classList.add("coterm-command-start"); element.dataset.blockId = block.id; });
-      entries.set(block.id, { block, start: marker, decoration, button, frame });
+      entries.set(block.id, { block, start: marker, button, frame });
       gutter.append(button);
       frames.append(frame);
       schedule();
     },
-    end(id: string) {
+    end(id: string, lineOffset = terminal.buffer.active.cursorX === 0 ? -1 : 0) {
       const entry = entries.get(id);
       if (entry && !entry.end)
-        entry.end = terminal.registerMarker(terminal.buffer.active.cursorX === 0 ? -1 : 0);
+        entry.end = terminal.registerMarker(lineOffset);
       schedule();
     },
     update(blocks: CommandBlock[]) {

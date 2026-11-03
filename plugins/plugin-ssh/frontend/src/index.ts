@@ -8,6 +8,7 @@ import { createTranslator } from "./i18n";
 import { mountSshBlocks } from "./blocks";
 import { mountJobs } from "./jobs";
 import { observeHumanCommands } from "./human-commands";
+import { observeBlockPrompt } from "./observed-boundaries";
 import { mountTerminalBlocks } from "@coterm/plugin-sdk/components/terminal-blocks";
 import { attachTerminalShortcuts } from "@coterm/plugin-sdk/components/terminal-shortcuts";
 import { mountTerminalSearch, TERMINAL_SEARCH_HIGHLIGHT_LIMIT } from "@coterm/plugin-sdk/components/terminal-search";
@@ -240,10 +241,11 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
     cancelLabel: t("Clear selection"),
     onSelectionChange(ids) { blocksView.select(ids); jobsView.selection(ids); },
   });
+  const observedBoundaries = observeBlockPrompt(terminal, (id, offset) => terminalBlocks.end(id, offset));
   const jobsView = mountJobs(workbench, terminalPane, jobsBar, api, t, id => terminalBlocks.toggle(id), reason => showError(reason));
   const blocksView = mountSshBlocks(blocksControls, api, t, blocks => {
     terminalBlocks.update(blocks); jobsView.setBlocks(blocks);
-  }, () => { terminalBlocks.reset(); jobsView.reset(); });
+  }, () => { observedBoundaries.reset(); terminalBlocks.reset(); jobsView.reset(); });
   const searchView = mountTerminalSearch(bar, terminal, searchAddon, t);
   const stopShortcuts = attachTerminalShortcuts(terminal, () => {
     if (!disposed) notice.textContent = t("Could not copy terminal selection. Try copying again.");
@@ -284,18 +286,21 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
         terminalBlocks.begin(block, offset);
         blocksView.invalidate();
         if (observed) {
+          observedBoundaries.begin(block.id, offset);
           // The command is already echoed on this row. Adding a label here would
           // alter the prompt/cursor and corrupt readline editing or replay.
           await write(frame.data);
           return;
         }
         humanCommands.suspend(true);
+        observedBoundaries.reset();
         const command = (await blocksView.command(block.id)).replace(/[\u0000-\u001f\u007f-\u009f]/g, " ");
         const label = block.actor === "human" ? "[👤 Human]" : "[🤖 Agent]";
         const prefix = block.actor === "human" ? "\x1b[38;2;52;211;153m" : "\x1b[38;2;56;189;248m";
         // Display metadata stays local; it never goes to ssh.input.
         await new Promise<void>(resolve => terminal.write(prefix + label + "\x1b[0m " + command + "\r\n", resolve));
       } else {
+        observedBoundaries.end(annotation.id);
         terminalBlocks.end(annotation.id);
         if (annotation.boundary !== "observed") humanCommands.suspend(false);
       }
@@ -307,6 +312,7 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
     if (disposed) return;
     label.textContent = `${status.config.username}@${status.config.host}:${status.config.port}`;
     if (connectionId !== status.connectionId) {
+      observedBoundaries.reset();
       humanCommands.suspend(false);
       connectionId = status.connectionId;
       cursor = "0";
@@ -320,6 +326,7 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
       const data = await invoke<Output>("ssh.read", { cursor, terminal: true });
       if (disposed || data.connectionId !== connectionId) return;
       if (data.gap) {
+        observedBoundaries.reset();
         humanCommands.suspend(false);
         terminalBlocks.reset(); terminal.reset();
         terminal.write("\r\n[Output gap: older data expired from replay buffer]\r\n");
@@ -343,6 +350,7 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
       if (event.name === "ssh.blocks.changed") { blocksView.invalidate(); return; }
       if (event.name === "runtime.gap" || event.name === "ssh.status") {
         if(event.name === "ssh.status" && (event.payload as {reset?:boolean}).reset) {
+          observedBoundaries.reset();
           humanCommands.suspend(false);
           searchView.close(false); terminalBlocks.reset(); terminal.reset();
           const value = (event.payload as {cursor?:unknown}).cursor;
@@ -438,6 +446,7 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
     observer.disconnect();
     jobsView.unmount();
     terminalBlocks.unmount();
+    observedBoundaries.dispose();
     humanCommands.dispose();
     onData.dispose();
     stopShortcuts();

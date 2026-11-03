@@ -41,13 +41,22 @@ const css = `
 .job .dismiss svg { width:10px; height:10px; }
 .job-view { display:flex; flex-direction:column; flex:none; min-width:0; min-height:100px; background:var(--coterm-surface,#1e1e1e); }
 .job-head { display:flex; flex-wrap:wrap; align-items:center; gap:8px; min-height:36px; padding:6px 10px; border-bottom:1px solid var(--coterm-border,#333); font-size:11px; }
-.job-head code { flex:1; min-width:70px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.job-head strong { font-weight:500; }
+.job-dock { margin-left:auto; }
 .job-head button { padding:2px 6px; }
+.job-head .job-close { display:grid; place-items:center; flex:none; width:26px; height:26px; padding:4px; }
+.job-close svg { width:14px; height:14px; }
+.job-state[data-state="error"], .job-state[data-state="timed out"] { color:var(--coterm-danger,#cf6868); }
 .job-follow { display:flex; flex-wrap:wrap; align-items:center; gap:6px; padding:7px 10px; font-size:11px; background:var(--coterm-selection,rgba(56,189,248,.1)); }
 .job-follow button { font-size:11px; padding:2px 5px; }
 .job-body { flex:1; min-height:0; overflow:auto; padding:8px 10px; }
-.job-stream h4 { margin:0 0 5px; font-size:10px; color:var(--coterm-text-muted,#969696); }
-.job-stream pre { margin:0 0 14px; white-space:pre-wrap; overflow-wrap:anywhere; font:var(--coterm-terminal-font-size,13px)/var(--coterm-terminal-line-height,1) var(--coterm-font-mono,Consolas,monospace); }
+.job-command-section { margin-bottom:12px; }
+.job-command-section h4, .job-stream h4 { margin:0 0 6px; font-size:10px; font-weight:500; color:var(--coterm-text-muted,#969696); }
+.job-command, .job-stream pre { margin:0; white-space:pre-wrap; overflow-wrap:anywhere; font:var(--coterm-terminal-font-size,13px)/var(--coterm-terminal-line-height,1.4) var(--coterm-font-mono,Consolas,monospace); }
+.job-stream { --stream-color:var(--terminal-blue,#5294cf); border:1px solid color-mix(in srgb,var(--stream-color) 65%,var(--coterm-border,#333)); border-left:3px solid var(--stream-color); border-radius:6px; padding:9px 10px; margin-bottom:10px; background:color-mix(in srgb,var(--stream-color) 5%,var(--coterm-surface,#1e1e1e)); }
+.job-stream[data-stream="stderr"] { --stream-color:var(--coterm-danger,#cf6868); }
+.job-stream[hidden] { display:none; }
+.job-stream h4 { color:var(--stream-color); }
 .exec-splitter { flex:none; width:6px; min-height:0; cursor:col-resize; background:var(--coterm-border,#333); touch-action:none; }
 .ssh-workbench[data-dock="bottom"] .exec-splitter { width:auto; height:6px; cursor:row-resize; }
 .exec-splitter:focus-visible { outline:2px solid var(--coterm-focus,#38bdf8); outline-offset:-2px; }
@@ -80,15 +89,19 @@ export function mountJobs(workbench: HTMLElement, terminalPane: HTMLElement, job
   panel.hidden = true;
   const head = document.createElement("div");
   head.className = "job-head";
-  const command = document.createElement("code");
+  const title = document.createElement("strong");
+  title.textContent = "Exec";
   const state = document.createElement("span");
+  state.className = "job-state";
+  state.setAttribute("role", "status");
   const dockButton = document.createElement("button");
   dockButton.type = "button";
   dockButton.className = "job-dock";
   const close = document.createElement("button");
   close.type = "button";
   close.className = "job-close";
-  head.append(command, state, dockButton, close);
+  close.innerHTML = '<svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m3 3 6 6M9 3 3 9"/></svg>';
+  head.append(title, state, dockButton, close);
   const followBar = document.createElement("div");
   followBar.className = "job-follow";
   followBar.hidden = true;
@@ -99,9 +112,18 @@ export function mountJobs(workbench: HTMLElement, terminalPane: HTMLElement, job
   const body = document.createElement("div");
   body.className = "job-body";
   body.tabIndex = 0;
+  const commandSection = document.createElement("section");
+  commandSection.className = "job-command-section";
+  const commandLabel = document.createElement("h4");
+  const command = document.createElement("pre");
+  command.className = "job-command";
+  commandSection.append(commandLabel, command);
+  body.append(commandSection);
   const streams = (["stdout", "stderr"] as const).map(name => {
     const section = document.createElement("section");
     section.className = "job-stream";
+    section.dataset.stream = name;
+    section.setAttribute("aria-label", name.toUpperCase());
     const heading = document.createElement("h4");
     heading.textContent = name.toUpperCase();
     const pre = document.createElement("pre");
@@ -175,8 +197,13 @@ export function mountJobs(workbench: HTMLElement, terminalPane: HTMLElement, job
       return;
     }
     command.textContent = job.text;
-    state.textContent = t(status(job));
-    close.textContent = t("Close view");
+    commandLabel.textContent = t("Command");
+    const currentState = status(job);
+    state.hidden = currentState === "success";
+    state.dataset.state = currentState;
+    state.textContent = state.hidden ? "" : currentState === "error" ? t("exit {code}", { code:job.exitCode ?? "?" }) : t(currentState);
+    close.title = t("Close view");
+    close.setAttribute("aria-label", close.title);
     dockButton.textContent = t(dock === "right" ? "Dock bottom" : "Dock right");
     dockButton.setAttribute("aria-label", dockButton.textContent);
     panel.setAttribute("aria-label", t("Exec output"));
@@ -270,7 +297,7 @@ export function mountJobs(workbench: HTMLElement, terminalPane: HTMLElement, job
       view.led.dataset.state = status(job);
       view.name.textContent = short(job);
       view.number.hidden = job.index === undefined;
-      view.number.textContent = `#${job.index}`;
+      view.number.textContent = String(job.index);
       view.number.setAttribute("aria-pressed", String(contextIds.has(job.operationId)));
       view.number.setAttribute("aria-label", t("Select block #{index} for Agent", { index: job.index ?? "?" }));
       view.dismiss.setAttribute("aria-label", `${t("Remove job from list")}: ${short(job)}`);

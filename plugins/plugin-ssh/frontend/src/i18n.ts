@@ -7,6 +7,7 @@ const zhCN: Readonly<Record<string, string>> = {
   "Dock bottom": "停靠底部",
   "Dock right": "停靠右侧",
   "Exec output": "Exec 输出",
+  "Command": "命令",
   "Viewing history #{index}": "正在查看历史任务 #{index}",
   "Follow latest": "恢复跟随最新",
   "Select block #{index} for Agent": "选择块 #{index} 供 Agent 读取",

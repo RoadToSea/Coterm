@@ -5,6 +5,13 @@
 - SDK v1.0 的实例绑定、操作调用、事件与公共交互入口见 [插件开发](../architecture/plugin-development.md)。
 - 公共 UI 文档见 [SDK 文档入口](../../packages/plugin-sdk/docs/README.md)，组件保持无框架依赖，协议数据由插件提供。
 
+## 2026-11-03：终端块边框与纯数字块号
+
+- 终端块使用单层 DOM 边框，移除重复的 xterm decoration 描边；border-box 保持外沿位于终端网格内，相邻块不能覆盖后一块首行。
+- `end(id, lineOffset?)` 可由插件显式指定视觉结束行；默认行为兼容原调用，重复结束保留首次 marker。SDK 仍不识别提示符或判断命令是否完成。
+- Gutter 块号显示纯数字，宽度按数字位数伸缩并保留最小 28px；取消全选与上下文选择语义不变。
+- SSH 集成回归覆盖提示符前裁剪、滚动 / resize / 字号重排、最大块号、选择和回放；接口见 [组件文档](../../packages/plugin-sdk/docs/command-blocks.md#终端行号栏)，验证结果见 [SSH 进度](ssh-plugin.md#2026-11-03现场块边界与-exec-展示反馈)。
+
 ## 2026-11-01：命令消息块与选择
 
 - 将原先仅单行命令的 `components.blocks()` 完善为编辑器式布局：左侧块号按钮，右侧命令和回复共同组成有边框的块。

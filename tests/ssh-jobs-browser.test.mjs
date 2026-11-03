@@ -35,7 +35,10 @@ test("SSH tasks collapse to one row and keep the selected task last while live e
     await client.send("Emulation.setDeviceMetricsOverride", { width: 1000, height: 720, deviceScaleFactor: 1, mobile: false });
     await run(`(async () => {
       document.body.style.cssText = 'margin:0;width:100vw;height:100vh';
-      window.locale = 'en'; window.cancelled = []; window.states = {};
+      window.locale = 'en'; window.cancelled = []; window.states = {}; window.exits = {}; window.stderr = {};
+      const theme = document.createElement('style');
+      theme.textContent = ${JSON.stringify(fs.readFileSync(new URL('../apps/desktop/src/index.css', import.meta.url),'utf8').match(/(?::root|\.dark)\s*\{[^}]*\}/g)?.join('\n'))};
+      document.head.append(theme);
       const receipt = (output) => ({operationId:'test',status:'completed',output,error:null,proposalId:null,waitExpired:false});
       const api = {
         pluginInstanceId:'ssh-one',
@@ -49,9 +52,9 @@ test("SSH tasks collapse to one row and keep the selected task last while live e
           if (operation === 'ssh.blocks') return receipt({epoch:'conn',revision:'1',dropped:0,blocks:[],more:false,nextBefore:null});
           if (operation === 'ssh.select_blocks') return receipt({});
           if (operation === 'ssh.output') return receipt({
-            done:window.states[args.operationId] ?? false,exitCode:window.states[args.operationId] ? 0 : null,cancelled:false,timedOut:false,
+            done:window.states[args.operationId] ?? false,exitCode:window.states[args.operationId] ? (window.exits[args.operationId] ?? 0) : null,cancelled:false,timedOut:false,
             stdout:{text:args.stdoutCursor === '0' ? 'output for ' + args.operationId : '',cursor:'1',more:false},
-            stderr:{text:'',cursor:'0',more:false},
+            stderr:{text:args.stderrCursor === '0' ? window.stderr[args.operationId] ?? '' : '',cursor:'1',more:false},
           });
           throw new Error('Unexpected operation: ' + operation);
         },
@@ -111,6 +114,12 @@ test("SSH tasks collapse to one row and keep the selected task last while live e
     assert.ok(await run(`select(30).getBoundingClientRect().left >= list.getBoundingClientRect().left`));
     assert.equal(await run(`root.querySelector('.job-view').hidden`), false);
     assert.match(await run(`root.querySelector('.job-body').textContent`), /output for job-30/);
+    assert.equal(await run(`root.querySelector('.job-head code')`), null, "the command belongs below the toolbar");
+    assert.equal(await run(`root.querySelector('.job-command').textContent`), "echo task 030");
+    assert.equal(await run(`root.querySelector('.job-close').textContent.trim()`), "", "close uses an icon");
+    assert.equal(await run(`root.querySelector('.job-close').getAttribute('aria-label')`), "Close view");
+    assert.equal(await run(`root.querySelector('.job-head').textContent.includes('success')`), false, "success is already shown by the job capsule");
+    assert.equal(await run(`getComputedStyle(root.querySelector('.job-command')).fontSize === getComputedStyle(root.querySelector('.job-stream pre')).fontSize`), true, "command and output share the configured monospace size");
     assert.equal(await run(`root.querySelector('.job-follow').hidden`), false, "history selection pauses following");
     assert.equal(await run(`root.querySelector('.ssh-workbench').dataset.dock`), "right");
     await assertTerminalFits();
@@ -125,9 +134,9 @@ test("SSH tasks collapse to one row and keep the selected task last while live e
     await client.send("Input.dispatchKeyEvent", {type:"keyDown",key:"Escape",code:"Escape",windowsVirtualKeyCode:27});
     await client.send("Input.dispatchKeyEvent", {type:"keyUp",key:"Escape",code:"Escape",windowsVirtualKeyCode:27});
     assert.equal(await run(`root.querySelector('.job-follow').hidden`), true);
-    assert.equal(await run(`root.querySelector('.job-head code').textContent`), "echo task 050");
+    assert.equal(await run(`root.querySelector('.job-command').textContent`), "echo task 050");
     await run(`emit(51)`);
-    assert.equal(await run(`root.querySelector('.job-head code').textContent`), "echo task 051", "open panel follows new tasks");
+    assert.equal(await run(`root.querySelector('.job-command').textContent`), "echo task 051", "open panel follows new tasks");
     await run(`select(51).parentElement.querySelector('.dismiss').click();select(30).click()`);
 
     await run(`toggle.click()`);
@@ -171,6 +180,38 @@ test("SSH tasks collapse to one row and keep the selected task last while live e
     assert.equal(await run(`items().length`), 1);
     assert.equal(await run(`root.querySelector('.job-view').hidden`), true, "a new job never opens a closed panel");
     assert.equal(await run(`toggle.getAttribute('aria-expanded')`), "false");
+    await run(`window.states['job-53']=true; window.exits['job-53']=2; window.stderr['job-53']='permission denied\\n';
+      const oldTask=window.task; window.task=n=>n===53?'systemctl is-enabled '+ 'service-name-'.repeat(20) + '\\nsystemctl is-active example.service':oldTask(n);
+      window.locale='en'; window.translate();`);
+    await run(`emit(53)`);
+    await run(`select(53).click()`);
+    await waitForValue(client, `root.querySelector('.job-state').textContent==='exit 2'`);
+    assert.equal(await run(`root.querySelector('.job-state').hidden`), false, "failure details remain visible");
+    assert.equal(await run(`root.querySelector('.job-command').textContent`), await run(`task(53)`));
+    for (const dark of [false,true]) {
+      await run(`document.documentElement.classList.toggle('dark',${dark})`);
+      assert.equal(await run(`(() => {
+        const streams=[...root.querySelectorAll('.job-stream')];
+        const styles=streams.map(el=>getComputedStyle(el));
+        return streams.every(el=>!el.hidden) && styles.every(s=>s.borderTopStyle==='solid' && parseFloat(s.borderTopWidth)>=1) && styles[0].borderLeftColor!==styles[1].borderLeftColor;
+      })()`), true, "stdout and stderr have separate, differently coloured borders in both themes");
+      await screenshot(dark ? "ssh-exec-streams-dark" : "ssh-exec-streams-light");
+    }
+    for (const width of [1000,320]) {
+      await client.send("Emulation.setDeviceMetricsOverride", {width,height:720,deviceScaleFactor:1,mobile:false});
+      await run(`document.documentElement.style.setProperty('--coterm-terminal-font-size','20px')`);
+      await waitForValue(client, `(() => {
+        const command=root.querySelector('.job-command'); const close=root.querySelector('.job-close');
+        return command.scrollWidth<=command.clientWidth && root.querySelector('.layout').scrollWidth<=innerWidth && close.getBoundingClientRect().right<=innerWidth;
+      })()`);
+      assert.equal(await run(`getComputedStyle(root.querySelector('.job-command')).fontSize`), "20px");
+      assert.equal(await run(`getComputedStyle(root.querySelector('.job-stream pre')).fontSize`), "20px");
+    }
+    await run(`window.locale='zh-CN';window.translate()`);
+    assert.equal(await run(`root.querySelector('.job-close').title`), "关闭视图");
+    assert.equal(await run(`root.querySelector('.job-command-section h4').textContent`), "命令");
+    await run(`root.querySelector('.job-close').click()`);
+    assert.equal(await run(`root.querySelector('.job-view').hidden`), true);
     await run(`window.frontend.unmount()`);
     assert.equal(await run(`window.unsubscribed && window.localeUnsubscribed && document.body.childElementCount === 0`), true);
   } catch (error) {

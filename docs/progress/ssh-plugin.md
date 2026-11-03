@@ -12,6 +12,16 @@
 - Exec 胶囊有 LED 状态、右侧 / 底部停靠、可拖动尺寸；历史选择暂停跟随，关闭面板时新任务不自动展开。
 - 块选择通过 `ssh.select_blocks` 按当前 epoch 传入插件内存；MCP `mcp.ssh.selected_blocks` 只读取人工选中的有界上下文，Agent 来源不能更改选择。
 
+## 2026-11-03：现场块边界与 Exec 展示反馈
+
+- 人工观察块在常见提示符返回时，将视觉结束 marker 放在提示符前一行；兼容提示符分包和 `cd /` 后目录变化，避免下一条提示符进入上一块。该判断只裁剪前端边框，不改变后端观察窗口、输出预览、unknown 状态或空退出码；自定义提示符仍可能无法识别。
+- SDK 移除重复的 xterm decoration 描边，保留单层 border-box 边框；相邻块以后一块首行为上限。块号改为纯数字，滚动、软折行、列宽与字号变化时边框保持在终端网格内。
+- Exec 命令移至工具栏下方正文，与输出共用终端字号并支持多行折行；成功不再重复显示「已成功」，失败仍显示退出码。STDOUT / STDERR 使用独立的主题蓝色 / 错误色边框，空流隐藏，关闭改为带本地化 tooltip 的图标。
+- 定向浏览器回归 8 项通过、0 失败、0 跳过，覆盖分包提示符、无回复命令、选择 / 回放、重排对齐、双输出流、双语主题、大字号窄屏、关闭 / 跟随、快捷键与审批界面。桌面和 SSH 前端构建通过；截图在忽略目录 `target/ssh-feedback-20261103/` 完成人工复核。
+- 完整 `pnpm plugin:ssh:build` 的 Rust 编译与前端构建通过，但复制后端 exe 时遇到运行中插件占用（EBUSY），未停止用户会话；前端产物已更新。退出旧桌面后可重新完整打包，本次无需后端改动。
+- 另将暂存源码独立导出，单独通过桌面 / SSH 的 TypeScript 与 Vite 构建，以及审批 / SSH 块 / 人工块 / Exec 共 4 项浏览器回归，确认本次提交不依赖工作区其他未提交修改。
+- 本次未修改 Rust、协议、依赖或权限，尚未连接用户真实远端。入口：[视觉边界观察](../../plugins/plugin-ssh/frontend/src/observed-boundaries.ts)、[SDK 边框](../../packages/plugin-sdk/src/components/terminal-blocks.ts)、[Exec UI](../../plugins/plugin-ssh/frontend/src/jobs.ts)、[交互约束](../design/ssh-terminal-interaction.md)。
+
 ## 2026-11-03：人工终端 Enter 生成可选命令块
 
 - 复现真实 xterm 人工输入 `ls` / Enter 后 Gutter 仍为空：原始输入只有 PTY 透传，未经过 API 命令包装器，因此没有开始帧。新增前端可见行观察，在常见 `$ ` / `# ` / `% ` 提示符后回车时随 `ssh.input` 发送命令预览；后端统一分配编号、输出观察帧并保留回复，按键仍原样发送，不重复执行或修改远端 Shell。

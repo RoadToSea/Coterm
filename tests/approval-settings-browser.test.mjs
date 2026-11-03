@@ -29,6 +29,12 @@ test("command approval settings edit both modes, preserve failed saves and previ
     await run(`document.querySelector('button[aria-label="Open approval settings"]').click()`);
     await wait(`!!document.getElementById('approval-pattern')`);
     assert.equal(await run(`__cotermTest.countCalls('list_operations')`), 0);
+    assert.equal(await run(`(() => {
+      const dialog=document.getElementById('approval-settings-dialog');
+      return [...dialog.querySelectorAll('button')].some(button=>button.textContent.includes('example'))
+        || dialog.textContent.includes('/128') || dialog.textContent.includes('Lookaround')
+        || dialog.textContent.includes('Matching commands skip approval;');
+    })()`), false, "approval settings omit sample buttons, counters and verbose implementation notes");
     await input("approval-pattern", "^ls$");
     await run(`[...document.querySelectorAll('#approval-settings-dialog button')].find(button=>button.textContent==='Add rule').click()`);
     await input("approval-pattern", "^cd /tmp$");
