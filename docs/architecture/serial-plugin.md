@@ -26,6 +26,8 @@ UART 接收 ASCII / HEX、暂停、清空和保存放在快捷栏。配置右侧
 
 提示由插件前端直接引用 SDK 的 [非模态提示组件](../../packages/plugin-sdk/docs/toasts.md)，错误红色、警告黄色，自动消失，不抢焦点；不新增 `PluginAPI` 或 MCP 工具，也不引入宿主权限或跨进程消息类型。
 
+接收换行补全由配置面板的「LF 补 CR」「CR 补 LF」两个独立复选框控制，可同时勾选，默认均不选。分别将单独 LF、CR 补成 CRLF，已存在的 CRLF（包括跨事件拆分的 CR / LF）不重复补全。该功能只作用于终端和 UART 文本显示；终端对后续输出生效，UART 文本从有界原始缓存重新渲染。HEX、保存文件、收发计数、后端缓冲与 MCP 输出保持原样。偏好按实例保存在前端本地存储，不调用 `serial.configure`；清空、连接更换和回放缺口均重置转换状态。
+
 文件导入使用用户选择的浏览器 File，接收保存是有界缓冲的快照下载，不开放任意路径文件代理。发送历史只驻留当前挂载内存；定时发送等待上次完成再计时，停止后不恢复旧队列。实现进度与限制见 [Serial 进度](../../plugins/plugin-serial/docs/progress.md)。
 
 通用契约见 [插件开发](plugin-development.md)、[运行时通信](runtime-communication.md) 和 [MCP 接入](mcp-integration.md)。终端公共快捷键见 [终端快捷键](terminal-shortcuts.md)。

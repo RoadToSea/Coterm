@@ -15,7 +15,7 @@ test("human Shell uses terminal keys, UART uses its sender, and MCP queues stay 
     "rebuild the serial frontend after changing terminal search");
   assert.ok(built >= fs.statSync(new URL("../packages/plugin-sdk/src/components/toasts.ts", import.meta.url)).mtimeMs,
     "rebuild the serial frontend after changing shared notices");
-  for (const file of ["index.ts", "i18n.ts", "console-settings.ts", "format-switch.ts", "toolbar.ts"]) {
+  for (const file of ["index.ts", "i18n.ts", "console-settings.ts", "format-switch.ts", "toolbar.ts", "receive-newlines.ts"]) {
     assert.ok(built >= fs.statSync(new URL(`../plugins/plugin-serial/frontend/src/${file}`, import.meta.url)).mtimeMs,
       "run pnpm --filter coterm-plugin-serial-ui build before the serial browser test");
   }

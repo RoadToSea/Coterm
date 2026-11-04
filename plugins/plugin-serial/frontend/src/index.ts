@@ -9,6 +9,7 @@ import { mountToasts, type ToastTone } from "@coterm/plugin-sdk/components/toast
 import { createFormatSwitch, type Format } from "./format-switch";
 import { createToolbar } from "./toolbar";
 import { createCommunicationSettings, type SerialConfig } from "./console-settings";
+import { createReceiveNewlineNormalizer, readReceiveNewlineMode, saveReceiveNewlineMode } from "./receive-newlines";
 import { attachTerminalShortcuts } from "@coterm/plugin-sdk/components/terminal-shortcuts";
 import { mountTerminalSearch, TERMINAL_SEARCH_HIGHLIGHT_LIMIT } from "@coterm/plugin-sdk/components/terminal-search";
 
@@ -111,6 +112,7 @@ const css = `
   .signal-check input { width: auto; }
   .settings-grid [aria-disabled="true"] { opacity: .65; cursor: not-allowed; }
   .settings-grid label:has(.receive-filename) { grid-column: span 2; }
+  .receive-newlines { grid-column: 1 / -1; }
   .toolbar-item { position: relative; display: inline-flex; flex: 0 0 auto; align-items: center; }
   .toolbar-item[data-control="stats"] { margin-left: auto; }
   .uart-bar[data-customizing="true"] .toolbar-item { cursor: grab; user-select: none;
@@ -548,7 +550,7 @@ function stamp(time: number): string {
   return `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}.${pad(date.getMilliseconds(), 3)}`;
 }
 
-interface LogEntry { time: number; bytes: number; text: string; hex: string }
+interface LogEntry { time: number; bytes: number; text: string; hex: string; boundary?: boolean }
 
 export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
   const root = surface(container, true);
@@ -599,6 +601,25 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
       } catch (reason) { showError(reason); }
     });
   settingsPanel.append(communication.element);
+
+  const receiveNewlines = document.createElement("div");
+  receiveNewlines.className = "receive-newlines checks";
+  receiveNewlines.setAttribute("role", "group");
+  const completeLF = document.createElement("input");
+  completeLF.type = "checkbox"; completeLF.name = "receiveCompleteLF";
+  const completeCR = document.createElement("input");
+  completeCR.type = "checkbox"; completeCR.name = "receiveCompleteCR";
+  const completeLFLabel = document.createElement("span");
+  const completeCRLabel = document.createElement("span");
+  for (const [control, text] of [[completeLF, completeLFLabel], [completeCR, completeCRLabel]]) {
+    const label = document.createElement("label"); label.className = "signal-check";
+    label.append(control, text); receiveNewlines.append(label);
+  }
+  let receiveNewlineMode = readReceiveNewlineMode(api.pluginInstanceId);
+  completeLF.checked = receiveNewlineMode === "lf" || receiveNewlineMode === "both";
+  completeCR.checked = receiveNewlineMode === "cr" || receiveNewlineMode === "both";
+  communication.element.append(receiveNewlines);
+  let receiveNormalizer = createReceiveNewlineNormalizer(receiveNewlineMode);
 
   // 终端模式：原始字节与远端回显，按键即发送。
   const terminalPanel = document.createElement("div");
@@ -795,6 +816,7 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
   let statsTx = 0;
   const entries: LogEntry[] = [];
   let logBytes = 0;
+  let receiveBoundary = true;
   let hexOffset = 0;
   let hexCursor = 0;
   const hexEntries: LogEntry[] = [];
@@ -900,6 +922,10 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
     settingsPanel.setAttribute("aria-label", tr("Serial settings"));
     toolbarButton.title = tr("Customize toolbar"); toolbarButton.setAttribute("aria-label", toolbarButton.title);
     toolbar.locale(tr); communication.locale(tr);
+    receiveNewlines.setAttribute("aria-label", tr("Receive newline completion"));
+    receiveNewlines.title = tr("Display only; terminal changes affect new output. Raw data and saved files stay unchanged.");
+    completeLFLabel.textContent = tr("Complete LF with CR");
+    completeCRLabel.textContent = tr("Complete CR with LF");
     toasts.updateLabels({ ariaLabel: tr("Notifications"), closeLabel: tr("Dismiss notification") });
     receiveFilenameLabel.firstElementChild!.textContent = tr("Save file (download directory)");
     exportButton.title = tr("Save receive buffer"); exportButton.setAttribute("aria-label", exportButton.title);
@@ -960,9 +986,12 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
   const renderUart = (force: boolean) => {
     if (disposed || (!force && (paused || mode !== "uart"))) return;
     let text = "";
+    const normalizer = createReceiveNewlineNormalizer(receiveNewlineMode);
     for (const item of uartView === "hex" ? hexEntries : entries) {
+      if (item.boundary) normalizer.reset();
       const prefix = timestamps.checked ? `[${stamp(item.time)}] ` : "";
-      text += prefix + (uartView === "hex" ? item.hex : item.text);
+      const content = uartView === "hex" ? item.hex : normalizer.write(item.text);
+      if (content) text += prefix + content;
     }
     if (uartView === "text") text = text.replace(/\r\n/g, "\n");
     uartOutput.textContent = text.length > RENDER_LIMIT ? text.slice(-RENDER_LIMIT) : text;
@@ -979,6 +1008,8 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
     hexOffset = 0;
     pendingWhilePaused = 0;
     uartOutput.textContent = "";
+    receiveBoundary = true;
+    receiveNormalizer.reset();
     terminal.reset();
   };
 
@@ -990,7 +1021,9 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
       bytes,
       text,
       hex: "",
+      boundary: receiveBoundary,
     });
+    receiveBoundary = false;
     logBytes += bytes;
     statsRx += bytes;
     while (logBytes > LOG_LIMIT && entries.length > 1) {
@@ -1005,7 +1038,8 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
 
   const write = async (data: string) => {
     if (!data || disposed) return;
-    await new Promise<void>((resolve) => terminal.write(data, resolve));
+    const display = receiveNormalizer.write(data);
+    if (display) await new Promise<void>((resolve) => terminal.write(display, resolve));
   };
 
   const refreshHex = async (explicitExport = false) => {
@@ -1054,6 +1088,8 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
       const data = await invoke<Output>("serial.read", { cursor });
       if (disposed || data.connectionId !== connectionId) return;
       if (data.gap) {
+        receiveBoundary = true;
+        receiveNormalizer.reset();
         terminal.reset();
         terminal.write(`\r\n[${t("Output gap: older data expired from the replay buffer")}]\r\n`);
       }
@@ -1300,6 +1336,12 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
     else renderUart(true);
   }, { signal: controller.signal });
   timestamps.addEventListener("change", () => renderUart(true), { signal: controller.signal });
+  receiveNewlines.addEventListener("change", () => {
+    receiveNewlineMode = completeLF.checked ? (completeCR.checked ? "both" : "lf") : (completeCR.checked ? "cr" : "none");
+    receiveNormalizer = createReceiveNewlineNormalizer(receiveNewlineMode);
+    saveReceiveNewlineMode(api.pluginInstanceId, receiveNewlineMode);
+    renderUart(true);
+  }, { signal: controller.signal });
   autoscroll.addEventListener("change", () => { if (autoscroll.checked) renderUart(true); }, { signal: controller.signal });
   clear.addEventListener("click", () => {
     clearLog();
