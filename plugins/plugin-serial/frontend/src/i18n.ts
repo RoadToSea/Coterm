@@ -24,7 +24,6 @@ const zhCN: Readonly<Record<string, string>> = {
   "Open serial port": "打开串口",
   "Loading ports…": "正在加载端口…",
   "No serial ports detected": "未检测到串口",
-  "Refresh ports": "刷新端口",
   "Could not load serial ports": "串口列表加载失败",
   "Could not load serial ports: {reason}": "串口列表加载失败：{reason}",
   "Serial port discovery is unavailable.": "当前宿主不支持查询串口列表。",

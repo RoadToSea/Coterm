@@ -45,17 +45,34 @@ test("Serial creation lists COM6 from a stopped plugin before any instance is su
     assert.equal(calls.includes("create_instance"), false, "enumeration does not create or open a serial connection");
     await screenshot("serial-creation-com6");
 
+    // Exercise an actual mouse opening, not just a scripted click on the element.
+    await run(`window.lookup=__cotermTest.gate('invoke_plugin_operation');window.beforeOpen=__cotermTest.countCalls('invoke_plugin_operation')`);
+    const point = await run(`(()=>{const r=configuration().querySelector('select').getBoundingClientRect();return {x:r.left+r.width/2,y:r.top+r.height/2}})()`);
+    await client.send("Input.dispatchMouseEvent", {type:"mousePressed",...point,button:"left",clickCount:1});
+    await client.send("Input.dispatchMouseEvent", {type:"mouseReleased",...point,button:"left",clickCount:1});
+    await wait(`lookup.size()===1`);
+    assert.equal(await run(`configuration().querySelector('select').matches(':open')`), false, "read new ports before the native picker snapshots its options");
+    await run(`lookup.release({status:'completed',output:{ports:[{portName:'COM6',portType:{kind:'usb'}},{portName:'COM8',portType:{kind:'unknown'}}]}})`);
+    await wait(`configuration().querySelector('option[value="COM8"]')`);
+    await wait(`configuration().querySelector('select').matches(':open')`);
+    for (const [key,code,windowsVirtualKeyCode] of [["End","End",35],["Enter","Enter",13]]) {
+      await client.send("Input.dispatchKeyEvent", {type:"keyDown",key,code,windowsVirtualKeyCode});
+      await client.send("Input.dispatchKeyEvent", {type:"keyUp",key,code,windowsVirtualKeyCode});
+    }
+    await wait(`configuration().querySelector('select').value==='COM8'`);
+    assert.equal(await run(`__cotermTest.countCalls('invoke_plugin_operation')`), await run(`beforeOpen+1`), "selecting an option does not trigger a second lookup");
+
     // A failed operation is not an empty device list, and retry must be possible.
-    await run(`window.lookup=__cotermTest.gate('invoke_plugin_operation');configuration().querySelector('.refresh-ports').click()`);
+    await run(`window.lookup=__cotermTest.gate('invoke_plugin_operation');configuration().querySelector('select').dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,button:0}))`);
     await wait(`lookup.size()===1`);
     assert.equal(await run(`configuration().querySelector('button[type=submit]').disabled`), true);
-    assert.equal(await run(`configuration().querySelector('.refresh-ports').disabled`), true);
+    assert.equal(await run(`configuration().querySelector('select').disabled`), false, 'a pending lookup does not block the native picker');
     await run(`lookup.release({status:'failed',output:null,error:{message:'device enumeration failed'}})`);
     await wait(`configuration().querySelector('.error').textContent.includes('device enumeration failed')`);
     assert.equal(await run(`configuration().querySelector('select').textContent.includes('No serial ports detected')`), false);
     assert.equal(await run(`configuration().querySelector('button[type=submit]').disabled`), true);
 
-    await run(`window.lookup=__cotermTest.gate('invoke_plugin_operation');configuration().querySelector('.refresh-ports').click()`);
+    await run(`window.lookup=__cotermTest.gate('invoke_plugin_operation');configuration().querySelector('select').dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,button:0}))`);
     await wait(`lookup.size()===1`);
     await setAppLocale(client, "zh-CN");
     assert.equal(await run(`configuration().querySelector('select').textContent`), "正在加载端口…",
@@ -63,26 +80,36 @@ test("Serial creation lists COM6 from a stopped plugin before any instance is su
     await run(`lookup.release({status:'completed',output:{ports:[]}})`);
     await wait(`configuration().querySelector('select').textContent==='未检测到串口'`);
     assert.equal(await run(`configuration().querySelector('.error').textContent`), "");
-    assert.equal(await run(`configuration().querySelector('.refresh-ports').getAttribute('aria-label')`), "刷新端口");
+    assert.equal(await run(`configuration().querySelector('.refresh-ports')`), null, 'refresh has no separate button');
 
     // A legacy backend missing the field must ask for an update, not report no devices.
-    await run(`window.lookup=__cotermTest.gate('invoke_plugin_operation');configuration().querySelector('.refresh-ports').click()`);
+    await run(`window.lookup=__cotermTest.gate('invoke_plugin_operation');configuration().querySelector('select').dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,button:0}))`);
     await wait(`lookup.size()===1`);
     await run(`lookup.release({status:'completed',output:{instanceCount:0}})`);
     await wait(`configuration().querySelector('.error').textContent.includes('请重新构建插件')`);
 
-    await run(`window.lookup=__cotermTest.gate('invoke_plugin_operation');configuration().querySelector('.refresh-ports').click()`);
+    await run(`window.lookup=__cotermTest.gate('invoke_plugin_operation');configuration().querySelector('select').dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,button:0}))`);
     await wait(`lookup.size()===1`);
     await run(`lookup.release({status:'completed',output:{ports:[{portName:'COM6',portType:{kind:'usb'}},{portName:'COM9',portType:{kind:'unknown'}}]}})`);
     await wait(`configuration().querySelector('select').options.length===2`);
     await run(`const port=configuration().querySelector('select');port.value='COM9';port.dispatchEvent(new Event('change',{bubbles:true}));
-      window.lookup=__cotermTest.gate('invoke_plugin_operation');configuration().querySelector('.refresh-ports').click()`);
+      window.lookup=__cotermTest.gate('invoke_plugin_operation');configuration().querySelector('select').dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,button:0}))`);
     await wait(`lookup.size()===1`);
     await run(`lookup.release({status:'completed',output:{ports:[{portName:'COM9',portType:{kind:'unknown'}},{portName:'COM6',portType:{kind:'usb'}}]}})`);
-    await wait(`!configuration().querySelector('.refresh-ports').disabled`);
+    await wait(`configuration().querySelector('form').getAttribute('aria-busy')==='false'`);
     assert.equal(await run(`configuration().querySelector('select').value`), "COM9", "refresh preserves the selected port if still present");
     assert.equal(await run(`configuration().querySelector('button[type=submit]').disabled`), false);
     assert.equal(await run(`__cotermTest.countCalls('create_instance')`), 0);
+
+    // Keyboard openings also refresh once; held keys and repeated pointer presses are coalesced.
+    await run(`(()=>{window.lookup=__cotermTest.gate('invoke_plugin_operation');window.beforeKeyboard=__cotermTest.countCalls('invoke_plugin_operation');
+      const port=configuration().querySelector('select');port.dispatchEvent(new KeyboardEvent('keydown',{key:' ',bubbles:true}));
+      port.dispatchEvent(new KeyboardEvent('keydown',{key:' ',repeat:true,bubbles:true}));
+      port.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,button:0}));})()`);
+    await wait(`lookup.size()===1`);
+    assert.equal(await run(`__cotermTest.countCalls('invoke_plugin_operation')`), await run(`beforeKeyboard+1`));
+    await run(`lookup.release({status:'completed',output:{ports:[{portName:'COM9',portType:{kind:'unknown'}}]}})`);
+    await wait(`configuration().querySelector('form').getAttribute('aria-busy')==='false'`);
 
     await client.send("Emulation.setDeviceMetricsOverride", {width:360,height:720,deviceScaleFactor:1,mobile:false});
     await wait(`document.documentElement.scrollWidth<=innerWidth`);
@@ -119,7 +146,7 @@ test("Serial discovery exposes startup failure and cancels lookup when its confi
     await run(`starting.fail('backend startup failed')`);
     await wait(`configuration()?.querySelector('.error').textContent.includes('backend startup failed')`);
     assert.equal(await run(`configuration().querySelector('select').textContent`), "Could not load serial ports");
-    await run(`window.starting=__cotermTest.gate('start_plugin');configuration().querySelector('.refresh-ports').click()`);
+    await run(`window.starting=__cotermTest.gate('start_plugin');configuration().querySelector('select').dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,button:0}))`);
     await wait(`starting.size()===1`);
     await run(`document.querySelector('button[aria-label="Manage Local"]').click()`);
     await wait(`document.getElementById('plugin-configuration').textContent.includes('does not provide a connection configuration screen')`);

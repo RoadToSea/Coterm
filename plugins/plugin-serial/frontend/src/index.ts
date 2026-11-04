@@ -53,9 +53,6 @@ const css = `
   textarea { resize: none; font-family: var(--coterm-font-mono, Consolas, monospace); min-height: 68px; }
   [hidden] { display: none !important; }
   .pair { display: grid; grid-template-columns: minmax(0, 1fr) 130px; gap: 12px; }
-  .port-controls { display: flex; gap: 6px; min-width: 0; }
-  .port-controls select { flex: 1; }
-  .port-controls button { flex: none; }
   @media (max-width: 560px) { .pair { grid-template-columns: minmax(0, 1fr); } }
   .triple { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
   .checks { display: flex; flex-wrap: wrap; gap: 16px; }
@@ -295,12 +292,6 @@ export function configure(container: HTMLElement, api: PluginConfigurationAPI): 
 
   const portLabel = caption(t("Port"));
   const port = document.createElement("select");
-  const refreshPorts = document.createElement("button");
-  refreshPorts.type = "button";
-  refreshPorts.className = "icon-button refresh-ports";
-  refreshPorts.title = t("Refresh ports");
-  refreshPorts.setAttribute("aria-label", refreshPorts.title);
-  refreshPorts.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5M6 7a7 7 0 0 1 12-1l2 3M4 15l2 3a7 7 0 0 0 12-1"/></svg>';
   let portPlaceholder: string | null = "Loading ports…";
   let portLoadError: string | null = null;
 
@@ -332,10 +323,7 @@ export function configure(container: HTMLElement, api: PluginConfigurationAPI): 
     }
   };
 
-  const portControls = document.createElement("div");
-  portControls.className = "port-controls";
-  portControls.append(port, refreshPorts);
-  portLabel.append(portControls);
+  portLabel.append(port);
 
   const baudLabel = caption(t("Baud rate"));
   const baud = document.createElement("input");
@@ -418,8 +406,6 @@ export function configure(container: HTMLElement, api: PluginConfigurationAPI): 
     rtsLabelText.textContent = next("RTS high on open");
     hint.textContent = next("Port names come from the operating system, e.g. COM6 or /dev/ttyUSB0.");
     lineHint.textContent = next("Some boards reset when DTR changes; clear it if the device reboots unexpectedly.");
-    refreshPorts.title = next("Refresh ports");
-    refreshPorts.setAttribute("aria-label", refreshPorts.title);
     if (portPlaceholder && port.options[0]) {
       port.options[0].textContent = next(portPlaceholder);
     }
@@ -431,15 +417,18 @@ export function configure(container: HTMLElement, api: PluginConfigurationAPI): 
   let disposed = false;
   let busy = false;
   let loading = false;
+  let pendingPorts: Promise<void> | undefined;
+  let openingPicker = false;
+  let pickerVersion = 0;
   const controller = new AbortController();
 
   const syncActions = () => {
-    port.disabled = loading || busy;
-    refreshPorts.disabled = loading || busy;
+    // Keep the native picker usable while its options refresh asynchronously.
+    port.disabled = busy;
     submit.disabled = loading || busy || !port.value;
     form.setAttribute("aria-busy", String(loading || busy));
   };
-  const loadPorts = async () => {
+  const readPorts = async () => {
     if (disposed || loading || busy) return;
     loading = true;
     portLoadError = null;
@@ -463,7 +452,35 @@ export function configure(container: HTMLElement, api: PluginConfigurationAPI): 
       if (!disposed) { loading = false; syncActions(); }
     }
   };
-  refreshPorts.addEventListener("click", () => void loadPorts(), {signal:controller.signal});
+  const loadPorts = () => {
+    if (!pendingPorts) pendingPorts = readPorts().finally(() => { pendingPorts = undefined; });
+    return pendingPorts;
+  };
+  const refreshForPicker = (event: Event) => {
+    if (typeof port.showPicker !== "function") { void loadPorts(); return; }
+    // Native menus snapshot their options on opening; populate before opening.
+    event.preventDefault();
+    if (disposed || busy || openingPicker) return;
+    port.focus({preventScroll:true});
+    const version = ++pickerVersion;
+    openingPicker = true;
+    void loadPorts().then(() => {
+      if (disposed || busy || portLoadError || !port.value || version !== pickerVersion || root.activeElement !== port) return;
+      try { port.showPicker(); }
+      catch { /* Slow reads can outlive user activation; keep the refreshed list for the next click. */ }
+    }).finally(() => { openingPicker = false; });
+  };
+  port.addEventListener("pointerdown", event => {
+    if (event.button === 0 && event.target === port) refreshForPicker(event);
+  }, {signal:controller.signal});
+  port.addEventListener("keydown", event => {
+    if (event.key === "Escape") pickerVersion++;
+    if (!event.repeat && !event.ctrlKey && !event.metaKey && (
+      event.key === " " || event.key === "Enter" || (event.key === "F4" && !event.altKey) ||
+      (event.key === "ArrowDown" && event.altKey)
+    )) refreshForPicker(event);
+  }, {signal:controller.signal});
+  port.addEventListener("blur", () => { pickerVersion++; }, {signal:controller.signal});
   port.addEventListener("change", syncActions, {signal:controller.signal});
   void loadPorts();
 
