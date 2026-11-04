@@ -59,6 +59,18 @@ export function makeHostMockSource(initial) {
     let attentionVersion = scenario.attention.version;
     let attention = scenario.attention;
     let failures = Object.assign({}, scenario.failures);
+    // Test-only persistence stands in for the Rust settings file across page reloads.
+    let mcpPort = Number(localStorage.getItem('__cotermTest.mcp-port') ?? scenario.mcp?.port ?? 51234);
+    let mcpEnabled = scenario.mcp?.enabled ?? false;
+    let mcpConfigurationError = scenario.mcp?.configurationError ?? null;
+    const mcpStatus = () => {
+      const command = 'C:/Program Files/Coterm/coterm-desktop.exe';
+      const address = '127.0.0.1:' + mcpPort;
+      const args = mcpPort === 51234 ? ['mcp','stdio'] : ['mcp','stdio','--addr',address];
+      return {enabled:mcpEnabled,port:mcpPort,configurationError:mcpConfigurationError,command,
+        address:mcpEnabled ? address : null,
+        clientConfig:mcpEnabled ? JSON.stringify({mcpServers:{coterm:{command,args}}},null,2) : null};
+    };
 
     const pendingSecrets = [];
     const approveCalls = [];
@@ -69,6 +81,7 @@ export function makeHostMockSource(initial) {
     const invocations = [];
 
     window.__cotermTest = {
+      mcpStatus,
       calls,
       approveCalls,
       rejectCalls,
@@ -190,6 +203,17 @@ export function makeHostMockSource(initial) {
     };
 
     const handlers = {
+      mcp_stdio_status: mcpStatus,
+      set_mcp_stdio_enabled: ({enabled}) => {
+        if (enabled && mcpConfigurationError) throw mcpConfigurationError;
+        mcpEnabled = enabled; return mcpStatus();
+      },
+      set_mcp_stdio_port: ({request:{port}}) => {
+        if (!Number.isInteger(port) || port < 1 || port > 65535) throw 'mcp_port_invalid';
+        if (scenario.mcp?.occupiedPorts?.includes(port)) throw 'mcp_port_unavailable';
+        localStorage.setItem('__cotermTest.mcp-port',String(port)); mcpPort=port; mcpConfigurationError=null;
+        return mcpStatus();
+      },
       runtime_snapshot: () => ({ instances: scenario.instances, runningPlugins: scenario.catalog.plugins.filter((plugin) => plugin.running).map((plugin) => plugin.id) }),
       workspace_snapshot: () => structuredClone(scenario.workspace),
       save_workspace_layout: ({activeInstanceId,instancesCollapsed,activeWorkspaceId}) => {

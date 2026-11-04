@@ -22,7 +22,7 @@ use tokio::{
 
 use crate::transport::{read_frame, write_frame};
 
-/// Fixed loopback endpoint used by the desktop MCP bridge.
+/// Default loopback endpoint used by the desktop MCP bridge.
 pub const DEFAULT_BRIDGE_ADDRESS: &str = "127.0.0.1:51234";
 
 #[derive(Clone, Serialize)]

@@ -35,7 +35,7 @@ test("categorized settings search, apply live fonts, persist and preserve mounte
     await run(`window.beforeSubscriptions=__cotermTest.calls.filter(c=>c==='subscribe_plugin_events').length;window.beforeProtocol=__cotermTest.invocations.filter(c=>['ssh.connect','ssh.disconnect','ssh.write'].includes(c.args.operation)).length;document.getElementById('open-settings').focus();document.getElementById('open-settings').click()`);
     await wait(`document.getElementById('app-settings-dialog')?.open`);
     await wait(`document.activeElement.id==='settings-search'`);
-    assert.equal(await run(`document.querySelectorAll('[data-setting]').length`),6);
+    assert.equal(await run(`document.querySelectorAll('[data-setting]').length`),7);
     await shot('settings-light.png');
     await category('general');
     assert.equal(await run(`document.querySelectorAll('[data-setting]').length`),1);

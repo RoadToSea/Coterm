@@ -2,6 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod mcp_commands;
+mod mcp_settings;
 mod plugin_install_commands;
 mod workspace;
 mod workspace_commands;
@@ -882,6 +883,7 @@ fn main() {
             let stdio_bridge = mcp_commands::StdioBridge::new(
                 plugin_runtime.clone(),
                 std::env::current_exe().ok(),
+                app_data.join("mcp-settings.v1.json"),
             );
             let expiry_runtime = plugin_runtime.clone();
             let app_handle = app.handle().clone();
@@ -947,6 +949,7 @@ fn main() {
             respond_secret,
             mcp_stdio_status,
             set_mcp_stdio_enabled,
+            mcp_commands::set_mcp_stdio_port,
             create_instance,
             destroy_instance,
             invoke_operation,

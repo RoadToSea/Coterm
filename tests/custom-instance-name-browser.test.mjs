@@ -22,6 +22,7 @@ test("the shared plugin configuration submits a separate custom instance name", 
     await wait(`!!document.querySelector('button[aria-label="Manage SSH"]')`);
     await run(`document.querySelector('button[aria-label="Manage SSH"]').click()`);
     await wait(`!!document.getElementById('new-instance-name')`);
+    await wait(`Array.from(document.querySelectorAll('#plugin-configuration div')).some(element => element.shadowRoot?.querySelector('form'))`);
     await run(`(() => {
       window.configuration = [...document.querySelectorAll('#plugin-configuration div')]
         .find(element => element.shadowRoot?.querySelector('form'))?.shadowRoot;

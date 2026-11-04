@@ -6,7 +6,7 @@ import { Modal } from "../ui/Modal";
 
 /**
  * MCP 面板。对外只有 Stdio：桌面可执行文件的 `mcp stdio` 子命令把标准输入输出
- * 转发到固定端口的私有回环桥，桥只在用户启用期间存在。面板不展示任何 HTTP 地址。
+ * 转发到设置中配置的私有回环桥，桥只在用户启用期间存在。面板不展示任何 HTTP 地址。
  */
 export function McpConfiguration({ onClose }: { onClose: () => void }) {
   useI18n();
@@ -58,7 +58,7 @@ export function McpConfiguration({ onClose }: { onClose: () => void }) {
       <p className="mb-3 text-xs text-coterm-text-subtle">
         {t("Agents connect through the adapter below. Keep Coterm running; the adapter routes to this desktop and never starts plugins on its own.")}
       </p>
-      {error && <p role="alert">{error}</p>}
+      {(error || status?.configurationError) && <p role="alert">{t(error || status?.configurationError || "")}</p>}
       <div className="mb-2 flex items-center justify-between gap-3">
         <h3 className="text-xs font-medium">{t("Stdio adapter")}</h3>
         <button
@@ -73,8 +73,9 @@ export function McpConfiguration({ onClose }: { onClose: () => void }) {
         </button>
       </div>
       <p className="mb-2 text-[11px] text-coterm-text-muted">
-        {t("Enabling opens the local loopback bridge on a fixed port. Disabling, or closing Coterm, stops it.")}
+        {t("Enabling opens the local loopback bridge on the port configured in Settings. Disabling, or closing Coterm, stops it.")}
       </p>
+      {status?.address && <p className="mb-2 text-[11px] text-coterm-text-muted">{t("Local bridge: {address}", { address: status.address })}</p>}
       {status?.clientConfig && (
         <>
           <p className="mb-1 text-[11px] text-coterm-text-muted">

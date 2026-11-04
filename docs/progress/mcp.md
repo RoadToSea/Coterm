@@ -8,6 +8,15 @@
 - 串口命令可在一次调用中发送文本并收集提示符前的回显，结果同时提供可读文本与结构化字段；近期输出另有无状态快照接口。
 - Agent 命令审批支持用户自定义正则：正向放行匹配命令，反向拦截匹配命令；编辑器支持追加/删除、试匹配和显式保存。规则作用于实际命令文本，旧接口级放行不再生效。
 
+## 2026-11-04：设置中的 MCP 端口
+
+- 设置新增可搜索的 MCP 分类，端口支持 1–65535、默认 51234；显式保存、按设备恢复，提供现有 MCP 连接弹窗作为启停 / 复制配置入口。显示偏好重置不修改端口，中英文及窄窗口沿用现有设置布局。
+- 宿主增加受信桌面命令 `set_mcp_stdio_port({request:{port}})`，状态增加 `port / configurationError`。启用时先绑定新端口并原子保存，再替换旧桥；占用或保存失败保留旧服务。停用时仅检查可用性及保存，不自行启用。设置损坏时阻止启用，保存有效端口后恢复。
+- 自定义端口的 Stdio 客户端配置自动携带 `--addr`；默认端口保留既有 `mcp stdio` 配置兼容。成功换端口会断开旧 MCP 客户端，需复制新配置并重新连接；插件连接和审批规则不变。只接受 IPv4 回环端口，不增加 HTTP、插件消息、依赖或 capability。
+- 新文件 [mcp_settings.rs](../../apps/desktop/src-tauri/src/mcp_settings.rs) 保存非敏感设备偏好，Windows 复用既有原子替换，其他平台使用 rename；保存通过阻塞任务执行。入口：[桥生命周期](../../apps/desktop/src-tauri/src/mcp_commands.rs)、[设置控件](../../apps/desktop/src/components/settings/McpPortSetting.tsx)、[客户端配置](../../crates/coterm-mcp/src/config.rs)、[浏览器验收](../../tests/mcp-settings-browser.test.mjs)。稳定规则见 [MCP 接入](../architecture/mcp-integration.md#端口设置与宿主接口)。
+- 验证通过：`pnpm build`、`cargo check --workspace --locked`、桌面单元测试 17 项（`cargo test -p coterm-desktop --bin coterm-desktop --locked`）、MCP 测试 14 项，以及 Desktop / MCP 全目标 Clippy（警告视为错误）。前端完整套件使用 `node --import ./scripts/test-ts-loader.mjs --test --test-concurrency=2 tests/*.test.mjs`，77 项全部通过；窄窗口中文、明暗主题已目视检查。
+- 回归补充了实例命名测试对插件配置表单挂载的等待。默认并发运行时，既有 Toast 测试的 500ms 提示在样式断言前过期；该项单独通过，限制测试并发后全套通过，未修改 Toast 实现。运行中的桌面锁定可执行文件，因此桌面测试只运行单元目标；未关闭用户进程、替换正在运行的程序或进行安装包验收。加载本次 Rust 改动需重启桌面开发进程。
+
 ## 2026-11-02：命令文本正则审批
 
 - 宿主使用独立策略模块编译、限额和匹配正则；模式为 `allow_matches` / `approve_matches`。列表逐项检查，正向全部匹配才放行，反向任意匹配即进入人工审批；多行原文整体匹配，不拆分 Shell 语法。

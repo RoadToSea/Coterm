@@ -17,9 +17,9 @@ use crate::{
 
 pub const ADDRESS_ENV: &str = "COTERM_MCP_ADDR";
 
-/// Connect to the fixed loopback bridge and forward standard input/output.
-/// `COTERM_MCP_ADDR` remains an optional test/development override; normal
-/// client configurations use the fixed production endpoint.
+/// Connect to the loopback bridge and forward standard input/output.
+/// Client configurations for custom ports pass `--addr`; the environment and
+/// default address remain compatible with existing client configurations.
 pub async fn run_from_env() -> Result<()> {
     run(&[]).await
 }

@@ -123,6 +123,8 @@ export interface McpStdioStatus {
   command: string | null;
   address: string | null;
   clientConfig: string | null;
+  port: number;
+  configurationError: string | null;
 }
 
 export interface ApprovalPolicy {
@@ -144,6 +146,7 @@ export interface HostAPI {
   respondSecret(interactionId: string, value: string | null): Promise<void>;
   mcpStdioStatus(): Promise<McpStdioStatus>;
   setMcpStdioEnabled(enabled: boolean): Promise<McpStdioStatus>;
+  setMcpStdioPort(port: number): Promise<McpStdioStatus>;
   listPlugins(): Promise<PluginCatalog>;
   preparePluginInstall(locale: "en" | "zh-CN"): Promise<PluginInstallPreview | null>;
   installPluginPackage(token: string): Promise<PluginSummary>;
@@ -373,6 +376,7 @@ export const hostAPI: HostAPI = {
   respondSecret: (interactionId, value) => invoke<void>("respond_secret", { interactionId, value }),
   mcpStdioStatus: () => invoke<McpStdioStatus>("mcp_stdio_status"),
   setMcpStdioEnabled: (enabled) => invoke<McpStdioStatus>("set_mcp_stdio_enabled", { enabled }),
+  setMcpStdioPort: (port) => invoke<McpStdioStatus>("set_mcp_stdio_port", { request: { port } }),
   frontendSource: (pluginId) => invoke<string | null>("plugin_frontend_source", { pluginId }),
   provideSecret: (pluginInstanceId, purpose, value) => invoke<SecretHandle>("provide_secret", { pluginInstanceId, purpose, value }),
   listPlugins: () => invoke<PluginCatalog>("list_plugins"),

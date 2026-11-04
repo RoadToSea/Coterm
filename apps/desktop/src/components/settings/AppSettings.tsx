@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
-import { Globe2, Palette, RotateCcw, Search, Settings2, TerminalSquare, X } from "lucide-react";
+import { Globe2, Palette, Plug, RotateCcw, Search, Settings2, TerminalSquare, X } from "lucide-react";
 import { useI18n } from "../../use-i18n";
 import { DEFAULT_PREFERENCES, getPreferences, setPreferences, subscribePreferences } from "../../preferences";
 import { ThemeSwitcher } from "../ThemeSwitcher";
@@ -7,13 +7,15 @@ import { Modal } from "../ui/Modal";
 import { Button } from "../ui/button";
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "../ui/empty";
 import { cn } from "../../lib/utils";
+import { McpPortSetting } from "./McpPortSetting";
 
-type Category = "general" | "appearance" | "terminal";
+type Category = "general" | "appearance" | "terminal" | "mcp";
 const categories = [
   { id: "all", label: "All settings", icon: Settings2 },
   { id: "general", label: "General", icon: Globe2 },
   { id: "appearance", label: "Appearance", icon: Palette },
   { id: "terminal", label: "Terminal", icon: TerminalSquare },
+  { id: "mcp", label: "MCP", icon: Plug },
 ] as const;
 
 const controlClass = "h-9 w-full min-w-0 rounded-md border border-input bg-background px-3 text-sm text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring sm:w-44";
@@ -47,6 +49,8 @@ export function AppSettings({ onClose }: { onClose: () => void }) {
       </select> },
     { id: "cursor-blink", category: "terminal", title: "Blinking cursor", description: "Blink the cursor in terminal views.", keywords: "caret cursor blink 光标 闪烁",
       control: <input id="cursor-blink" type="checkbox" role="switch" className="settings-switch" aria-label={t("Blinking cursor")} checked={preferences.cursorBlink} onChange={event => setPreferences({ cursorBlink: event.target.checked })} /> },
+    { id: "mcp-port", category: "mcp", title: "MCP port", description: "Local loopback bridge port (1–65535). Default: 51234.", keywords: "MCP Stdio bridge interface port localhost 端口 接口 本机 桥接",
+      control: <McpPortSetting /> },
   ];
   const words = query.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);
   // Searching covers all categories so users never have to guess where a setting lives.
@@ -89,7 +93,7 @@ export function AppSettings({ onClose }: { onClose: () => void }) {
         </main>
       </div>
       <footer className="settings-footer">
-        <p className="text-xs text-muted-foreground">{t("Changes apply immediately and are saved on this device.")}</p>
+        <p className="text-xs text-muted-foreground">{t("Display changes apply immediately. MCP port changes apply after saving.")}</p>
         <Button type="button" variant="ghost" size="sm" onClick={() => setPreferences({ ...DEFAULT_PREFERENCES })}><RotateCcw data-icon="inline-start" />{t("Reset font and cursor settings")}</Button>
       </footer>
     </div>
