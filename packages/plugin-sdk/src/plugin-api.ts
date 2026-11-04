@@ -132,6 +132,8 @@ export interface PluginAPI {
   readonly capabilities: Readonly<{ interactions: true; events: true; streams: false }>;
   readonly pluginId: string;
   readonly pluginInstanceId: string;
+  /** Stable saved-instance identity; survives runtime recreation. Absent on older hosts or unsaved instances. */
+  readonly instanceConfigRef?: string;
   readonly sessionId: string;
   readonly components: Readonly<CommonComponents>;
 

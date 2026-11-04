@@ -122,7 +122,7 @@ test("human Shell uses terminal keys, UART uses its sender, and MCP queues stay 
     await key("ArrowUp", "ArrowUp", 38);
     await key("Backspace", "Backspace", 8);
     await key("c", "KeyC", 67, { modifiers: 2 });
-    await waitForValue(client, `window.raw() === ${JSON.stringify("pwd\r\t\u001b[A\u007f\u0003")}`);
+    await waitForValue(client, `window.raw() === ${JSON.stringify("pwd\r\t\u001b[A\b\u0003")}`);
     assert.equal(await run(`window.writes().every(c => c.args.lineEnding === 'none')`), true,
       "terminal Enter and controls are raw bytes without an extra line ending");
     await client.send("Input.insertText", { text: "echo 中文" });

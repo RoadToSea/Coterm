@@ -56,6 +56,7 @@ test("receive newline settings update xterm, preserve raw bytes and persist per 
       window.mount=id => {
         window.frontend=window.pluginModule.mount(document.body, {
           pluginInstanceId:id,
+          instanceConfigRef:'saved-'+id,
           i18n:{get locale(){return window.locale;},subscribe(fn){window.translate=fn;return ()=>{};}},
           async invoke(operation,args){
             window.calls.push({operation,args});

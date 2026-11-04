@@ -11,6 +11,7 @@ const zhCN: Readonly<Record<string, string>> = {
   // 配置界面
   "Port": "端口",
   "Baud rate": "波特率",
+  "Backspace key": "退格键",
   "Data bits": "数据位",
   "Stop bits": "停止位",
   "Parity": "校验位",

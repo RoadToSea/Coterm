@@ -5,6 +5,12 @@
 - SDK v1.0 的实例绑定、操作调用、事件与公共交互入口见 [插件开发](../architecture/plugin-development.md)。
 - 公共 UI 文档见 [SDK 文档入口](../../packages/plugin-sdk/docs/README.md)，组件保持无框架依赖，协议数据由插件提供。
 
+## 2026-11-04：插件前端固定保存项标识
+
+- `PluginAPI` 增加可选只读 `instanceConfigRef`，由桌面从工作区固定 `configRef` 取得；恢复实例或移动分组不改变它。旧宿主 / 未保存实例可缺省，插件不得按设备地址或名称猜测替代值。
+- `pluginInstanceId` / `sessionId` 继续表示本次运行，操作路由保持原绑定；固定标识只用于插件自有显示偏好的归属，不新增 Tauri 或插件进程消息、权限或依赖。
+- 串口显示偏好首先应用；宿主契约和真实桌面回归覆盖同 COM 多保存项、运行 ID 重建及名称变化，详见[插件开发契约](../architecture/plugin-development.md#运行身份与保存身份)与[串口验收记录](../../plugins/plugin-serial/docs/progress.md#2026-11-04显示偏好跨启动恢复与串口退格)。
+
 ## 2026-11-03：终端块边框与纯数字块号
 
 - 终端块使用单层 DOM 边框，移除重复的 xterm decoration 描边；border-box 保持外沿位于终端网格内，相邻块不能覆盖后一块首行。

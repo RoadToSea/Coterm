@@ -14,7 +14,8 @@ SSH 与串口 Shell 使用同一套快捷键规则。判断依据是**终端是�
 | 搜索框 Enter / Shift+Enter | 下一处 / 上一处，首尾循环跳转 |
 | Esc | 搜索框获得焦点时关闭搜索并回到终端；终端有选区时只清除选区；否则原样发送 Esc |
 | Ctrl+A/E、Ctrl+R、Ctrl+D、Ctrl+L、Ctrl+U/W/Z | 保留 Shell 控制键语义，不改成页面全选、搜索、关闭、清屏或撤销 |
-| Enter、Tab、方向键、Home/End、退格 | 沿用 xterm 的终端输入行为 |
+| Enter、Tab、方向键、Home/End | 沿用 xterm 的终端输入行为 |
+| Backspace | SSH 沿用 xterm；串口普通退格默认发 BS（`0x08`），可在串口配置中切换 DEL（`0x7F`），由设备回显与编辑；UART / 配置框保留原生编辑 |
 | Shift+PageUp/PageDown | 沿用 xterm 的本地滚动行为 |
 | macOS Cmd+C / Cmd+V / Cmd+A | 分别复制选区、原生粘贴与终端全选；Ctrl 组合仍按终端规则处理 |
 

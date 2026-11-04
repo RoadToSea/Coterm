@@ -9,7 +9,8 @@ import { mountToasts, type ToastTone } from "@coterm/plugin-sdk/components/toast
 import { createFormatSwitch, type Format } from "./format-switch";
 import { createToolbar } from "./toolbar";
 import { createCommunicationSettings, type SerialConfig } from "./console-settings";
-import { createReceiveNewlineNormalizer, readReceiveNewlineMode, saveReceiveNewlineMode } from "./receive-newlines";
+import { createReceiveNewlineNormalizer, type ReceiveNewlineMode } from "./receive-newlines";
+import { readSerialDisplayPreferences, saveSerialDisplayPreferences } from "./display-preferences";
 import { attachTerminalShortcuts } from "@coterm/plugin-sdk/components/terminal-shortcuts";
 import { mountTerminalSearch, TERMINAL_SEARCH_HIGHLIGHT_LIMIT } from "@coterm/plugin-sdk/components/terminal-search";
 
@@ -553,6 +554,7 @@ function stamp(time: number): string {
 interface LogEntry { time: number; bytes: number; text: string; hex: string; boundary?: boolean }
 
 export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
+  const displayPreferences = readSerialDisplayPreferences(api.instanceConfigRef, api.pluginInstanceId);
   const root = surface(container, true);
   const layout = document.createElement("div");
   layout.className = "layout";
@@ -615,11 +617,19 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
     const label = document.createElement("label"); label.className = "signal-check";
     label.append(control, text); receiveNewlines.append(label);
   }
-  let receiveNewlineMode = readReceiveNewlineMode(api.pluginInstanceId);
+  let receiveNewlineMode: ReceiveNewlineMode = displayPreferences.receiveNewlines;
   completeLF.checked = receiveNewlineMode === "lf" || receiveNewlineMode === "both";
   completeCR.checked = receiveNewlineMode === "cr" || receiveNewlineMode === "both";
   communication.element.append(receiveNewlines);
   let receiveNormalizer = createReceiveNewlineNormalizer(receiveNewlineMode);
+  const backspaceLabel = caption(createTranslator(api.i18n)("Backspace key"));
+  const backspaceLabelText = backspaceLabel.firstElementChild as HTMLSpanElement;
+  const backspaceKey = document.createElement("select");
+  backspaceKey.name = "backspaceKey";
+  backspaceKey.append(option("bs", "BS (0x08)"), option("del", "DEL (0x7F)"));
+  backspaceKey.value = displayPreferences.backspace;
+  backspaceLabel.append(backspaceKey);
+  communication.element.append(backspaceLabel);
 
   // 终端模式：原始字节与远端回显，按键即发送。
   const terminalPanel = document.createElement("div");
@@ -635,15 +645,17 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
   const uartBar = document.createElement("div");
   uartBar.className = "uart-bar";
   const receiveFormats = createFormatSwitch(createTranslator(api.i18n)("Receive format"));
+  receiveFormats.value = displayPreferences.receiveFormat;
   const timestampsLabel = document.createElement("label");
   const timestamps = document.createElement("input");
   timestamps.type = "checkbox";
+  timestamps.checked = displayPreferences.timestamps;
   const timestampsText = document.createElement("span");
   timestampsLabel.append(timestamps, timestampsText);
   const autoscrollLabel = document.createElement("label");
   const autoscroll = document.createElement("input");
   autoscroll.type = "checkbox";
-  autoscroll.checked = true;
+  autoscroll.checked = displayPreferences.autoScroll;
   const autoscrollText = document.createElement("span");
   autoscrollLabel.append(autoscroll, autoscrollText);
   const pause = document.createElement("button");
@@ -799,7 +811,13 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
   let inputQueue = Promise.resolve();
   let commandQueue = 0;
   let mode: "terminal" | "uart" = "terminal";
-  let uartView: "text" | "hex" = "text";
+  let uartView: "text" | "hex" = displayPreferences.receiveFormat;
+  const saveDisplayPreferences = () => {
+    saveSerialDisplayPreferences(api.instanceConfigRef, {
+      view: mode, receiveFormat: uartView, timestamps: timestamps.checked, autoScroll: autoscroll.checked,
+      receiveNewlines: receiveNewlineMode, backspace: backspaceKey.value === "del" ? "del" : "bs",
+    }, api.pluginInstanceId);
+  };
   let paused = false;
   let pendingWhilePaused = 0;
   let renderTimer = 0;
@@ -922,6 +940,7 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
     settingsPanel.setAttribute("aria-label", tr("Serial settings"));
     toolbarButton.title = tr("Customize toolbar"); toolbarButton.setAttribute("aria-label", toolbarButton.title);
     toolbar.locale(tr); communication.locale(tr);
+    backspaceLabelText.textContent = tr("Backspace key");
     receiveNewlines.setAttribute("aria-label", tr("Receive newline completion"));
     receiveNewlines.title = tr("Display only; terminal changes affect new output. Raw data and saved files stay unchanged.");
     completeLFLabel.textContent = tr("Complete LF with CR");
@@ -1224,9 +1243,10 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
     await enqueue(refreshSnapshot);
   };
 
-  const setMode = (next: "terminal" | "uart") => {
+  const setMode = (next: "terminal" | "uart", remember = true) => {
     if (mode !== next) { stopRepeat(); inputGeneration++; closeHistory(); }
     mode = next;
+    if (remember) saveDisplayPreferences();
     terminalMode.setAttribute("aria-pressed", String(next === "terminal"));
     uartMode.setAttribute("aria-pressed", String(next === "uart"));
     terminalPanel.hidden = next !== "terminal";
@@ -1332,17 +1352,19 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
 
   receiveFormats.element.addEventListener("change", () => {
     uartView = receiveFormats.value;
+    saveDisplayPreferences();
     if (uartView === "hex") void enqueue(refreshHex);
     else renderUart(true);
   }, { signal: controller.signal });
-  timestamps.addEventListener("change", () => renderUart(true), { signal: controller.signal });
+  timestamps.addEventListener("change", () => { saveDisplayPreferences(); renderUart(true); }, { signal: controller.signal });
   receiveNewlines.addEventListener("change", () => {
     receiveNewlineMode = completeLF.checked ? (completeCR.checked ? "both" : "lf") : (completeCR.checked ? "cr" : "none");
     receiveNormalizer = createReceiveNewlineNormalizer(receiveNewlineMode);
-    saveReceiveNewlineMode(api.pluginInstanceId, receiveNewlineMode);
+    saveDisplayPreferences();
     renderUart(true);
   }, { signal: controller.signal });
-  autoscroll.addEventListener("change", () => { if (autoscroll.checked) renderUart(true); }, { signal: controller.signal });
+  backspaceKey.addEventListener("change", saveDisplayPreferences, { signal: controller.signal });
+  autoscroll.addEventListener("change", () => { saveDisplayPreferences(); if (autoscroll.checked) renderUart(true); }, { signal: controller.signal });
   clear.addEventListener("click", () => {
     clearLog();
     if (paused) { paused = false; renderPause(); }
@@ -1429,6 +1451,14 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
     finally { if (!disposed) exportButton.disabled = false; }
   }, { signal: controller.signal });
 
+  // Map only a physical, unmodified Backspace. Paste, API data and other controls stay byte-exact.
+  // Capture on the ancestor before xterm's own textarea handler can emit DEL.
+  terminal.element?.addEventListener("keydown", event => {
+    if (event.target !== terminal.textarea || event.key !== "Backspace" || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey
+      || event.isComposing || event.keyCode === 229 || disposed || mode !== "terminal") return;
+    event.preventDefault(); event.stopImmediatePropagation();
+    void sendText(backspaceKey.value === "del" ? "\x7f" : "\b", "none");
+  }, { capture: true, signal: controller.signal });
   // Same text contract as MCP: preserve controls, CR and escape sequences exactly.
   const onData = terminal.onData((text) => sendText(text, "none"));
   const observer = new ResizeObserver(() => {
@@ -1439,7 +1469,7 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
   const stopLocale = api.i18n?.subscribe(() => applyLocale());
   const downloads = new Map<string, number>();
   applyLocale();
-  setMode("terminal");
+  setMode(displayPreferences.view, false);
   void startEvents().catch(showError);
 
   return { unmount() {

@@ -436,7 +436,7 @@ export const hostAPI: HostAPI = {
 };
 
 /** Binds plugin-facing calls to one instance; unsupported event features fail explicitly. */
-export function createPluginAPI(instance: InstanceInfo): PluginAPI & { dispose(): void } {
+export function createPluginAPI(instance: InstanceInfo, instanceConfigRef?: string): PluginAPI & { dispose(): void } {
   const unsupported = (feature: string): Error => new Error(`${feature} is not connected yet`);
   let disposed = false;
   const whileMounted = <T>(call: () => Promise<T>): Promise<T> => disposed
@@ -492,6 +492,7 @@ export function createPluginAPI(instance: InstanceInfo): PluginAPI & { dispose()
     },
     pluginId: instance.pluginId,
     pluginInstanceId: instance.pluginInstanceId,
+    instanceConfigRef,
     sessionId: instance.sessionId,
     components: { blocks: mountBlockList },
     invoke: <T = unknown>(operation: string, args: unknown, options?: { waitTimeoutMs?: number }) =>

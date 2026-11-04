@@ -100,6 +100,23 @@ test("Plugin SDK language subscriptions are released with their frontend scope",
 
 // --- 2. subscribeHostAttention 可控并发、代次与生命周期测试 ---
 
+test("Plugin SDK exposes stable saved identity while operations remain bound to the runtime instance", async () => {
+  const previousInvoke = mockInvoke;
+  const calls = [];
+  mockInvoke = async (command, args) => { calls.push({ command, args }); return { status: "completed" }; };
+  const instance = { pluginId: "serial", pluginInstanceId: "runtime-one", sessionId: "session-one", label: "Board", status: "ready" };
+  const first = createPluginAPI(instance, "saved-reference");
+  const restored = createPluginAPI({ ...instance, pluginInstanceId: "runtime-two", sessionId: "session-two", label: "Renamed" }, "saved-reference");
+  const unsaved = createPluginAPI(instance);
+  try {
+    assert.equal(first.instanceConfigRef, restored.instanceConfigRef);
+    assert.equal(unsaved.instanceConfigRef, undefined);
+    await restored.invoke("serial.status", {});
+    assert.equal(calls.at(-1).args.pluginInstanceId, "runtime-two");
+    assert.equal("instanceConfigRef" in calls.at(-1).args, false, "saved identity is not an IPC routing target");
+  } finally { first.dispose(); restored.dispose(); unsaved.dispose(); mockInvoke = previousInvoke; }
+});
+
 test("subscribeHostAttention: concurrent registration creates only one listen and unlistens cleanly (order 1)", async () => {
   listenCalls = 0;
   unlistenCalls = 0;

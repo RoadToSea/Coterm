@@ -495,7 +495,8 @@ export default function App() {
             id={instancePanelId(instance.pluginInstanceId)} aria-labelledby={instanceTabId(instance.pluginInstanceId)}
             hidden={!!selectedPluginId || instance.pluginInstanceId !== activeInstanceId} tabIndex={0}
             className="min-h-0 flex-1 overflow-hidden">
-            {instance.status === "ready" && <PluginWorkspace instance={instance} />}
+            {instance.status === "ready" && (workspace !== null || workspaceError !== null) && <PluginWorkspace instance={instance}
+              configRef={workspace?.entries.find(entry => entry.instanceId === instance.pluginInstanceId)?.configRef} />}
             {instance.status !== "ready" && instance.status !== "failed" && <p role="status" className="p-5 text-sm text-muted-foreground">{t(instance.status)}</p>}
             {instance.status === "failed" && <div role="alert" className="p-5 text-sm text-destructive">
               <p>{t("Plugin stopped unexpectedly. In-flight results are unknown. Operations will not be replayed.")}</p>
