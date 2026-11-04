@@ -10,17 +10,39 @@ use serde::{Deserialize, Serialize};
 pub const DEFAULT_PORT: u16 = 51234;
 const MAX_BYTES: u64 = 4096;
 
-#[derive(Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct Settings {
-    version: u8,
-    port: u16,
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StartupMode {
+    #[default]
+    Auto,
+    Manual,
 }
 
-pub fn load_port(path: &Path) -> Result<u16, String> {
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Settings {
+    version: u8,
+    pub port: u16,
+    #[serde(default)]
+    pub startup_mode: StartupMode,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            version: 1,
+            port: DEFAULT_PORT,
+            startup_mode: StartupMode::Auto,
+        }
+    }
+}
+
+pub fn load(path: &Path) -> Result<Settings, String> {
     let file = match fs::File::open(path) {
         Ok(file) => file,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(DEFAULT_PORT),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(Settings::default())
+        }
         Err(_) => return Err("mcp_settings_read_failed".into()),
     };
     let mut bytes = Vec::new();
@@ -34,15 +56,19 @@ pub fn load_port(path: &Path) -> Result<u16, String> {
     if settings.version != 1 || settings.port == 0 {
         return Err("mcp_settings_invalid".into());
     }
-    Ok(settings.port)
+    Ok(settings)
 }
 
-pub fn save_port(path: &Path, port: u16) -> Result<(), String> {
+pub fn save(path: &Path, port: u16, startup_mode: StartupMode) -> Result<(), String> {
     if port == 0 {
         return Err("mcp_port_invalid".into());
     }
-    let bytes = serde_json::to_vec_pretty(&Settings { version: 1, port })
-        .map_err(|_| "mcp_settings_write_failed")?;
+    let bytes = serde_json::to_vec_pretty(&Settings {
+        version: 1,
+        port,
+        startup_mode,
+    })
+    .map_err(|_| "mcp_settings_write_failed")?;
     let temporary = path.with_extension(format!("{}.tmp", uuid::Uuid::new_v4()));
     let result = (|| -> std::io::Result<()> {
         let mut file = fs::OpenOptions::new()
@@ -71,13 +97,29 @@ mod tests {
     #[test]
     fn missing_defaults_and_atomic_updates_survive_reopening() -> anyhow::Result<()> {
         let path = std::env::temp_dir().join(format!("coterm-mcp-{}.json", uuid::Uuid::new_v4()));
-        assert_eq!(load_port(&path).map_err(anyhow::Error::msg)?, DEFAULT_PORT);
-        save_port(&path, 12345).map_err(anyhow::Error::msg)?;
-        assert_eq!(load_port(&path).map_err(anyhow::Error::msg)?, 12345);
-        save_port(&path, 65535).map_err(anyhow::Error::msg)?;
-        assert_eq!(load_port(&path).map_err(anyhow::Error::msg)?, 65535);
-        assert!(save_port(&path, 0).is_err());
-        assert_eq!(load_port(&path).map_err(anyhow::Error::msg)?, 65535);
+        assert_eq!(load(&path).map_err(anyhow::Error::msg)?.port, DEFAULT_PORT);
+        save(&path, 12345, StartupMode::Auto).map_err(anyhow::Error::msg)?;
+        assert_eq!(load(&path).map_err(anyhow::Error::msg)?.port, 12345);
+        save(&path, 65535, StartupMode::Manual).map_err(anyhow::Error::msg)?;
+        assert_eq!(load(&path).map_err(anyhow::Error::msg)?.port, 65535);
+        assert!(save(&path, 0, StartupMode::Auto).is_err());
+        assert_eq!(load(&path).map_err(anyhow::Error::msg)?.port, 65535);
+        assert_eq!(
+            load(&path).map_err(anyhow::Error::msg)?.startup_mode,
+            StartupMode::Manual
+        );
+        fs::remove_file(path)?;
+        Ok(())
+    }
+
+    #[test]
+    fn legacy_port_only_settings_preserve_automatic_startup() -> anyhow::Result<()> {
+        let path =
+            std::env::temp_dir().join(format!("coterm-mcp-legacy-{}.json", uuid::Uuid::new_v4()));
+        fs::write(&path, br#"{"version":1,"port":12345}"#)?;
+        let settings = load(&path).map_err(anyhow::Error::msg)?;
+        assert_eq!(settings.port, 12345);
+        assert_eq!(settings.startup_mode, StartupMode::Auto);
         fs::remove_file(path)?;
         Ok(())
     }
@@ -92,12 +134,13 @@ mod tests {
             br#"{"version":1,"port":65536}"#,
             br#"{"version":2,"port":51234}"#,
             br#"{"version":1,"port":51234,"extra":1}"#,
+            br#"{"version":1,"port":51234,"startupMode":"unknown"}"#,
         ] {
             fs::write(&path, bytes)?;
-            assert!(load_port(&path).is_err());
+            assert!(load(&path).is_err());
         }
         fs::write(&path, vec![b' '; MAX_BYTES as usize + 1])?;
-        assert!(load_port(&path).is_err());
+        assert!(load(&path).is_err());
         fs::remove_file(path)?;
         Ok(())
     }

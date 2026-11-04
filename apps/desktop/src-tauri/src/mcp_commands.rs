@@ -9,7 +9,7 @@ use coterm_core::plugin_manager::ProcessPluginRuntime;
 use coterm_mcp::{config::StdioClientConfiguration, server::BridgeServer};
 use serde::{Deserialize, Serialize};
 
-use crate::mcp_settings;
+use crate::mcp_settings::{self, StartupMode};
 
 /// 启用时未找到当前可执行文件，无法给出可启动的客户端配置。
 const EXECUTABLE_UNAVAILABLE: &str = "mcp_stdio_executable_unavailable";
@@ -27,6 +27,7 @@ pub struct StdioStatus {
     pub client_config: Option<String>,
     /// Saved device-local port, including while the bridge is disabled.
     pub port: u16,
+    pub startup_mode: StartupMode,
     /// A damaged settings file blocks enabling until the user saves a valid port.
     pub configuration_error: Option<String>,
 }
@@ -34,6 +35,7 @@ pub struct StdioStatus {
 struct BridgeState {
     bind_address: SocketAddr,
     active: Option<BridgeServer>,
+    startup_mode: StartupMode,
     configuration_error: Option<String>,
 }
 
@@ -52,16 +54,14 @@ impl StdioBridge {
         executable: Option<PathBuf>,
         settings_path: PathBuf,
     ) -> Self {
-        let loaded = mcp_settings::load_port(&settings_path);
-        let port = loaded
-            .as_ref()
-            .copied()
-            .unwrap_or(mcp_settings::DEFAULT_PORT);
+        let loaded = mcp_settings::load(&settings_path);
+        let settings = loaded.as_ref().cloned().unwrap_or_default();
         let mut bridge = Self::with_address(
             runtime,
             executable,
-            SocketAddr::from(([127, 0, 0, 1], port)),
+            SocketAddr::from(([127, 0, 0, 1], settings.port)),
         );
+        bridge.state.get_mut().startup_mode = settings.startup_mode;
         bridge.state.get_mut().configuration_error = loaded.err();
         bridge.settings_path = Some(settings_path);
         bridge
@@ -82,6 +82,7 @@ impl StdioBridge {
             state: tokio::sync::Mutex::new(BridgeState {
                 bind_address,
                 active: None,
+                startup_mode: StartupMode::Auto,
                 configuration_error: None,
             }),
         }
@@ -102,6 +103,7 @@ impl StdioBridge {
             address: info.map(|info| info.address),
             client_config,
             port: state.bind_address.port(),
+            startup_mode: state.startup_mode,
             configuration_error: state.configuration_error.clone(),
         }
     }
@@ -109,6 +111,51 @@ impl StdioBridge {
     pub async fn status(&self) -> StdioStatus {
         let state = self.state.lock().await;
         self.snapshot(&state)
+    }
+
+    /// Restore the device startup policy once, before the frontend can issue commands.
+    pub async fn start_on_launch(&self) -> Result<(), String> {
+        let automatic = self.state.lock().await.startup_mode == StartupMode::Auto;
+        if automatic {
+            self.set_enabled(true).await?;
+        }
+        Ok(())
+    }
+
+    async fn persist(&self, port: u16, startup_mode: StartupMode) -> Result<(), String> {
+        if let Some(path) = self.settings_path.clone() {
+            tokio::task::spawn_blocking(move || mcp_settings::save(&path, port, startup_mode))
+                .await
+                .map_err(|_| "mcp_settings_write_failed")??;
+        }
+        Ok(())
+    }
+
+    /// Automatic mode starts immediately; manual mode preserves the current listener.
+    pub async fn set_startup_mode(&self, mode: StartupMode) -> Result<StdioStatus, String> {
+        let mut state = self.state.lock().await;
+        if let Some(error) = &state.configuration_error {
+            return Err(error.clone());
+        }
+        if state.startup_mode == mode && (mode == StartupMode::Manual || state.active.is_some()) {
+            return Ok(self.snapshot(&state));
+        }
+        let replacement = if mode == StartupMode::Auto && state.active.is_none() {
+            self.command.as_ref().ok_or(EXECUTABLE_UNAVAILABLE)?;
+            Some(
+                BridgeServer::bind_at(self.runtime.clone(), state.bind_address)
+                    .await
+                    .map_err(|_| "mcp_port_unavailable")?,
+            )
+        } else {
+            None
+        };
+        self.persist(state.bind_address.port(), mode).await?;
+        if let Some(bridge) = replacement {
+            state.active = Some(bridge);
+        }
+        state.startup_mode = mode;
+        Ok(self.snapshot(&state))
     }
 
     /// 幂等：重复启用复用已监听的端口。停用后桥立即关闭。
@@ -161,11 +208,7 @@ impl StdioBridge {
         } else {
             None
         };
-        if let Some(path) = self.settings_path.clone() {
-            tokio::task::spawn_blocking(move || mcp_settings::save_port(&path, port))
-                .await
-                .map_err(|_| "mcp_settings_write_failed")??;
-        }
+        self.persist(port, state.startup_mode).await?;
         state.active = replacement;
         state.bind_address = address;
         state.configuration_error = None;
@@ -188,6 +231,23 @@ pub async fn set_mcp_stdio_port(
 ) -> Result<StdioStatus, String> {
     let port = checked_port(request.port)?;
     state.stdio_bridge.set_port(port).await
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SetMcpStartupModeRequest {
+    pub startup_mode: StartupMode,
+}
+
+#[tauri::command]
+pub async fn set_mcp_startup_mode(
+    request: SetMcpStartupModeRequest,
+    state: tauri::State<'_, crate::AppState>,
+) -> Result<StdioStatus, String> {
+    state
+        .stdio_bridge
+        .set_startup_mode(request.startup_mode)
+        .await
 }
 
 fn checked_port(port: u32) -> Result<u16, String> {
@@ -322,7 +382,7 @@ mod tests {
             Some(address.as_str())
         );
         assert_eq!(
-            mcp_settings::load_port(&path).map_err(anyhow::Error::msg)?,
+            mcp_settings::load(&path).map_err(anyhow::Error::msg)?.port,
             first
         );
         drop(occupied);
@@ -415,11 +475,172 @@ mod tests {
         let fixed = bridge.set_port(port).await.map_err(anyhow::Error::msg)?;
         assert!(fixed.configuration_error.is_none());
         assert_eq!(
-            mcp_settings::load_port(&path).map_err(anyhow::Error::msg)?,
+            mcp_settings::load(&path).map_err(anyhow::Error::msg)?.port,
             port
         );
         std::fs::remove_file(&path)?;
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn startup_mode_controls_launch_and_survives_port_changes() -> anyhow::Result<()> {
+        let path =
+            std::env::temp_dir().join(format!("coterm-mcp-startup-{}.json", uuid::Uuid::new_v4()));
+        let reservation = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let port = reservation.local_addr()?.port();
+        drop(reservation);
+        mcp_settings::save(&path, port, StartupMode::Manual).map_err(anyhow::Error::msg)?;
+        let bridge = StdioBridge::new(runtime(), Some(executable()), path.clone());
+        bridge.start_on_launch().await.map_err(anyhow::Error::msg)?;
+        assert!(!bridge.status().await.enabled);
+        assert_eq!(bridge.status().await.startup_mode, StartupMode::Manual);
+        let running = bridge.set_enabled(true).await.map_err(anyhow::Error::msg)?;
+        assert_eq!(running.startup_mode, StartupMode::Manual);
+
+        let automatic = bridge
+            .set_startup_mode(StartupMode::Auto)
+            .await
+            .map_err(anyhow::Error::msg)?;
+        assert!(automatic.enabled);
+        assert_eq!(automatic.port, port);
+        let saved = mcp_settings::load(&path).map_err(anyhow::Error::msg)?;
+        assert_eq!(saved.port, port);
+        assert_eq!(saved.startup_mode, StartupMode::Auto);
+        let reopened = StdioBridge::new(runtime(), Some(executable()), path.clone());
+        assert_eq!(reopened.status().await.startup_mode, StartupMode::Auto);
+        // A second process cannot claim success while the first owns the port.
+        assert!(reopened.start_on_launch().await.is_err());
+        assert!(!reopened.status().await.enabled);
+
+        let manual = bridge
+            .set_startup_mode(StartupMode::Manual)
+            .await
+            .map_err(anyhow::Error::msg)?;
+        assert!(
+            manual.enabled,
+            "changing launch policy must not interrupt clients"
+        );
+        assert_eq!(manual.address, automatic.address);
+        let reservation = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let next_port = reservation.local_addr()?.port();
+        drop(reservation);
+        let moved = bridge
+            .set_port(next_port)
+            .await
+            .map_err(anyhow::Error::msg)?;
+        assert!(moved.enabled);
+        assert_eq!(moved.startup_mode, StartupMode::Manual);
+        let saved = mcp_settings::load(&path).map_err(anyhow::Error::msg)?;
+        assert_eq!(saved.port, next_port);
+        assert_eq!(saved.startup_mode, StartupMode::Manual);
+        // Manual mode stays off on a new launch, even if the last session was running.
+        let reopened = StdioBridge::new(runtime(), Some(executable()), path.clone());
+        reopened
+            .start_on_launch()
+            .await
+            .map_err(anyhow::Error::msg)?;
+        assert!(!reopened.status().await.enabled);
+        std::fs::remove_file(path)?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn automatic_launch_uses_the_saved_port() -> anyhow::Result<()> {
+        let path =
+            std::env::temp_dir().join(format!("coterm-mcp-auto-{}.json", uuid::Uuid::new_v4()));
+        let reservation = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let port = reservation.local_addr()?.port();
+        drop(reservation);
+        mcp_settings::save(&path, port, StartupMode::Auto).map_err(anyhow::Error::msg)?;
+        let bridge = StdioBridge::new(runtime(), Some(executable()), path.clone());
+        bridge.start_on_launch().await.map_err(anyhow::Error::msg)?;
+        let status = bridge.status().await;
+        assert!(status.enabled);
+        assert_eq!(
+            status.address.as_deref(),
+            Some(format!("127.0.0.1:{port}").as_str())
+        );
+        let _client = tokio::net::TcpStream::connect(format!("127.0.0.1:{port}")).await?;
+        bridge.start_on_launch().await.map_err(anyhow::Error::msg)?;
+        assert_eq!(
+            bridge.status().await.address,
+            status.address,
+            "startup is idempotent"
+        );
+        std::fs::remove_file(path)?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn failed_startup_mode_changes_preserve_policy_and_listener() -> anyhow::Result<()> {
+        let path =
+            std::env::temp_dir().join(format!("coterm-mcp-mode-{}.json", uuid::Uuid::new_v4()));
+        let occupied = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let address = occupied.local_addr()?;
+        mcp_settings::save(&path, address.port(), StartupMode::Manual)
+            .map_err(anyhow::Error::msg)?;
+        let bridge = StdioBridge::new(runtime(), Some(executable()), path.clone());
+        assert!(
+            matches!(bridge.set_startup_mode(StartupMode::Auto).await, Err(error) if error == "mcp_port_unavailable")
+        );
+        assert_eq!(bridge.status().await.startup_mode, StartupMode::Manual);
+        assert!(!bridge.status().await.enabled);
+        assert_eq!(
+            mcp_settings::load(&path)
+                .map_err(anyhow::Error::msg)?
+                .startup_mode,
+            StartupMode::Manual
+        );
+        std::fs::remove_file(path)?;
+
+        let reservation = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let address = reservation.local_addr()?;
+        drop(reservation);
+        let mut bridge = StdioBridge::with_address(runtime(), Some(executable()), address);
+        bridge.state.get_mut().startup_mode = StartupMode::Manual;
+        bridge.settings_path = Some(
+            std::env::temp_dir()
+                .join(uuid::Uuid::new_v4().to_string())
+                .join("missing.json"),
+        );
+        assert!(
+            matches!(bridge.set_startup_mode(StartupMode::Auto).await, Err(error) if error == "mcp_settings_write_failed")
+        );
+        assert_eq!(bridge.status().await.startup_mode, StartupMode::Manual);
+        assert!(!bridge.status().await.enabled);
+        // The failed replacement listener must release its socket.
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                if let Ok(listener) = tokio::net::TcpListener::bind(address).await {
+                    break listener;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await?;
+        let running = bridge.set_enabled(true).await.map_err(anyhow::Error::msg)?;
+        assert!(bridge.set_startup_mode(StartupMode::Auto).await.is_err());
+        assert!(bridge.status().await.enabled);
+        assert_eq!(bridge.status().await.address, running.address);
+        assert_eq!(bridge.status().await.startup_mode, StartupMode::Manual);
+        Ok(())
+    }
+
+    #[test]
+    fn startup_requests_reject_unknown_modes_and_fields() {
+        assert!(
+            serde_json::from_str::<SetMcpStartupModeRequest>(r#"{"startupMode":"auto"}"#).is_ok()
+        );
+        assert!(
+            serde_json::from_str::<SetMcpStartupModeRequest>(r#"{"startupMode":"manual"}"#).is_ok()
+        );
+        for invalid in [
+            r#"{"startupMode":"other"}"#,
+            r#"{"startupMode":"auto","extra":1}"#,
+            r#"{}"#,
+        ] {
+            assert!(serde_json::from_str::<SetMcpStartupModeRequest>(invalid).is_err());
+        }
     }
 
     #[test]

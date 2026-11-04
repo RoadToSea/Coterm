@@ -1,10 +1,10 @@
 /** Stable host error codes get readable text; third-party diagnostics keep their source text. */
 export const en: Readonly<Record<string, string>> = {
   mcp_port_invalid: "Enter a whole port number between 1 and 65535.",
-  mcp_port_unavailable: "This port is unavailable or already in use. The previous MCP service and saved port were kept.",
+  mcp_port_unavailable: "This port is unavailable or already in use. The previous MCP service and settings were kept.",
   mcp_settings_read_failed: "Could not read the MCP settings. Save a valid port to recover.",
   mcp_settings_invalid: "The saved MCP settings are invalid. Save a valid port to recover.",
-  mcp_settings_write_failed: "Could not save the MCP settings. The previous MCP service and saved port were kept.",
+  mcp_settings_write_failed: "Could not save the MCP settings. The previous MCP service and settings were kept.",
   "Instance name (optional)": "Instance name (optional)",
   "Leave empty to use the plugin default": "Leave empty to use the plugin default",
   "Instance name must be at most 256 UTF-8 bytes and contain no control characters.": "Instance name must be at most 256 UTF-8 bytes and contain no control characters.",

@@ -885,6 +885,9 @@ fn main() {
                 std::env::current_exe().ok(),
                 app_data.join("mcp-settings.v1.json"),
             );
+            if let Err(error) = tauri::async_runtime::block_on(stdio_bridge.start_on_launch()) {
+                eprintln!("Failed to auto-start MCP Stdio bridge: {error}");
+            }
             let expiry_runtime = plugin_runtime.clone();
             let app_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
@@ -950,6 +953,7 @@ fn main() {
             mcp_stdio_status,
             set_mcp_stdio_enabled,
             mcp_commands::set_mcp_stdio_port,
+            mcp_commands::set_mcp_startup_mode,
             create_instance,
             destroy_instance,
             invoke_operation,

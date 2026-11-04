@@ -61,13 +61,15 @@ export function makeHostMockSource(initial) {
     let failures = Object.assign({}, scenario.failures);
     // Test-only persistence stands in for the Rust settings file across page reloads.
     let mcpPort = Number(localStorage.getItem('__cotermTest.mcp-port') ?? scenario.mcp?.port ?? 51234);
-    let mcpEnabled = scenario.mcp?.enabled ?? false;
+    const savedMcpStartupMode = localStorage.getItem('__cotermTest.mcp-startup-mode');
+    let mcpStartupMode = savedMcpStartupMode ?? scenario.mcp?.startupMode ?? 'auto';
+    let mcpEnabled = savedMcpStartupMode !== null ? mcpStartupMode === 'auto' : scenario.mcp?.enabled ?? mcpStartupMode === 'auto';
     let mcpConfigurationError = scenario.mcp?.configurationError ?? null;
     const mcpStatus = () => {
       const command = 'C:/Program Files/Coterm/coterm-desktop.exe';
       const address = '127.0.0.1:' + mcpPort;
       const args = mcpPort === 51234 ? ['mcp','stdio'] : ['mcp','stdio','--addr',address];
-      return {enabled:mcpEnabled,port:mcpPort,configurationError:mcpConfigurationError,command,
+      return {enabled:mcpEnabled,port:mcpPort,startupMode:mcpStartupMode,configurationError:mcpConfigurationError,command,
         address:mcpEnabled ? address : null,
         clientConfig:mcpEnabled ? JSON.stringify({mcpServers:{coterm:{command,args}}},null,2) : null};
     };
@@ -207,6 +209,14 @@ export function makeHostMockSource(initial) {
       set_mcp_stdio_enabled: ({enabled}) => {
         if (enabled && mcpConfigurationError) throw mcpConfigurationError;
         mcpEnabled = enabled; return mcpStatus();
+      },
+      set_mcp_startup_mode: ({request:{startupMode}}) => {
+        if (!['auto','manual'].includes(startupMode)) throw 'mcp_startup_mode_invalid';
+        if (mcpConfigurationError) throw mcpConfigurationError;
+        if (startupMode==='auto' && !mcpEnabled && scenario.mcp?.occupiedPorts?.includes(mcpPort)) throw 'mcp_port_unavailable';
+        localStorage.setItem('__cotermTest.mcp-startup-mode',startupMode); mcpStartupMode=startupMode;
+        if(startupMode==='auto')mcpEnabled=true;
+        return mcpStatus();
       },
       set_mcp_stdio_port: ({request:{port}}) => {
         if (!Number.isInteger(port) || port < 1 || port > 65535) throw 'mcp_port_invalid';

@@ -117,6 +117,8 @@ export interface BackendSecretRequest extends InteractionOptions {
  * Stdio 适配器状态。适配器是桌面可执行文件的 `mcp stdio` 子命令；
  * `clientConfig` 是不含秘密的 Stdio 客户端配置，只用于用户复制。
  */
+export type McpStartupMode = "auto" | "manual";
+
 export interface McpStdioStatus {
   enabled: boolean;
   /** 适配器入口，即桌面可执行文件；路径不可用时为 null。 */
@@ -124,6 +126,7 @@ export interface McpStdioStatus {
   address: string | null;
   clientConfig: string | null;
   port: number;
+  startupMode: McpStartupMode;
   configurationError: string | null;
 }
 
@@ -147,6 +150,7 @@ export interface HostAPI {
   mcpStdioStatus(): Promise<McpStdioStatus>;
   setMcpStdioEnabled(enabled: boolean): Promise<McpStdioStatus>;
   setMcpStdioPort(port: number): Promise<McpStdioStatus>;
+  setMcpStartupMode(startupMode: McpStartupMode): Promise<McpStdioStatus>;
   listPlugins(): Promise<PluginCatalog>;
   preparePluginInstall(locale: "en" | "zh-CN"): Promise<PluginInstallPreview | null>;
   installPluginPackage(token: string): Promise<PluginSummary>;
@@ -377,6 +381,7 @@ export const hostAPI: HostAPI = {
   mcpStdioStatus: () => invoke<McpStdioStatus>("mcp_stdio_status"),
   setMcpStdioEnabled: (enabled) => invoke<McpStdioStatus>("set_mcp_stdio_enabled", { enabled }),
   setMcpStdioPort: (port) => invoke<McpStdioStatus>("set_mcp_stdio_port", { request: { port } }),
+  setMcpStartupMode: (startupMode) => invoke<McpStdioStatus>("set_mcp_startup_mode", { request: { startupMode } }),
   frontendSource: (pluginId) => invoke<string | null>("plugin_frontend_source", { pluginId }),
   provideSecret: (pluginInstanceId, purpose, value) => invoke<SecretHandle>("provide_secret", { pluginInstanceId, purpose, value }),
   listPlugins: () => invoke<PluginCatalog>("list_plugins"),

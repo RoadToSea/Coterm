@@ -8,6 +8,10 @@ import { Button } from "../ui/button";
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "../ui/empty";
 import { cn } from "../../lib/utils";
 import { McpPortSetting } from "./McpPortSetting";
+import { McpConnectionSetting } from "./McpConnectionSetting";
+import { useMcpSettings } from "./use-mcp-settings";
+import { Badge } from "../ui/badge";
+import { Alert, AlertDescription } from "../ui/alert";
 
 type Category = "general" | "appearance" | "terminal" | "mcp";
 const categories = [
@@ -22,13 +26,14 @@ const controlClass = "h-9 w-full min-w-0 rounded-md border border-input bg-backg
 
 export function AppSettings({ onClose }: { onClose: () => void }) {
   const { t, locale, setLocale } = useI18n();
+  const mcp = useMcpSettings();
   const preferences = useSyncExternalStore(subscribePreferences, getPreferences, getPreferences);
   const [category, setCategory] = useState<Category | "all">("all");
   const [query, setQuery] = useState("");
   const searchRef = useRef<HTMLInputElement>(null);
   useEffect(() => { searchRef.current?.focus(); }, []);
   const clearSearch = () => { setQuery(""); searchRef.current?.focus(); };
-  const definitions: { id: string; category: Category; title: string; description: string; keywords: string; control: ReactNode }[] = [
+  const definitions: { id: string; category: Category; title: string; description?: string; keywords: string; control: ReactNode }[] = [
     { id: "language", category: "general", title: "Language", description: "Choose the language used by the app and supported plugins.", keywords: "locale translation 中文 简体中文 English en zh-CN",
       control: <select id="locale-select" className={controlClass} aria-label={t("Language")} value={locale} onChange={event => {
         if (event.target.value === "en" || event.target.value === "zh-CN") setLocale(event.target.value);
@@ -49,19 +54,32 @@ export function AppSettings({ onClose }: { onClose: () => void }) {
       </select> },
     { id: "cursor-blink", category: "terminal", title: "Blinking cursor", description: "Blink the cursor in terminal views.", keywords: "caret cursor blink 光标 闪烁",
       control: <input id="cursor-blink" type="checkbox" role="switch" className="settings-switch" aria-label={t("Blinking cursor")} checked={preferences.cursorBlink} onChange={event => setPreferences({ cursorBlink: event.target.checked })} /> },
-    { id: "mcp-port", category: "mcp", title: "MCP port", description: "Local loopback bridge port (1–65535). Default: 51234.", keywords: "MCP Stdio bridge interface port localhost 端口 接口 本机 桥接",
-      control: <McpPortSetting /> },
+    { id: "mcp-port", category: "mcp", title: "MCP port", keywords: "MCP Stdio bridge interface port localhost 端口 接口 本机 桥接",
+      control: <McpPortSetting mcp={mcp} /> },
+    { id: "mcp-connection", category: "mcp", title: "MCP connection", keywords: "MCP Stdio auto manual startup connection client 自启动 手动启动 开关 连接 客户端",
+      control: <McpConnectionSetting mcp={mcp} /> },
   ];
   const words = query.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);
   // Searching covers all categories so users never have to guess where a setting lives.
   const visible = definitions.filter(setting => {
     if (!words.length) return category === "all" || setting.category === category;
     const categoryLabel = categories.find(item => item.id === setting.category)!.label;
-    const text = [setting.title, t(setting.title), setting.description, t(setting.description), categoryLabel, t(categoryLabel), setting.keywords].join(" ").toLocaleLowerCase();
+    const text = [setting.title, t(setting.title), setting.description, setting.description ? t(setting.description) : "", categoryLabel, t(categoryLabel), setting.keywords].join(" ").toLocaleLowerCase();
     return words.every(word => text.includes(word));
   });
   return <Modal id="app-settings-dialog" title={t("Settings")} onClose={onClose} className="w-[840px] max-h-[90dvh]" bodyClassName="p-0">
     <div className="settings-content">
+      <div className="flex items-center justify-between gap-3 px-5 pt-4" data-mcp-status>
+        <span className="text-sm font-medium">{t("MCP status")}</span>
+        <Badge variant={mcp.status?.enabled ? "default" : "secondary"} role="status" aria-live="polite">
+          {t(mcp.status ? mcp.status.enabled ? "Started" : "Not started" : mcp.error ? "Unavailable" : "Loading…")}
+        </Badge>
+      </div>
+      {(mcp.error || mcp.status?.configurationError) && <Alert id="mcp-settings-error" variant="destructive" className="mx-5 mt-3 w-auto">
+        <AlertDescription>{t(mcp.error || mcp.status?.configurationError || "")}
+          {!mcp.status && <Button type="button" variant="outline" size="sm" disabled={mcp.busy} onClick={() => void mcp.refresh()}>{t("Retry")}</Button>}
+        </AlertDescription>
+      </Alert>}
       <div className="settings-search">
         <Search className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
         <input ref={searchRef} id="settings-search" type="search" value={query} placeholder={t("Search settings…")} aria-label={t("Search settings")} onChange={event => setQuery(event.target.value)} />
@@ -81,8 +99,8 @@ export function AppSettings({ onClose }: { onClose: () => void }) {
             return settings.length ? <section key={group.id} aria-labelledby={`settings-category-${group.id}`}>
               <h3 id={`settings-category-${group.id}`} className="settings-section-title">{t(group.label)}</h3>
               {settings.map(setting => <div key={setting.id} className="settings-row" data-setting={setting.id}>
-                <div className="min-w-0">{setting.id === "theme" ? <p className="text-sm font-medium">{t(setting.title)}</p> : <label className="text-sm font-medium" htmlFor={setting.id === "language" ? "locale-select" : setting.id}>{t(setting.title)}</label>}
-                  <p id={`${setting.id}-description`} className="mt-1 text-xs leading-relaxed text-muted-foreground">{t(setting.description)}</p>
+                <div className="min-w-0">{setting.id === "theme" || setting.id === "mcp-connection" ? <p id={`${setting.id}-label`} className="text-sm font-medium">{t(setting.title)}</p> : <label className="text-sm font-medium" htmlFor={setting.id === "language" ? "locale-select" : setting.id}>{t(setting.title)}</label>}
+                  {setting.description && <p id={`${setting.id}-description`} className="mt-1 text-xs leading-relaxed text-muted-foreground">{t(setting.description)}</p>}
                 </div>
                 <div className={cn("settings-control", setting.id === "cursor-blink" && "settings-control-switch")}>{setting.control}</div>
               </div>)}
