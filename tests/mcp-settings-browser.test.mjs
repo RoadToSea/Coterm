@@ -25,7 +25,7 @@ test("MCP settings validate, save ports, preserve failures and publish matching 
   const submit = () => run(`document.getElementById('mcp-port').form.requestSubmit()`);
   const portCalls = () => run(`__cotermTest.invocations.filter(c=>c.command==='set_mcp_stdio_port')`);
   const openConnection = async () => {
-    await run(`document.querySelector('[data-setting=mcp-connection] [data-mcp-config]').click()`);
+    await run(`document.querySelector('[data-setting=mcp-client-configuration] [data-mcp-config]').click()`);
     await wait(`!!document.querySelector('dialog[aria-label="MCP connection"]')?.open`);
   };
   const closeConnection = async () => {
@@ -179,8 +179,10 @@ test("MCP connection has equal capsule options, manual controls, live status and
     await client.send('Emulation.setDeviceMetricsOverride',{width:1100,height:800,deviceScaleFactor:1,mobile:false});
     await client.send('Page.navigate',{url:server.url});await open();
     assert.equal(await run(`document.querySelector('[data-mcp-status] [role=status]').textContent`),'Not started');
-    assert.equal(await run(`document.querySelectorAll('[data-setting]').length`),2);
+    assert.equal(await run(`document.querySelectorAll('[data-setting]').length`),3);
     assert.equal(await run(`document.querySelector('[data-setting=mcp-port]').innerText`),'MCP port\nSave');
+    assert.equal(await run(`(()=>{const section=document.querySelector('section[aria-labelledby=settings-category-mcp]');return !!section?.querySelector('[data-mcp-status]')&&!document.querySelector('.settings-content > [data-mcp-status]')&&section.querySelector('[data-mcp-status]').getBoundingClientRect().bottom<=section.querySelector('[data-setting=mcp-port]').getBoundingClientRect().top;})()`),true,'status is the MCP section heading above the port');
+    assert.equal(await run(`(()=>{const configuration=document.querySelector('[data-setting=mcp-client-configuration]');const connection=document.querySelector('[data-setting=mcp-connection]');return !!configuration?.querySelector('[data-mcp-config]')&&!connection.querySelector('[data-mcp-config]')&&configuration.previousElementSibling===connection;})()`),true,'client configuration occupies its own row after the connection controls');
     assert.equal(await run(`document.getElementById('mcp-toggle').textContent`),'Start MCP');
     assert.equal(await run(`(()=>{const items=[...document.querySelectorAll('#mcp-connection button')];return items.length===2&&Math.abs(items[0].getBoundingClientRect().width-items[1].getBoundingClientRect().width)<1&&items.every(item=>parseFloat(getComputedStyle(item).borderRadius)>=20);})()`),true);
     const calls=await run(`__cotermTest.calls.filter(c=>c==='set_mcp_startup_mode').length`);
@@ -226,7 +228,10 @@ test("MCP connection has equal capsule options, manual controls, live status and
     assert.equal(await run(`document.querySelector('[data-mcp-status] [role=status]').textContent`),'未启动');
     assert.equal(await run(`document.getElementById('mcp-toggle').textContent`),'启动 MCP');
     await run(`document.querySelector('[data-category=general]').click()`);
-    assert.equal(await run(`document.querySelector('[data-mcp-status] [role=status]').textContent`),'未启动','status remains at the top of every category');
+    assert.equal(await run(`!!document.querySelector('[data-mcp-status]')`),false,'MCP status stays within its category');
+    await run(`document.querySelector('[data-category=mcp]').click()`);
+    await wait(`document.querySelector('[data-mcp-status] [role=status]')?.textContent==='未启动'`);
+    assert.equal(await run(`document.querySelector('[data-setting=mcp-client-configuration]').innerText`),'客户端配置\n查看配置');
     assert.deepEqual(errors,[]);
   }finally{await session.close();await new Promise(resolve=>server.server.close(resolve));}
 });

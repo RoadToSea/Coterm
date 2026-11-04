@@ -8,7 +8,6 @@ import type { McpSettingsController } from "./use-mcp-settings";
 
 export function McpConnectionSetting({ mcp }: { mcp: McpSettingsController }) {
   const { t } = useI18n();
-  const [configurationOpen, setConfigurationOpen] = useState(false);
   const { status, busy, perform } = mcp;
   return <div className="flex w-64 max-w-full flex-col gap-2">
     <ToggleGroup id="mcp-connection" type="single" value={status?.startupMode ?? ""}
@@ -24,8 +23,16 @@ export function McpConnectionSetting({ mcp }: { mcp: McpSettingsController }) {
       disabled={busy} onClick={() => void perform(() => hostAPI.setMcpStdioEnabled(!status.enabled))}>
       {t(status.enabled ? "Stop MCP" : "Start MCP")}
     </Button>}
-    <Button type="button" data-mcp-config variant="ghost" size="sm" disabled={busy || !status}
-      onClick={() => setConfigurationOpen(true)}>{t("Client configuration")}</Button>
-    {configurationOpen && status && <McpConfiguration status={status} onClose={() => setConfigurationOpen(false)} />}
   </div>;
+}
+
+export function McpClientConfigurationSetting({ mcp }: { mcp: McpSettingsController }) {
+  const { t } = useI18n();
+  const [configurationOpen, setConfigurationOpen] = useState(false);
+  const { status, busy } = mcp;
+  return <>
+    <Button id="mcp-client-configuration" type="button" data-mcp-config variant="outline" size="sm" disabled={busy || !status}
+      onClick={() => setConfigurationOpen(true)}>{t("View configuration")}</Button>
+    {configurationOpen && status && <McpConfiguration status={status} onClose={() => setConfigurationOpen(false)} />}
+  </>;
 }

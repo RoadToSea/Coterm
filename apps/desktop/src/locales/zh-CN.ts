@@ -157,6 +157,7 @@ export const zhCN: Readonly<Record<string, string>> = {
   "Start MCP": "启动 MCP",
   "Stop MCP": "关闭 MCP",
   "Client configuration": "客户端配置",
+  "View configuration": "查看配置",
   "Start MCP to view the client configuration.": "启动 MCP 后可查看客户端配置。",
   "MCP port": "MCP 端口",
   "Save": "保存",

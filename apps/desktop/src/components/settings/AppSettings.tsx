@@ -8,7 +8,7 @@ import { Button } from "../ui/button";
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "../ui/empty";
 import { cn } from "../../lib/utils";
 import { McpPortSetting } from "./McpPortSetting";
-import { McpConnectionSetting } from "./McpConnectionSetting";
+import { McpClientConfigurationSetting, McpConnectionSetting } from "./McpConnectionSetting";
 import { useMcpSettings } from "./use-mcp-settings";
 import { Badge } from "../ui/badge";
 import { Alert, AlertDescription } from "../ui/alert";
@@ -58,6 +58,8 @@ export function AppSettings({ onClose }: { onClose: () => void }) {
       control: <McpPortSetting mcp={mcp} /> },
     { id: "mcp-connection", category: "mcp", title: "MCP connection", keywords: "MCP Stdio auto manual startup connection client 自启动 手动启动 开关 连接 客户端",
       control: <McpConnectionSetting mcp={mcp} /> },
+    { id: "mcp-client-configuration", category: "mcp", title: "Client configuration", keywords: "MCP Stdio client configuration copy agent 客户端 配置 复制",
+      control: <McpClientConfigurationSetting mcp={mcp} /> },
   ];
   const words = query.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);
   // Searching covers all categories so users never have to guess where a setting lives.
@@ -69,17 +71,6 @@ export function AppSettings({ onClose }: { onClose: () => void }) {
   });
   return <Modal id="app-settings-dialog" title={t("Settings")} onClose={onClose} className="w-[840px] max-h-[90dvh]" bodyClassName="p-0">
     <div className="settings-content">
-      <div className="flex items-center justify-between gap-3 px-5 pt-4" data-mcp-status>
-        <span className="text-sm font-medium">{t("MCP status")}</span>
-        <Badge variant={mcp.status?.enabled ? "default" : "secondary"} role="status" aria-live="polite">
-          {t(mcp.status ? mcp.status.enabled ? "Started" : "Not started" : mcp.error ? "Unavailable" : "Loading…")}
-        </Badge>
-      </div>
-      {(mcp.error || mcp.status?.configurationError) && <Alert id="mcp-settings-error" variant="destructive" className="mx-5 mt-3 w-auto">
-        <AlertDescription>{t(mcp.error || mcp.status?.configurationError || "")}
-          {!mcp.status && <Button type="button" variant="outline" size="sm" disabled={mcp.busy} onClick={() => void mcp.refresh()}>{t("Retry")}</Button>}
-        </AlertDescription>
-      </Alert>}
       <div className="settings-search">
         <Search className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
         <input ref={searchRef} id="settings-search" type="search" value={query} placeholder={t("Search settings…")} aria-label={t("Search settings")} onChange={event => setQuery(event.target.value)} />
@@ -97,7 +88,17 @@ export function AppSettings({ onClose }: { onClose: () => void }) {
           {categories.filter(item => item.id !== "all").map(group => {
             const settings = visible.filter(item => item.category === group.id);
             return settings.length ? <section key={group.id} aria-labelledby={`settings-category-${group.id}`}>
-              <h3 id={`settings-category-${group.id}`} className="settings-section-title">{t(group.label)}</h3>
+              <div className="flex items-center justify-between gap-3" data-mcp-status={group.id === "mcp" ? true : undefined}>
+                <h3 id={`settings-category-${group.id}`} className="settings-section-title">{t(group.id === "mcp" ? "MCP status" : group.label)}</h3>
+                {group.id === "mcp" && <Badge variant={mcp.status?.enabled ? "default" : "secondary"} role="status" aria-live="polite">
+                  {t(mcp.status ? mcp.status.enabled ? "Started" : "Not started" : mcp.error ? "Unavailable" : "Loading…")}
+                </Badge>}
+              </div>
+              {group.id === "mcp" && (mcp.error || mcp.status?.configurationError) && <Alert id="mcp-settings-error" variant="destructive" className="mb-3">
+                <AlertDescription>{t(mcp.error || mcp.status?.configurationError || "")}
+                  {!mcp.status && <Button type="button" variant="outline" size="sm" disabled={mcp.busy} onClick={() => void mcp.refresh()}>{t("Retry")}</Button>}
+                </AlertDescription>
+              </Alert>}
               {settings.map(setting => <div key={setting.id} className="settings-row" data-setting={setting.id}>
                 <div className="min-w-0">{setting.id === "theme" || setting.id === "mcp-connection" ? <p id={`${setting.id}-label`} className="text-sm font-medium">{t(setting.title)}</p> : <label className="text-sm font-medium" htmlFor={setting.id === "language" ? "locale-select" : setting.id}>{t(setting.title)}</label>}
                   {setting.description && <p id={`${setting.id}-description`} className="mt-1 text-xs leading-relaxed text-muted-foreground">{t(setting.description)}</p>}
