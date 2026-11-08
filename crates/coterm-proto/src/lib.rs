@@ -62,9 +62,9 @@ pub enum ApprovalDecision {
     Rejected,
 }
 
-/// 插件元信息配置 (manifest.json)
+/// 驱动元信息配置 (manifest.json)
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PluginManifest {
+pub struct DriverManifest {
     pub id: String,
     pub name: String,
     pub version: String,

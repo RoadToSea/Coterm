@@ -14,24 +14,24 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
-const sshFrontendBundlePath = path.join(rootDir, "plugins/plugin-ssh/dist/frontend/index.js");
+const sshFrontendBundlePath = path.join(rootDir, "drivers/driver-ssh/dist/frontend/index.js");
 const sshFrontendSource = fs.existsSync(sshFrontendBundlePath)
   ? fs.readFileSync(sshFrontendBundlePath, "utf8")
   : null;
-const serialFrontendBundlePath = path.join(rootDir, "plugins/plugin-serial/dist/frontend/index.js");
+const serialFrontendBundlePath = path.join(rootDir, "drivers/driver-serial/dist/frontend/index.js");
 const serialFrontendSource = fs.existsSync(serialFrontendBundlePath)
   ? fs.readFileSync(serialFrontendBundlePath, "utf8") : null;
 
 /**
- * 真实 Plugin SDK 模块的 ES 源码，供页面以动态 import 加载。
- * 由 scripts/build-sdk-browser.mjs 从 `packages/plugin-sdk/src/components/block-list.ts` 生成；
+ * 真实 Driver SDK 模块的 ES 源码，供页面以动态 import 加载。
+ * 由 scripts/build-sdk-browser.mjs 从 `packages/driver-sdk/src/components/block-list.ts` 生成；
  * 缺失时直接报错，绝不回退到手工替身。
  */
 export function sdkModuleSource() {
-  const modulePath = path.join(rootDir, "packages/plugin-sdk/dist/browser/block-list.js");
+  const modulePath = path.join(rootDir, "packages/driver-sdk/dist/browser/block-list.js");
   if (!fs.existsSync(modulePath)) {
     throw new Error(
-      `packages/plugin-sdk/dist/browser/block-list.js is missing; run "pnpm build:sdk"`,
+      `packages/driver-sdk/dist/browser/block-list.js is missing; run "pnpm build:sdk"`,
     );
   }
   return fs.readFileSync(modulePath, "utf8");
@@ -45,7 +45,7 @@ export function makeHostMockSource(initial) {
       groups:[{id:"default",name:"Default workspace"}], historyPolicy:"session_only", persistence:"windows_dpapi",
       ...scenario.workspace,
       entries:(scenario.workspace?.entries ?? scenario.instances.map(instance => ({
-        configRef:"ref-" + instance.pluginInstanceId, pluginId:instance.pluginId,label:instance.label,instanceId:instance.pluginInstanceId,
+        configRef:"ref-" + instance.driverInstanceId, driverId:instance.driverId,label:instance.label,instanceId:instance.driverInstanceId,
       }))).map(entry => ({workspaceId:"default",approvalPolicy:{mode:"allow_matches",patterns:[]},...entry})),
       layout:{...defaultLayout,...scenario.workspace?.layout},
     };
@@ -225,7 +225,7 @@ export function makeHostMockSource(initial) {
         localStorage.setItem('__cotermTest.mcp-port',String(port)); mcpPort=port; mcpConfigurationError=null;
         return mcpStatus();
       },
-      runtime_snapshot: () => ({ instances: scenario.instances, runningPlugins: scenario.catalog.plugins.filter((plugin) => plugin.running).map((plugin) => plugin.id) }),
+      runtime_snapshot: () => ({ instances: scenario.instances, runningDrivers: scenario.catalog.drivers.filter((driver) => driver.running).map((driver) => driver.id) }),
       workspace_snapshot: () => structuredClone(scenario.workspace),
       save_workspace_layout: ({activeInstanceId,instancesCollapsed,activeWorkspaceId}) => {
         scenario.workspace.layout = {activeConfigRef:scenario.workspace.entries.find(entry => entry.instanceId === activeInstanceId)?.configRef ?? null,
@@ -261,78 +261,68 @@ export function makeHostMockSource(initial) {
       restore_saved_instance: ({configRef}) => {
         const entry = scenario.workspace.entries.find(item => item.configRef === configRef);
         if (!entry) throw new Error("workspace_entry_not_found");
-        const instance = {pluginId:entry.pluginId,pluginInstanceId:"restored-" + ++nextInstance,sessionId:"session-" + nextInstance,label:entry.label,status:"ready"};
+        const instance = {driverId:entry.driverId,driverInstanceId:"restored-" + ++nextInstance,sessionId:"session-" + nextInstance,label:entry.label,status:"ready"};
         scenario.instances = [...scenario.instances,instance];
-        scenario.workspace.entries = scenario.workspace.entries.map(item => item.configRef === configRef ? {...item,instanceId:instance.pluginInstanceId} : item);
+        scenario.workspace.entries = scenario.workspace.entries.map(item => item.configRef === configRef ? {...item,instanceId:instance.driverInstanceId} : item);
         return instance;
       },
-      destroy_instance: ({pluginInstanceId}) => {
-        scenario.instances = scenario.instances.filter(instance => instance.pluginInstanceId !== pluginInstanceId);
-        scenario.workspace.entries = scenario.workspace.entries.filter(entry => entry.instanceId !== pluginInstanceId);
+      destroy_instance: ({driverInstanceId}) => {
+        scenario.instances = scenario.instances.filter(instance => instance.driverInstanceId !== driverInstanceId);
+        scenario.workspace.entries = scenario.workspace.entries.filter(entry => entry.instanceId !== driverInstanceId);
         return null;
       },
-      create_instance: ({pluginId,config,workspaceId,name}) => {
-        const plugin = scenario.catalog.plugins.find(item => item.id === pluginId);
-        if (!plugin?.running) throw new Error("plugin_not_running");
-        const instance = {pluginId,pluginInstanceId:"created-" + ++nextInstance,sessionId:"session-" + nextInstance,
-          label:name?.trim() || (config.host ? config.username + "@" + config.host : config.port ?? plugin.name),status:"ready"};
+      create_instance: ({driverId,config,workspaceId,name}) => {
+        const driver = scenario.catalog.drivers.find(item => item.id === driverId);
+        if (!driver?.running) throw new Error("driver_not_running");
+        const instance = {driverId,driverInstanceId:"created-" + ++nextInstance,sessionId:"session-" + nextInstance,
+          label:name?.trim() || (config.host ? config.username + "@" + config.host : config.port ?? driver.name),status:"ready"};
         scenario.instances = [...scenario.instances,instance];
         scenario.workspace.entries = [...scenario.workspace.entries,{configRef:"created-ref-" + nextInstance,
-          pluginId,instanceId:instance.pluginInstanceId,label:instance.label,workspaceId:workspaceId ?? "default",approvalPolicy:{mode:"allow_matches",patterns:[]}}];
+          driverId,instanceId:instance.driverInstanceId,label:instance.label,workspaceId:workspaceId ?? "default",approvalPolicy:{mode:"allow_matches",patterns:[]}}];
         return instance;
       },
-      start_plugin: ({pluginId}) => {
-        scenario.catalog.plugins = scenario.catalog.plugins.map(plugin => plugin.id === pluginId ? {...plugin,running:true} : plugin);
+      start_driver: ({driverId}) => {
+        scenario.catalog.drivers = scenario.catalog.drivers.map(driver => driver.id === driverId ? {...driver,running:true} : driver);
         return null;
       },
-      provide_secret: ({ pluginInstanceId, purpose }) => ({ id: "secret-test", pluginInstanceId, purpose, expiresAt: "2099-01-01T00:00:00Z" }),
-      list_plugins: () => scenario.catalog,
-      get_approval_policy: ({pluginInstanceId}) => {
-        const entry = scenario.workspace.entries.find(item=>item.instanceId===pluginInstanceId);
-        if (!entry) throw new Error("plugin_instance_not_found");
+      provide_secret: ({ driverInstanceId, purpose }) => ({ id: "secret-test", driverInstanceId, purpose, expiresAt: "2099-01-01T00:00:00Z" }),
+      list_drivers: () => scenario.catalog,
+      get_approval_policy: ({driverInstanceId}) => {
+        const entry = scenario.workspace.entries.find(item=>item.instanceId===driverInstanceId);
+        if (!entry) throw new Error("driver_instance_not_found");
         return structuredClone(entry.approvalPolicy);
       },
-      set_approval_policy: ({pluginInstanceId,policy}) => {
-        const entry = scenario.workspace.entries.find(item=>item.instanceId===pluginInstanceId);
-        if (!entry) throw new Error("plugin_instance_not_found");
+      set_approval_policy: ({driverInstanceId,policy}) => {
+        const entry = scenario.workspace.entries.find(item=>item.instanceId===driverInstanceId);
+        if (!entry) throw new Error("driver_instance_not_found");
         entry.approvalPolicy = structuredClone(policy);
         return structuredClone(entry.approvalPolicy);
       },
       // Matching semantics are tested against the Rust matcher, not a JS reimplementation.
       preview_approval_policy: ({text}) => scenario.approvalPreview?.[text] ?? true,
-      prepare_plugin_install: () => scenario.installPreview ?? null,
-      install_plugin_package: ({ token }) => {
-        if (!scenario.installPreview || token !== scenario.installPreview.token) throw new Error("plugin_install_unavailable");
-        const { id, name, version } = scenario.installPreview;
-        const plugin = { id, name, version, hasFrontend: false, running: false };
-        // Real Tauri IPC deserializes a fresh catalog on the following refresh.
-        scenario.catalog = { ...scenario.catalog, plugins: [...scenario.catalog.plugins, plugin] };
-        return plugin;
-      },
-      discard_plugin_install: () => null,
       list_instances: () => scenario.instances,
-      get_bypass: ({pluginInstanceId}) => {
-        if (!scenario.instances.some(item=>item.pluginInstanceId===pluginInstanceId)) throw new Error("plugin_instance_not_found");
-        return bypasses.get(pluginInstanceId) ?? false;
+      get_bypass: ({driverInstanceId}) => {
+        if (!scenario.instances.some(item=>item.driverInstanceId===driverInstanceId)) throw new Error("driver_instance_not_found");
+        return bypasses.get(driverInstanceId) ?? false;
       },
-      set_bypass: ({pluginInstanceId,enabled}) => {
-        if (!scenario.instances.some(item=>item.pluginInstanceId===pluginInstanceId)) throw new Error("plugin_instance_not_found");
-        bypasses.set(pluginInstanceId,enabled);
+      set_bypass: ({driverInstanceId,enabled}) => {
+        if (!scenario.instances.some(item=>item.driverInstanceId===driverInstanceId)) throw new Error("driver_instance_not_found");
+        bypasses.set(driverInstanceId,enabled);
         return null;
       },
       list_operations: () => scenario.operations ?? [],
       recent_operations: () => scenario.history ?? [],
-      recent_plugin_operations: () => scenario.history ?? [],
-      invoke_plugin_operation: ({ pluginId, operation }) => {
-        if (!scenario.catalog.plugins.some(plugin => plugin.id === pluginId && plugin.running)) {
-          throw new Error("plugin_not_started");
+      recent_driver_operations: () => scenario.history ?? [],
+      invoke_driver_operation: ({ driverId, operation }) => {
+        if (!scenario.catalog.drivers.some(driver => driver.id === driverId && driver.running)) {
+          throw new Error("driver_not_started");
         }
-        if (operation === "serial.plugin_info") {
+        if (operation === "serial.driver_info") {
           return {
             status: "completed",
             output: {
-              pluginId: "serial",
-              instanceCount: scenario.instances.filter(x => x.pluginId === "serial").length,
+              driverId: "serial",
+              instanceCount: scenario.instances.filter(x => x.driverId === "serial").length,
               ports: scenario.serialPorts ?? [
                 { portName: "COM1", portType: { kind: "usb", product: "USB Serial" } },
                 { portName: "COM2", portType: { kind: "usb", product: "USB Serial" } },
@@ -343,7 +333,7 @@ export function makeHostMockSource(initial) {
         return { status: "completed", output: {} };
       },
       host_attention: () => attention,
-      plugin_frontend_source: ({ pluginId }) => pluginId === "ssh" ? scenario.sshFrontendSource : pluginId === "serial" ? scenario.serialFrontendSource : null,
+      driver_frontend_source: ({ driverId }) => driverId === "ssh" ? scenario.sshFrontendSource : driverId === "serial" ? scenario.serialFrontendSource : null,
       invoke_operation: ({ operation, args }) => {
         if (operation === "ssh.status") {
           return {
@@ -375,15 +365,15 @@ export function makeHostMockSource(initial) {
         if (operation === "serial.read") return {status:"completed",output:{text:"serial ready\\r\\n",bytes:14,cursor:14,gap:false,closed:false,more:false,connectionId:"serial-conn"}};
         return { status: "completed", output: {} };
       },
-      subscribe_plugin_events: () => "sub-" + ++nextSubscription,
-      ack_plugin_event: () => null,
-      unsubscribe_plugin_events: () => null,
-      get_operation: ({ pluginInstanceId, operationId }) =>
+      subscribe_driver_events: () => "sub-" + ++nextSubscription,
+      ack_driver_event: () => null,
+      unsubscribe_driver_events: () => null,
+      get_operation: ({ driverInstanceId, operationId }) =>
         (scenario.history ?? []).find((record) => record.operationId === operationId) ?? null,
       approve_proposal: (args) => { approveCalls.push({ command: "approve_proposal", ...args }); return { operationId: args.proposalId, status: "completed" }; },
       reject_proposal: (args) => { rejectCalls.push({ command: "reject_proposal", ...args }); return null; },
-      approve_plugin_proposal: (args) => { approveCalls.push({ command: "approve_plugin_proposal", ...args }); return { operationId: args.proposalId, status: "completed" }; },
-      reject_plugin_proposal: (args) => { rejectCalls.push({ command: "reject_plugin_proposal", ...args }); return null; },
+      approve_driver_proposal: (args) => { approveCalls.push({ command: "approve_driver_proposal", ...args }); return { operationId: args.proposalId, status: "completed" }; },
+      reject_driver_proposal: (args) => { rejectCalls.push({ command: "reject_driver_proposal", ...args }); return null; },
       respond_secret: (args) => {
         pendingSecrets.push(args);
         return null;
@@ -438,17 +428,17 @@ export function makeHostMockSource(initial) {
   })();`;
 }
 
-/** 与 main.rs / plugin_manager.rs 一致的默认场景：有效插件 + 损坏包诊断 + 实例 + 待处理项。 */
+/** 与 main.rs / driver_manager.rs 一致的默认场景：有效驱动 + 损坏包诊断 + 实例 + 待处理项。 */
 export const defaultScenario = {
   catalog: {
-    plugins: [{ id: "ssh", name: "SSH", version: "0.1.0", hasFrontend: true, running: true }],
+    drivers: [{ id: "ssh", name: "SSH", version: "0.1.0", hasFrontend: true, running: true }],
     issues: [
-      { directory: "broken-plugin", pluginId: null, code: "plugin_manifest_invalid", message: "Package manifest is not valid JSON" },
-      { directory: "legacy-plugin", pluginId: "legacy", code: "plugin_manifest_legacy", message: "Package predates the current manifest schema" },
+      { directory: "broken-driver", driverId: null, code: "driver_manifest_invalid", message: "Package manifest is not valid JSON" },
+      { directory: "legacy-driver", driverId: "legacy", code: "driver_manifest_legacy", message: "Package predates the current manifest schema" },
     ],
   },
   instances: [
-    { pluginId: "ssh", pluginInstanceId: "inst-1", sessionId: "sess-1", label: "Prod-Server", status: "ready" },
+    { driverId: "ssh", driverInstanceId: "inst-1", sessionId: "sess-1", label: "Prod-Server", status: "ready" },
   ],
   bypass: false,
   attention: { version: 1, approvals: [], interactions: [] },
@@ -461,7 +451,7 @@ export const defaultScenario = {
 export function secretInteraction(id, instance, { title = `${instance} password`, remainingMs = 60_000 } = {}) {
   return {
     interactionId: id,
-    pluginInstanceId: instance,
+    driverInstanceId: instance,
     operationId: null,
     kind: { kind: "secret", purpose: "ssh.password" },
     title,

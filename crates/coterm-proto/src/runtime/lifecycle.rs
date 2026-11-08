@@ -5,9 +5,9 @@ use serde_json::Value;
 
 use super::operation::OperationDescriptor;
 use super::stream::FlowWindow;
-use super::{ErrorCategory, PluginId, PluginInstanceId, RuntimeError};
+use super::{ErrorCategory, DriverId, DriverInstanceId, RuntimeError};
 
-pub const INTERFACE_MAJOR: u16 = 1;
+pub const INTERFACE_MAJOR: u16 = 2;
 pub const INTERFACE_MINOR: u16 = 0;
 pub const REQUIRED_FEATURES: &[&str] = &["instances", "backend-calls", "operation-catalog"];
 pub const OPTIONAL_FEATURES: &[&str] = &[
@@ -15,20 +15,20 @@ pub const OPTIONAL_FEATURES: &[&str] = &[
     "native-mcp-tools",
     "deferred-interactions",
     "async-operations",
-    "plugin-events",
+    "driver-events",
 ];
 
 fn incompatible(message: &str) -> RuntimeError {
     RuntimeError {
         category: ErrorCategory::Unsupported,
-        code: "plugin_handshake_incompatible".to_owned(),
+        code: "driver_handshake_incompatible".to_owned(),
         message: message.to_owned(),
         details: None,
     }
 }
 
 impl RuntimeHello {
-    /// 插件仅启用双方支持的特性；未来可选特性可以忽略，必需特性不能忽略。
+    /// 驱动仅启用双方支持的特性；未来可选特性可以忽略，必需特性不能忽略。
     pub fn negotiate_features(&self, supported: &[&str]) -> Result<Vec<String>, RuntimeError> {
         if self.interface_major != INTERFACE_MAJOR {
             return Err(incompatible("Unsupported runtime interface"));
@@ -56,7 +56,7 @@ impl RuntimeHello {
                 .any(|f| f == "deferred-interactions")
             {
                 return Err(incompatible(
-                    "v1 secret interactions require secret-delivery",
+                    "Secret interactions require secret-delivery",
                 ));
             }
             enabled.retain(|f| f != "deferred-interactions");
@@ -105,7 +105,7 @@ impl RuntimeHello {
             && !enabled.iter().any(|f| f == "secret-delivery")
         {
             return Err(incompatible(
-                "v1 secret interactions require secret-delivery",
+                "Secret interactions require secret-delivery",
             ));
         }
         if !result.mcp_tools.is_empty() && !enabled.iter().any(|f| f == "native-mcp-tools") {
@@ -136,15 +136,15 @@ pub struct RuntimeLimits {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HelloResult {
-    pub plugin_id: PluginId,
-    pub plugin_version: String,
+    pub driver_id: DriverId,
+    pub driver_version: String,
     pub interface_minor: u16,
     pub enabled_features: Vec<String>,
     pub limits: RuntimeLimits,
     /// Operation contracts are registered by the host at process startup.
     #[serde(default)]
     pub operations: Vec<OperationDescriptor>,
-    /// Plugin-authored native MCP tools; never inferred from the operation catalog.
+    /// Driver-authored native MCP tools; never inferred from the operation catalog.
     #[serde(default)]
     pub mcp_tools: Vec<McpToolRegistration>,
 }
@@ -154,7 +154,7 @@ pub struct HelloResult {
 pub struct McpToolRegistration {
     /// Operation used for host source attribution, approval and history.
     pub operation: String,
-    /// Native MCP Tool descriptor, including the plugin's inputSchema.
+    /// Native MCP Tool descriptor, including the driver's inputSchema.
     pub descriptor: Value,
 }
 
@@ -171,8 +171,8 @@ pub enum InstanceStatus {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InstanceInfo {
-    pub plugin_id: PluginId,
-    pub plugin_instance_id: PluginInstanceId,
+    pub driver_id: DriverId,
+    pub driver_instance_id: DriverInstanceId,
     pub session_id: String,
     pub label: String,
     pub status: InstanceStatus,
@@ -181,7 +181,7 @@ pub struct InstanceInfo {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateInstance {
-    /// 由基座分配；插件不得自行切换到另一连接。
+    /// 由基座分配；驱动不得自行切换到另一连接。
     pub instance: InstanceInfo,
     pub config: Value,
 }

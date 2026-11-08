@@ -9,12 +9,12 @@ import { findBrowser, openSession, evaluate, waitForValue, rootDir } from "./sup
 test("command/reply blocks support number selection, keyboard, live updates, copy and theme inheritance", async t => {
   const browserPath = findBrowser();
   if (!browserPath) { t.skip("No Chrome/Edge binary; command blocks were not browser-verified"); return; }
-  const modulePath = path.join(rootDir, "packages/plugin-sdk/dist/browser/block-list.js");
+  const modulePath = path.join(rootDir, "packages/driver-sdk/dist/browser/block-list.js");
   assert.ok(fs.existsSync(modulePath), "run pnpm test:build");
-  assert.ok(fs.statSync(modulePath).mtimeMs >= fs.statSync(path.join(rootDir, "packages/plugin-sdk/src/components/block-list.ts")).mtimeMs, "SDK build must be current");
+  assert.ok(fs.statSync(modulePath).mtimeMs >= fs.statSync(path.join(rootDir, "packages/driver-sdk/src/components/block-list.ts")).mtimeMs, "SDK build must be current");
   const routes = new Map([
-    ["/packages/plugin-sdk/examples/command-blocks.html", ["text/html; charset=utf-8", path.join(rootDir, "packages/plugin-sdk/examples/command-blocks.html")]],
-    ["/packages/plugin-sdk/dist/browser/block-list.js", ["text/javascript; charset=utf-8", modulePath]],
+    ["/packages/driver-sdk/examples/command-blocks.html", ["text/html; charset=utf-8", path.join(rootDir, "packages/driver-sdk/examples/command-blocks.html")]],
+    ["/packages/driver-sdk/dist/browser/block-list.js", ["text/javascript; charset=utf-8", modulePath]],
   ]);
   const server = http.createServer((request, response) => {
     const route = routes.get(request.url);
@@ -33,7 +33,7 @@ test("command/reply blocks support number selection, keyboard, live updates, cop
     await client.send("Page.enable");
     await client.send("Runtime.enable");
     await client.send("Emulation.setDeviceMetricsOverride", { width: 1000, height: 720, deviceScaleFactor: 1, mobile: false });
-    await client.send("Page.navigate", { url: `http://127.0.0.1:${server.address().port}/packages/plugin-sdk/examples/command-blocks.html` });
+    await client.send("Page.navigate", { url: `http://127.0.0.1:${server.address().port}/packages/driver-sdk/examples/command-blocks.html` });
     await waitForValue(client, `document.querySelector('#blocks')?.shadowRoot?.querySelectorAll('.coterm-block').length===3`);
     await run(`window.blocksRoot=document.querySelector('#blocks').shadowRoot;
       window.rows=()=>[...blocksRoot.querySelectorAll('.coterm-block')];
@@ -97,7 +97,7 @@ test("command/reply blocks support number selection, keyboard, live updates, cop
     assert.deepEqual(await run(`pressed()`), ["false", "true", "false"], "live output preserves selection");
 
     // Isolated consumer: plain-text safety, keyed update semantics and lifecycle.
-    await run(String.raw`(async()=>{window.sdk=await import('/packages/plugin-sdk/dist/browser/block-list.js');
+    await run(String.raw`(async()=>{window.sdk=await import('/packages/driver-sdk/dist/browser/block-list.js');
       window.host=document.createElement('div'); host.style.cssText='height:150px;width:280px'; document.body.replaceChildren(host);
       window.changes=[]; window.data=[{id:'a',index:41,command:'echo <script>literal</script>',output:'<img src=x onerror=alert(1)>\n中文\toutput',actor:'human'},
         {id:'b',index:42,command:'long',output:'x'.repeat(400),actor:'robot',exitCode:7}];

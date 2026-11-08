@@ -34,7 +34,7 @@ export function AppSettings({ onClose }: { onClose: () => void }) {
   useEffect(() => { searchRef.current?.focus(); }, []);
   const clearSearch = () => { setQuery(""); searchRef.current?.focus(); };
   const definitions: { id: string; category: Category; title: string; description?: string; keywords: string; control: ReactNode }[] = [
-    { id: "language", category: "general", title: "Language", description: "Choose the language used by the app and supported plugins.", keywords: "locale translation 中文 简体中文 English en zh-CN",
+    { id: "language", category: "general", title: "Language", description: "Choose the language used by the app and supported drivers.", keywords: "locale translation 中文 简体中文 English en zh-CN",
       control: <select id="locale-select" className={controlClass} aria-label={t("Language")} value={locale} onChange={event => {
         if (event.target.value === "en" || event.target.value === "zh-CN") setLocale(event.target.value);
       }}><option value="zh-CN">简体中文</option><option value="en">English</option></select> },

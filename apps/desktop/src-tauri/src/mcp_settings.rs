@@ -1,4 +1,4 @@
-//! Public, device-local MCP preferences. No credentials or plugin data are stored here.
+//! Public, device-local MCP preferences. No credentials or driver data are stored here.
 use std::{
     fs,
     io::{Read, Write},

@@ -30,16 +30,16 @@ export function setLocale(next: Locale): void {
   locale = next;
   if (typeof document !== "undefined") document.documentElement.lang = next;
   for (const listener of [...listeners]) {
-    try { listener(); } catch { /* A plugin listener cannot interrupt other language updates. */ }
+    try { listener(); } catch { /* A driver listener cannot interrupt other language updates. */ }
   }
 }
 
-/** English is the source language and the fallback for unknown plugin text. */
+/** English is the source language and the fallback for unknown driver text. */
 export function t(message: string, values: Record<string, string | number> = {}): string {
   const template = locale === "zh-CN" ? zhCN[message] ?? en[message] ?? message : en[message] ?? message;
   return template.replace(/\{(\w+)\}/g, (match, key: string) => String(values[key] ?? match));
 }
 
 /** Optional SDK capability; changing language never remounts a live connection. */
-export const pluginI18n = Object.freeze({ get locale() { return locale; }, subscribe: subscribeLocale });
+export const driverI18n = Object.freeze({ get locale() { return locale; }, subscribe: subscribeLocale });
 if (typeof document !== "undefined") document.documentElement.lang = locale;

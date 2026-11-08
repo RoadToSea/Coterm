@@ -1,8 +1,8 @@
 /**
- * 当前构建的真实浏览器验收：布局（1280/1024/768）、纯键盘折叠恢复、PluginCatalog 逐包诊断、
+ * 当前构建的真实浏览器验收：布局（1280/1024/768）、纯键盘折叠恢复、DriverCatalog 逐包诊断、
  * 真实 SSH 前端 Shadow DOM 与 SDK mountBlockList 的 token/fallback 计算样式验证、多审批卡片独立处理。
  *
- * 这里验证的是 App.tsx + index.css + plugin-sdk + coterm-plugin-ssh-ui 的实际浏览器渲染结果。
+ * 这里验证的是 App.tsx + index.css + driver-sdk + coterm-driver-ssh-ui 的实际浏览器渲染结果。
  * 没有浏览器时整组 skip 并写明原因；skip 不等于通过。
  */
 import test from "node:test";
@@ -133,8 +133,8 @@ test("appearance switches live SSH and serial renderers, persists, and follows s
       const host = [...document.querySelectorAll('main div')].find(node => node.shadowRoot?.querySelector('.xterm'));
       if (!host || !host.shadowRoot.querySelector('.bar span')?.textContent.includes('Connected')) return false;
       window.themeSsh = host; window.themeTerminal = host.shadowRoot.querySelector('.xterm');
-      window.themeSubscriptions = window.__cotermTest.calls.filter(c => c === 'subscribe_plugin_events').length;
-      window.themeConnectionCalls = window.__cotermTest.invocations.filter(c => c.command === 'invoke_plugin_operation' && ['ssh.connect','ssh.disconnect','ssh.write'].includes(c.args.operation)).length;
+      window.themeSubscriptions = window.__cotermTest.calls.filter(c => c === 'subscribe_driver_events').length;
+      window.themeConnectionCalls = window.__cotermTest.invocations.filter(c => c.command === 'invoke_driver_operation' && ['ssh.connect','ssh.disconnect','ssh.write'].includes(c.args.operation)).length;
       return true;
     })()`, { label: "SSH ready for live appearance switch" });
     const choose = async (mode) => {
@@ -156,8 +156,8 @@ test("appearance switches live SSH and serial renderers, persists, and follows s
     await waitForValue({ send: page.send }, `document.documentElement.dataset.theme === 'light'`);
     assert.equal(await terminalBackground("themeSsh"), "rgb(255, 255, 255)");
     assert.equal(await page.evaluate(`themeTerminal === themeSsh.shadowRoot.querySelector('.xterm')`), true);
-    assert.equal(await page.evaluate(`window.__cotermTest.calls.filter(c => c === 'subscribe_plugin_events').length === themeSubscriptions`), true, "theme changes do not remount the SSH plugin");
-    assert.equal(await page.evaluate(`window.__cotermTest.invocations.filter(c => c.command === 'invoke_plugin_operation' && ['ssh.connect','ssh.disconnect','ssh.write'].includes(c.args.operation)).length === themeConnectionCalls`), true);
+    assert.equal(await page.evaluate(`window.__cotermTest.calls.filter(c => c === 'subscribe_driver_events').length === themeSubscriptions`), true, "theme changes do not remount the SSH driver");
+    assert.equal(await page.evaluate(`window.__cotermTest.invocations.filter(c => c.command === 'invoke_driver_operation' && ['ssh.connect','ssh.disconnect','ssh.write'].includes(c.args.operation)).length === themeConnectionCalls`), true);
     for (const [width, height] of [[1280, 800], [1024, 768], [768, 800]]) {
       await page.resize(width, height);
       assert.equal(await page.evaluate(`document.documentElement.scrollWidth <= innerWidth`), true);
@@ -167,14 +167,14 @@ test("appearance switches live SSH and serial renderers, persists, and follows s
     await page.resize(1280, 800);
 
     // Mount the actual serial bundle in the same themed document, with a typed-contract mock only.
-    const artifact = path.join(rootDir, "plugins/plugin-serial/dist/frontend/index.js");
-    assert.ok(fs.statSync(artifact).mtimeMs >= fs.statSync(path.join(rootDir, "packages/plugin-sdk/src/components/terminal-theme.ts")).mtimeMs);
+    const artifact = path.join(rootDir, "drivers/driver-serial/dist/frontend/index.js");
+    assert.ok(fs.statSync(artifact).mtimeMs >= fs.statSync(path.join(rootDir, "packages/driver-sdk/src/components/terminal-theme.ts")).mtimeMs);
     const serialURL = `data:text/javascript;base64,${fs.readFileSync(artifact).toString("base64")}`;
     await page.evaluate(`(async () => {
       const container = document.createElement('div'); container.style.cssText = 'position:fixed;inset:80px 24px 50px 330px'; document.body.append(container);
       window.themeSerialCalls = []; window.themeSerialSubscriptions = 0;
       const receipt = output => ({ operationId:'theme',status:'completed',output,error:null,proposalId:null,waitExpired:false });
-      const api = { pluginInstanceId:'theme-serial', async invoke(operation,args) {
+      const api = { driverInstanceId:'theme-serial', async invoke(operation,args) {
         themeSerialCalls.push({operation,args});
         if (operation === 'serial.status') return receipt({config:{port:'COM1',baudRate:115200,dataBits:8,stopBits:1,parity:'none',dtr:true,rts:true},connected:true,connectionId:'theme-conn',signals:{dtr:true,rts:true},rxBytes:0,txBytes:0,commandQueue:0});
         if (operation === 'serial.read') return receipt({text:'Theme probe\\r\\n',bytes:13,cursor:1,gap:false,closed:false,more:false,connectionId:'theme-conn'});
@@ -214,87 +214,39 @@ test("appearance switches live SSH and serial renderers, persists, and follows s
   }
 });
 
-test("Alpha language switching and offline installation preserve live SSH state", async (t) => {
+test("Language switching and built-in driver settings preserve live SSH state", async (t) => {
   if (!browserPath) { t.skip("No Chrome/Edge binary found; alpha browser verification did not run"); return; }
   assertFreshBuild();
   const staticServer = await startStaticServer();
   serverUrl = staticServer.url;
   const session = await openSession({ browserPath, totalTimeoutMs: 120_000 });
-  const preview = { token: "install-ticket", id: "test.offline", name: "Offline test", version: "0.1.0-alpha.1", platform: "windows-x64" };
   let page;
   try {
-    page = await openPage(session, { ...defaultScenario, installPreview: preview });
+    page = await openPage(session, defaultScenario);
     await waitForValue({ send: page.send }, `(() => {
       const host = [...document.querySelectorAll('main div')].find((node) => node.shadowRoot?.querySelector('.layout'));
       if (!host || host.shadowRoot.querySelector('.bar span')?.textContent !== 'Connected') return false;
       window.__alphaSshHost = host;
       window.__alphaTerminal = host.shadowRoot.querySelector('.xterm');
-      window.__alphaSubscriptions = window.__cotermTest.calls.filter((command) => command === 'subscribe_plugin_events').length;
+      window.__alphaSubscriptions = window.__cotermTest.calls.filter((command) => command === 'subscribe_driver_events').length;
       return !!window.__alphaTerminal;
     })()`, { label: "live SSH frontend" });
     const switchLanguage = (locale) => setAppLocale({ send: page.send }, locale);
     await switchLanguage("zh-CN");
-    await waitForValue({ send: page.send }, `document.documentElement.lang === 'zh-CN' && document.getElementById('install-plugin-button').title === '安装插件'`, { label: "Chinese host controls" });
+    await waitForValue({ send: page.send }, `document.documentElement.lang === 'zh-CN' && !document.getElementById('install-driver-button')`, { label: "Chinese host controls" });
     assert.equal(await page.evaluate(`window.__alphaSshHost.shadowRoot.querySelector('.bar span').textContent`), "已连接");
-    assert.equal(await page.evaluate(`window.__alphaSshHost.shadowRoot.querySelector('.bar button').textContent`), "断开连接");
-    assert.equal(await page.evaluate(`window.__alphaTerminal === window.__alphaSshHost.shadowRoot.querySelector('.xterm')`), true, "language changes preserve the terminal object");
-    assert.equal(await page.evaluate(`window.__cotermTest.calls.filter((command) => command === 'subscribe_plugin_events').length === window.__alphaSubscriptions`), true, "language changes never reconnect the plugin");
-
-    await page.evaluate(`document.getElementById('install-plugin-button').click()`);
-    await waitForValue({ send: page.send }, `!!document.querySelector('dialog[aria-label="离线安装插件"]')`, { label: "offline installer" });
-    await page.evaluate(`(() => {
-      window.__alphaChooseGate = window.__cotermTest.gate('prepare_plugin_install');
-      [...document.querySelectorAll('dialog button')].find((button) => button.textContent === '选择插件包').click();
-    })()`);
-    await waitForValue({ send: page.send }, `window.__alphaChooseGate.size() === 1`, { label: "package selection pending" });
-    assert.equal(await page.evaluate(`document.querySelector('dialog [aria-busy]').getAttribute('aria-busy')`), "true");
-    await page.evaluate(`window.__alphaChooseGate.release(${JSON.stringify(preview)})`);
-    await waitForValue({ send: page.send }, `document.querySelector('dialog dl')?.textContent.includes('0.1.0-alpha.1')`, { label: "validated preview" });
-    assert.equal(await page.evaluate(`window.__cotermTest.calls.includes('install_plugin_package')`), false, "preview requires a separate trust confirmation");
-    await page.resize(800, 600);
-    const screenshot = await page.send("Page.captureScreenshot", { format: "png" });
-    fs.writeFileSync(path.join(rootDir, "target/alpha-installer-zh.png"), Buffer.from(screenshot.data, "base64"));
-    await page.evaluate(`(() => {
-      const button = [...document.querySelectorAll('dialog button')].find((button) => button.textContent === '安装此可信插件包');
-      button.click(); button.click();
-    })()`);
-    await waitForValue({ send: page.send }, `document.querySelector('dialog [role="status"]')?.textContent.includes('插件安装成功')`, { label: "installation completed" });
-    assert.equal(await page.evaluate(`window.__cotermTest.calls.filter((command) => command === 'install_plugin_package').length`), 1, "double click installs once");
-    await waitForValue({ send: page.send }, `!!document.querySelector('button[aria-label="管理 Offline test"]')`, { label: "installed plugin appears without restarting" });
-    assert.equal(await page.evaluate(`window.__cotermTest.calls.includes('start_plugin') || window.__cotermTest.calls.includes('create_instance')`), false, "installation never executes the package");
-    await page.evaluate(`document.querySelector('dialog button[aria-label="关闭对话框"]').click()`);
-
-    // A rejected archive stays recoverable, and a cancelled native picker is a normal outcome.
-    await page.evaluate(`document.getElementById('install-plugin-button').click()`);
-    await page.evaluate(`(() => {
-      window.__alphaChooseGate = window.__cotermTest.gate('prepare_plugin_install');
-      [...document.querySelectorAll('dialog button')].find((button) => button.textContent === '选择插件包').click();
-    })()`);
-    await waitForValue({ send: page.send }, `window.__alphaChooseGate.size() === 1`);
-    await page.evaluate(`window.__alphaChooseGate.fail({ code: 'plugin_archive_invalid', message: 'plugin_archive_invalid' })`);
-    await waitForValue({ send: page.send }, `document.querySelector('dialog [role="alert"]')?.textContent.includes('无法读取插件压缩包')`, { label: "localized package failure" });
-    await page.evaluate(`(() => {
-      window.__alphaChooseGate = window.__cotermTest.gate('prepare_plugin_install');
-      [...document.querySelectorAll('dialog button')].find((button) => button.textContent === '选择插件包').click();
-    })()`);
-    await waitForValue({ send: page.send }, `window.__alphaChooseGate.size() === 1`);
-    await page.evaluate(`window.__alphaChooseGate.release(null)`);
-    await waitForValue({ send: page.send }, `document.querySelector('dialog [aria-busy]')?.getAttribute('aria-busy') === 'false'`);
-    assert.equal(await page.evaluate(`!!document.querySelector('dialog [role="alert"]') || !!document.querySelector('dialog dl')`), false);
-
-    await page.evaluate(`(() => {
-      window.__alphaChooseGate = window.__cotermTest.gate('prepare_plugin_install');
-      [...document.querySelectorAll('dialog button')].find((button) => button.textContent === '选择插件包').click();
-    })()`);
-    await waitForValue({ send: page.send }, `window.__alphaChooseGate.size() === 1`);
-    await page.evaluate(`window.__alphaChooseGate.release(${JSON.stringify(preview)})`);
-    await waitForValue({ send: page.send }, `!!document.querySelector('dialog dl')`);
-    await page.evaluate(`document.querySelector('dialog button[aria-label="关闭对话框"]').click()`);
-    await waitForValue({ send: page.send }, `window.__cotermTest.invocations.some((item) => item.command === 'discard_plugin_install' && item.args.token === 'install-ticket')`, { label: "cancelled preview released" });
+    assert.equal(await page.evaluate(`window.__alphaTerminal === window.__alphaSshHost.shadowRoot.querySelector('.xterm')`), true);
+    assert.equal(await page.evaluate(`window.__cotermTest.countCalls('subscribe_driver_events') === window.__alphaSubscriptions`), true);
+    await page.evaluate(`document.getElementById('open-settings').click()`);
+    await waitForValue({ send: page.send }, `document.getElementById('app-settings-dialog')?.open`);
+    assert.equal(await page.evaluate(`!!document.querySelector('[data-category="drivers"]')`),false);
+    assert.equal(await page.evaluate(`!!document.getElementById('install-driver-package')`),false);
+    assert.equal(await page.evaluate(`window.__alphaTerminal===window.__alphaSshHost.shadowRoot.querySelector('.xterm')`),true);
+    await page.evaluate(`document.querySelector('#app-settings-dialog button[aria-label="关闭对话框"]').click()`);
     await page.send("Page.reload");
     await waitForValue({ send: page.send }, `document.documentElement.lang === 'zh-CN' && !!document.getElementById('open-settings')`, { label: "language preference survives reload" });
     await switchLanguage("en");
-    await waitForValue({ send: page.send }, `document.getElementById('install-plugin-button')?.title === 'Install plugin'`, { label: "switch back to English" });
+    await waitForValue({ send: page.send }, `document.documentElement.lang==='en' && !document.getElementById('install-driver-button')`, { label: "switch back to English" });
   } finally {
     await page?.close();
     await session.close();
@@ -316,13 +268,13 @@ test("Browser layout, catalog diagnostics, and keyboard collapse on the current 
     const page = await openPage(session);
     try {
       // 页面挂载完成
-      await waitForValue({ send: page.send }, `!!document.querySelector('main[aria-label="Plugin workspace"]')`, { label: "app mounted" });
+      await waitForValue({ send: page.send }, `!!document.querySelector('main[aria-label="Driver workspace"]')`, { label: "app mounted" });
 
       // 等待真实 SSH 前端 Shadow DOM 在工作区内完整挂载
       await waitForValue(
         { send: page.send },
         `(() => {
-          const workspace = document.querySelector('main[aria-label="Plugin workspace"]');
+          const workspace = document.querySelector('main[aria-label="Driver workspace"]');
           const hosts = workspace ? Array.from(workspace.querySelectorAll('div')) : [];
           return hosts.some((host) => !!(host.shadowRoot && host.shadowRoot.querySelector('.layout')));
         })()`,
@@ -337,17 +289,17 @@ test("Browser layout, catalog diagnostics, and keyboard collapse on the current 
       };
 
       const measure = async () => page.evaluate(`(() => {
-        const plugins = document.querySelector('aside[aria-label="Installed plugins"]');
+        const drivers = document.querySelector('aside[aria-label="Installed drivers"]');
         const instances = document.getElementById('instances-sidebar');
-        const workspace = document.querySelector('main[aria-label="Plugin workspace"]');
+        const workspace = document.querySelector('main[aria-label="Driver workspace"]');
         const toggle = document.getElementById('toggle-instances-button');
         const visible = (element) => !!element && getComputedStyle(element).display !== 'none' && element.getBoundingClientRect().width > 0;
         const rect = (element) => element ? element.getBoundingClientRect() : null;
-        const p = rect(plugins), i = rect(instances), w = rect(workspace);
+        const p = rect(drivers), i = rect(instances), w = rect(workspace);
         return {
           innerWidth: window.innerWidth,
-          pluginsWidth: p ? Math.round(p.width) : 0,
-          pluginsRight: p ? Math.round(p.right) : 0,
+          driversWidth: p ? Math.round(p.width) : 0,
+          driversRight: p ? Math.round(p.right) : 0,
           instancesVisible: visible(instances),
           instancesWidth: i ? Math.round(i.width) : 0,
           instancesLeft: i ? Math.round(i.left) : 0,
@@ -365,11 +317,11 @@ test("Browser layout, catalog diagnostics, and keyboard collapse on the current 
       // --- 1280px：两栏都展开，工作区拿到剩余宽度 ---
       await page.resize(1280, 800);
       const wide = await measure();
-      assert.equal(wide.pluginsWidth, 72, "1280px: plugin rail is 72px");
+      assert.equal(wide.driversWidth, 72, "1280px: driver rail is 72px");
       assert.equal(wide.instancesWidth, 240, "1280px: instances panel is 240px");
       assert.equal(wide.instancesVisible, true, "1280px: instances panel visible");
       assert.equal(wide.workspaceWidth, 968, "1280px: workspace takes the remaining 968px");
-      assert.ok(wide.instancesLeft >= wide.pluginsRight, "1280px: no overlap between plugin rail and instances");
+      assert.ok(wide.instancesLeft >= wide.driversRight, "1280px: no overlap between driver rail and instances");
       assert.ok(wide.workspaceLeft >= wide.instancesRight, "1280px: no overlap between instances and workspace");
       assert.ok(wide.scrollWidth <= wide.clientWidth, `1280px: no horizontal overflow (${wide.scrollWidth} <= ${wide.clientWidth})`);
       await takeScreenshot("layout-1280px.png");
@@ -377,7 +329,7 @@ test("Browser layout, catalog diagnostics, and keyboard collapse on the current 
       // --- 1024px：实例栏收窄到 200px ---
       await page.resize(1024, 768);
       const medium = await measure();
-      assert.equal(medium.pluginsWidth, 72, "1024px: plugin rail stays 72px");
+      assert.equal(medium.driversWidth, 72, "1024px: driver rail stays 72px");
       assert.equal(medium.instancesWidth, 200, "1024px: instances panel narrows to 200px");
       assert.equal(medium.workspaceWidth, 752, "1024px: workspace is 752px");
       assert.ok(medium.scrollWidth <= medium.clientWidth, `1024px: no horizontal overflow (${medium.scrollWidth} <= ${medium.clientWidth})`);
@@ -470,23 +422,23 @@ test("Browser layout, catalog diagnostics, and keyboard collapse on the current 
       assert.equal(recollapsed.instancesVisible, false, "768px: collapse is reversible via keyboard");
       assert.equal(recollapsed.workspaceWidth, 696, "768px: workspace returns to 696px");
 
-      // --- 逐包诊断与有效插件并存 ---
+      // --- 逐包诊断与有效驱动并存 ---
       const diagnostics = await page.evaluate(`(() => {
-        const list = document.querySelector('ul[aria-label="Plugin package issues"]');
+        const list = document.querySelector('ul[aria-label="Driver package issues"]');
         return {
           present: !!list,
           entries: list ? [...list.querySelectorAll('li')].map((item) => item.textContent) : [],
-          pluginButtons: [...document.querySelectorAll('aside[aria-label="Installed plugins"] nav button[aria-label^="Manage "]')].map((item) => item.getAttribute('aria-label')),
+          driverButtons: [...document.querySelectorAll('aside[aria-label="Installed drivers"] nav button[aria-label^="Manage "]')].map((item) => item.getAttribute('aria-label')),
           roles: list ? list.getAttribute('role') : null,
         };
       })()`);
       assert.equal(diagnostics.present, true, "broken packages surface as a visible diagnostics list");
       assert.equal(diagnostics.roles, "status", "diagnostics use a status role, not an alert");
       assert.equal(diagnostics.entries.length, 2, "each broken package gets its own diagnostics entry");
-      assert.match(diagnostics.entries[0], /broken-plugin/, "entry identifies the failing directory when pluginId is null");
+      assert.match(diagnostics.entries[0], /broken-driver/, "entry identifies the failing directory when driverId is null");
       assert.match(diagnostics.entries[0], /not valid JSON/, "entry carries the user-facing message");
-      assert.match(diagnostics.entries[1], /legacy-plugin/, "second broken package is listed too");
-      assert.deepEqual(diagnostics.pluginButtons, ["Manage SSH"], "valid plugin stays listable alongside broken packages");
+      assert.match(diagnostics.entries[1], /legacy-driver/, "second broken package is listed too");
+      assert.deepEqual(diagnostics.driverButtons, ["Manage SSH"], "valid driver stays listable alongside broken packages");
 
       // --- 真实 SSH 前端 Shadow DOM：计算样式与 token 继承 ---
       const palette = await page.evaluate(`(() => {
@@ -496,7 +448,7 @@ test("Browser layout, catalog diagnostics, and keyboard collapse on the current 
         probe.remove(); return result;
       })()`);
       const sshStyles = await page.evaluate(`(() => {
-        const workspace = document.querySelector('main[aria-label="Plugin workspace"]');
+        const workspace = document.querySelector('main[aria-label="Driver workspace"]');
         const host = workspace ? Array.from(workspace.querySelectorAll('div')).find((d) => d.shadowRoot) : null;
         const root = host ? host.shadowRoot : null;
         const layout = root ? root.querySelector('.layout') : null;
@@ -566,7 +518,7 @@ test("Browser layout, catalog diagnostics, and keyboard collapse on the current 
       assert.equal(sshFallbacks.strongColor, "rgb(204, 204, 204)", "SSH .bar strong falls back to its own #cccccc");
 
       // --- 真实 SDK mountBlockList：token 继承、选择状态与销毁 ---
-      // 组件来自 packages/plugin-sdk/src/components/block-list.ts 的构建产物，
+      // 组件来自 packages/driver-sdk/src/components/block-list.ts 的构建产物，
       // 页面以动态 import 加载，脚本里没有任何手写 DOM 或样式替身。
       await page.evaluate(`(async () => { window.__sdkModule = await window.__cotermTest.loadSdk(); })()`);
       const blockStyles = await page.evaluate(`(() => {
@@ -705,8 +657,8 @@ test("Snapshot failure keeps the last valid attention state on screen", async (t
       approvals: [{
         operationId: "op-1",
         proposalId: "proposal-1",
-        pluginId: "ssh",
-        pluginInstanceId: "inst-1",
+        driverId: "ssh",
+        driverInstanceId: "inst-1",
         operation: "terminal.write",
         targetLabel: "Prod-Server",
         createdAt: "2026-10-22T00:00:00Z",
@@ -715,8 +667,8 @@ test("Snapshot failure keeps the last valid attention state on screen", async (t
     },
     history: [{
       operationId: "op-1",
-      pluginId: "ssh",
-      pluginInstanceId: "inst-1",
+      driverId: "ssh",
+      driverInstanceId: "inst-1",
       operation: "terminal.write",
       status: "awaiting_approval",
       proposalId: "proposal-1",
@@ -780,8 +732,8 @@ test("Multi-card independent approvals and UI convergence in the browser", async
         {
           operationId: "op-inst-1",
           proposalId: "prop-1",
-          pluginId: "ssh",
-          pluginInstanceId: "inst-1",
+          driverId: "ssh",
+          driverInstanceId: "inst-1",
           operation: "terminal.write",
           targetLabel: "Web-Server",
           createdAt: "2026-10-22T00:00:00Z",
@@ -789,19 +741,19 @@ test("Multi-card independent approvals and UI convergence in the browser", async
         {
           operationId: "op-inst-2",
           proposalId: "prop-2",
-          pluginId: "ssh",
-          pluginInstanceId: "inst-2",
+          driverId: "ssh",
+          driverInstanceId: "inst-2",
           operation: "terminal.write",
           targetLabel: "DB-Server",
           createdAt: "2026-10-22T00:01:00Z",
         },
         {
-          operationId: "op-plugin-1",
+          operationId: "op-driver-1",
           proposalId: "prop-3",
-          pluginId: "ssh",
-          pluginInstanceId: null,
+          driverId: "ssh",
+          driverInstanceId: null,
           operation: "ssh.scan",
-          targetLabel: "SSH Plugin",
+          targetLabel: "SSH Driver",
           createdAt: "2026-10-22T00:02:00Z",
         },
       ],
@@ -810,8 +762,8 @@ test("Multi-card independent approvals and UI convergence in the browser", async
     history: [
       {
         operationId: "op-inst-1",
-        pluginId: "ssh",
-        pluginInstanceId: "inst-1",
+        driverId: "ssh",
+        driverInstanceId: "inst-1",
         operation: "terminal.write",
         status: "awaiting_approval",
         proposalId: "prop-1",
@@ -819,16 +771,16 @@ test("Multi-card independent approvals and UI convergence in the browser", async
       },
       {
         operationId: "op-inst-2",
-        pluginId: "ssh",
-        pluginInstanceId: "inst-2",
+        driverId: "ssh",
+        driverInstanceId: "inst-2",
         operation: "terminal.write",
         status: "awaiting_approval",
         proposalId: "prop-2",
         input: { command: "journalctl -u nginx" },
       },
       {
-        operationId: "op-plugin-1",
-        pluginId: "ssh",
+        operationId: "op-driver-1",
+        driverId: "ssh",
         operation: "ssh.scan",
         status: "awaiting_approval",
         proposalId: "prop-3",
@@ -886,21 +838,21 @@ test("Multi-card independent approvals and UI convergence in the browser", async
       );
       const afterApprove = await cardTargets();
       assert.ok(afterApprove.some((t) => t.includes("DB-Server")), "DB-Server card survives the first approval");
-      assert.ok(afterApprove.some((t) => t.includes("SSH Plugin")), "plugin-level card survives the first approval");
+      assert.ok(afterApprove.some((t) => t.includes("SSH Driver")), "driver-level card survives the first approval");
       assert.ok(!afterApprove.some((t) => t.includes("Web-Server")), "the decided card is gone");
 
       // 批准必须打到真实的 command + 参数 + 提案身份，并被未决卡片保留验证。
       const approveCalls = await page.evaluate(`window.__cotermTest.approveCalls`);
       assert.equal(approveCalls.length, 1, "exactly one approve command issued");
       assert.equal(approveCalls[0].command, "approve_proposal", "instance-level card uses approve_proposal");
-      assert.equal(approveCalls[0].pluginInstanceId, "inst-1", "approve targets the card's own instance");
+      assert.equal(approveCalls[0].driverInstanceId, "inst-1", "approve targets the card's own instance");
       assert.equal(approveCalls[0].proposalId, "prop-1", "approve carries the card's proposal id");
       assert.deepEqual(approveCalls[0].args, { command: "systemctl restart nginx" }, "approve carries the edited draft args");
 
-      // 用户拒绝插件级卡片（SSH Plugin）——按身份定位，不按索引。
+      // 用户拒绝驱动级卡片（SSH Driver）——按身份定位，不按索引。
       await page.evaluate(`(() => {
         const cards = [...document.querySelectorAll('form[aria-label="Agent operation approval"]')];
-        const card = cards.find((item) => item.querySelector('[id$="-target"]').textContent.includes("SSH Plugin"));
+        const card = cards.find((item) => item.querySelector('[id$="-target"]').textContent.includes("SSH Driver"));
         card.querySelector('button[type="button"]').click();
       })()`);
 
@@ -908,7 +860,7 @@ test("Multi-card independent approvals and UI convergence in the browser", async
       await waitForValue(
         { send: page.send },
         `document.querySelectorAll('form[aria-label="Agent operation approval"]').length === 1`,
-        { label: "1 approval card remaining after the plugin card is rejected" },
+        { label: "1 approval card remaining after the driver card is rejected" },
       );
       const afterReject = await cardTargets();
       assert.equal(afterReject.length, 1, "exactly one card remains");
@@ -916,9 +868,9 @@ test("Multi-card independent approvals and UI convergence in the browser", async
 
       const rejectCalls = await page.evaluate(`window.__cotermTest.rejectCalls`);
       assert.equal(rejectCalls.length, 1, "exactly one reject command issued");
-      assert.equal(rejectCalls[0].command, "reject_plugin_proposal", "plugin-level card uses reject_plugin_proposal");
-      assert.equal(rejectCalls[0].pluginId, "ssh", "plugin-level reject targets the plugin id");
-      assert.equal(rejectCalls[0].proposalId, "prop-3", "plugin-level reject carries its proposal id");
+      assert.equal(rejectCalls[0].command, "reject_driver_proposal", "driver-level card uses reject_driver_proposal");
+      assert.equal(rejectCalls[0].driverId, "ssh", "driver-level reject targets the driver id");
+      assert.equal(rejectCalls[0].proposalId, "prop-3", "driver-level reject carries its proposal id");
 
       // 用户批准剩余卡片。
       await page.evaluate(`(() => {
@@ -935,7 +887,7 @@ test("Multi-card independent approvals and UI convergence in the browser", async
       const finalApproves = await page.evaluate(`window.__cotermTest.approveCalls`);
       assert.equal(finalApproves.length, 2, "two approvals in total, one per approved card");
       assert.equal(finalApproves[1].command, "approve_proposal");
-      assert.equal(finalApproves[1].pluginInstanceId, "inst-2", "the last approval targets the DB-Server instance");
+      assert.equal(finalApproves[1].driverInstanceId, "inst-2", "the last approval targets the DB-Server instance");
       assert.equal(finalApproves[1].proposalId, "prop-2", "the last approval carries the DB-Server proposal id");
       assert.deepEqual(finalApproves[1].args, { command: "journalctl -u nginx" }, "the last approval carries the DB-Server draft args");
     } finally {

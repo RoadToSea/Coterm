@@ -12,20 +12,19 @@ import { Badge } from "./components/ui/badge";
 import { Separator } from "./components/ui/separator";
 import { Skeleton } from "./components/ui/skeleton";
 import { Alert, AlertDescription } from "./components/ui/alert";
-import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "./components/ui/empty";
+import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "./components/ui/empty";
 import { cn } from "./lib/utils";
 import { HostInteractions } from "./components/host/HostInteractions";
 import { HostApprovals } from "./components/host/HostApprovals";
 import { ApprovalSettings } from "./components/host/ApprovalSettings";
 import { Modal } from "./components/ui/Modal";
-import { PluginWorkspace } from "./components/plugins/PluginWorkspace";
-import { PluginConfiguration } from "./components/plugins/PluginConfiguration";
-import { PluginInstaller } from "./components/plugins/PluginInstaller";
+import { DriverWorkspace } from "./components/drivers/DriverWorkspace";
+import { DriverConfiguration } from "./components/drivers/DriverConfiguration";
 import {
   hostAPI,
   type InstanceInfo,
-  type PluginLoadIssue,
-  type PluginSummary,
+  type DriverLoadIssue,
+  type DriverSummary,
   type SavedWorkspace,
   type WorkspaceGroup,
 } from "./host-api";
@@ -63,9 +62,8 @@ export default function App() {
   }, []);
 
   const [approvalTarget, setApprovalTarget] = useState<InstanceInfo | null>(null);
-  const [installerOpen, setInstallerOpen] = useState(false);
-  const [plugins, setPlugins] = useState<PluginSummary[]>([]);
-  const [pluginIssues, setPluginIssues] = useState<PluginLoadIssue[]>([]);
+  const [drivers, setDrivers] = useState<DriverSummary[]>([]);
+  const [driverIssues, setDriverIssues] = useState<DriverLoadIssue[]>([]);
   const [instances, setInstances] = useState<InstanceInfo[]>([]);
   const [managedInstanceId, setManagedInstanceId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -79,9 +77,9 @@ export default function App() {
   const [workspaceError, setWorkspaceError] = useState<string | null>(null);
   const views = useInstanceViews(instances, loading);
   const activeInstanceId = views.activeId;
-  const selectedPluginId = views.pluginId;
-  const approvalInstance = !selectedPluginId ? instances.find(instance => instance.pluginInstanceId === activeInstanceId) ?? null : null;
-  const approvalInstanceId = approvalInstance?.pluginInstanceId ?? null;
+  const selectedDriverId = views.driverId;
+  const approvalInstance = !selectedDriverId ? instances.find(instance => instance.driverInstanceId === activeInstanceId) ?? null : null;
+  const approvalInstanceId = approvalInstance?.driverInstanceId ?? null;
   const bypass = bypassState?.instanceId === approvalInstanceId && bypassState?.enabled === true;
   const bypassReady = !!approvalInstanceId && bypassState?.instanceId === approvalInstanceId;
 
@@ -95,8 +93,8 @@ export default function App() {
     }
     return () => { disposed = true; };
   }, [approvalInstanceId]);
-  const managedInstance = instances.find(instance => instance.pluginInstanceId === managedInstanceId) ?? null;
-  const openInstances = views.ids.flatMap(id => instances.find(instance => instance.pluginInstanceId === id) ?? []);
+  const managedInstance = instances.find(instance => instance.driverInstanceId === managedInstanceId) ?? null;
+  const openInstances = views.ids.flatMap(id => instances.find(instance => instance.driverInstanceId === id) ?? []);
   const formatError = (reason: unknown) => typeof reason === "object" && reason !== null && "code" in reason
     ? String((reason as { code: unknown }).code) : String(reason);
 
@@ -128,30 +126,30 @@ export default function App() {
       const index = workspace?.entries.findIndex((entry) => entry.instanceId === id) ?? -1;
       return index < 0 ? Number.MAX_SAFE_INTEGER : index;
     };
-    return rank(left.pluginInstanceId) - rank(right.pluginInstanceId);
+    return rank(left.driverInstanceId) - rank(right.driverInstanceId);
   }), [instances, workspace]);
 
   useEffect(() => {
     if (!workspace || workspaceError || busyId !== null) return;
     const timer = window.setTimeout(() => {
-      void hostAPI.saveLayout(activeInstanceId, instancesCollapsed, orderedInstances.map((item) => item.pluginInstanceId), activeWorkspaceId)
+      void hostAPI.saveLayout(activeInstanceId, instancesCollapsed, orderedInstances.map((item) => item.driverInstanceId), activeWorkspaceId)
         .catch((reason) => setWorkspaceError(formatError(reason)));
     }, 250);
     return () => window.clearTimeout(timer);
   }, [activeInstanceId, instancesCollapsed, orderedInstances, workspace, workspaceError, activeWorkspaceId, busyId]);
 
-  const selectedPlugin = plugins.find((plugin) => plugin.id === selectedPluginId) ?? null;
+  const selectedDriver = drivers.find((driver) => driver.id === selectedDriverId) ?? null;
   const refresh = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
       const [catalog, nextInstances] = await Promise.all([
-        hostAPI.listPlugins(),
+        hostAPI.listDrivers(),
         hostAPI.listInstances(),
       ]);
-      // 坏包只进诊断列表，有效插件照常列出。
-      setPlugins(catalog.plugins);
-      setPluginIssues(catalog.issues);
+      // 坏包只进诊断列表，有效驱动照常列出。
+      setDrivers(catalog.drivers);
+      setDriverIssues(catalog.issues);
       setInstances(nextInstances);
     } catch (reason) {
       setError(String(reason));
@@ -171,11 +169,11 @@ export default function App() {
     const timer = window.setInterval(() => {
       if (pending) return;
       pending = true;
-      void hostAPI.runtimeStatus().then(({ instances: next, runningPlugins }) => {
+      void hostAPI.runtimeStatus().then(({ instances: next, runningDrivers }) => {
         if (disposed) return;
         setInstances((current) => JSON.stringify(current) === JSON.stringify(next) ? current : next);
-        setPlugins((current) => current.some((plugin) => plugin.running !== runningPlugins.includes(plugin.id))
-          ? current.map((plugin) => ({ ...plugin, running: runningPlugins.includes(plugin.id) })) : current);
+        setDrivers((current) => current.some((driver) => driver.running !== runningDrivers.includes(driver.id))
+          ? current.map((driver) => ({ ...driver, running: runningDrivers.includes(driver.id) })) : current);
       }).catch((reason) => { if (!disposed) setError(formatError(reason)); })
         .finally(() => { pending = false; });
     }, 1000);
@@ -188,7 +186,7 @@ export default function App() {
       const instance = await hostAPI.restoreInstance(configRef);
       await refresh();
       await refreshWorkspace();
-      views.open(instance.pluginInstanceId);
+      views.open(instance.driverInstanceId);
       const entry = workspace?.entries.find(item => item.configRef === configRef);
       if (entry) setActiveWorkspaceId(entry.workspaceId);
     } catch (reason) { setError(formatError(reason)); }
@@ -204,11 +202,11 @@ export default function App() {
     let active: string | null = null;
     for (const entry of workspace.entries) {
       if (entry.workspaceId !== workspaceId) continue;
-      if (instances.some((item) => item.pluginInstanceId === entry.instanceId)) continue;
+      if (instances.some((item) => item.driverInstanceId === entry.instanceId)) continue;
       try {
         const instance = await hostAPI.restoreInstance(entry.configRef);
-        restored.push(instance.pluginInstanceId);
-        if (!active || entry.configRef === workspace.layout.activeConfigRef) active = instance.pluginInstanceId;
+        restored.push(instance.driverInstanceId);
+        if (!active || entry.configRef === workspace.layout.activeConfigRef) active = instance.driverInstanceId;
       } catch (reason) { failures.push(`${entry.label}: ${formatError(reason)}`); }
     }
     await refresh();
@@ -220,8 +218,8 @@ export default function App() {
     setBusyId(null);
   };
 
-  const runPluginAction = async (pluginId: string, action: () => Promise<void>) => {
-    setBusyId(pluginId);
+  const runDriverAction = async (driverId: string, action: () => Promise<void>) => {
+    setBusyId(driverId);
     setError(null);
     try {
       await action();
@@ -234,17 +232,17 @@ export default function App() {
     }
   };
 
-  const createConfiguredInstance = async (pluginId: string, config: unknown, name?: string) => {
-    setBusyId(pluginId);
+  const createConfiguredInstance = async (driverId: string, config: unknown, name?: string) => {
+    setBusyId(driverId);
     setError(null);
     try {
-      if (!plugins.find((plugin) => plugin.id === pluginId)?.running) {
-        await hostAPI.startPlugin(pluginId);
+      if (!drivers.find((driver) => driver.id === driverId)?.running) {
+        await hostAPI.startDriver(driverId);
       }
-      const instance = await hostAPI.createInstance(pluginId, config, activeWorkspaceId, name);
+      const instance = await hostAPI.createInstance(driverId, config, activeWorkspaceId, name);
       await refresh();
       await refreshWorkspace();
-      views.open(instance.pluginInstanceId);
+      views.open(instance.driverInstanceId);
     } catch (reason) {
       setError(String(reason));
       throw reason;
@@ -255,7 +253,7 @@ export default function App() {
 
   const toggleBypass = async () => {
     if (!approvalInstance || !bypassReady || bypassAction.current) return;
-    const instanceId = approvalInstance.pluginInstanceId;
+    const instanceId = approvalInstance.driverInstanceId;
     const enabled = !bypass;
     if (enabled && !window.confirm(t("Enable Bypass for {name}? Only this instance will skip Coterm approval until it is closed.", { name: approvalInstance.label }))) return;
     bypassAction.current = true;
@@ -314,12 +312,12 @@ export default function App() {
   };
 
   const destroyInstance = async (instance: InstanceInfo) => {
-    const result = await promptForConfirmation(`destroy-${instance.pluginInstanceId}`, {
+    const result = await promptForConfirmation(`destroy-${instance.driverInstanceId}`, {
       title: t("Delete instance {name}", { name: instance.label }),
       prompt: t("This closes the connection and removes its saved restore entry."), allowCancel: true,
     });
     if (result.outcome !== "submitted") return;
-    await runPluginAction(instance.pluginInstanceId, () => hostAPI.destroyInstance(instance.pluginInstanceId));
+    await runDriverAction(instance.driverInstanceId, () => hostAPI.destroyInstance(instance.driverInstanceId));
     setManagedInstanceId(null);
   };
 
@@ -327,11 +325,11 @@ export default function App() {
     <Alert variant="destructive" className="break-words"><AlertDescription>{error}</AlertDescription></Alert>
   );
 
-  const pluginIssueNotice = pluginIssues.length > 0 && (
-    <ul role="status" aria-label={t("Plugin package issues")} className="max-h-32 overflow-y-auto break-words border-l-2 border-warning bg-warning-surface px-3 py-2 text-xs leading-relaxed text-warning">
-      {pluginIssues.map((issue) => (
+  const driverIssueNotice = driverIssues.length > 0 && (
+    <ul role="status" aria-label={t("Driver package issues")} className="max-h-32 overflow-y-auto break-words border-l-2 border-warning bg-warning-surface px-3 py-2 text-xs leading-relaxed text-warning">
+      {driverIssues.map((issue) => (
         <li key={`${issue.directory}:${issue.code}`} title={issue.code}>
-          <span className="font-medium">{issue.pluginId ? `${issue.pluginId} (${issue.directory})` : issue.directory}</span>
+          <span className="font-medium">{issue.driverId ? `${issue.driverId} (${issue.directory})` : issue.directory}</span>
           {" — "}
           {locale === "zh-CN" && t(issue.code) !== issue.code ? t(issue.code) : issue.message}
         </li>
@@ -366,7 +364,7 @@ export default function App() {
       {workspaceError && <div role="alert" className="px-3 py-2 text-xs text-destructive">
         {t("Workspace:")} {workspaceError}{t(". Saved state is preserved.")}
         {instances.length === 0 && <button className="ml-3 underline" onClick={() => {
-          void promptForConfirmation("workspace-reset", { title: t("Reset saved workspace?"), prompt: t("This removes saved configuration references and layout. Plugin data is unaffected.") })
+          void promptForConfirmation("workspace-reset", { title: t("Reset saved workspace?"), prompt: t("This removes saved configuration references and layout. Driver data is unaffected.") })
             .then(async (result) => {
               if (result.outcome !== "submitted") return;
               await hostAPI.resetWorkspace();
@@ -374,47 +372,42 @@ export default function App() {
             }).catch((reason) => setWorkspaceError(formatError(reason)));
         }}>{t("Reset saved workspace")}</button>}
       </div>}
-      {pluginIssueNotice}
-      {approvalTarget && <ApprovalSettings key={approvalTarget.pluginInstanceId} instance={approvalTarget} onClose={() => setApprovalTarget(null)} />}
-      {installerOpen && <PluginInstaller onClose={() => setInstallerOpen(false)} onInstalled={refresh} />}
+      {driverIssueNotice}
+      {approvalTarget && <ApprovalSettings key={approvalTarget.driverInstanceId} instance={approvalTarget} onClose={() => setApprovalTarget(null)} />}
 
       <div className="flex min-h-0 flex-1">
-        <aside aria-label={t("Installed plugins")} className="flex w-[64px] shrink-0 flex-col border-r border-coterm-border bg-coterm-surface-sidebar sm:w-[72px]">
+        <aside aria-label={t("Installed drivers")} className="flex w-[64px] shrink-0 flex-col border-r border-coterm-border bg-coterm-surface-sidebar sm:w-[72px]">
           {instancesCollapsed && <Button variant="ghost" size="icon" type="button" id="toggle-instances-button"
             className="mx-auto mt-3 shrink-0" aria-controls="instances-sidebar" aria-expanded={false}
             aria-label={t("Expand instances panel")} title={t("Expand instances panel")}
             onClick={() => setInstancesCollapsed(false)}><PanelLeftOpen data-icon="inline-start" /></Button>}
-          <nav aria-label={t("Plugin list")} aria-busy={loading} className="min-h-0 flex-1 overflow-y-auto pt-3">
-            {loading && plugins.length === 0 ? (
-              <div aria-label={t("Loading plugins")} className="flex flex-col items-center gap-4 py-2">
+          <nav aria-label={t("Driver list")} aria-busy={loading} className="min-h-0 flex-1 overflow-y-auto pt-3">
+            {loading && drivers.length === 0 ? (
+              <div aria-label={t("Loading drivers")} className="flex flex-col items-center gap-4 py-2">
                 {[0, 1, 2].map((item) => <Skeleton key={item} className="size-8" />)}
               </div>
-            ) : plugins.map((plugin) => (
+            ) : drivers.map((driver) => (
               <button
-                key={plugin.id}
+                key={driver.id}
                 type="button"
-                title={`${plugin.name} · ${plugin.version} · ${plugin.running ? t("Running") : t("Stopped")}`}
-                aria-label={t("Manage {name}", { name: plugin.name })}
-                aria-controls="plugin-configuration"
-                aria-pressed={selectedPluginId === plugin.id}
-                onClick={() => views.configure(plugin.id)}
-                className={cn("group relative flex min-h-16 w-full flex-col items-center justify-center gap-1.5 border-l-2 px-1 py-3 transition-colors hover:bg-accent", selectedPluginId === plugin.id ? "border-primary bg-accent" : "border-transparent")}
+                title={`${driver.name} · ${driver.version} · ${driver.running ? t("Running") : t("Stopped")}`}
+                aria-label={t("Manage {name}", { name: driver.name })}
+                aria-controls="driver-configuration"
+                aria-pressed={selectedDriverId === driver.id}
+                onClick={() => views.configure(driver.id)}
+                className={cn("group relative flex min-h-16 w-full flex-col items-center justify-center gap-1.5 border-l-2 px-1 py-3 transition-colors hover:bg-accent", selectedDriverId === driver.id ? "border-primary bg-accent" : "border-transparent")}
               >
                 <span className="relative grid h-7 w-8 place-items-center">
-                  <PlugZap size={25} strokeWidth={1.5} className={plugin.running ? "text-primary" : "text-muted-foreground"} data-plugin-icon />
-                  <span className={cn("absolute bottom-0 right-0 size-2 rounded-full ring-2 ring-card", plugin.running ? "bg-success" : "bg-muted-foreground")} />
+                  <PlugZap size={25} strokeWidth={1.5} className={driver.running ? "text-primary" : "text-muted-foreground"} data-driver-icon />
+                  <span className={cn("absolute bottom-0 right-0 size-2 rounded-full ring-2 ring-card", driver.running ? "bg-success" : "bg-muted-foreground")} />
                 </span>
-                <span className="w-full truncate text-center text-[10px] text-coterm-text-subtle">{plugin.name}</span>
+                <span className="w-full truncate text-center text-[10px] text-coterm-text-subtle">{driver.name}</span>
               </button>
             ))}
-            {!loading && plugins.length === 0 && <p className="px-1 py-3 text-center text-[10px] leading-relaxed text-coterm-text-subtle">{t("No plugins")}</p>}
+            {!loading && drivers.length === 0 && <p className="px-1 py-3 text-center text-[10px] leading-relaxed text-coterm-text-subtle">{t("No drivers")}</p>}
           </nav>
           <Separator />
           <div className="flex flex-col items-center gap-2 py-3">
-            <Button variant="outline" size="icon" type="button" id="install-plugin-button" title={t("Install plugin")} aria-label={t("Install plugin")}
-              aria-haspopup="dialog" onClick={() => setInstallerOpen(true)}>
-              <Plus data-icon="inline-start" />
-            </Button>
             <Button variant="ghost" size="icon"
               type="button"
               title={t(bypass ? "Bypass on — click to require approval" : "Agent approval on — click to enable bypass")}
@@ -466,64 +459,63 @@ export default function App() {
                 {["w-3/4", "w-1/2"].map((width) => <Skeleton key={width} className={cn("h-3", width)} />)}
               </div>
             ) : <WorkspaceInstances workspace={workspace ?? EMPTY_WORKSPACE} instances={orderedInstances}
-              activeInstanceId={selectedPluginId ? null : activeInstanceId} activeWorkspaceId={activeWorkspaceId} busy={busyId !== null}
-              onSelect={(instance, groupId) => { views.open(instance.pluginInstanceId); setActiveWorkspaceId(groupId); }}
-              onSelectWorkspace={setActiveWorkspaceId} onManage={instance => setManagedInstanceId(instance.pluginInstanceId)}
+              activeInstanceId={selectedDriverId ? null : activeInstanceId} activeWorkspaceId={activeWorkspaceId} busy={busyId !== null}
+              onSelect={(instance, groupId) => { views.open(instance.driverInstanceId); setActiveWorkspaceId(groupId); }}
+              onSelectWorkspace={setActiveWorkspaceId} onManage={instance => setManagedInstanceId(instance.driverInstanceId)}
               onDestroy={instance => void destroyInstance(instance)} onDeleteWorkspace={group => void deleteWorkspace(group)}
               onMove={(ref, groupId) => void moveWorkspaceEntry(ref, groupId)} onRestore={ref => void restoreSavedInstance(ref)}
               onRestoreWorkspace={groupId => void restoreWorkspace(groupId)}
-              onForget={ref => { void runPluginAction(ref, () => hostAPI.forgetInstance(ref)); }} />}
+              onForget={ref => { void runDriverAction(ref, () => hostAPI.forgetInstance(ref)); }} />}
             {!loading && instances.length === 0 && (workspace?.entries.length ?? 0) === 0 && (
               <div className="px-5 py-5 text-xs leading-5 text-coterm-text-muted">
                 <p>{t("No instances yet.")}</p>
-                <p className="mt-1">{t("Select a plugin on the left to create one.")}</p>
+                <p className="mt-1">{t("Select a driver on the left to create one.")}</p>
               </div>
             )}
           </nav>
         </aside>
 
-        <main aria-label={t("Plugin workspace")} className="relative isolate min-w-0 flex-1 overflow-hidden flex flex-col bg-coterm-surface" tabIndex={-1}>
-          <InstanceTabs instances={openInstances} activeId={selectedPluginId ? null : activeInstanceId}
+        <main aria-label={t("Driver workspace")} className="relative isolate min-w-0 flex-1 overflow-hidden flex flex-col bg-coterm-surface" tabIndex={-1}>
+          <InstanceTabs instances={openInstances} activeId={selectedDriverId ? null : activeInstanceId}
             onSelect={id => {
               views.open(id);
               const entry = workspace?.entries.find(item => item.instanceId === id);
               if (entry) setActiveWorkspaceId(entry.workspaceId);
             }} onClose={views.close} />
           {errorNotice}
-          {selectedPlugin && <section id="plugin-configuration" aria-label={t("New instance")}
+          {selectedDriver && <section id="driver-configuration" aria-label={t("New instance")}
             className="min-h-0 flex-1 overflow-y-auto p-5 sm:p-8">
             <div className="mx-auto max-w-xl rounded-xl border border-border bg-card p-5 sm:p-6">
               <div className="mb-6 flex items-center gap-3">
                 <PlugZap className="size-6 shrink-0 text-primary" />
                 <div className="min-w-0">
-                  <h1 className="text-lg font-medium">{selectedPlugin.name} · {t("New instance")}</h1>
+                  <h1 className="text-lg font-medium">{selectedDriver.name} · {t("New instance")}</h1>
                   <p className="mt-1 text-xs text-muted-foreground">{t("Workspace:")} {workspaceName((workspace ?? EMPTY_WORKSPACE).groups.find(group => group.id === activeWorkspaceId) ?? EMPTY_WORKSPACE.groups[0])}</p>
                 </div>
               </div>
-              {selectedPlugin.hasFrontend
-                ? <PluginConfiguration key={selectedPlugin.id} pluginId={selectedPlugin.id}
-                    disabled={busyId !== null} onSubmit={(config, name) => createConfiguredInstance(selectedPlugin.id, config, name)} />
-                : <p role="status" className="text-sm text-muted-foreground">{t("This plugin does not provide a connection configuration screen.")}</p>}
+              {selectedDriver.hasFrontend
+                ? <DriverConfiguration key={selectedDriver.id} driverId={selectedDriver.id}
+                    disabled={busyId !== null} onSubmit={(config, name) => createConfiguredInstance(selectedDriver.id, config, name)} />
+                : <p role="status" className="text-sm text-muted-foreground">{t("This driver does not provide a connection configuration screen.")}</p>}
             </div>
           </section>}
-          {!selectedPlugin && !activeInstanceId && !loading && <Empty>
+          {!selectedDriver && !activeInstanceId && !loading && <Empty>
             <EmptyHeader>
               <EmptyMedia variant="icon"><TerminalSquare /></EmptyMedia>
               <EmptyTitle>{t("Ready when you are")}</EmptyTitle>
-              <EmptyDescription>{t("Open an instance from the sidebar, or select a plugin to create a connection.")}</EmptyDescription>
+              <EmptyDescription>{t("Open an instance from the sidebar, or select a driver to create a connection.")}</EmptyDescription>
             </EmptyHeader>
-            <EmptyContent><Button variant="outline" onClick={() => setInstallerOpen(true)}><Plus data-icon="inline-start" />{t("Install plugin")}</Button></EmptyContent>
           </Empty>}
-          {openInstances.map(instance => <section key={instance.pluginInstanceId} role="tabpanel"
-            id={instancePanelId(instance.pluginInstanceId)} aria-labelledby={instanceTabId(instance.pluginInstanceId)}
-            hidden={!!selectedPluginId || instance.pluginInstanceId !== activeInstanceId} tabIndex={0}
+          {openInstances.map(instance => <section key={instance.driverInstanceId} role="tabpanel"
+            id={instancePanelId(instance.driverInstanceId)} aria-labelledby={instanceTabId(instance.driverInstanceId)}
+            hidden={!!selectedDriverId || instance.driverInstanceId !== activeInstanceId} tabIndex={0}
             className="min-h-0 flex-1 overflow-hidden">
-            {instance.status === "ready" && (workspace !== null || workspaceError !== null) && <PluginWorkspace instance={instance}
-              configRef={workspace?.entries.find(entry => entry.instanceId === instance.pluginInstanceId)?.configRef} />}
+            {instance.status === "ready" && (workspace !== null || workspaceError !== null) && <DriverWorkspace instance={instance}
+              configRef={workspace?.entries.find(entry => entry.instanceId === instance.driverInstanceId)?.configRef} />}
             {instance.status !== "ready" && instance.status !== "failed" && <p role="status" className="p-5 text-sm text-muted-foreground">{t(instance.status)}</p>}
             {instance.status === "failed" && <div role="alert" className="p-5 text-sm text-destructive">
-              <p>{t("Plugin stopped unexpectedly. In-flight results are unknown. Operations will not be replayed.")}</p>
-              {workspace?.entries.filter(entry => entry.instanceId === instance.pluginInstanceId).map(entry =>
+              <p>{t("Driver stopped unexpectedly. In-flight results are unknown. Operations will not be replayed.")}</p>
+              {workspace?.entries.filter(entry => entry.instanceId === instance.driverInstanceId).map(entry =>
                 <Button key={entry.configRef} variant="outline" size="sm" disabled={busyId !== null}
                   className="mt-3" onClick={() => void restoreSavedInstance(entry.configRef)}>{t("Restart instance")}</Button>)}
             </div>}
@@ -534,7 +526,7 @@ export default function App() {
 
       <footer className="flex h-8 shrink-0 items-center justify-between gap-3 border-t border-coterm-border bg-coterm-surface-raised px-3 text-[10px] text-coterm-text-muted">
         <div className="flex items-center gap-4">
-          <span>{plugins.length} {t("plugins")}</span>
+          <span>{drivers.length} {t("drivers")}</span>
           <span>{instances.length} {t("instances")}</span>
           <span className="hidden sm:inline" title={t("Bounded operation history is cleared on application exit")}>{t("History: this session")}</span>
           {busyId && <span role="status">{t("Updating…")}</span>}
@@ -550,14 +542,14 @@ export default function App() {
               <h2 className="min-w-0 truncate text-lg font-medium">{managedInstance.label}</h2>
               <Badge variant="secondary">{t(managedInstance.status)}</Badge>
             </div>
-            <p className="text-xs text-muted-foreground">{t("Plugin")}: {plugins.find(plugin => plugin.id === managedInstance.pluginId)?.name ?? managedInstance.pluginId}</p>
+            <p className="text-xs text-muted-foreground">{t("Driver")}: {drivers.find(driver => driver.id === managedInstance.driverId)?.name ?? managedInstance.driverId}</p>
             {workspace && <label className="flex items-center gap-3 text-xs">
               {t("Move to workspace")}
-              <select aria-label={t("Move to workspace")} disabled={busyId !== null || !workspace.entries.some(entry => entry.instanceId === managedInstance.pluginInstanceId)}
-                value={workspace.entries.find(entry => entry.instanceId === managedInstance.pluginInstanceId)?.workspaceId ?? workspace.groups[0]?.id}
+              <select aria-label={t("Move to workspace")} disabled={busyId !== null || !workspace.entries.some(entry => entry.instanceId === managedInstance.driverInstanceId)}
+                value={workspace.entries.find(entry => entry.instanceId === managedInstance.driverInstanceId)?.workspaceId ?? workspace.groups[0]?.id}
                 className="h-9 min-w-0 flex-1 rounded-md border border-input bg-background px-2"
                 onChange={event => {
-                  const entry = workspace.entries.find(item => item.instanceId === managedInstance.pluginInstanceId);
+                  const entry = workspace.entries.find(item => item.instanceId === managedInstance.driverInstanceId);
                   if (entry) void moveWorkspaceEntry(entry.configRef, event.target.value);
                 }}>
                 {workspace.groups.map(group => <option key={group.id} value={group.id}>{workspaceName(group)}</option>)}

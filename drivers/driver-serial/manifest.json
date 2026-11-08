@@ -1,0 +1,22 @@
+{
+  "manifestVersion": 1,
+  "id": "coterm-driver-serial",
+  "name": "Serial",
+  "version": "0.1.0",
+  "runtime": {
+    "interfaceMajor": 2,
+    "requires": ["instances", "backend-calls", "operation-catalog", "native-mcp-tools", "async-operations", "driver-events"]
+  },
+  "backend": {
+    "windows-x64": "backend/coterm-driver-serial.exe",
+    "windows-arm64": "backend/coterm-driver-serial.exe",
+    "linux-x64": "backend/coterm-driver-serial",
+    "linux-arm64": "backend/coterm-driver-serial",
+    "macos-x64": "backend/coterm-driver-serial",
+    "macos-arm64": "backend/coterm-driver-serial"
+  },
+  "frontend": { "entry": "frontend/index.js" },
+  "mcp": { "provider": "backend" },
+  "instances": { "type": "serial-port", "multiple": true },
+  "capabilities": ["confirmation"]
+}

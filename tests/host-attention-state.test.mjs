@@ -7,7 +7,7 @@
  * - `tests/host-interactions-component.test.mjs`：真实 HostInteractions 组件 + 真实 secret-input + 真实 IPC
  *   契约下的弹窗队列与凭据归属，在浏览器里跑。
  * - `tests/browser-layout.test.mjs`：真实构建产物的布局、真实 SDK 组件与真实 SSH 前端。
- * - Rust 测试（`plugins/plugin-ssh/tests/*`、`crates/*`）：协议核心与基座安全边界。
+ * - Rust 测试（`drivers/driver-ssh/tests/*`、`crates/*`）：协议核心与基座安全边界。
  *
  * 本文件不声称覆盖任何 UI 渲染或组件生命周期。
  */
@@ -81,12 +81,12 @@ async function waitFor(predicate, timeoutMs = 2000) {
   if (!predicate()) throw new Error("Timed out waiting for condition");
 }
 
-const { subscribeHostAttention, retryHostAttention, hostAPI, createPluginAPI } = await import("../apps/desktop/src/host-api.ts");
+const { subscribeHostAttention, retryHostAttention, hostAPI, createDriverAPI } = await import("../apps/desktop/src/host-api.ts");
 const { setLocale } = await import("../apps/desktop/src/i18n.ts");
 
-test("Plugin SDK language subscriptions are released with their frontend scope", () => {
+test("Driver SDK language subscriptions are released with their frontend scope", () => {
   setLocale("en");
-  const api = createPluginAPI({ pluginId: "ssh", pluginInstanceId: "locale-instance", sessionId: "locale-session", label: "Locale", status: "ready" });
+  const api = createDriverAPI({ driverId: "ssh", driverInstanceId: "locale-instance", sessionId: "locale-session", label: "Locale", status: "ready" });
   let calls = 0;
   api.i18n.subscribe(() => calls++);
   setLocale("zh-CN");
@@ -100,19 +100,19 @@ test("Plugin SDK language subscriptions are released with their frontend scope",
 
 // --- 2. subscribeHostAttention 可控并发、代次与生命周期测试 ---
 
-test("Plugin SDK exposes stable saved identity while operations remain bound to the runtime instance", async () => {
+test("Driver SDK exposes stable saved identity while operations remain bound to the runtime instance", async () => {
   const previousInvoke = mockInvoke;
   const calls = [];
   mockInvoke = async (command, args) => { calls.push({ command, args }); return { status: "completed" }; };
-  const instance = { pluginId: "serial", pluginInstanceId: "runtime-one", sessionId: "session-one", label: "Board", status: "ready" };
-  const first = createPluginAPI(instance, "saved-reference");
-  const restored = createPluginAPI({ ...instance, pluginInstanceId: "runtime-two", sessionId: "session-two", label: "Renamed" }, "saved-reference");
-  const unsaved = createPluginAPI(instance);
+  const instance = { driverId: "serial", driverInstanceId: "runtime-one", sessionId: "session-one", label: "Board", status: "ready" };
+  const first = createDriverAPI(instance, "saved-reference");
+  const restored = createDriverAPI({ ...instance, driverInstanceId: "runtime-two", sessionId: "session-two", label: "Renamed" }, "saved-reference");
+  const unsaved = createDriverAPI(instance);
   try {
     assert.equal(first.instanceConfigRef, restored.instanceConfigRef);
     assert.equal(unsaved.instanceConfigRef, undefined);
     await restored.invoke("serial.status", {});
-    assert.equal(calls.at(-1).args.pluginInstanceId, "runtime-two");
+    assert.equal(calls.at(-1).args.driverInstanceId, "runtime-two");
     assert.equal("instanceConfigRef" in calls.at(-1).args, false, "saved identity is not an IPC routing target");
   } finally { first.dispose(); restored.dispose(); unsaved.dispose(); mockInvoke = previousInvoke; }
 });
@@ -326,14 +326,14 @@ test("subscribeHostAttention: snapshot failure keeps last valid state and recove
 
 // --- 3. 审批请求的宿主级路由（不用手写 map/filter 冒充 UI） ---
 // 真实卡片的渲染、命令名/参数与未决身份断言在 `browser-layout.test.mjs` 里跑。
-// 这里只验证 hostAPI 这一层：实例级与插件级分别路由到正确的命令和参数。
+// 这里只验证 hostAPI 这一层：实例级与驱动级分别路由到正确的命令和参数。
 
-test("hostAPI routes instance-level and plugin-level approvals to distinct commands", async () => {
+test("hostAPI routes instance-level and driver-level approvals to distinct commands", async () => {
   const approved = [];
   const rejected = [];
   mockInvoke = async (cmd, args) => {
     if (cmd === "approve_proposal" || cmd === "reject_proposal"
-      || cmd === "approve_plugin_proposal" || cmd === "reject_plugin_proposal") {
+      || cmd === "approve_driver_proposal" || cmd === "reject_driver_proposal") {
       (cmd.startsWith("approve") ? approved : rejected).push({ cmd, args });
       return cmd.startsWith("approve") ? { operationId: args.proposalId, status: "completed" } : null;
     }
@@ -342,23 +342,23 @@ test("hostAPI routes instance-level and plugin-level approvals to distinct comma
 
   await hostAPI.approveProposal("inst-1", "prop-inst-1", { command: "systemctl restart nginx" });
   await hostAPI.rejectProposal("inst-1", "prop-inst-2");
-  await hostAPI.approvePluginProposal("ssh", "prop-plugin-1", { action: "scan" });
-  await hostAPI.rejectPluginProposal("ssh", "prop-plugin-2");
+  await hostAPI.approveDriverProposal("ssh", "prop-driver-1", { action: "scan" });
+  await hostAPI.rejectDriverProposal("ssh", "prop-driver-2");
 
-  assert.deepEqual(approved.map((item) => item.cmd), ["approve_proposal", "approve_plugin_proposal"]);
+  assert.deepEqual(approved.map((item) => item.cmd), ["approve_proposal", "approve_driver_proposal"]);
   assert.deepEqual(approved[0].args, {
-    pluginInstanceId: "inst-1",
+    driverInstanceId: "inst-1",
     proposalId: "prop-inst-1",
     args: { command: "systemctl restart nginx" },
   }, "instance-level approval binds its own instance, proposal and draft args");
   assert.deepEqual(approved[1].args, {
-    pluginId: "ssh",
-    proposalId: "prop-plugin-1",
+    driverId: "ssh",
+    proposalId: "prop-driver-1",
     args: { action: "scan" },
-  }, "plugin-level approval binds the plugin id instead of an instance");
-  assert.deepEqual(rejected.map((item) => item.cmd), ["reject_proposal", "reject_plugin_proposal"]);
-  assert.deepEqual(rejected[0].args, { pluginInstanceId: "inst-1", proposalId: "prop-inst-2" });
-  assert.deepEqual(rejected[1].args, { pluginId: "ssh", proposalId: "prop-plugin-2" });
+  }, "driver-level approval binds the driver id instead of an instance");
+  assert.deepEqual(rejected.map((item) => item.cmd), ["reject_proposal", "reject_driver_proposal"]);
+  assert.deepEqual(rejected[0].args, { driverInstanceId: "inst-1", proposalId: "prop-inst-2" });
+  assert.deepEqual(rejected[1].args, { driverId: "ssh", proposalId: "prop-driver-2" });
 });
 
 // --- 4. secret-input 自身行为（不经过组件，也不声称覆盖组件生命周期） ---

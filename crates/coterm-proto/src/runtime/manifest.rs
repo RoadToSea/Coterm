@@ -1,20 +1,20 @@
-//! 插件包声明。只描述装配信息，不规定协议配置和领域数据。
+//! 驱动包声明。只描述装配信息，不规定协议配置和领域数据。
 
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use super::PluginId;
+use super::DriverId;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct PluginManifest {
+pub struct DriverManifest {
     pub manifest_version: u16,
-    pub id: PluginId,
+    pub id: DriverId,
     pub name: String,
     pub version: String,
     pub runtime: RuntimeRequirement,
-    /// 平台标识 -> 包内相对入口路径；不得越出插件包。
+    /// 平台标识 -> 包内相对入口路径；不得越出驱动包。
     pub backend: BTreeMap<String, String>,
     pub frontend: Option<FrontendEntry>,
     pub mcp: McpEntry,
@@ -49,6 +49,6 @@ pub enum McpProvider {
 pub struct InstanceDeclaration {
     #[serde(rename = "type")]
     pub instance_type: String,
-    /// 社区插件须支持多实例；保留此字段用于校验清单。
+    /// 社区驱动须支持多实例；保留此字段用于校验清单。
     pub multiple: bool,
 }

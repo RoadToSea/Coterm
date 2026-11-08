@@ -1,4 +1,4 @@
-/** Actual desktop -> PluginAPI -> Serial frontend; both saved instances use the same COM port. */
+/** Actual desktop -> DriverAPI -> Serial frontend; both saved instances use the same COM port. */
 import test from "node:test";
 import assert from "node:assert/strict";
 import { assertFreshBuild, evaluate, findBrowser, openSession, startStaticServer, waitForValue } from "./support/browser-harness.mjs";
@@ -9,13 +9,13 @@ test("desktop forwards saved instance identity across restart, name changes and 
   if (!browserPath) { t.skip("No Chrome/Edge binary"); return; }
   assertFreshBuild();
   const scenario = structuredClone(defaultScenario);
-  scenario.catalog = { plugins: [{ id: "serial", name: "Serial", version: "0.1.0", hasFrontend: true, running: true }], issues: [] };
+  scenario.catalog = { drivers: [{ id: "serial", name: "Serial", version: "0.1.0", hasFrontend: true, running: true }], issues: [] };
   scenario.instances = [
-    { pluginId: "serial", pluginInstanceId: "runtime-one", sessionId: "session-one", label: "Board A", status: "ready" },
-    { pluginId: "serial", pluginInstanceId: "runtime-two", sessionId: "session-two", label: "Board B", status: "ready" },
+    { driverId: "serial", driverInstanceId: "runtime-one", sessionId: "session-one", label: "Board A", status: "ready" },
+    { driverId: "serial", driverInstanceId: "runtime-two", sessionId: "session-two", label: "Board B", status: "ready" },
   ];
   scenario.workspace = { entries: scenario.instances.map((instance, index) => ({
-    pluginId: "serial", configRef: "saved-" + index, instanceId: instance.pluginInstanceId, label: instance.label, workspaceId: "default",
+    driverId: "serial", configRef: "saved-" + index, instanceId: instance.driverInstanceId, label: instance.label, workspaceId: "default",
   })) };
   const server = await startStaticServer();
   const session = await openSession({ browserPath });
@@ -47,7 +47,7 @@ test("desktop forwards saved instance identity across restart, name changes and 
     assert.equal(await run(`serialRoot().querySelector('[name=receiveCompleteLF]').checked`), false,
       "a different saved instance on the same COM port must keep its own display choices");
 
-    scenario.instances[0] = { ...scenario.instances[0], pluginInstanceId: "recreated-one", sessionId: "recreated-session", label: "Renamed board" };
+    scenario.instances[0] = { ...scenario.instances[0], driverInstanceId: "recreated-one", sessionId: "recreated-session", label: "Renamed board" };
     scenario.workspace.entries[0] = { ...scenario.workspace.entries[0], instanceId: "recreated-one", label: "Renamed board" };
     await client.send("Page.removeScriptToEvaluateOnNewDocument", { identifier: script.identifier });
     script = await client.send("Page.addScriptToEvaluateOnNewDocument", { source: makeHostMockSource(scenario) });

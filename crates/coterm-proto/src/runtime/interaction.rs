@@ -3,7 +3,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use super::{InteractionId, OperationId, PluginInstanceId};
+use super::{InteractionId, OperationId, DriverInstanceId};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -29,7 +29,7 @@ pub enum InteractionKind {
 #[serde(rename_all = "camelCase")]
 pub struct InteractionRequest {
     pub interaction_id: InteractionId,
-    pub plugin_instance_id: PluginInstanceId,
+    pub driver_instance_id: DriverInstanceId,
     pub operation_id: Option<OperationId>,
     pub kind: InteractionKind,
     pub title: String,
@@ -37,7 +37,7 @@ pub struct InteractionRequest {
     /// 交互有效期，与操作调用的 waitTimeoutMs 分开。
     pub timeout_ms: Option<u64>,
     pub allow_cancel: bool,
-    /// 基座受理交互时写入的绝对期限。插件发出的请求不带此字段，也不依赖它。
+    /// 基座受理交互时写入的绝对期限。驱动发出的请求不带此字段，也不依赖它。
     #[serde(default)]
     pub deadline: Option<DateTime<Utc>>,
 }
@@ -46,7 +46,7 @@ pub struct InteractionRequest {
 #[serde(rename_all = "camelCase")]
 pub struct SecretHandle {
     pub id: String,
-    pub plugin_instance_id: PluginInstanceId,
+    pub driver_instance_id: DriverInstanceId,
     pub purpose: String,
     pub expires_at: DateTime<Utc>,
 }
@@ -91,7 +91,7 @@ pub enum InteractionOutcome {
 #[serde(rename_all = "camelCase")]
 pub struct InteractionResult {
     pub interaction_id: InteractionId,
-    pub plugin_instance_id: PluginInstanceId,
+    pub driver_instance_id: DriverInstanceId,
     pub outcome: InteractionOutcome,
 }
 

@@ -1,7 +1,7 @@
 //! 标准 MCP Stdio 适配器：stdin/stdout 只承载 JSON-RPC，通过私有回环桥转发给桌面。
 //!
 //! 接收与发送分离到两个任务：任何一侧关闭或出错都不能丢帧，
-//! 且 stdout 始终只包含完整帧。插件由桌面运行时启动，本模块不接触插件进程。
+//! 且 stdout 始终只包含完整帧。驱动由桌面运行时启动，本模块不接触驱动进程。
 
 use anyhow::{bail, Context, Result};
 use tokio::{

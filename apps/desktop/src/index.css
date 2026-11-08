@@ -46,7 +46,7 @@
   --terminal-search: #e8cc76;
   --terminal-search-active: #d99b38;
 
-  /* Stable plugin tokens: inherited through Shadow DOM, no IPC required. */
+  /* Stable driver tokens: inherited through Shadow DOM, no IPC required. */
   --coterm-surface: hsl(var(--background));
   --coterm-surface-raised: hsl(var(--card));
   --coterm-surface-panel: hsl(var(--secondary));

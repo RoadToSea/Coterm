@@ -1,4 +1,4 @@
-/** Actual plugin bundles and xterm keyboard/paste events; clipboard writes are isolated. */
+/** Actual driver bundles and xterm keyboard/paste events; clipboard writes are isolated. */
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -8,15 +8,15 @@ for (const protocol of ["serial", "ssh"]) {
   test(`${protocol} Shell handles local shortcuts without sending them to the remote terminal`, async (t) => {
     const browserPath = findBrowser();
     if (!browserPath) { t.skip("No Chrome/Edge binary; terminal shortcuts were not browser-verified"); return; }
-    const artifact = new URL(`../plugins/plugin-${protocol}/dist/frontend/index.js`, import.meta.url);
+    const artifact = new URL(`../drivers/driver-${protocol}/dist/frontend/index.js`, import.meta.url);
     const built = fs.statSync(artifact).mtimeMs;
     for (const source of [
-      new URL(`../plugins/plugin-${protocol}/frontend/src/index.ts`, import.meta.url),
-      new URL(`../plugins/plugin-${protocol}/frontend/src/i18n.ts`, import.meta.url),
-      new URL("../packages/plugin-sdk/src/components/terminal-shortcuts.ts", import.meta.url),
-      new URL("../packages/plugin-sdk/src/components/terminal-search.ts", import.meta.url),
-      ...(protocol === "ssh" ? [new URL("../packages/plugin-sdk/src/components/terminal-blocks.ts", import.meta.url)] : []),
-    ]) assert.ok(built >= fs.statSync(source).mtimeMs, `rebuild plugin:${protocol}:build before testing`);
+      new URL(`../drivers/driver-${protocol}/frontend/src/index.ts`, import.meta.url),
+      new URL(`../drivers/driver-${protocol}/frontend/src/i18n.ts`, import.meta.url),
+      new URL("../packages/driver-sdk/src/components/terminal-shortcuts.ts", import.meta.url),
+      new URL("../packages/driver-sdk/src/components/terminal-search.ts", import.meta.url),
+      ...(protocol === "ssh" ? [new URL("../packages/driver-sdk/src/components/terminal-blocks.ts", import.meta.url)] : []),
+    ]) assert.ok(built >= fs.statSync(source).mtimeMs, `rebuild driver:${protocol}:build before testing`);
     const moduleURL = `data:text/javascript;base64,${fs.readFileSync(artifact).toString("base64")}`;
     const session = await openSession({ browserPath, totalTimeoutMs:30_000 });
     const { client } = session;

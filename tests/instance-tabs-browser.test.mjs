@@ -1,4 +1,4 @@
-/** Real host + real plugin frontends; only the Tauri backend contract is mocked. */
+/** Real host + real driver frontends; only the Tauri backend contract is mocked. */
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -9,14 +9,14 @@ test("inline protocol configuration and instance tabs preserve live frontends an
   const browserPath = findBrowser();
   if (!browserPath) { t.skip("No Chrome/Edge binary; instance tabs were not browser-verified"); return; }
   assertFreshBuild();
-  for (const plugin of ["ssh", "serial"]) {
-    assert.ok(fs.statSync(new URL(`../plugins/plugin-${plugin}/dist/frontend/index.js`, import.meta.url)).mtimeMs >=
-      fs.statSync(new URL(`../plugins/plugin-${plugin}/frontend/src/index.ts`, import.meta.url)).mtimeMs, "rebuild the actual plugin frontend");
+  for (const driver of ["ssh", "serial"]) {
+    assert.ok(fs.statSync(new URL(`../drivers/driver-${driver}/dist/frontend/index.js`, import.meta.url)).mtimeMs >=
+      fs.statSync(new URL(`../drivers/driver-${driver}/frontend/src/index.ts`, import.meta.url)).mtimeMs, "rebuild the actual driver frontend");
   }
   const scenario = structuredClone(defaultScenario);
   scenario.installPreview = {token:"tab-refresh-test",id:"test.tabs",name:"Tabs test",version:"0.1.0",platform:"windows-x64"};
   scenario.catalog.issues = [];
-  scenario.catalog.plugins.push(
+  scenario.catalog.drivers.push(
     {id:"serial",name:"Serial",version:"0.1.0",hasFrontend:true,running:false},
     {id:"local",name:"Local",version:"0.1.0",hasFrontend:false,running:false},
   );
@@ -41,14 +41,14 @@ test("inline protocol configuration and instance tabs preserve live frontends an
     await wait(`document.querySelector('#instance-panel-inst-1 div') && [...document.querySelectorAll('#instance-panel-inst-1 div')].some(el=>el.shadowRoot?.querySelector('.bar span')?.textContent==='Connected')`, "initial SSH frontend connected");
     await run(`window.originalHost=[...document.querySelectorAll('#instance-panel-inst-1 div')].find(el=>el.shadowRoot?.querySelector('.xterm'));
       window.originalRoot=originalHost.shadowRoot; window.originalTerminal=originalRoot.querySelector('.xterm');
-      window.baseSubscriptions=__cotermTest.countCalls('subscribe_plugin_events');
-      window.configuration=()=>[...document.querySelectorAll('#plugin-configuration div')].find(el=>el.shadowRoot?.querySelector('form'))?.shadowRoot;`);
+      window.baseSubscriptions=__cotermTest.countCalls('subscribe_driver_events');
+      window.configuration=()=>[...document.querySelectorAll('#driver-configuration div')].find(el=>el.shadowRoot?.querySelector('form'))?.shadowRoot;`);
     assert.equal(await run(`document.querySelectorAll('[role=tab]').length`), 1);
     await run(`document.querySelector('button[aria-label="Manage SSH"]').click()`);
     await wait(`!!configuration()?.querySelector('form')`, "SSH inline connection form");
     assert.equal(await run(`document.querySelector('dialog[open]')`), null, "new instance configuration does not open a dialog");
     assert.equal(await run(`document.getElementById('instance-panel-inst-1').hidden && originalHost.isConnected`), true);
-    assert.equal(await run(`/Plugin operations|Advanced JSON|Configuration \(JSON\)/.test(document.querySelector('main').textContent)`), false);
+    assert.equal(await run(`/Driver operations|Advanced JSON|Configuration \(JSON\)/.test(document.querySelector('main').textContent)`), false);
     assert.equal(await run(`__cotermTest.countCalls('list_operations')`), 0, "ordinary navigation no longer fetches operation debugger catalogs");
     assert.ok(await run(`[...configuration().querySelectorAll('input,button')].every(el=>parseFloat(getComputedStyle(el).borderRadius)>0)`));
 
@@ -56,18 +56,18 @@ test("inline protocol configuration and instance tabs preserve live frontends an
     await run(`window.formBefore=configuration().querySelector('form');
       (()=>{const fields=configuration().querySelectorAll('input');fields[0].value='lab.example';fields[2].value='tester';})();
       window.creationGate=__cotermTest.gate('create_instance');formBefore.requestSubmit();`);
-    await wait(`creationGate.size()===1 && document.querySelector('#plugin-configuration fieldset').getAttribute('aria-busy')==='true'`, "creation in flight");
-    assert.equal(await run(`document.querySelector('#plugin-configuration fieldset > div').inert`), true);
+    await wait(`creationGate.size()===1 && document.querySelector('#driver-configuration fieldset').getAttribute('aria-busy')==='true'`, "creation in flight");
+    assert.equal(await run(`document.querySelector('#driver-configuration fieldset > div').inert`), true);
     await run(`formBefore.requestSubmit()`);
     assert.equal(await run(`__cotermTest.countCalls('create_instance')`), 1, "duplicate submit is suppressed");
     await run(`creationGate.fail('simulated create failure')`);
     await wait(`configuration()?.querySelector('.error').textContent.includes('simulated create failure')`, "creation failure is visible");
     assert.equal(await run(`formBefore === configuration().querySelector('form') && configuration().querySelector('input').value==='lab.example'`), true);
     await run(`formBefore.requestSubmit()`);
-    await wait(`document.querySelectorAll('[role=tab]').length===2 && !document.getElementById('plugin-configuration')`, "successful creation opens a tab");
+    await wait(`document.querySelectorAll('[role=tab]').length===2 && !document.getElementById('driver-configuration')`, "successful creation opens a tab");
     const created = await run(`__cotermTest.invocations.filter(x=>x.command==='create_instance').at(-1).args`);
-    assert.deepEqual(created, {pluginId:"ssh",config:{host:"lab.example",port:22,username:"tester"},workspaceId:"default"});
-    await wait(`__cotermTest.countCalls('subscribe_plugin_events')===baseSubscriptions+1`, "new SSH subscription");
+    assert.deepEqual(created, {driverId:"ssh",config:{host:"lab.example",port:22,username:"tester"},workspaceId:"default"});
+    await wait(`__cotermTest.countCalls('subscribe_driver_events')===baseSubscriptions+1`, "new SSH subscription");
     assert.equal(await run(`originalHost.isConnected && document.getElementById('instance-panel-inst-1').hidden`), true);
 
     // Switching and visiting a config page preserve the real terminal DOM and subscription.
@@ -78,24 +78,24 @@ test("inline protocol configuration and instance tabs preserve live frontends an
     await selectTab("inst-1");
     assert.equal(await run(`originalHost.isConnected && originalRoot.querySelector('.xterm')===originalTerminal && originalRoot.querySelector('.xterm-helper-textarea').value==='pending input'`), true);
     assert.ok(await run(`originalRoot.querySelector('.xterm').textContent.includes('Connected to Prod-Server')`), "terminal replay output survives navigation");
-    assert.equal(await run(`__cotermTest.countCalls('subscribe_plugin_events')`), 2);
-    assert.equal(await run(`__cotermTest.countCalls('unsubscribe_plugin_events')`), 0);
+    assert.equal(await run(`__cotermTest.countCalls('subscribe_driver_events')`), 2);
+    assert.equal(await run(`__cotermTest.countCalls('unsubscribe_driver_events')`), 0);
 
-    // Serial uses its own rounded form, starts the stopped plugin and creates the chosen config.
+    // Serial uses its own rounded form, starts the stopped driver and creates the chosen config.
     await run(`document.querySelector('button[aria-label="Manage Serial"]').click()`);
     await wait(`!!configuration()?.querySelector('option[value="COM2"]')`, "serial inline protocol fields and detected ports");
     assert.ok(await run(`[...configuration().querySelectorAll('input:not([type=checkbox]),select,button')].every(el=>parseFloat(getComputedStyle(el).borderRadius)>0)`));
     assert.equal(await run(`configuration().querySelectorAll('textarea').length`), 0);
     await run(`configuration().querySelector('select').value='COM2';configuration().querySelector('form').requestSubmit()`);
     await wait(`document.querySelectorAll('[role=tab]').length===3 && document.getElementById('instance-tab-created-2')?.getAttribute('aria-selected')==='true'`, "serial created and selected");
-    await wait(`__cotermTest.countCalls('subscribe_plugin_events')===3`, "serial frontend mounted");
-    assert.equal(await run(`__cotermTest.countCalls('start_plugin')`), 2, "configuration lookup starts the plugin; creation safely repeats the idempotent start");
+    await wait(`__cotermTest.countCalls('subscribe_driver_events')===3`, "serial frontend mounted");
+    assert.equal(await run(`__cotermTest.countCalls('start_driver')`), 2, "configuration lookup starts the driver; creation safely repeats the idempotent start");
     assert.deepEqual(await run(`__cotermTest.invocations.filter(x=>x.command==='create_instance').at(-1).args.config`),
-      {port:"COM2",baudRate:115200,dataBits:8,stopBits:1,parity:"none",dtr:true,rts:true});
+      {port:"COM2",baudRate:115200,dataBits:8,stopBits:1,parity:"none",dtr:true,rts:true,mode:"stream",prompt:null});
 
     await run(`document.querySelector('button[aria-label="Manage Local"]').click()`);
-    await wait(`document.getElementById('plugin-configuration')?.textContent.includes('does not provide a connection configuration screen')`, "headless plugin explains missing config UI");
-    assert.equal(await run(`document.querySelector('#plugin-configuration textarea')`), null);
+    await wait(`document.getElementById('driver-configuration')?.textContent.includes('does not provide a connection configuration screen')`, "headless driver explains missing config UI");
+    assert.equal(await run(`document.querySelector('#driver-configuration textarea')`), null);
     assert.equal(await run(`document.querySelector('dialog[open]')`), null);
 
     // Keyboard tab navigation and scroll containment in a narrow window.
@@ -128,23 +128,20 @@ test("inline protocol configuration and instance tabs preserve live frontends an
 
     // Failed process removes its frontend, exposes recovery, then removal clears its tab.
     await run(`__cotermTest.replaceInstances([
-      {pluginId:'ssh',pluginInstanceId:'inst-1',sessionId:'sess-1',label:'Prod-Server',status:'ready'},
-      {pluginId:'serial',pluginInstanceId:'created-2',sessionId:'session-2',label:'COM2',status:'failed'}
+      {driverId:'ssh',driverInstanceId:'inst-1',sessionId:'sess-1',label:'Prod-Server',status:'ready'},
+      {driverId:'serial',driverInstanceId:'created-2',sessionId:'session-2',label:'COM2',status:'failed'}
     ])`);
-    await wait(`document.getElementById('instance-panel-created-2')?.textContent.includes('Plugin stopped unexpectedly')`, "failed instance recovery");
+    await wait(`document.getElementById('instance-panel-created-2')?.textContent.includes('Driver stopped unexpectedly')`, "failed instance recovery");
     assert.equal(await run(`[...document.querySelectorAll('#instance-panel-created-2 div')].some(el=>!!el.shadowRoot)`), false);
-    await run(`__cotermTest.replaceInstances([{pluginId:'ssh',pluginInstanceId:'inst-1',sessionId:'sess-1',label:'Prod-Server',status:'ready'}])`);
+    await run(`__cotermTest.replaceInstances([{driverId:'ssh',driverInstanceId:'inst-1',sessionId:'sess-1',label:'Prod-Server',status:'ready'}])`);
     await wait(`!document.getElementById('instance-tab-created-2') && document.getElementById('instance-tab-inst-1').getAttribute('aria-selected')==='true'`, "runtime removal selects remaining tab");
     await run(`document.querySelector('button[aria-label="Close view Prod-Server"]').click()`);
     await wait(`document.querySelector('[role=tablist]')===null && document.querySelector('main').textContent.includes('Ready when you are')`, "last tab closed");
-    await wait(`__cotermTest.countCalls('unsubscribe_plugin_events')===__cotermTest.countCalls('subscribe_plugin_events')`, "all closed views clean subscriptions");
-    // A normal refresh (installing an offline package) cannot reopen explicitly closed tabs.
-    await run(`document.getElementById('install-plugin-button').click()`);
-    await wait(`!!document.querySelector('dialog[open]')`, "installer opened");
-    await run(`[...document.querySelectorAll('dialog button')].find(button=>button.textContent==='Choose plugin package').click()`);
-    await wait(`!!document.querySelector('dialog dl')`, "install preview");
-    await run(`[...document.querySelectorAll('dialog button')].find(button=>button.textContent==='Install trusted package').click()`);
-    await wait(`!!document.querySelector('button[aria-label="Manage Tabs test"]')`, "catalog refresh after installation");
+    await wait(`__cotermTest.countCalls('unsubscribe_driver_events')===__cotermTest.countCalls('subscribe_driver_events')`, "all closed views clean subscriptions");
+    // Settings cannot reopen an explicitly closed terminal view.
+    await run(`document.getElementById('open-settings').click()`);
+    await wait(`document.getElementById('app-settings-dialog')?.open`);
+    assert.equal(await run(`!!document.getElementById('install-driver-button')`),false);
     await run(`document.querySelector('dialog button[aria-label="Close dialog"]').click()`);
     assert.equal(await run(`document.querySelector('[role=tablist]')`), null);
     await run(`document.querySelector('[data-instance-id="inst-1"] > button').click()`);
@@ -158,8 +155,8 @@ test("inline protocol configuration and instance tabs preserve live frontends an
     assert.equal(await run(`__cotermTest.countCalls('destroy_instance')`), 1);
     await setAppLocale(client, 'zh-CN');
     await run(`document.querySelector('button[aria-label="管理 SSH"]').click()`);
-    await wait(`configuration()?.querySelector('button').textContent==='创建 SSH 实例'`, "inline plugin form translates");
-    assert.ok(await run(`document.getElementById('plugin-configuration').textContent.includes('新建实例')`));
+    await wait(`configuration()?.querySelector('button').textContent==='创建 SSH 实例'`, "inline driver form translates");
+    assert.ok(await run(`document.getElementById('driver-configuration').textContent.includes('新建实例')`));
     assert.deepEqual(errors, []);
   } catch (error) {
     t.diagnostic(JSON.stringify(await run(`({body:document.body.innerText.slice(-1800),calls:__cotermTest.invocations.slice(-8).map(x=>({command:x.command,args:x.args}))})`).catch(()=>null)));

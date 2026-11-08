@@ -56,7 +56,7 @@ let serverUrl;
 
 function scenarioBase(initialAttention) {
   return {
-    catalog: { plugins: [], issues: [] },
+    catalog: { drivers: [], issues: [] },
     instances: [],
     bypass: false,
     attention: initialAttention,
@@ -248,7 +248,7 @@ test("HostInteractions: late IPC completion from an old prompt does not clear or
   }
 });
 
-test("HostInteractions: cancel, expiry, instance destroy, plugin stop and unmount all converge", async (t) => {
+test("HostInteractions: cancel, expiry, instance destroy, driver stop and unmount all converge", async (t) => {
   if (!browserPath) {
     t.skip("No Chrome/Edge binary found; lifecycle convergence verification did not run");
     return;
@@ -291,9 +291,9 @@ test("HostInteractions: cancel, expiry, instance destroy, plugin stop and unmoun
       await waitForDialogs(page, 1, "destroyed instance prompt replaced by the surviving one");
       assert.match(await page.evaluate(`window.__cotermTest.dialogs()[0].title`), /inst-alive/, "only the surviving instance prompts");
 
-      // 5. 插件停止：宿主清空全部交互。
+      // 5. 驱动停止：宿主清空全部交互。
       await page.evaluate(`window.__cotermTest.setAttention(${JSON.stringify(attention(6, []))})`);
-      await waitForDialogs(page, 0, "plugin stop removes every prompt");
+      await waitForDialogs(page, 0, "driver stop removes every prompt");
 
       // 6. 卸载：disposed 之后即使有新快照，也不得弹窗。
       await page.evaluate(`window.__cotermTest.setAttention(${JSON.stringify(attention(7, [secretInteraction("int-unmount", "inst-1")]))})`);
@@ -604,7 +604,7 @@ test("Frontend SDK v1: typed host dialogs, rejection, timeout, scope replacement
   const session = await openSession({ browserPath, totalTimeoutMs: 60_000 });
   const page = await openInteractionsPage(session, scenarioBase(attention(1, [])));
   try {
-    await page.evaluate(`window.api = window.__cotermHostInteractions.createPluginAPI({pluginId:'fixture',pluginInstanceId:'sdk-instance',sessionId:'session',label:'SDK',status:'ready'});
+    await page.evaluate(`window.api = window.__cotermHostInteractions.createDriverAPI({driverId:'fixture',driverInstanceId:'sdk-instance',sessionId:'session',label:'SDK',status:'ready'});
       window.result = null; window.api.requestText({title:'Text',prompt:'<b>plain text</b>'}).then(value=>window.result=value); true;`);
     await waitForDialogs(page, 1, "text prompt");
     assert.equal(await page.evaluate("document.querySelector('dialog label span').textContent"), "<b>plain text</b>");
@@ -612,7 +612,7 @@ test("Frontend SDK v1: typed host dialogs, rejection, timeout, scope replacement
     await page.evaluate("document.querySelector('dialog input').value='typed'; document.querySelector('dialog form').requestSubmit()");
     await waitForValue({send:page.send}, "window.result?.outcome === 'submitted'");
     assert.deepEqual(await page.evaluate("window.result"), {outcome:"submitted",value:"typed"});
-    assert.equal(await page.evaluate("window.api.apiVersion"), "1.0");
+    assert.equal(await page.evaluate("window.api.apiVersion"), "2.0");
     assert.equal(await page.evaluate("window.api.capabilities.streams"), false);
 
     await page.evaluate("window.result=null; window.api.requestSelection({title:'Select',prompt:'Choose',options:[{value:'a',label:'Alpha'},{value:'b',label:'Beta'}]}).then(value=>window.result=value); true");

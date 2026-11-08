@@ -11,10 +11,10 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const outDir = path.join(rootDir, "packages/plugin-sdk/dist/browser");
+const outDir = path.join(rootDir, "packages/driver-sdk/dist/browser");
 mkdirSync(outDir, { recursive: true });
 for (const component of ["block-list", "terminal-blocks", "toasts"]) {
-  const sourcePath = path.join(rootDir, `packages/plugin-sdk/src/components/${component}.ts`);
+  const sourcePath = path.join(rootDir, `packages/driver-sdk/src/components/${component}.ts`);
   const outPath = path.join(outDir, `${component}.js`);
   const source = readFileSync(sourcePath, "utf8");
   const stripped = stripTypeScriptTypes(source, { mode: "strip", sourceMap: false });

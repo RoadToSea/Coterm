@@ -8,11 +8,11 @@ import { findBrowser, openSession, evaluate, waitForValue } from "./support/brow
 test("SSH tasks collapse to one row and keep the selected task last while live events arrive", async (t) => {
   const browserPath = findBrowser();
   if (!browserPath) { t.skip("No Chrome/Edge binary; SSH task layout was not browser-verified"); return; }
-  const artifact = new URL("../plugins/plugin-ssh/dist/frontend/index.js", import.meta.url);
+  const artifact = new URL("../drivers/driver-ssh/dist/frontend/index.js", import.meta.url);
   const built = fs.statSync(artifact).mtimeMs;
   for (const file of ["index.ts", "i18n.ts"]) {
-    assert.ok(built >= fs.statSync(new URL(`../plugins/plugin-ssh/frontend/src/${file}`, import.meta.url)).mtimeMs,
-      "run pnpm --filter coterm-plugin-ssh-ui build before the SSH jobs browser test");
+    assert.ok(built >= fs.statSync(new URL(`../drivers/driver-ssh/frontend/src/${file}`, import.meta.url)).mtimeMs,
+      "run pnpm --filter coterm-driver-ssh-ui build before the SSH jobs browser test");
   }
   const moduleURL = `data:text/javascript;base64,${fs.readFileSync(artifact).toString("base64")}`;
   const session = await openSession({ browserPath, totalTimeoutMs: 45_000 });
@@ -41,7 +41,7 @@ test("SSH tasks collapse to one row and keep the selected task last while live e
       document.head.append(theme);
       const receipt = (output) => ({operationId:'test',status:'completed',output,error:null,proposalId:null,waitExpired:false});
       const api = {
-        pluginInstanceId:'ssh-one',
+        driverInstanceId:'ssh-one',
         i18n:{get locale() { return window.locale; }, subscribe(fn) {
           window.translate = fn; return () => { window.localeUnsubscribed = true; };
         }},

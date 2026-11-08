@@ -26,7 +26,7 @@ struct State {
     updates: HashMap<String, watch::Sender<OperationRecord>>,
 }
 
-/// Keeps the newest `capacity` records for each plugin instance (or plugin scope).
+/// Keeps the newest `capacity` records for each driver instance (or driver scope).
 pub struct OperationHistory {
     capacity: usize,
     max_value_bytes: usize,
@@ -137,11 +137,11 @@ impl OperationHistory {
 
     pub async fn recent(
         &self,
-        plugin_id: &str,
-        plugin_instance_id: Option<&str>,
+        driver_id: &str,
+        driver_instance_id: Option<&str>,
         limit: usize,
     ) -> Vec<OperationRecord> {
-        let key = bucket_key_parts(plugin_id, plugin_instance_id);
+        let key = bucket_key_parts(driver_id, driver_instance_id);
         let state = self.state.lock().await;
         state
             .buckets
@@ -153,29 +153,29 @@ impl OperationHistory {
             .collect()
     }
 
-    pub async fn active(&self, plugin_id: &str, instance_id: &str) -> Vec<OperationRecord> {
+    pub async fn active(&self, driver_id: &str, instance_id: &str) -> Vec<OperationRecord> {
         let state = self.state.lock().await;
         state
             .buckets
             .values()
             .flat_map(|records| records.iter())
             .filter(|r| {
-                r.plugin_id == plugin_id
-                    && r.plugin_instance_id.as_deref() == Some(instance_id)
+                r.driver_id == driver_id
+                    && r.driver_instance_id.as_deref() == Some(instance_id)
                     && !terminal(r.status)
             })
             .cloned()
             .collect()
     }
 
-    pub async fn active_plugin(&self, plugin_id: &str) -> Vec<OperationRecord> {
+    pub async fn active_driver(&self, driver_id: &str) -> Vec<OperationRecord> {
         self.state
             .lock()
             .await
             .buckets
             .values()
             .flatten()
-            .filter(|record| record.plugin_id == plugin_id && !terminal(record.status))
+            .filter(|record| record.driver_id == driver_id && !terminal(record.status))
             .cloned()
             .collect()
     }
@@ -334,7 +334,7 @@ fn redact_error(
 }
 
 fn bucket_key(record: &OperationRecord) -> String {
-    let key = bucket_key_parts(&record.plugin_id, record.plugin_instance_id.as_deref());
+    let key = bucket_key_parts(&record.driver_id, record.driver_instance_id.as_deref());
     if record.transient {
         format!("{key}\0transient")
     } else {
@@ -342,10 +342,10 @@ fn bucket_key(record: &OperationRecord) -> String {
     }
 }
 
-fn bucket_key_parts(plugin_id: &str, instance_id: Option<&str>) -> String {
+fn bucket_key_parts(driver_id: &str, instance_id: Option<&str>) -> String {
     match instance_id {
-        Some(instance_id) => format!("{plugin_id}\0instance\0{instance_id}"),
-        None => format!("{plugin_id}\0plugin"),
+        Some(instance_id) => format!("{driver_id}\0instance\0{instance_id}"),
+        None => format!("{driver_id}\0driver"),
     }
 }
 
@@ -390,8 +390,8 @@ mod tests {
         let now = Utc::now();
         OperationRecord {
             operation_id: id.to_owned(),
-            plugin_id: "example.plugin".to_owned(),
-            plugin_instance_id: instance_id.map(str::to_owned),
+            driver_id: "example.driver".to_owned(),
+            driver_instance_id: instance_id.map(str::to_owned),
             source: OperationSource::Human,
             effect: OperationEffect::Read,
             operation: "example.read".to_owned(),
@@ -438,7 +438,7 @@ mod tests {
             .unwrap();
 
         let recent = history
-            .recent("example.plugin", Some("instance-a"), 10)
+            .recent("example.driver", Some("instance-a"), 10)
             .await;
         assert_eq!(
             recent
@@ -456,7 +456,7 @@ mod tests {
                 .get("op-4")
                 .await
                 .unwrap()
-                .plugin_instance_id
+                .driver_instance_id
                 .as_deref(),
             Some("instance-b")
         );
@@ -496,7 +496,7 @@ mod tests {
         );
         assert_eq!(
             history
-                .recent("example.plugin", Some("one"), 100)
+                .recent("example.driver", Some("one"), 100)
                 .await
                 .len(),
             1

@@ -26,12 +26,12 @@ interface Props {
   onForget(configRef: string): void;
 }
 
-/** Workspace membership is host metadata; dragging never reconnects a plugin. */
+/** Workspace membership is host metadata; dragging never reconnects a driver. */
 export function WorkspaceInstances(props: Props) {
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [dropTarget, setDropTarget] = useState<string | null>(null);
   const { workspace, instances, activeInstanceId, activeWorkspaceId, busy } = props;
-  const liveIds = new Set(instances.map(instance => instance.pluginInstanceId));
+  const liveIds = new Set(instances.map(instance => instance.driverInstanceId));
   const startDrag = (event: DragEvent, configRef: string) => {
     event.dataTransfer.setData(ENTRY_TYPE, configRef);
     event.dataTransfer.effectAllowed = "move";
@@ -39,7 +39,7 @@ export function WorkspaceInstances(props: Props) {
   return workspace.groups.map(group => {
     const entries = workspace.entries.filter(entry => entry.workspaceId === group.id);
     const live = instances.filter(instance => {
-      const saved = workspace.entries.find(entry => entry.instanceId === instance.pluginInstanceId);
+      const saved = workspace.entries.find(entry => entry.instanceId === instance.driverInstanceId);
       return saved ? saved.workspaceId === group.id : group.id === workspace.groups[0]?.id;
     });
     const pending = entries.filter(entry => !entry.instanceId || !liveIds.has(entry.instanceId));
@@ -86,14 +86,14 @@ export function WorkspaceInstances(props: Props) {
       </div>
       <div id={`workspace-${group.id}`} hidden={isCollapsed}>
         {live.map(instance => {
-          const entry = entries.find(item => item.instanceId === instance.pluginInstanceId);
-          return <div key={instance.pluginInstanceId} data-instance-id={instance.pluginInstanceId}
+          const entry = entries.find(item => item.instanceId === instance.driverInstanceId);
+          return <div key={instance.driverInstanceId} data-instance-id={instance.driverInstanceId}
             draggable={!busy && !!entry} onDragStart={event => { if (entry) startDrag(event, entry.configRef); }}
-            className={cn("group/instance mb-1 flex h-10 items-center rounded-lg border transition-colors", activeInstanceId === instance.pluginInstanceId ? "border-primary/20 bg-accent text-accent-foreground" : "border-transparent hover:bg-muted")}>
-            <button type="button" title={`${instance.pluginId} · ${instance.status}`}
-              aria-current={activeInstanceId === instance.pluginInstanceId ? "true" : undefined}
+            className={cn("group/instance mb-1 flex h-10 items-center rounded-lg border transition-colors", activeInstanceId === instance.driverInstanceId ? "border-primary/20 bg-accent text-accent-foreground" : "border-transparent hover:bg-muted")}>
+            <button type="button" title={`${instance.driverId} · ${instance.status}`}
+              aria-current={activeInstanceId === instance.driverInstanceId ? "true" : undefined}
               onClick={() => props.onSelect(instance, group.id)} className="flex h-full min-w-0 flex-1 items-center gap-2 pl-2 pr-1 text-left text-xs">
-              <PlugZap size={15} strokeWidth={1.5} className="shrink-0 text-primary" data-plugin-icon />
+              <PlugZap size={15} strokeWidth={1.5} className="shrink-0 text-primary" data-driver-icon />
               <span className="truncate">{instance.label}</span>
             </button>
             <div className="flex shrink-0 items-center pr-1 opacity-0 group-hover/instance:opacity-100 group-focus-within/instance:opacity-100">
@@ -111,7 +111,7 @@ export function WorkspaceInstances(props: Props) {
           className="group/instance mb-1 flex min-h-10 items-center rounded-lg border border-border bg-muted/30">
           <button type="button" className="flex min-w-0 flex-1 items-center gap-2 px-2 py-2 text-left text-xs"
             title={t("Restore instance")} disabled={busy} onClick={() => props.onRestore(entry.configRef)}>
-            <PlugZap size={15} strokeWidth={1.5} className="shrink-0 text-muted-foreground" data-plugin-icon />
+            <PlugZap size={15} strokeWidth={1.5} className="shrink-0 text-muted-foreground" data-driver-icon />
             <span className="min-w-0"><span className="block truncate">{entry.label}</span><span className="block text-[10px] text-muted-foreground">{t("Restore instance")}</span></span>
           </button>
           <Button type="button" variant="ghost" size="icon" disabled={busy}

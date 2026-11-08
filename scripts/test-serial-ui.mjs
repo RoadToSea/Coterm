@@ -1,5 +1,5 @@
 /**
- * 串口插件真实 Tauri 界面验收（开发构建，加载 plugins/plugin-serial/dist）。
+ * 串口驱动真实 Tauri 界面验收（开发构建，加载 drivers/driver-serial/dist）。
  * 只在本机存在可枚举串口时运行；不写入物理设备，除非显式给出 COTERM_SERIAL_LIVE。
  */
 import assert from "node:assert/strict";
@@ -54,7 +54,7 @@ async function launch() {
   await waitForValue(client, "!!window.__TAURI_INTERNALS__ && !!document.getElementById('open-settings')", { label: "real Tauri UI loaded" });
   // 验收断言使用英文文案，先显式切换到英文；随后再验证语言切换。
   await setAppLocale(client, 'en');
-  await waitForValue(client, "!!document.querySelector('[aria-label=\"Plugin list\"]')", { label: "English UI applied" });
+  await waitForValue(client, "!!document.querySelector('[aria-label=\"Driver list\"]')", { label: "English UI applied" });
 }
 
 const run = (expression) => evaluate(client, expression);
@@ -67,9 +67,9 @@ async function serialRoot() {
 
 await launch();
 try {
-  const plugins = await invoke("list_plugins");
-  const serial = plugins.plugins.find((plugin) => plugin.id === "coterm-plugin-serial");
-  assert.ok(serial, `serial plugin must be discovered: ${JSON.stringify(plugins)}`);
+  const drivers = await invoke("list_drivers");
+  const serial = drivers.drivers.find((driver) => driver.id === "coterm-driver-serial");
+  assert.ok(serial, `serial driver must be discovered: ${JSON.stringify(drivers)}`);
 
   await run(`document.querySelector('[aria-label="Manage ${serial.name}"]').click()`);
   await waitForValue(client, "[...document.querySelectorAll('dialog div')].some(node=>node.shadowRoot?.querySelector('form'))", { label: "serial configuration form" });
@@ -150,7 +150,7 @@ try {
   assert.match(received.text, /uname -a/);
   assert.match(received.text, /Linux \S+ \d+\./);
   assert.doesNotMatch(received.stats, /RX 0 B · TX 0 B/);
-  // TX 计数必须包含插件补上的行结束符，不能只算输入文本长度。
+  // TX 计数必须包含驱动补上的行结束符，不能只算输入文本长度。
   const counters = /RX (\d+) B · TX (\d+) B/.exec(received.stats);
   assert.ok(counters, `byte counters must be rendered: ${received.stats}`);
   const sent = "uname -a".length + 1; // 文本长度加一个 CR 行结束符

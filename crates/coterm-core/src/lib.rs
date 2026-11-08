@@ -3,10 +3,9 @@ pub mod arbiter;
 pub mod block_parser;
 pub mod guardrail;
 pub mod operation_history;
-pub mod plugin_install;
-pub mod plugin_manager;
-pub mod plugin_process;
-pub mod plugin_runtime;
+pub mod driver_manager;
+pub mod driver_process;
+pub mod driver_runtime;
 pub mod session;
 
 pub use arbiter::{ArbiterMode, InputArbiter};

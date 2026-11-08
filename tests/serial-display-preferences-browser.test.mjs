@@ -6,7 +6,7 @@ import http from "node:http";
 import { evaluate, findBrowser, openSession, waitForValue } from "./support/browser-harness.mjs";
 
 async function serialSession(browserPath, { delayStatus = false } = {}) {
-  const artifact = new URL("../plugins/plugin-serial/dist/frontend/index.js", import.meta.url);
+  const artifact = new URL("../drivers/driver-serial/dist/frontend/index.js", import.meta.url);
   const server = http.createServer((request, response) => {
     if (request.url === "/serial.js") {
       response.setHeader("Content-Type", "text/javascript");
@@ -19,7 +19,7 @@ async function serialSession(browserPath, { delayStatus = false } = {}) {
       window.id=crypto.randomUUID(); window.port=new URL(location.href).searchParams.get('port')??'COM6';
       window.configRef=new URL(location.href).searchParams.get('config')??'saved-serial-one';
       window.receipt=output=>({status:'completed',output,error:null});
-      window.api={pluginInstanceId:window.id,instanceConfigRef:window.configRef,
+      window.api={driverInstanceId:window.id,instanceConfigRef:window.configRef,
         async invoke(operation,args){
           calls.push({operation,args});
           if(operation==='serial.status'){

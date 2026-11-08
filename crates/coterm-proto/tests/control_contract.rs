@@ -1,10 +1,10 @@
-//! Crosses the same codec and transport seam as a plugin, with literal wire fixtures.
+//! Crosses the same codec and transport seam as a driver, with literal wire fixtures.
 use std::time::Duration;
 
 use coterm_proto::runtime::{
-    backend::PluginBackend,
+    backend::DriverBackend,
     lifecycle::{HelloResult, RuntimeHello, OPTIONAL_FEATURES, REQUIRED_FEATURES},
-    message::{HostCommand, PluginEvent, PluginNotification},
+    message::{DriverEvent, DriverNotification, HostCommand},
     transport::serve_with_io,
     wire::{
         decode_request, decode_response, encode_line, encode_request, reply, MAX_CONTROL_BYTES,
@@ -19,7 +19,7 @@ use tokio::{
 
 fn hello(limit: u32) -> RuntimeHello {
     serde_json::from_value(json!({
-        "interfaceMajor":1,"interfaceMinor":0,
+        "interfaceMajor":2,"interfaceMinor":0,
         "requiredFeatures":REQUIRED_FEATURES,"optionalFeatures":OPTIONAL_FEATURES,
         "limits":{"maxControlBytes":limit,"maxDataChunkBytes":65536,
                   "initialWindow":{"chunks":16,"bytes":1048576}}
@@ -34,8 +34,8 @@ fn accepted(hello: &RuntimeHello) -> HelloResult {
         .copied()
         .collect();
     HelloResult {
-        plugin_id: "fixture".to_owned(),
-        plugin_version: "0.1.0".to_owned(),
+        driver_id: "fixture".to_owned(),
+        driver_version: "0.1.0".to_owned(),
         interface_minor: 0,
         enabled_features: hello.negotiate_features(&supported).unwrap(),
         limits: hello.control_limits(),
@@ -54,21 +54,21 @@ fn request(id: &str, method: &str, params: Value) -> Vec<u8> {
 
 #[test]
 fn golden_methods_round_trip_with_camel_case_fields() {
-    let handle = json!({"id":"secret","pluginInstanceId":"i","purpose":"password","expiresAt":"2026-10-26T00:00:00Z"});
+    let handle = json!({"id":"secret","driverInstanceId":"i","purpose":"password","expiresAt":"2026-10-26T00:00:00Z"});
     let fixtures = vec![
         ("initialize", serde_json::to_value(hello(4096)).unwrap()),
         (
             "create_instance",
-            json!({"instance":{"pluginId":"p","pluginInstanceId":"i","sessionId":"s","label":"x","status":"starting"},"config":{}}),
+            json!({"instance":{"driverId":"p","driverInstanceId":"i","sessionId":"s","label":"x","status":"starting"},"config":{}}),
         ),
-        ("destroy_instance", json!({"pluginInstanceId":"i"})),
+        ("destroy_instance", json!({"driverInstanceId":"i"})),
         (
             "invoke",
-            json!({"operationId":"o","pluginInstanceId":"i","source":"agent","effect":"commit","operation":"example.write","args":{"bytes":"AA=="},"dispatch":{"mode":"prepare_proposal","proposalId":"p"}}),
+            json!({"operationId":"o","driverInstanceId":"i","source":"agent","effect":"commit","operation":"example.write","args":{"bytes":"AA=="},"dispatch":{"mode":"prepare_proposal","proposalId":"p"}}),
         ),
         (
             "approve",
-            json!({"operationId":"o","proposalId":"p","pluginInstanceId":"i","args":{}}),
+            json!({"operationId":"o","proposalId":"p","driverInstanceId":"i","args":{}}),
         ),
         (
             "reject",
@@ -79,7 +79,7 @@ fn golden_methods_round_trip_with_camel_case_fields() {
         ("provide_secret", json!({"handle":handle,"value":"private"})),
         (
             "interaction_result",
-            json!({"interactionId":"ix","pluginInstanceId":"i","outcome":{"outcome":"submitted","value":{"kind":"secret","value":handle}}}),
+            json!({"interactionId":"ix","driverInstanceId":"i","outcome":{"outcome":"submitted","value":{"kind":"secret","value":handle}}}),
         ),
         ("shutdown", Value::Null),
     ];
@@ -160,7 +160,7 @@ fn structured_error_preserves_category_code_and_safe_details() {
         details: Some(json!({"retryable":false})),
     };
     let response = serde_json::to_string(&reply("r".to_owned(), Err(original.clone()))).unwrap();
-    let PluginEvent::Reply {
+    let DriverEvent::Reply {
         result: Err(error), ..
     } = decode_response(&response).unwrap()
     else {
@@ -173,7 +173,7 @@ fn structured_error_preserves_category_code_and_safe_details() {
     let success = serde_json::to_string(&reply("r".to_owned(), Ok(Value::Null))).unwrap();
     assert!(matches!(
         decode_response(&success).unwrap(),
-        PluginEvent::Reply {
+        DriverEvent::Reply {
             result: Ok(Value::Null),
             ..
         }
@@ -187,7 +187,7 @@ fn byte_limit_includes_utf8_and_line_terminator() {
     assert_eq!(encode_line(&value, length).unwrap().len(), length);
     assert_eq!(
         encode_line(&value, length - 1).unwrap_err().code,
-        "plugin_control_too_large"
+        "driver_control_too_large"
     );
     assert!(encode_line(&json!("x".repeat(MAX_CONTROL_BYTES)), usize::MAX).is_err());
 }
@@ -203,7 +203,7 @@ fn negotiation_uses_intersection_and_rejects_unoffered_or_missing_features() {
     let result = accepted(&host);
     host.validate_result(&result).unwrap();
     let mut invalid = result.clone();
-    invalid.enabled_features.push("plugin-events".to_owned());
+    invalid.enabled_features.push("driver-events".to_owned());
     assert!(host.validate_result(&invalid).is_err());
     invalid = result.clone();
     invalid.enabled_features.pop();
@@ -234,7 +234,7 @@ fn negotiation_checks_version_and_limits_and_reserves_stream_fields() {
     let mut future = host.clone();
     future.interface_minor = 7;
     future.validate_result(&accepted(&future)).unwrap();
-    future.interface_major = 2;
+    future.interface_major = 1;
     assert!(future.negotiate_features(REQUIRED_FEATURES).is_err());
     let oversized = hello(u32::MAX);
     assert_eq!(
@@ -269,14 +269,14 @@ fn secret_interaction_dependency_is_required_and_optional_fields_can_grow() {
     let future = request(
         "r",
         "destroy_instance",
-        json!({"pluginInstanceId":"i","futureOptional":true}),
+        json!({"driverInstanceId":"i","futureOptional":true}),
     );
     assert!(decode_request(&future).is_ok());
 }
 
 struct Backend {
-    sender: mpsc::Sender<PluginNotification>,
-    receiver: Option<mpsc::Receiver<PluginNotification>>,
+    sender: mpsc::Sender<DriverNotification>,
+    receiver: Option<mpsc::Receiver<DriverNotification>>,
 }
 impl Backend {
     fn new() -> Self {
@@ -287,13 +287,13 @@ impl Backend {
         }
     }
 }
-impl PluginBackend for Backend {
+impl DriverBackend for Backend {
     async fn request(&mut self, command: HostCommand) -> Result<Value, RuntimeError> {
         match command {
             HostCommand::Hello(h) => Ok(serde_json::to_value(accepted(&h)).unwrap()),
             HostCommand::Invoke(request) if request.operation == "defer" => {
                 self.sender
-                    .send(PluginNotification::OperationCompleted {
+                    .send(DriverNotification::OperationCompleted {
                         operation_id: request.operation_id.clone(),
                         result: json!({"done":true}),
                     })
@@ -307,15 +307,15 @@ impl PluginBackend for Backend {
                 message: "Device disconnected".to_owned(),
                 details: None,
             }),
-            HostCommand::DestroyInstance { plugin_instance_id }
-                if plugin_instance_id == "large" =>
+            HostCommand::DestroyInstance { driver_instance_id }
+                if driver_instance_id == "large" =>
             {
                 Ok(json!("x".repeat(5000)))
             }
             _ => Ok(json!({"ok":true})),
         }
     }
-    fn take_notifications(&mut self) -> Option<mpsc::Receiver<PluginNotification>> {
+    fn take_notifications(&mut self) -> Option<mpsc::Receiver<DriverNotification>> {
         self.receiver.take()
     }
 }
@@ -325,11 +325,11 @@ async fn transport_requires_handshake_and_recovers_after_request_errors() {
     let mut minimal = hello(4096);
     minimal.optional_features.clear();
     let input = [
-        request("before","destroy_instance",json!({"pluginInstanceId":"i"})),
+        request("before","destroy_instance",json!({"driverInstanceId":"i"})),
         request("hello","initialize",serde_json::to_value(&minimal).unwrap()),
         request("twice","initialize",serde_json::to_value(&minimal).unwrap()),
         request("unknown","missing",Value::Null),
-        request("private","provide_secret",json!({"handle":{"id":"s","pluginInstanceId":"i","purpose":"password","expiresAt":"2026-10-26T00:00:00Z"},"value":"private"})),
+        request("private","provide_secret",json!({"handle":{"id":"s","driverInstanceId":"i","purpose":"password","expiresAt":"2026-10-26T00:00:00Z"},"value":"private"})),
         request("bye","shutdown",Value::Null),
     ].concat();
     let mut output = Vec::new();
@@ -404,12 +404,12 @@ async fn transport_enforces_negotiated_limits_in_both_directions() {
         request(
             "large",
             "destroy_instance",
-            json!({"pluginInstanceId":"large"}),
+            json!({"driverInstanceId":"large"}),
         ),
         request(
             "large",
             "destroy_instance",
-            json!({"pluginInstanceId":"x".repeat(5000)}),
+            json!({"driverInstanceId":"x".repeat(5000)}),
         ),
     ] {
         let input = [
@@ -466,7 +466,7 @@ async fn deferred_completion_uses_notification_without_id() {
             .unwrap()
             .get("result")
             .is_some());
-        client_write.write_all(&request("invoke","invoke",json!({"operationId":"op","pluginInstanceId":"i","source":"human","effect":"read","operation":"defer","args":{},"dispatch":{"mode":"execute"}}))).await.unwrap();
+        client_write.write_all(&request("invoke","invoke",json!({"operationId":"op","driverInstanceId":"i","source":"human","effect":"read","operation":"defer","args":{},"dispatch":{"mode":"execute"}}))).await.unwrap();
         let mut responses = Vec::new();
         for _ in 0..2 {
             line.clear();

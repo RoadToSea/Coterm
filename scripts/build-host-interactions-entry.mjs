@@ -51,12 +51,12 @@ export async function buildHostInteractionsEntry() {
       alias: [
         ...bareAlias,
         {
-          find: /^@coterm\/plugin-sdk\/components\/block-list$/,
-          replacement: path.join(rootDir, "packages/plugin-sdk/src/components/block-list.ts"),
+          find: /^@coterm\/driver-sdk\/components\/block-list$/,
+          replacement: path.join(rootDir, "packages/driver-sdk/src/components/block-list.ts"),
         },
         {
-          find: /^@coterm\/plugin-sdk$/,
-          replacement: path.join(rootDir, "packages/plugin-sdk/src/index.ts"),
+          find: /^@coterm\/driver-sdk$/,
+          replacement: path.join(rootDir, "packages/driver-sdk/src/index.ts"),
         },
       ],
     },

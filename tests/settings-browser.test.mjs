@@ -32,7 +32,7 @@ test("categorized settings search, apply live fonts, persist and preserve mounte
     await client.send("Page.navigate",{url:server.url});
     await wait(`(()=>{const host=[...document.querySelectorAll('main div')].find(node=>node.shadowRoot?.querySelector('.xterm'));if(!host)return false;window.settingsSsh=host;window.settingsTerminal=host.shadowRoot.querySelector('.xterm');return !!host.shadowRoot.querySelector('.bar span')?.textContent.includes('Connected');})()`);
     assert.equal(await run(`!!document.getElementById('locale-select')`),false,'language moves into settings');
-    await run(`window.beforeSubscriptions=__cotermTest.calls.filter(c=>c==='subscribe_plugin_events').length;window.beforeProtocol=__cotermTest.invocations.filter(c=>['ssh.connect','ssh.disconnect','ssh.write'].includes(c.args.operation)).length;document.getElementById('open-settings').focus();document.getElementById('open-settings').click()`);
+    await run(`window.beforeSubscriptions=__cotermTest.calls.filter(c=>c==='subscribe_driver_events').length;window.beforeProtocol=__cotermTest.invocations.filter(c=>['ssh.connect','ssh.disconnect','ssh.write'].includes(c.args.operation)).length;document.getElementById('open-settings').focus();document.getElementById('open-settings').click()`);
     await wait(`document.getElementById('app-settings-dialog')?.open`);
     await wait(`document.activeElement.id==='settings-search'`);
     assert.equal(await run(`document.querySelectorAll('[data-setting]').length`),9);
@@ -59,7 +59,7 @@ test("categorized settings search, apply live fonts, persist and preserve mounte
     await run(`document.getElementById('cursor-blink').click()`);
     await wait(`getComputedStyle(settingsSsh.shadowRoot.querySelector('.xterm-char-measure-element')).fontSize==='20px'`);
     assert.equal(await run(`settingsTerminal===settingsSsh.shadowRoot.querySelector('.xterm')`),true);
-    assert.equal(await run(`__cotermTest.calls.filter(c=>c==='subscribe_plugin_events').length===beforeSubscriptions`),true);
+    assert.equal(await run(`__cotermTest.calls.filter(c=>c==='subscribe_driver_events').length===beforeSubscriptions`),true);
     assert.equal(await run(`__cotermTest.invocations.filter(c=>['ssh.connect','ssh.disconnect','ssh.write'].includes(c.args.operation)).length===beforeProtocol`),true);
     assert.deepEqual(await run(`JSON.parse(localStorage.getItem('coterm.preferences.v1'))`),{interfaceFontSize:18,terminalFontSize:20,terminalLineHeight:1.4,cursorBlink:false});
     await shot('settings-dark-terminal.png');
@@ -79,11 +79,11 @@ test("categorized settings search, apply live fonts, persist and preserve mounte
     await wait(`!document.getElementById('app-settings-dialog')`);
     assert.equal(await run(`document.activeElement.id`),'open-settings');
 
-    // Saved preferences apply before new plugin views mount, including the actual serial frontend.
+    // Saved preferences apply before new driver views mount, including the actual serial frontend.
     await client.send('Page.reload');
     await wait(`document.getElementById('open-settings')&&document.documentElement.lang==='zh-CN'`);
     assert.equal(await run(`getComputedStyle(document.documentElement).getPropertyValue('--coterm-terminal-font-size').trim()`),'20px');
-    const artifact=fs.readFileSync(path.join(rootDir,'plugins/plugin-serial/dist/frontend/index.js'));
+    const artifact=fs.readFileSync(path.join(rootDir,'drivers/driver-serial/dist/frontend/index.js'));
     await run(`(async()=>{
       const container=document.createElement('div');container.style.cssText='position:fixed;inset:80px 20px 40px 80px';document.body.append(container);
       window.settingsSerialCalls=[];

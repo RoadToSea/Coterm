@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { DEFAULT_SERIAL_DISPLAY_PREFERENCES as defaults, readSerialDisplayPreferences as read,
-  saveSerialDisplayPreferences as save } from "../plugins/plugin-serial/frontend/src/display-preferences.ts";
+  saveSerialDisplayPreferences as save } from "../drivers/driver-serial/frontend/src/display-preferences.ts";
 
 function withStorage(run) {
   const previous = Object.getOwnPropertyDescriptor(globalThis, "localStorage");

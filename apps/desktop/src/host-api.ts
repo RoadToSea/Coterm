@@ -1,11 +1,11 @@
-/** 桌面壳的接口；不传给插件前端，不包含通信协议或插件内部页面模型。 */
+/** 桌面壳的接口；不传给驱动前端，不包含通信协议或驱动内部页面模型。 */
 import type {
   OperationDescriptor,
   OperationRecord,
   OperationReceipt,
-  PluginAPI,
-  PluginFrontend,
-  PluginFrontendModule,
+  DriverAPI,
+  DriverFrontend,
+  DriverFrontendModule,
   InteractionOptions,
   InteractionOutcome,
   SelectionOption,
@@ -13,14 +13,14 @@ import type {
   StreamDelivery,
   StreamOptions,
   StreamSubscription,
-  PluginInstanceEvent,
-} from "@coterm/plugin-sdk";
+  DriverInstanceEvent,
+} from "@coterm/driver-sdk";
 import { Channel, invoke } from "@tauri-apps/api/core";
-import { pluginI18n } from "./i18n";
+import { driverI18n } from "./i18n";
 import { listen } from "@tauri-apps/api/event";
 import { cancelSecretInput, promptForSecret, promptForText, promptForConfirmation, promptForSelection } from "./secret-input";
-import { FRONTEND_API_VERSION } from "@coterm/plugin-sdk";
-import { mountBlockList } from "@coterm/plugin-sdk/components/block-list";
+import { FRONTEND_API_VERSION } from "@coterm/driver-sdk";
+import { mountBlockList } from "@coterm/driver-sdk/components/block-list";
 
 /** 宿主待处理状态变化的全局事件；payload 只有版本号。 */
 export const ATTENTION_CHANGED_EVENT = "host://attention-changed";
@@ -28,9 +28,9 @@ export const ATTENTION_CHANGED_EVENT = "host://attention-changed";
 export interface AttentionApproval {
   operationId: string;
   proposalId: string;
-  pluginId: string;
-  /** null 表示插件级操作。 */
-  pluginInstanceId: string | null;
+  driverId: string;
+  /** null 表示驱动级操作。 */
+  driverInstanceId: string | null;
   operation: string;
   targetLabel: string;
   createdAt: string;
@@ -38,9 +38,9 @@ export interface AttentionApproval {
 
 export interface AttentionInteraction {
   interactionId: string;
-  pluginInstanceId: string;
+  driverInstanceId: string;
   operationId: string | null;
-  /** 基座只路由 secret 交互；普通文本/确认由插件前端自行处理。 */
+  /** 基座只路由 secret 交互；普通文本/确认由驱动前端自行处理。 */
   kind: { kind: "secret"; purpose: string } | { kind: "text" | "confirmation" } | { kind: "selection"; options: SelectionOption[] };
   title: string;
   prompt: string;
@@ -56,7 +56,7 @@ export interface HostAttention {
   interactions: AttentionInteraction[];
 }
 
-export interface PluginSummary {
+export interface DriverSummary {
   id: string;
   name: string;
   version: string;
@@ -64,31 +64,23 @@ export interface PluginSummary {
   running: boolean;
 }
 
-/** 单个插件包的可定位诊断；不含绝对路径、秘密或内部错误明文。 */
-export interface PluginLoadIssue {
+/** 单个驱动包的可定位诊断；不含绝对路径、秘密或内部错误明文。 */
+export interface DriverLoadIssue {
   directory: string;
-  pluginId: string | null;
+  driverId: string | null;
   code: string;
   message: string;
 }
 
-/** 有效插件与逐包诊断分开返回：单个坏包不影响其余插件列出。 */
-export interface PluginCatalog {
-  plugins: PluginSummary[];
-  issues: PluginLoadIssue[];
-}
-
-export interface PluginInstallPreview {
-  token: string;
-  id: string;
-  name: string;
-  version: string;
-  platform: string;
+/** 有效驱动与逐包诊断分开返回：单个坏包不影响其余驱动列出。 */
+export interface DriverCatalog {
+  drivers: DriverSummary[];
+  issues: DriverLoadIssue[];
 }
 
 export interface InstanceInfo {
-  pluginId: string;
-  pluginInstanceId: string;
+  driverId: string;
+  driverInstanceId: string;
   sessionId: string;
   label: string;
   status: "starting" | "ready" | "stopping" | "stopped" | "failed";
@@ -97,7 +89,7 @@ export interface InstanceInfo {
 export interface WorkspaceGroup { id: string; name: string }
 
 export interface SavedWorkspace {
-  entries: { configRef: string; pluginId: string; label: string; instanceId: string | null; workspaceId: string; approvalPolicy: ApprovalPolicy }[];
+  entries: { configRef: string; driverId: string; label: string; instanceId: string | null; workspaceId: string; approvalPolicy: ApprovalPolicy }[];
   groups: WorkspaceGroup[];
   layout: { activeConfigRef: string | null; instancesCollapsed: boolean; activeWorkspaceId: string };
   historyPolicy: "session_only";
@@ -106,7 +98,7 @@ export interface SavedWorkspace {
 
 export interface BackendSecretRequest extends InteractionOptions {
   interactionId: string;
-  pluginInstanceId: string;
+  driverInstanceId: string;
   operationId: string;
   kind: { kind: "secret"; purpose: string };
 }
@@ -134,7 +126,7 @@ export interface ApprovalPolicy {
 }
 
 export interface HostAPI {
-  runtimeStatus(): Promise<{ instances: InstanceInfo[]; runningPlugins: string[] }>;
+  runtimeStatus(): Promise<{ instances: InstanceInfo[]; runningDrivers: string[] }>;
   workspace(): Promise<SavedWorkspace>;
   saveLayout(activeInstanceId: string | null, instancesCollapsed: boolean, order: string[], activeWorkspaceId?: string): Promise<void>;
   createWorkspace(name: string): Promise<WorkspaceGroup>;
@@ -143,50 +135,48 @@ export interface HostAPI {
   restoreInstance(configRef: string): Promise<InstanceInfo>;
   forgetInstance(configRef: string): Promise<void>;
   resetWorkspace(): Promise<void>;
+  saveInstanceConfiguration(instanceId: string, config: unknown): Promise<void>;
   pendingInteractions(): Promise<BackendSecretRequest[]>;
   respondSecret(interactionId: string, value: string | null): Promise<void>;
   mcpStdioStatus(): Promise<McpStdioStatus>;
   setMcpStdioEnabled(enabled: boolean): Promise<McpStdioStatus>;
   setMcpStdioPort(port: number): Promise<McpStdioStatus>;
   setMcpStartupMode(startupMode: McpStartupMode): Promise<McpStdioStatus>;
-  listPlugins(): Promise<PluginCatalog>;
-  preparePluginInstall(locale: "en" | "zh-CN"): Promise<PluginInstallPreview | null>;
-  installPluginPackage(token: string): Promise<PluginSummary>;
-  discardPluginInstall(token: string): Promise<void>;
-  startPlugin(pluginId: string): Promise<void>;
-  stopPlugin(pluginId: string): Promise<void>;
-  listInstances(pluginId?: string): Promise<InstanceInfo[]>;
-  createInstance(pluginId: string, config: unknown, workspaceId?: string, name?: string): Promise<InstanceInfo>;
-  destroyInstance(pluginInstanceId: string): Promise<void>;
-  listOperations(pluginId: string): Promise<OperationDescriptor[]>;
+  listDrivers(): Promise<DriverCatalog>;
+  startDriver(driverId: string): Promise<void>;
+  stopDriver(driverId: string): Promise<void>;
+  listInstances(driverId?: string): Promise<InstanceInfo[]>;
+  createInstance(driverId: string, config: unknown, workspaceId?: string, name?: string): Promise<InstanceInfo>;
+  destroyInstance(driverInstanceId: string): Promise<void>;
+  listOperations(driverId: string): Promise<OperationDescriptor[]>;
   invokeOperation<T = unknown>(
-    pluginInstanceId: string,
+    driverInstanceId: string,
     operation: string,
     args: unknown,
     waitTimeoutMs?: number,
   ): Promise<OperationReceipt<T>>;
-  invokePluginOperation<T = unknown>(pluginId: string, operation: string, args: unknown, waitTimeoutMs?: number): Promise<OperationReceipt<T>>;
-  recentPluginOperations(pluginId: string, limit?: number): Promise<OperationRecord[]>;
-  approvePluginProposal<T = unknown>(pluginId: string, proposalId: string, args: unknown): Promise<OperationReceipt<T>>;
-  rejectPluginProposal(pluginId: string, proposalId: string): Promise<void>;
-  getOperation(pluginInstanceId: string, operationId: string): Promise<OperationRecord>;
-  recentOperations(pluginInstanceId: string, limit?: number): Promise<OperationRecord[]>;
+  invokeDriverOperation<T = unknown>(driverId: string, operation: string, args: unknown, waitTimeoutMs?: number): Promise<OperationReceipt<T>>;
+  recentDriverOperations(driverId: string, limit?: number): Promise<OperationRecord[]>;
+  approveDriverProposal<T = unknown>(driverId: string, proposalId: string, args: unknown): Promise<OperationReceipt<T>>;
+  rejectDriverProposal(driverId: string, proposalId: string): Promise<void>;
+  getOperation(driverInstanceId: string, operationId: string): Promise<OperationRecord>;
+  recentOperations(driverInstanceId: string, limit?: number): Promise<OperationRecord[]>;
   approveProposal<T = unknown>(
-    pluginInstanceId: string,
+    driverInstanceId: string,
     proposalId: string,
     args: unknown,
   ): Promise<OperationReceipt<T>>;
-  rejectProposal(pluginInstanceId: string, proposalId: string): Promise<void>;
-  cancelOperation(pluginInstanceId: string, operationId: string): Promise<OperationReceipt>;
-  setBypass(pluginInstanceId: string, enabled: boolean): Promise<void>;
-  getBypass(pluginInstanceId: string): Promise<boolean>;
-  /** 放行列表只跳过 Agent 审批；不改变 effect、不绕过插件校验。 */
-  setApprovalPolicy(pluginInstanceId: string, policy: ApprovalPolicy): Promise<ApprovalPolicy>;
-  getApprovalPolicy(pluginInstanceId: string): Promise<ApprovalPolicy>;
+  rejectProposal(driverInstanceId: string, proposalId: string): Promise<void>;
+  cancelOperation(driverInstanceId: string, operationId: string): Promise<OperationReceipt>;
+  setBypass(driverInstanceId: string, enabled: boolean): Promise<void>;
+  getBypass(driverInstanceId: string): Promise<boolean>;
+  /** 放行列表只跳过 Agent 审批；不改变 effect、不绕过驱动校验。 */
+  setApprovalPolicy(driverInstanceId: string, policy: ApprovalPolicy): Promise<ApprovalPolicy>;
+  getApprovalPolicy(driverInstanceId: string): Promise<ApprovalPolicy>;
   previewApprovalPolicy(policy: ApprovalPolicy, text: string): Promise<boolean>;
-  frontendSource(pluginId: string): Promise<string | null>;
-  provideSecret(pluginInstanceId: string, purpose: string, value: string): Promise<SecretHandle>;
-  /** 一次取回全部实例级与插件级待处理项，替代逐实例扫描历史。 */
+  frontendSource(driverId: string): Promise<string | null>;
+  provideSecret(driverInstanceId: string, purpose: string, value: string): Promise<SecretHandle>;
+  /** 一次取回全部实例级与驱动级待处理项，替代逐实例扫描历史。 */
   hostAttention(): Promise<HostAttention>;
 }
 
@@ -357,12 +347,12 @@ export function retryHostAttention(): void {
 }
 
 /** 仅管理挂载容器；unmount 不隐式销毁后端实例。模块查找不暴露任意路径。 */
-export interface PluginFrontendLoader {
-  load(pluginId: string): Promise<PluginFrontendModule | null>;
-  mount(container: HTMLElement, pluginInstanceId: string): Promise<PluginFrontend>;
+export interface DriverFrontendLoader {
+  load(driverId: string): Promise<DriverFrontendModule | null>;
+  mount(container: HTMLElement, driverInstanceId: string): Promise<DriverFrontend>;
 }
 
-/** Tauri-backed desktop API. Package paths stay inside the app data plugins directory. */
+/** Tauri-backed desktop API. Package paths stay inside the app data drivers directory. */
 export const hostAPI: HostAPI = {
   runtimeStatus: () => invoke("runtime_snapshot"),
   workspace: () => invoke<SavedWorkspace>("workspace_snapshot"),
@@ -370,6 +360,7 @@ export const hostAPI: HostAPI = {
   createWorkspace: (name) => invoke<WorkspaceGroup>("create_workspace_group", { name }),
   deleteWorkspace: (workspaceId) => invoke<void>("delete_workspace_group", { workspaceId }),
   moveWorkspaceEntry: (configRef, workspaceId) => invoke<void>("move_workspace_entry", { configRef, workspaceId }),
+  saveInstanceConfiguration: (instanceId, config) => invoke<void>("save_instance_configuration", {driverInstanceId:instanceId, config}),
   restoreInstance: (configRef) => invoke<InstanceInfo>("restore_saved_instance", { configRef }),
   forgetInstance: (configRef) => invoke<void>("forget_saved_instance", { configRef }),
   resetWorkspace: () => invoke<void>("reset_saved_workspace"),
@@ -380,72 +371,69 @@ export const hostAPI: HostAPI = {
   setMcpStdioEnabled: (enabled) => invoke<McpStdioStatus>("set_mcp_stdio_enabled", { enabled }),
   setMcpStdioPort: (port) => invoke<McpStdioStatus>("set_mcp_stdio_port", { request: { port } }),
   setMcpStartupMode: (startupMode) => invoke<McpStdioStatus>("set_mcp_startup_mode", { request: { startupMode } }),
-  frontendSource: (pluginId) => invoke<string | null>("plugin_frontend_source", { pluginId }),
-  provideSecret: (pluginInstanceId, purpose, value) => invoke<SecretHandle>("provide_secret", { pluginInstanceId, purpose, value }),
-  listPlugins: () => invoke<PluginCatalog>("list_plugins"),
-  preparePluginInstall: (locale) => invoke<PluginInstallPreview | null>("prepare_plugin_install", { locale }),
-  installPluginPackage: (token) => invoke<PluginSummary>("install_plugin_package", { token }),
-  discardPluginInstall: (token) => invoke<void>("discard_plugin_install", { token }),
-  startPlugin: (pluginId) => invoke<void>("start_plugin", { pluginId }),
-  stopPlugin: (pluginId) => invoke<void>("stop_plugin", { pluginId }),
-  listInstances: (pluginId) => invoke<InstanceInfo[]>("list_instances", { pluginId }),
-  createInstance: (pluginId, config, workspaceId, name) =>
-    invoke<InstanceInfo>("create_instance", { pluginId, config, workspaceId, ...(name ? { name } : {}) }),
-  destroyInstance: (pluginInstanceId) =>
-    invoke<void>("destroy_instance", { pluginInstanceId }),
-  listOperations: (pluginId) => invoke<OperationDescriptor[]>("list_operations", { pluginId }),
+  frontendSource: (driverId) => invoke<string | null>("driver_frontend_source", { driverId }),
+  provideSecret: (driverInstanceId, purpose, value) => invoke<SecretHandle>("provide_secret", { driverInstanceId, purpose, value }),
+  listDrivers: () => invoke<DriverCatalog>("list_drivers"),
+  startDriver: (driverId) => invoke<void>("start_driver", { driverId }),
+  stopDriver: (driverId) => invoke<void>("stop_driver", { driverId }),
+  listInstances: (driverId) => invoke<InstanceInfo[]>("list_instances", { driverId }),
+  createInstance: (driverId, config, workspaceId, name) =>
+    invoke<InstanceInfo>("create_instance", { driverId, config, workspaceId, ...(name ? { name } : {}) }),
+  destroyInstance: (driverInstanceId) =>
+    invoke<void>("destroy_instance", { driverInstanceId }),
+  listOperations: (driverId) => invoke<OperationDescriptor[]>("list_operations", { driverId }),
   invokeOperation: <T = unknown>(
-    pluginInstanceId: string,
+    driverInstanceId: string,
     operation: string,
     args: unknown,
     waitTimeoutMs?: number,
   ) =>
     invoke<OperationReceipt<T>>("invoke_operation", {
-      pluginInstanceId,
+      driverInstanceId,
       operation,
       args,
       waitTimeoutMs,
     }),
-  invokePluginOperation: <T = unknown>(pluginId: string, operation: string, args: unknown, waitTimeoutMs?: number) => invoke<OperationReceipt<T>>("invoke_plugin_operation", {
-    pluginId, operation, args, waitTimeoutMs,
+  invokeDriverOperation: <T = unknown>(driverId: string, operation: string, args: unknown, waitTimeoutMs?: number) => invoke<OperationReceipt<T>>("invoke_driver_operation", {
+    driverId, operation, args, waitTimeoutMs,
   }),
-  recentPluginOperations: (pluginId, limit) => invoke<OperationRecord[]>("recent_plugin_operations", { pluginId, limit }),
-  approvePluginProposal: <T = unknown>(pluginId: string, proposalId: string, args: unknown) => invoke<OperationReceipt<T>>("approve_plugin_proposal", { pluginId, proposalId, args }),
-  rejectPluginProposal: (pluginId, proposalId) => invoke<void>("reject_plugin_proposal", { pluginId, proposalId }),
-  getOperation: (pluginInstanceId, operationId) =>
-    invoke<OperationRecord>("get_operation", { pluginInstanceId, operationId }),
-  recentOperations: (pluginInstanceId, limit) =>
-    invoke<OperationRecord[]>("recent_operations", { pluginInstanceId, limit }),
-  approveProposal: <T = unknown>(pluginInstanceId: string, proposalId: string, args: unknown) =>
+  recentDriverOperations: (driverId, limit) => invoke<OperationRecord[]>("recent_driver_operations", { driverId, limit }),
+  approveDriverProposal: <T = unknown>(driverId: string, proposalId: string, args: unknown) => invoke<OperationReceipt<T>>("approve_driver_proposal", { driverId, proposalId, args }),
+  rejectDriverProposal: (driverId, proposalId) => invoke<void>("reject_driver_proposal", { driverId, proposalId }),
+  getOperation: (driverInstanceId, operationId) =>
+    invoke<OperationRecord>("get_operation", { driverInstanceId, operationId }),
+  recentOperations: (driverInstanceId, limit) =>
+    invoke<OperationRecord[]>("recent_operations", { driverInstanceId, limit }),
+  approveProposal: <T = unknown>(driverInstanceId: string, proposalId: string, args: unknown) =>
     invoke<OperationReceipt<T>>("approve_proposal", {
-      pluginInstanceId,
+      driverInstanceId,
       proposalId,
       args,
     }),
-  rejectProposal: (pluginInstanceId, proposalId) =>
-    invoke<void>("reject_proposal", { pluginInstanceId, proposalId }),
-  cancelOperation: (pluginInstanceId, operationId) =>
-    invoke<OperationReceipt>("cancel_operation", { pluginInstanceId, operationId }),
-  setBypass: (pluginInstanceId, enabled) => invoke<void>("set_bypass", { pluginInstanceId, enabled }),
-  getBypass: (pluginInstanceId) => invoke<boolean>("get_bypass", { pluginInstanceId }),
-  setApprovalPolicy: (pluginInstanceId, policy) => invoke<ApprovalPolicy>("set_approval_policy", { pluginInstanceId, policy }),
-  getApprovalPolicy: (pluginInstanceId) => invoke<ApprovalPolicy>("get_approval_policy", { pluginInstanceId }),
+  rejectProposal: (driverInstanceId, proposalId) =>
+    invoke<void>("reject_proposal", { driverInstanceId, proposalId }),
+  cancelOperation: (driverInstanceId, operationId) =>
+    invoke<OperationReceipt>("cancel_operation", { driverInstanceId, operationId }),
+  setBypass: (driverInstanceId, enabled) => invoke<void>("set_bypass", { driverInstanceId, enabled }),
+  getBypass: (driverInstanceId) => invoke<boolean>("get_bypass", { driverInstanceId }),
+  setApprovalPolicy: (driverInstanceId, policy) => invoke<ApprovalPolicy>("set_approval_policy", { driverInstanceId, policy }),
+  getApprovalPolicy: (driverInstanceId) => invoke<ApprovalPolicy>("get_approval_policy", { driverInstanceId }),
   previewApprovalPolicy: (policy, text) => invoke<boolean>("preview_approval_policy", { policy, text }),
 };
 
-/** Binds plugin-facing calls to one instance; unsupported event features fail explicitly. */
-export function createPluginAPI(instance: InstanceInfo, instanceConfigRef?: string): PluginAPI & { dispose(): void } {
+/** Binds driver-facing calls to one instance; unsupported event features fail explicitly. */
+export function createDriverAPI(instance: InstanceInfo, instanceConfigRef?: string): DriverAPI & { dispose(): void } {
   const unsupported = (feature: string): Error => new Error(`${feature} is not connected yet`);
   let disposed = false;
   const whileMounted = <T>(call: () => Promise<T>): Promise<T> => disposed
-    ? Promise.reject(new Error("Plugin frontend is disposed")) : call();
-  const scope = `frontend:${instance.pluginInstanceId}`;
+    ? Promise.reject(new Error("Driver frontend is disposed")) : call();
+  const scope = `frontend:${instance.driverInstanceId}`;
   const subscriptions = new Set<() => void>();
-  const subscribeEvents = async (handler: (event: PluginInstanceEvent) => void | Promise<void>): Promise<() => void> => {
-    if (disposed) throw new Error("Plugin frontend is disposed");
+  const subscribeEvents = async (handler: (event: DriverInstanceEvent) => void | Promise<void>): Promise<() => void> => {
+    if (disposed) throw new Error("Driver frontend is disposed");
     let active = true;
-    const channel = new Channel<PluginInstanceEvent>();
-    const ready = invoke<string>("subscribe_plugin_events", { pluginInstanceId: instance.pluginInstanceId, onEvent: channel });
+    const channel = new Channel<DriverInstanceEvent>();
+    const ready = invoke<string>("subscribe_driver_events", { driverInstanceId: instance.driverInstanceId, onEvent: channel });
     channel.onmessage = (event) => {
       void (async () => {
         const subscriptionId = await ready;
@@ -453,10 +441,10 @@ export function createPluginAPI(instance: InstanceInfo, instanceConfigRef?: stri
         try { await handler(event); }
         catch {
           active = false;
-          await invoke("unsubscribe_plugin_events", { pluginInstanceId: instance.pluginInstanceId, subscriptionId });
+          await invoke("unsubscribe_driver_events", { driverInstanceId: instance.driverInstanceId, subscriptionId });
           return;
         }
-        if (active) await invoke("ack_plugin_event", { pluginInstanceId: instance.pluginInstanceId, subscriptionId });
+        if (active) await invoke("ack_driver_event", { driverInstanceId: instance.driverInstanceId, subscriptionId });
       })().catch(() => { active = false; });
     };
     const subscriptionId = await ready;
@@ -464,7 +452,7 @@ export function createPluginAPI(instance: InstanceInfo, instanceConfigRef?: stri
       subscriptions.delete(cancel);
       if (!active) return;
       active = false;
-      void invoke("unsubscribe_plugin_events", { pluginInstanceId: instance.pluginInstanceId, subscriptionId }).catch(() => {});
+      void invoke("unsubscribe_driver_events", { driverInstanceId: instance.driverInstanceId, subscriptionId }).catch(() => {});
     };
     subscriptions.add(cancel);
     if (disposed) cancel();
@@ -474,10 +462,10 @@ export function createPluginAPI(instance: InstanceInfo, instanceConfigRef?: stri
     apiVersion: FRONTEND_API_VERSION,
     capabilities: Object.freeze({ interactions: true, events: true, streams: false }),
     i18n: {
-      get locale() { return pluginI18n.locale; },
+      get locale() { return driverI18n.locale; },
       subscribe: (listener) => {
         if (disposed) return () => {};
-        const stop = pluginI18n.subscribe(listener);
+        const stop = driverI18n.subscribe(listener);
         const cancel = () => { subscriptions.delete(cancel); stop(); };
         subscriptions.add(cancel);
         return cancel;
@@ -488,34 +476,35 @@ export function createPluginAPI(instance: InstanceInfo, instanceConfigRef?: stri
       cancelSecretInput(scope);
       for (const cancel of subscriptions) cancel();
     },
-    pluginId: instance.pluginId,
-    pluginInstanceId: instance.pluginInstanceId,
+    driverId: instance.driverId,
+    driverInstanceId: instance.driverInstanceId,
     instanceConfigRef,
     sessionId: instance.sessionId,
     components: { blocks: mountBlockList },
     invoke: <T = unknown>(operation: string, args: unknown, options?: { waitTimeoutMs?: number }) =>
       whileMounted(() => hostAPI.invokeOperation<T>(
-        instance.pluginInstanceId,
+        instance.driverInstanceId,
         operation,
         args,
         options?.waitTimeoutMs,
       )),
+    saveConfiguration: (config) => whileMounted(() => hostAPI.saveInstanceConfiguration(instance.driverInstanceId, config)),
     getOperation: (operationId) =>
-      hostAPI.getOperation(instance.pluginInstanceId, operationId),
-    recentOperations: (limit) => hostAPI.recentOperations(instance.pluginInstanceId, limit),
+      hostAPI.getOperation(instance.driverInstanceId, operationId),
+    recentOperations: (limit) => hostAPI.recentOperations(instance.driverInstanceId, limit),
     cancelOperation: (operationId) =>
-      whileMounted(() => hostAPI.cancelOperation(instance.pluginInstanceId, operationId)),
+      whileMounted(() => hostAPI.cancelOperation(instance.driverInstanceId, operationId)),
     approveProposal: <T = unknown>(proposalId: string, args: unknown) =>
-      whileMounted(() => hostAPI.approveProposal<T>(instance.pluginInstanceId, proposalId, args)),
+      whileMounted(() => hostAPI.approveProposal<T>(instance.driverInstanceId, proposalId, args)),
     rejectProposal: (proposalId) =>
-      whileMounted(() => hostAPI.rejectProposal(instance.pluginInstanceId, proposalId)),
+      whileMounted(() => hostAPI.rejectProposal(instance.driverInstanceId, proposalId)),
     subscribeEvents,
     subscribe: <T = unknown>(event: string, handler: (event: T) => void | Promise<void>) => {
       let disposed = false;
       let cancel: (() => void) | undefined;
       void subscribeEvents((message) => { if (!disposed && message.name === event) return handler(message.payload as T); })
         .then((unsubscribe) => { if (disposed) unsubscribe(); else cancel = unsubscribe; })
-        .catch(() => { if (!disposed) console.error("Plugin event subscription failed"); });
+        .catch(() => { if (!disposed) console.error("Driver event subscription failed"); });
       return () => { disposed = true; cancel?.(); };
     },
     subscribeStream: async <T = Uint8Array>(
@@ -529,7 +518,7 @@ export function createPluginAPI(instance: InstanceInfo, instanceConfigRef?: stri
     requestSecret: async (
       request: InteractionOptions & { purpose: string },
     ): Promise<InteractionOutcome<SecretHandle>> => {
-      return disposed ? { outcome: "unavailable" } : promptForSecret(instance.pluginInstanceId, request, hostAPI.provideSecret, scope);
+      return disposed ? { outcome: "unavailable" } : promptForSecret(instance.driverInstanceId, request, hostAPI.provideSecret, scope);
     },
     requestConfirmation: (request) => disposed ? Promise.resolve({ outcome: "unavailable" }) : promptForConfirmation(scope, request),
     requestSelection: (request) => disposed ? Promise.resolve({ outcome: "unavailable" }) : promptForSelection(scope, request),

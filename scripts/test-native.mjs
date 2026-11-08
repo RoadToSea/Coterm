@@ -1,256 +1,96 @@
-/** Real Windows WebView2 + Rust IPC acceptance. No host mocks; isolated app identifier. */
+/** Windows WebView2 + bundled workers + real MCP Stdio, with an isolated smoke profile. */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import net from "node:net";
-import { spawn } from "node:child_process";
-import { fileURLToPath } from "node:url";
-import { setAppLocale, connectCdp, delay, evaluate, waitForValue } from "../tests/support/browser-harness.mjs";
+import {spawn} from "node:child_process";
+import {createInterface} from "node:readline";
+import {connectCdp,delay,evaluate,waitForValue,setAppLocale} from "../tests/support/browser-harness.mjs";
 
-if (process.platform !== "win32") throw new Error("Native acceptance requires Windows + WebView2");
-const root = fileURLToPath(new URL("../", import.meta.url));
-const executable = process.argv[2];
-if (!executable) throw new Error("Usage: pnpm test:native <installed Coterm Smoke executable>");
-const appData = path.join(process.env.APPDATA, "com.coterm.smoke");
-// Never delete or modify an existing application workspace.
-try { await fs.access(appData); throw new Error(`Smoke profile already exists: ${appData}. Move it aside before testing.`); }
-catch (error) { if (error.code !== "ENOENT") throw error; }
-const scratch = await fs.mkdtemp(path.join(os.tmpdir(), "coterm-native-"));
-const packages = path.join(appData, "plugins", "fixture");
-await fs.mkdir(path.join(packages, "backend"), { recursive: true });
-await fs.mkdir(path.join(packages, "frontend"), { recursive: true });
-await fs.copyFile(path.join(root, "target/debug/coterm-runtime-fixture.exe"), path.join(packages, "backend/fixture.exe"));
-await fs.copyFile(path.join(root, "tests/fixtures/runtime-plugin/frontend.js"), path.join(packages, "frontend/index.js"));
-const manifest = {
-  manifestVersion: 1, id: "coterm-runtime-fixture", name: "Fixture", version: "0.1.0",
-  runtime: { interfaceMajor: 1, requires: ["instances", "backend-calls", "operation-catalog", "secret-delivery", "deferred-interactions", "async-operations", "plugin-events"] },
-  backend: { "windows-x64": "backend/fixture.exe", "windows-arm64": "backend/fixture.exe" },
-  frontend: { entry: "frontend/index.js" }, mcp: { provider: "backend" },
-  instances: { type: "test", multiple: true }, capabilities: ["secret-input"],
-};
-const manifestPath = path.join(packages, "manifest.json");
-await fs.writeFile(manifestPath, JSON.stringify(manifest));
-await fs.cp(path.join(root, "plugins/plugin-ssh/dist"), path.join(appData, "plugins/ssh"), { recursive: true });
-const fixturePids = new Set();
-let app;
-let client;
-let failures = "";
-async function launch() {
-  const port = await new Promise((resolve, reject) => {
-    const server = net.createServer();
-    server.on("error", reject);
-    server.listen(0, "127.0.0.1", () => { const { port } = server.address(); server.close(() => resolve(port)); });
-  });
-  app = spawn(path.resolve(executable), [], { windowsHide: true, stdio: ["ignore", "ignore", "pipe"], env: {
-    ...process.env, WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${port}`,
-    WEBVIEW2_USER_DATA_FOLDER: path.join(scratch, "webview"),
-  } });
-  app.stderr.on("data", (chunk) => { failures += chunk.toString(); });
-  const deadline = Date.now() + 30_000;
+if(process.platform!=="win32")throw new Error("Requires Windows WebView2");
+const executable=path.resolve(process.argv[2]??"target/debug/coterm-desktop.exe");
+const profile=path.resolve(process.env.APPDATA,"com.coterm.smoke");
+try{await fs.access(profile);throw new Error("Smoke profile already exists; refusing to overwrite it");}
+catch(error){if(error.code!=="ENOENT")throw error;}
+const scratch=await fs.mkdtemp(path.join(os.tmpdir(),"coterm-native-"));
+const port=await new Promise((resolve,reject)=>{const server=net.createServer();server.on("error",reject);server.listen(0,"127.0.0.1",()=>{const port=server.address().port;server.close(()=>resolve(port));});});
+let client,adapter;const calls=new Map();let sequence=0;
+const app=spawn(executable,[],{windowsHide:true,stdio:["ignore","ignore","pipe"],env:{...process.env,WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS:`--remote-debugging-port=${port}`,WEBVIEW2_USER_DATA_FOLDER:path.join(scratch,"webview")}});
+let diagnostic="";app.stderr.on("data",data=>{diagnostic=(diagnostic+data).slice(-4096)});
+const run=source=>evaluate(client,source);
+const invoke=(command,args={})=>run(`window.__TAURI_INTERNALS__.invoke(${JSON.stringify(command)},${JSON.stringify(args)}).catch(reason=>{throw new Error(typeof reason==='string'?reason:JSON.stringify(reason))})`);
+const operation=async(id,operation,args={})=>{const result=await invoke("invoke_operation",{driverInstanceId:id,operation,args,waitTimeoutMs:5000});if(result.error)throw new Error(JSON.stringify(result.error));return result.output;};
+const rpc=(method,params={})=>new Promise((resolve,reject)=>{const id=++sequence;const timer=setTimeout(()=>{calls.delete(id);reject(new Error(`MCP ${method} timed out`))},15000);calls.set(id,{resolve,reject,timer});adapter.stdin.write(JSON.stringify({jsonrpc:"2.0",id,method,params})+"\n");});
+const tool=(name,args)=>rpc("tools/call",{name,arguments:args});
+async function approve(name,id,toolName,commands){
+  const result=await tool(toolName,{name,commands});
+  assert.equal(result.structuredContent.status,"pending_approval",JSON.stringify(result));
+  await waitForValue(client,"!!document.querySelector('.approval-tray-shell button[type=submit]')");
+  await run("document.querySelector('.approval-tray-shell button[type=submit]').click()");
+  let record;
+  for(let i=0;i<600;i++){record=await invoke("get_operation",{driverInstanceId:id,operationId:result.structuredContent.operationId});if(["completed","failed","unknown","cancelled"].includes(record.status))break;await delay(50);}
+  assert.equal(record.status,"completed",JSON.stringify(record));
+}
+try{
   let page;
-  while (Date.now() < deadline) {
-    if (app.exitCode !== null) throw new Error(`App exited ${app.exitCode}: ${failures}`);
-    try {
-      page = (await (await fetch(`http://127.0.0.1:${port}/json/list`)).json()).find((item) => item.type === "page");
-      if (page?.webSocketDebuggerUrl) break;
-    } catch { /* WebView2 is starting. */ }
-    await delay(100);
+  for(let i=0;i<300;i++){
+    if(app.exitCode!==null)throw new Error(`Desktop exited: ${diagnostic}`);
+    try{page=(await(await fetch(`http://127.0.0.1:${port}/json/list`)).json()).find(item=>item.type==="page");}catch{}
+    if(page?.webSocketDebuggerUrl)break;await delay(100);
   }
-  if (!page?.webSocketDebuggerUrl) throw new Error(`No native WebView CDP endpoint: ${failures}`);
-  client = await connectCdp(page.webSocketDebuggerUrl);
-  await client.send("Runtime.enable");
-  await waitForValue(client, "!!document.getElementById('open-settings')", { label: "settings entry mounted" });
-  await setAppLocale(client, 'en');
-  await waitForValue(client, "!!window.__TAURI_INTERNALS__ && !!document.querySelector('[aria-label=\"Plugin list\"]')", { label: "real Tauri UI loaded" });
-  await waitForValue(client, "!!document.querySelector('[aria-label=\"Manage Fixture\"]')", { label: "installed fixture discovered" });
-}
-const run = (expression) => evaluate(client, expression);
-const invoke = (command, args = {}) => run(`window.__TAURI_INTERNALS__.invoke(${JSON.stringify(command)},${JSON.stringify(args)})`);
-const operation = (id, name, waitTimeoutMs = 100) => invoke("invoke_operation", { pluginInstanceId: id, operation: name, args: {}, waitTimeoutMs });
-async function checkedProcess(command, args) {
-  const child = spawn(command, args, { cwd: root, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
-  let output = "";
-  child.stdout.on("data", (chunk) => { output += chunk.toString(); });
-  child.stderr.on("data", (chunk) => { output += chunk.toString(); });
-  await new Promise((resolve, reject) => {
-    const timer = setTimeout(() => { child.kill(); reject(new Error(`${command} timed out`)); }, 120_000);
-    child.on("error", (error) => { clearTimeout(timer); reject(error); });
-    child.on("exit", (code) => { clearTimeout(timer); code === 0 ? resolve() : reject(new Error(`${command} failed (${code}): ${output}`)); });
-  });
-}
-async function offlineInstall() {
-  const source = path.join(scratch, "offline-source");
-  await fs.mkdir(path.join(source, "backend"), { recursive: true });
-  const offlineManifest = { ...manifest, id: "coterm-offline-fixture", name: "Offline Fixture", backend: { "windows-x64": "backend/fixture.exe" } };
-  // The installer treats native bytes as opaque; this package is never started.
-  delete offlineManifest.frontend;
-  await fs.copyFile(path.join(root, "target/debug/coterm-runtime-fixture.exe"), path.join(source, "backend/fixture.exe"));
-  await fs.writeFile(path.join(source, "manifest.json"), JSON.stringify(offlineManifest));
-  const archive = path.join(scratch, "offline.coterm");
-  await checkedProcess("cargo", ["run", "--locked", "-p", "coterm-core", "--example", "package_plugin", "--", source, archive]);
-  await run("document.getElementById('install-plugin-button').click()");
-  await waitForValue(client, "!!document.querySelector('dialog[aria-label=\"Install offline plugin\"]')");
-  const choose = () => run("[...document.querySelectorAll('dialog button')].find(button=>button.textContent==='Choose plugin package').click()");
-  const nativeDialog = (cancel) => checkedProcess("powershell", ["-NoProfile", "-NonInteractive", "-File", path.join(root, "scripts/test-plugin-file-dialog.ps1"), "-TaskProcessId", String(app.pid), ...(cancel ? ["-Cancel"] : ["-PackagePath", archive])]);
-  await choose();
-  await nativeDialog(true);
-  await waitForValue(client, "document.querySelector('dialog [aria-busy]')?.getAttribute('aria-busy')==='false'");
-  assert.equal(await run("!!document.querySelector('dialog [role=alert]')"), false, "cancelling the real native picker is not an error");
-  await choose();
-  await nativeDialog(false);
-  await waitForValue(client, "document.querySelector('dialog dl')?.textContent.includes('coterm-offline-fixture')", { label: "native package preview" });
-  assert.equal((await invoke("list_plugins")).plugins.some((plugin) => plugin.id === offlineManifest.id), false, "preview never registers a package");
-  await run("[...document.querySelectorAll('dialog button')].find(button=>button.textContent==='Install trusted package').click()");
-  await waitForValue(client, "!!document.querySelector('[aria-label=\"Manage Offline Fixture\"]')", { label: "native offline installation" });
-  const installed = (await invoke("list_plugins")).plugins.find((plugin) => plugin.id === offlineManifest.id);
-  assert.equal(installed.running, false, "installation must not start native code");
-  assert.ok(await fs.stat(path.join(appData, "plugins", offlineManifest.id, "manifest.json")));
-  await run("document.querySelector('dialog button[aria-label=\"Close dialog\"]').click()");
-  console.log("PASS native offline picker cancellation, package preview, trust confirmation, installation and immediate catalog refresh");
-}
-async function poll(command, args, condition, label) {
-  const deadline = Date.now() + 10_000;
-  while (Date.now() < deadline) {
-    const result = await invoke(command, args);
-    if (condition(result)) return result;
-    await delay(50);
+  if(!page?.webSocketDebuggerUrl)throw new Error(`WebView2 unavailable: ${diagnostic}`);
+  client=await connectCdp(page.webSocketDebuggerUrl);await client.send("Runtime.enable");
+  await waitForValue(client,"!!document.getElementById('open-settings')");
+  assert.equal(await invoke("plugin:app|name"),"Coterm Smoke","Build with tests/fixtures/tauri-smoke.conf.json");
+  await setAppLocale(client,"en");
+  const catalog=await invoke("list_drivers");
+  assert.deepEqual(catalog.drivers.map(item=>item.id).sort(),["coterm-driver-local","coterm-driver-serial","coterm-driver-ssh"]);assert.deepEqual(catalog.issues,[]);
+  await assert.rejects(invoke("prepare_driver_install",{locale:"en"}));
+  await run("document.getElementById('open-settings').click()");await waitForValue(client,"document.getElementById('app-settings-dialog')?.open");
+  assert.equal(await run("!!document.querySelector('[data-category=drivers]')"),false);
+  await run("document.querySelector('#app-settings-dialog button[aria-label=\"Close dialog\"]').click()");
+  await invoke("start_driver",{driverId:"coterm-driver-local"});
+  const local=await invoke("create_instance",{driverId:"coterm-driver-local",config:{shell:"powershell.exe"},name:"Native local"});
+  await waitForValue(client,`!!document.querySelector('[data-instance-id="${local.driverInstanceId}"]')`);
+  await run(`document.querySelector('[data-instance-id="${local.driverInstanceId}"] > button').click()`);
+  await waitForValue(client,"[...document.querySelectorAll('main div')].some(node=>node.shadowRoot?.querySelector('.xterm'))");
+  for(let i=0;i<300;i++){if((await operation(local.driverInstanceId,"local.status")).running)break;await delay(50);}
+  assert.equal((await operation(local.driverInstanceId,"local.status")).running,true);
+  const mcp=await invoke("mcp_stdio_status");assert.equal(mcp.enabled,true);
+  adapter=spawn(executable,["mcp","stdio","--addr",mcp.address],{windowsHide:true,stdio:["pipe","pipe","pipe"]});
+  adapter.stderr.on("data",data=>{diagnostic=(diagnostic+data).slice(-4096)});
+  createInterface({input:adapter.stdout}).on("line",line=>{const message=JSON.parse(line),call=calls.get(message.id);if(!call)return;calls.delete(message.id);clearTimeout(call.timer);message.error?call.reject(new Error(JSON.stringify(message.error))):call.resolve(message.result);});
+  await rpc("initialize",{protocolVersion:"2024-11-05",capabilities:{},clientInfo:{name:"native-acceptance",version:"1"}});
+  adapter.stdin.write(JSON.stringify({jsonrpc:"2.0",method:"notifications/initialized"})+"\n");
+  const tools=(await rpc("tools/list")).tools.map(tool=>tool.name);assert.ok(tools.includes("coterm_local_command"));assert.ok(!tools.includes("coterm_local_exec"));
+  await approve("Native local",local.driverInstanceId,"coterm_local_command",["$env:COTERM_ACCEPTANCE='retained'; Write-Output 'native-local-first'"]);
+  await approve("Native local",local.driverInstanceId,"coterm_local_command",["Write-Output $env:COTERM_ACCEPTANCE"]);
+  const pairs=await tool("coterm_local_read_dialogue_pairs",{name:"Native local",count:2});assert.equal(pairs.structuredContent.pairs.length,2);assert.ok(pairs.structuredContent.pairs[0].stdout.includes("retained"));
+  if(process.env.COTERM_SERIAL_SHELL_LIVE){
+    await invoke("start_driver",{driverId:"coterm-driver-serial"});
+    const serial=await invoke("create_instance",{driverId:"coterm-driver-serial",name:"Native board",config:{port:process.env.COTERM_SERIAL_SHELL_LIVE,baudRate:Number(process.env.COTERM_SERIAL_LIVE_BAUD??115200),dtr:false,rts:false,mode:"stream"}});
+    const config=(await operation(serial.driverInstanceId,"serial.configure",{mode:"shell",prompt:process.env.COTERM_SERIAL_SHELL_PROMPT??"# "})).config;
+    await invoke("save_instance_configuration",{driverInstanceId:serial.driverInstanceId,config});await operation(serial.driverInstanceId,"serial.connect");
+    try{
+      await operation(serial.driverInstanceId,"serial.write",{text:"\r"});let ready=false;
+      for(let i=0;i<100;i++){ready=(await operation(serial.driverInstanceId,"serial.status")).shellReady;if(ready)break;await delay(50);}assert.equal(ready,true,"Board must already be logged in at its prompt");
+      await approve("Native board",serial.driverInstanceId,"coterm_serial_command",["printf '__COTERM_FULL_CHAIN__\\n'"]);
+      const data=await tool("coterm_serial_read_dialogue_pairs",{name:"Native board",count:1});assert.ok(data.structuredContent.pairs[0].stdout.includes("__COTERM_FULL_CHAIN__"));assert.equal(data.structuredContent.pairs[0].stderr,"");assert.equal(data.structuredContent.pairs[0].exitCode,null);
+    }finally{await operation(serial.driverInstanceId,"serial.disconnect");}
+    const entry=(await invoke("workspace_snapshot")).entries.find(entry=>entry.instanceId===serial.driverInstanceId);
+    await invoke("stop_driver",{driverId:"coterm-driver-serial"});const restored=await invoke("restore_saved_instance",{configRef:entry.configRef});
+    const status=await operation(restored.driverInstanceId,"serial.status");assert.equal(status.config.mode,"shell");assert.equal(status.config.prompt,config.prompt);assert.equal(status.connected,false);
+    console.log("PASS physical Serial: MCP -> approval UI -> worker -> board -> backend reads; saved Shell restore without reconnect");
   }
-  throw new Error(`Native condition timed out: ${label}`);
-}
-async function createSshInstance() {
-  await run("document.querySelector('[aria-label=\"Manage SSH\"]').click()");
-  await waitForValue(client, "[...document.querySelectorAll('dialog div')].some(node=>node.shadowRoot?.querySelector('form'))", { label: "real SSH configuration form" });
-  await run(`(() => {
-    const root = [...document.querySelectorAll('dialog div')].find(node=>node.shadowRoot?.querySelector('form')).shadowRoot;
-    const inputs = root.querySelectorAll('input');
-    inputs[0].value = '127.0.0.1'; inputs[1].value = '22'; inputs[2].value = 'coterm-test';
-    root.querySelector('form').requestSubmit();
-  })()`);
-  await waitForValue(client, "!document.querySelector('dialog[open]') && [...document.querySelectorAll('main div')].some(node=>node.shadowRoot?.querySelector('.bar span')?.textContent==='Disconnected' && node.shadowRoot.querySelector('.xterm'))", { label: "real SSH instance workspace" });
-  const instances = await invoke("list_instances", { pluginId: "coterm-plugin-ssh" });
-  assert.equal(instances.length, 1);
-  assert.equal(instances[0].status, "ready");
-  const status = await operation(instances[0].pluginInstanceId, "ssh.status");
-  assert.equal(status.status, "completed");
-  assert.equal(status.output.connected, false, "creating an SSH instance never connects to a remote server automatically");
-  console.log("PASS native real SSH configuration submit, backend handshake and disconnected terminal workspace");
-}
-async function closeApp() {
-  // Close through the actual Windows window message, exercising Tauri ExitRequested.
-  const child = spawn("powershell", ["-NoProfile", "-NonInteractive", "-Command",
-    `Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public class CotermClose { [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr h,uint m,IntPtr w,IntPtr l); }'; $p = Get-Process -Id ${app.pid}; [CotermClose]::PostMessage($p.MainWindowHandle,0x0010,[IntPtr]::Zero,[IntPtr]::Zero) | Out-Null`],
-  { windowsHide: true, stdio: "ignore" });
-  await new Promise((resolve, reject) => { child.on("error", reject); child.on("exit", resolve); });
-  const deadline = Date.now() + 10_000;
-  while (app.exitCode === null && Date.now() < deadline) await delay(50);
-  assert.equal(app.exitCode, 0, "normal Tauri exit finishes within 10 seconds");
-  client.dispose();
-  client = null;
-  for (const pid of fixturePids) {
-    let alive = true;
-    try { process.kill(pid, 0); } catch { alive = false; }
-    assert.equal(alive, false, `plugin child ${pid} was reaped on exit`);
-  }
-}
-try {
-  await launch();
-  await offlineInstall();
-  await invoke("start_plugin", { pluginId: manifest.id });
-  const first = await invoke("create_instance", { pluginId: manifest.id, config: { label: "First", password: "native-config-secret" } });
-  const second = await invoke("create_instance", { pluginId: manifest.id, config: { label: "Second" } });
-  assert.notEqual(first.pluginInstanceId, second.pluginInstanceId);
-  assert.notEqual(first.sessionId, second.sessionId);
-  const info = await operation(first.pluginInstanceId, "fixture.info");
-  fixturePids.add(info.output.pid);
-  assert.equal(info.output.consoleAttached, false, "creating an instance must not open a plugin console window");
-  assert.equal((await operation(second.pluginInstanceId, "fixture.info")).output.instanceId, second.pluginInstanceId);
-  await poll("runtime_snapshot", {}, (result) => result.instances.length === 2, "two instances");
-  // Mount the real bundled plugin through the real workspace.
-  await waitForValue(client, "!![...document.querySelectorAll('[aria-label=\"Instance list\"] button')].find(b=>b.textContent==='First')");
-  await run("[...document.querySelectorAll('[aria-label=\"Instance list\"] button')].find(b=>b.textContent==='First').click()");
-  await waitForValue(client, "!![...document.querySelectorAll('main button')].find(b=>b.textContent==='Text')");
-  for (const [label, value, expected] of [["Text", "hello", "hello"], ["Selection", "b", "b"], ["Confirmation", null, true]]) {
-    await run(`[...document.querySelectorAll('main button')].find(b=>b.textContent===${JSON.stringify(label)}).click()`);
-    await waitForValue(client, "!!document.querySelector('dialog.host-secret-dialog[open]')");
-    await run(`(() => { const d=document.querySelector('dialog.host-secret-dialog'); const input=d.querySelector('input,select'); if(input)input.value=${JSON.stringify(value)}; d.querySelector('form').requestSubmit(); })()`);
-    await waitForValue(client, `document.querySelector('main output')?.textContent === ${JSON.stringify(JSON.stringify({ outcome: "submitted", value: expected }))}`);
-  }
-  // The WebView receives one unacknowledged event; a lagging consumer gets an explicit gap.
-  await run("[...document.querySelectorAll('main button')].find(b=>b.textContent==='Hold events').click()");
-  await waitForValue(client, "!!document.querySelector('main [data-subscribed=true]')");
-  await operation(first.pluginInstanceId, "fixture.flood");
-  await waitForValue(client, "JSON.parse(document.querySelector('main section').dataset.events || '[]').length === 1");
-  await delay(500);
-  assert.equal(await run("JSON.parse(document.querySelector('main section').dataset.events).length"), 1);
-  await run("[...document.querySelectorAll('main button')].find(b=>b.textContent==='Resume events').click()");
-  await waitForValue(client, "JSON.parse(document.querySelector('main section').dataset.events || '[]').includes('runtime.gap')");
-  await operation(first.pluginInstanceId, "fixture.commit");
-  const hanging = await operation(second.pluginInstanceId, "fixture.hang");
-  await operation(first.pluginInstanceId, "fixture.crash").catch(() => {});
-  await poll("runtime_snapshot", {}, (result) => result.instances.length === 2 && result.instances.every((instance) => instance.status === "failed"), "crashed instances converge");
-  await waitForValue(client, "document.querySelector('main')?.textContent.includes('stopped unexpectedly')");
-  assert.equal((await invoke("get_operation", { pluginInstanceId: second.pluginInstanceId, operationId: hanging.operationId })).status, "unknown");
-  let saved = await invoke("workspace_snapshot");
-  assert.equal(saved.entries.length, 2);
-  assert.equal(JSON.stringify(saved).includes("native-config-secret"), false);
-  assert.equal((await fs.readFile(path.join(appData, "workspace.v1.dpapi"))).includes(Buffer.from("native-config-secret")), false);
-  const firstRef = saved.entries.find((entry) => entry.instanceId === first.pluginInstanceId)?.configRef;
-  assert.ok(firstRef, "configuration reference is aligned to the original instance");
-  const recovered = await invoke("restore_saved_instance", { configRef: firstRef });
-  assert.notEqual(recovered.pluginInstanceId, first.pluginInstanceId);
-  const restartedInfo = await operation(recovered.pluginInstanceId, "fixture.info");
-  fixturePids.add(restartedInfo.output.pid);
-  assert.equal(restartedInfo.output.writes, 0, "recovery does not replay writes");
-  await waitForValue(client, "!![...document.querySelectorAll('[aria-label=\"Instance list\"] button')].find(b=>b.textContent==='First' && b.title.endsWith('ready'))");
-  await run("[...document.querySelectorAll('[aria-label=\"Instance list\"] button')].find(b=>b.textContent==='First' && b.title.endsWith('ready')).click(); if(document.getElementById('toggle-instances-button').getAttribute('aria-expanded')==='true') document.getElementById('toggle-instances-button').click()");
-  await poll("workspace_snapshot", {}, (result) => result.layout.instancesCollapsed, "UI layout persisted");
-  await invoke("set_bypass", { enabled: true });
-  await closeApp();
-  console.log("PASS native multi-instance, SDK prompts, slow consumer/gap, crash/restart, encrypted persistence, exit reaping");
-
-  // Relaunch headless: the same saved config reference creates a new instance on demand.
-  delete manifest.frontend;
-  await fs.writeFile(manifestPath, JSON.stringify(manifest));
-  await launch();
-  assert.ok((await invoke("list_plugins")).plugins.some((plugin) => plugin.id === "coterm-offline-fixture"), "offline installation survives app restart");
-  assert.equal((await invoke("list_instances")).length, 0, "startup does not auto execute or recreate connections");
-  assert.equal(await invoke("get_bypass"), false, "Bypass never persists");
-  saved = await invoke("workspace_snapshot");
-  assert.equal(saved.layout.instancesCollapsed, true);
-  assert.equal(saved.entries.length, 2);
-  assert.ok(saved.entries.some((entry) => entry.configRef === firstRef), "stable configuration reference survives relaunch");
-  const headless = await invoke("restore_saved_instance", { configRef: firstRef });
-  assert.equal((await invoke("recent_operations", { pluginInstanceId: headless.pluginInstanceId, limit: 100 })).length, 0, "history is session-only");
-  fixturePids.add((await operation(headless.pluginInstanceId, "fixture.info")).output.pid);
-  const credential = await operation(headless.pluginInstanceId, "fixture.secret");
-  assert.equal(credential.status, "running");
-  await waitForValue(client, "document.querySelector('dialog h2')?.textContent === 'Headless fixture credential'");
-  await run("document.querySelector('dialog input').value='native-entered-secret'; document.querySelector('dialog form').requestSubmit()");
-  const final = await poll("get_operation", { pluginInstanceId: headless.pluginInstanceId, operationId: credential.operationId }, (record) => record.status === "completed", "headless secret completed");
-  assert.deepEqual(final.output, { accepted: true });
-  assert.equal(JSON.stringify(final).includes("native-entered-secret"), false);
-  await createSshInstance();
-  await operation(headless.pluginInstanceId, "fixture.block", 0);
-  await delay(100);
-  await closeApp();
-  console.log("PASS native headless interaction, explicit restore, no write replay, session history, Bypass reset, blocked-control exit reaping");
-} finally {
-  if (app && app.exitCode === null) {
-    try { await closeApp(); }
-    catch {
-      const killer = spawn("taskkill", ["/PID", String(app.pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" });
-      await new Promise((resolve) => killer.on("exit", resolve));
-    }
+  console.log("PASS native bundled discovery, no installer, MCP Stdio, approval UI and shared PowerShell state");
+}finally{
+  adapter?.kill();for(const call of calls.values()){clearTimeout(call.timer);call.reject(new Error("Acceptance ended"));}
+  if(app.exitCode===null){
+    const closer=spawn("powershell",["-NoProfile","-NonInteractive","-Command",`Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public class CotermClose { [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr h,uint m,IntPtr w,IntPtr l); }'; $p=Get-Process -Id ${app.pid}; [CotermClose]::PostMessage($p.MainWindowHandle,0x0010,[IntPtr]::Zero,[IntPtr]::Zero) | Out-Null`],{windowsHide:true,stdio:"ignore"});
+    await new Promise(resolve=>closer.on("exit",resolve));for(let i=0;i<200&&app.exitCode===null;i++)await delay(50);if(app.exitCode===null)app.kill();
   }
   client?.dispose();
-  // Remove only the freshly-created, fixed smoke identifier and our own temp directory.
-  for (let attempt = 0; attempt < 50; attempt++) {
-    try { await fs.rm(scratch, { recursive: true, force: true }); break; }
-    catch { await delay(100); }
-  }
-  for (let attempt = 0; attempt < 50; attempt++) {
-    try { await fs.rm(appData, { recursive: true, force: true }); break; }
-    catch (error) { if (attempt === 49) throw error; await delay(100); }
-  }
+  if(path.basename(profile)!=="com.coterm.smoke"||!scratch.startsWith(path.resolve(os.tmpdir())+path.sep))throw new Error("Unexpected cleanup path");
+  for(const target of [scratch,profile])for(let i=0;i<50;i++){try{await fs.rm(target,{recursive:true,force:true});break;}catch(error){if(i===49)throw error;await delay(100);}}
 }

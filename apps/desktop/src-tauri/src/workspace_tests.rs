@@ -28,7 +28,7 @@ fn approval_rules_roundtrip_and_failed_writes_preserve_the_saved_policy() -> any
     assert!(serialized.get("allowedOperations").is_none());
     assert!(serialized.get("approvalPolicy").is_none());
     let disk: Value = serde_json::from_slice(&protect(&fs::read(fixture.path())?, false)?)?;
-    assert_eq!(disk["version"], 2);
+    assert_eq!(disk["version"], 3);
     assert!(disk.get("approvalPolicy").is_none());
     store.path = fixture.0.join("missing").join("workspace.bin");
     assert!(store
@@ -53,8 +53,8 @@ fn legacy_rules_are_copied_to_saved_instances_but_not_to_new_instances() -> anyh
         patterns: vec!["^ls$".into()],
     };
     let legacy = serde_json::json!({"version":1,"entries":[
-        {"configRef":"first","pluginId":"ssh","label":"Same driver A","config":{}},
-        {"configRef":"second","pluginId":"ssh","label":"Same driver B","config":{}}
+        {"configRef":"first","driverId":"ssh","label":"Same driver A","config":{}},
+        {"configRef":"second","driverId":"ssh","label":"Same driver B","config":{}}
     ],"layout":{"activeConfigRef":null,"instancesCollapsed":false},"approvalPolicy":policy});
     fs::write(
         fixture.path(),
@@ -96,7 +96,7 @@ fn legacy_rules_are_copied_to_saved_instances_but_not_to_new_instances() -> anyh
 fn legacy_interface_grants_never_become_instance_command_rules() -> anyhow::Result<()> {
     let fixture = Fixture::new()?;
     let legacy = serde_json::json!({"version":1,"entries":[
-        {"configRef":"first","pluginId":"ssh","label":"Server","config":{}}
+        {"configRef":"first","driverId":"ssh","label":"Server","config":{}}
     ],"layout":{"activeConfigRef":null,"instancesCollapsed":false},"allowedOperations":["ssh.command"]});
     fs::write(
         fixture.path(),
@@ -267,7 +267,7 @@ fn layout_and_explicit_creation_group_share_the_same_membership() -> anyhow::Res
 fn legacy_v1_migrates_into_default_group_and_preserves_encrypted_config() -> anyhow::Result<()> {
     let fixture = Fixture::new()?;
     let legacy = serde_json::json!({"version":1,"entries":[{
-        "configRef":"legacy","pluginId":"test","label":"Legacy","config":{"secret":"kept-private"}
+        "configRef":"legacy","driverId":"test","label":"Legacy","config":{"secret":"kept-private"}
     }],"layout":{"activeConfigRef":"legacy","instancesCollapsed":true}});
     fs::write(
         fixture.path(),
@@ -355,5 +355,101 @@ fn failed_write_preserves_groups_membership_and_session_checkpoint() -> anyhow::
     assert_eq!(serde_json::to_value(store.snapshot())?, before);
     store.path = fixture.path();
     assert_eq!(fixture.store()?.snapshot().groups.len(), 2);
+    Ok(())
+}
+
+#[test]
+fn configuration_updates_are_bound_and_preserve_identity_and_rules() -> anyhow::Result<()> {
+    let fixture = Fixture::new()?;
+    let mut store = fixture.store()?;
+    store.insert(
+        "serial".into(),
+        "one".into(),
+        "Board".into(),
+        serde_json::json!({"port":"COM6","mode":"stream"}),
+        None,
+    )?;
+    store.insert(
+        "serial".into(),
+        "two".into(),
+        "Other".into(),
+        serde_json::json!({"port":"COM7"}),
+        None,
+    )?;
+    let before = store.snapshot().entries;
+    let reference = before[0].config_ref.clone();
+    let config = serde_json::json!({"port":"COM6","mode":"shell","prompt":"# "});
+    store.save_configuration("one", config.clone())?;
+    assert_eq!(store.find(&reference)?.config, config);
+    assert_eq!(store.snapshot().entries[1].config, before[1].config);
+    assert_eq!(store.find(&reference)?.label, before[0].label);
+    assert_eq!(
+        store.find(&reference)?.approval_policy,
+        before[0].approval_policy
+    );
+    assert!(store.save_configuration("stale", Value::Null).is_err());
+    assert!(store.save_configuration("one", serde_json::json!({"id":"secret","driverInstanceId":"one","purpose":"auth","expiresAt":"later"})).is_err());
+    #[cfg(windows)]
+    {
+        assert_eq!(fixture.store()?.find(&reference)?.config, config);
+        store.path = fixture.0.join("absent").join("workspace.bin");
+        assert!(store.save_configuration("one", Value::Null).is_err());
+        assert_eq!(store.find(&reference)?.config, config);
+        assert_eq!(fixture.store()?.find(&reference)?.config, config);
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+#[test]
+fn legacy_driver_names_migrate_without_changing_saved_identity_or_policies() -> anyhow::Result<()> {
+    use coterm_core::approval_policy::{ApprovalMode, ApprovalPolicy};
+    for version in [1, 2] {
+        let fixture = Fixture::new()?;
+        let policy = ApprovalPolicy {
+            mode: ApprovalMode::ApproveMatches,
+            patterns: vec!["^reboot$".into()],
+        };
+        let entries: Vec<_> = ["ssh", "serial", "local"]
+            .into_iter()
+            .map(|name| {
+                serde_json::json!({"configRef":name,"pluginId":format!("coterm-plugin-{name}"),
+                "label":name,"config":{"private":"kept"},"approvalPolicy":policy,"retained":true})
+            })
+            .collect();
+        let legacy = serde_json::json!({"version":version,"entries":entries,
+            "layout":{"activeConfigRef":"serial","instancesCollapsed":true}});
+        fs::write(
+            fixture.path(),
+            protect(&serde_json::to_vec(&legacy)?, true)?,
+        )?;
+        let mut store = fixture.store()?;
+        for name in ["ssh", "serial", "local"] {
+            let entry = store.find(name)?;
+            assert_eq!(entry.driver_id, format!("coterm-driver-{name}"));
+            assert_eq!(entry.config_ref, name);
+            assert!(entry.retained);
+            assert_eq!(entry.approval_policy, policy);
+            assert_eq!(entry.config["private"], "kept");
+            assert!(entry.instance_id.is_none());
+        }
+        store.save_layout(None, true, vec![], None)?;
+        let plaintext = protect(&fs::read(fixture.path())?, false)?;
+        let migrated: Value = serde_json::from_slice(&plaintext)?;
+        assert_eq!(migrated["version"], 3);
+        assert!(migrated["entries"][0].get("pluginId").is_none());
+        assert_eq!(migrated["entries"][0]["driverId"], "coterm-driver-ssh");
+        assert_eq!(fixture.store()?.find("serial")?.approval_policy, policy);
+        assert_eq!(
+            fixture
+                .store()?
+                .snapshot()
+                .layout
+                .active_config_ref
+                .as_deref(),
+            Some("serial")
+        );
+        assert!(!String::from_utf8_lossy(&fs::read(fixture.path())?).contains("kept"));
+    }
     Ok(())
 }

@@ -1,9 +1,9 @@
-//! 单入口 MCP 路由契约。不把插件的原生工具转换成统一 execute 工具。
+//! 单入口 MCP 路由契约。不把驱动的原生工具转换成统一 execute 工具。
 
-use coterm_core::plugin_runtime::CallerContext;
+use coterm_core::driver_runtime::CallerContext;
 use coterm_proto::runtime::{
     operation::{DispatchMode, OperationEffect, OperationReceipt, OperationScope},
-    OperationId, PluginId, PluginInstanceId, RuntimeFuture,
+    OperationId, DriverId, DriverInstanceId, RuntimeFuture,
 };
 use coterm_proto::{JsonRpcNotification, JsonRpcRequest, JsonRpcResponse};
 use serde_json::Value;
@@ -32,10 +32,10 @@ pub enum McpMessage {
     Notification(JsonRpcNotification),
 }
 
-/// 只有进入插件执行路径后才产生。ID、source 和 dispatch 均由基座确定。
+/// 只有进入驱动执行路径后才产生。ID、source 和 dispatch 均由基座确定。
 pub struct McpDispatchContext {
     pub operation_id: OperationId,
-    pub plugin_instance_id: Option<PluginInstanceId>,
+    pub driver_instance_id: Option<DriverInstanceId>,
     pub caller: CallerContext,
     pub dispatch: DispatchMode,
 }
@@ -52,9 +52,9 @@ pub struct McpClientMessage {
     pub message: McpMessage,
 }
 
-/// 一个原生 MCP Server 的逻辑通道，与其插件后端共享领域实例。
+/// 一个原生 MCP Server 的逻辑通道，与其驱动后端共享领域实例。
 /// 具体采用独立连接还是复用 stdio 尚待冻结；本接口不启动额外协议连接。
-pub trait PluginMcpProvider: Send + Sync {
+pub trait DriverMcpProvider: Send + Sync {
     fn catalog<'a>(&'a self) -> RuntimeFuture<'a, McpCatalog>;
     fn send<'a>(&'a self, message: McpInbound) -> RuntimeFuture<'a, ()>;
     /// 单一收件任务；等待消息不能阻止并发 send/close。
@@ -62,21 +62,21 @@ pub trait PluginMcpProvider: Send + Sync {
     fn close<'a>(&'a self) -> RuntimeFuture<'a, ()>;
 }
 
-/// 路由只调整名称/URI/请求 ID；领域参数、原生结果和错误保持插件定义。
+/// 路由只调整名称/URI/请求 ID；领域参数、原生结果和错误保持驱动定义。
 pub trait McpBridge: Send + Sync {
     fn register<'a>(
         &'a self,
-        plugin_id: PluginId,
-        provider: Box<dyn PluginMcpProvider>,
+        driver_id: DriverId,
+        provider: Box<dyn DriverMcpProvider>,
     ) -> RuntimeFuture<'a, ()>;
-    fn unregister<'a>(&'a self, plugin_id: &'a str) -> RuntimeFuture<'a, ()>;
+    fn unregister<'a>(&'a self, driver_id: &'a str) -> RuntimeFuture<'a, ()>;
     fn catalog<'a>(&'a self) -> RuntimeFuture<'a, McpCatalog>;
-    /// caller.source 必须为 Agent。实例级工具必须显式含 pluginInstanceId，
+    /// caller.source 必须为 Agent。实例级工具必须显式含 driverInstanceId，
     /// 且与基座解析出的目标一致；不依据当前标签页补入参数。
     fn forward<'a>(&'a self, caller: CallerContext, message: McpMessage) -> RuntimeFuture<'a, ()>;
     /// 向外部客户端交付的消息，包含异步通知和结果。
     fn receive<'a>(&'a self) -> RuntimeFuture<'a, Option<McpClientMessage>>;
-    /// 公共查询/取消由基座提供，不要求插件重复实现状态表。
+    /// 公共查询/取消由基座提供，不要求驱动重复实现状态表。
     fn get_operation<'a>(
         &'a self,
         caller: CallerContext,

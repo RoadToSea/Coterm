@@ -43,10 +43,12 @@ pub fn error(code: &str) -> RuntimeError {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SavedInstance {
     pub config_ref: String,
-    pub plugin_id: String,
+    pub driver_id: String,
     pub label: String,
     pub instance_id: Option<String>,
     pub workspace_id: String,
+    #[serde(default)]
+    pub retained: bool,
     #[serde(default)]
     pub approval_policy: ApprovalPolicy,
     #[serde(skip_serializing)]
@@ -58,11 +60,14 @@ pub struct SavedInstance {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Entry {
     config_ref: String,
-    plugin_id: String,
+    #[serde(alias = "pluginId")]
+    driver_id: String,
     label: String,
     config: Value,
     #[serde(default = "default_workspace_id")]
     workspace_id: String,
+    #[serde(default)]
+    retained: bool,
     #[serde(default)]
     approval_policy: Option<ApprovalPolicy>,
 }
@@ -111,6 +116,7 @@ pub struct Snapshot {
     pub persistence: &'static str,
 }
 
+#[derive(Clone)]
 pub struct WorkspaceStore {
     #[cfg(windows)]
     path: PathBuf,
@@ -151,7 +157,7 @@ impl WorkspaceStore {
         let parsed = serde_json::from_slice::<Document>(&bytes);
         bytes.fill(0);
         let doc = parsed.map_err(|_| error("workspace_invalid"))?;
-        if !matches!(doc.version, 1 | 2) || doc.entries.len() > MAX_ENTRIES {
+        if !matches!(doc.version, 1..=3) || doc.entries.len() > MAX_ENTRIES {
             return Err(error("workspace_version_unsupported"));
         }
         let mut group_ids = std::collections::HashSet::new();
@@ -174,7 +180,7 @@ impl WorkspaceStore {
             entry.config_ref.len() > 64
                 || entry.config_ref.is_empty()
                 || !ids.insert(&entry.config_ref)
-                || entry.plugin_id.len() > 256
+                || entry.driver_id.len() > 256
                 || entry.label.len() > 256
                 || !group_ids.contains(entry.workspace_id.as_str())
         }) {
@@ -212,11 +218,17 @@ impl WorkspaceStore {
                 .into_iter()
                 .map(|entry| SavedInstance {
                     config_ref: entry.config_ref,
-                    plugin_id: entry.plugin_id,
+                    driver_id: match entry.driver_id.as_str() {
+                        "coterm-plugin-ssh" => "coterm-driver-ssh".into(),
+                        "coterm-plugin-serial" => "coterm-driver-serial".into(),
+                        "coterm-plugin-local" => "coterm-driver-local".into(),
+                        _ => entry.driver_id,
+                    },
                     label: entry.label,
                     config: entry.config,
                     instance_id: None,
                     workspace_id: entry.workspace_id,
+                    retained: entry.retained,
                     approval_policy: entry
                         .approval_policy
                         .unwrap_or_else(|| legacy_policy.clone()),
@@ -247,7 +259,7 @@ impl WorkspaceStore {
     }
     pub fn insert(
         &mut self,
-        plugin_id: String,
+        driver_id: String,
         instance_id: String,
         label: String,
         config: Value,
@@ -260,7 +272,10 @@ impl WorkspaceStore {
         self.require_group(&workspace_id)?;
         let mut entries = self.entries.clone();
         if entries.len() >= MAX_ENTRIES {
-            if let Some(index) = entries.iter().position(|entry| entry.instance_id.is_none()) {
+            if let Some(index) = entries
+                .iter()
+                .position(|entry| entry.instance_id.is_none() && !entry.retained)
+            {
                 entries.remove(index);
             } else {
                 return Err(error("workspace_capacity"));
@@ -268,11 +283,12 @@ impl WorkspaceStore {
         }
         entries.push(SavedInstance {
             config_ref: uuid::Uuid::new_v4().to_string(),
-            plugin_id,
+            driver_id,
             label,
             config,
             instance_id: Some(instance_id),
             workspace_id,
+            retained: false,
             approval_policy: ApprovalPolicy::default(),
         });
         self.commit(entries, self.layout.clone())
@@ -289,6 +305,7 @@ impl WorkspaceStore {
             .find(|entry| entry.config_ref == id)
             .ok_or_else(|| error("workspace_entry_not_found"))?;
         entry.instance_id = Some(instance_id);
+        entry.retained = false;
         entry.label = label;
         self.commit(entries, self.layout.clone())
     }
@@ -371,16 +388,17 @@ impl WorkspaceStore {
             saved_layout.active_config_ref = None;
         }
         let doc = Document {
-            version: 2,
+            version: 3,
             entries: entries
                 .iter()
-                .filter(|entry| !session_started || entry.instance_id.is_some())
+                .filter(|entry| !session_started || entry.instance_id.is_some() || entry.retained)
                 .map(|entry| Entry {
                     config_ref: entry.config_ref.clone(),
-                    plugin_id: entry.plugin_id.clone(),
+                    driver_id: entry.driver_id.clone(),
                     label: entry.label.clone(),
                     config: entry.config.clone(),
                     workspace_id: entry.workspace_id.clone(),
+                    retained: entry.retained,
                     approval_policy: Some(entry.approval_policy.clone()),
                 })
                 .collect(),
@@ -478,6 +496,26 @@ impl WorkspaceStore {
         self.commit(entries, self.layout.clone())
     }
 
+    /// Replaces the configuration of one live saved instance. Returns an error for
+    /// unknown/stale bindings, ephemeral handles, oversized data or failed writes;
+    /// every failure leaves the previous saved configuration and metadata intact.
+    pub fn save_configuration(
+        &mut self,
+        instance_id: &str,
+        config: Value,
+    ) -> Result<(), RuntimeError> {
+        if contains_runtime_handle(&config) {
+            return Err(error("workspace_ephemeral_secret_handle"));
+        }
+        let mut entries = self.entries.clone();
+        let entry = entries
+            .iter_mut()
+            .find(|entry| entry.instance_id.as_deref() == Some(instance_id))
+            .ok_or_else(|| error("workspace_entry_not_found"))?;
+        entry.config = config;
+        self.commit(entries, self.layout.clone())
+    }
+
     /// Saves rules on the bound instance's configRef. Unknown instances and failed writes
     /// leave all entries unchanged; invalid rules return approval_rule_invalid.
     pub fn save_approval_policy(
@@ -506,9 +544,10 @@ fn valid_group_name(name: &str) -> bool {
 fn contains_runtime_handle(value: &Value) -> bool {
     match value {
         Value::Object(object) => {
-            ["id", "pluginInstanceId", "purpose", "expiresAt"]
+            ["id", "purpose", "expiresAt"]
                 .iter()
                 .all(|key| object.contains_key(*key))
+                && (object.contains_key("driverInstanceId") || object.contains_key("pluginInstanceId"))
                 || object.values().any(contains_runtime_handle)
         }
         Value::Array(values) => values.iter().any(contains_runtime_handle),
@@ -631,7 +670,7 @@ mod tests {
         let mut store = WorkspaceStore::open(path.clone()).expect("new store");
         store
             .insert(
-                "test.plugin".into(),
+                "test.driver".into(),
                 "old-instance".into(),
                 "Test".into(),
                 serde_json::json!({"password":"private-roundtrip-secret"}),
@@ -668,7 +707,7 @@ mod tests {
         assert_eq!(
             store
                 .insert(
-                    "test.plugin".into(),
+                    "test.driver".into(),
                     "new".into(),
                     "Too large".into(),
                     too_large,
@@ -679,14 +718,14 @@ mod tests {
             "workspace_too_large"
         );
         assert_eq!(store.snapshot().entries.len(), 1);
-        assert_eq!(store.insert("test.plugin".into(), "invalid".into(), "Handle".into(),
-            serde_json::json!({"nested":{"id":"secret","pluginInstanceId":"instance","purpose":"password","expiresAt":"soon"}}), None)
+        assert_eq!(store.insert("test.driver".into(), "invalid".into(), "Handle".into(),
+            serde_json::json!({"nested":{"id":"secret","driverInstanceId":"instance","purpose":"password","expiresAt":"soon"}}), None)
             .expect_err("ephemeral handle").code, "workspace_ephemeral_secret_handle");
         store.path = root.join("missing").join("workspace.bin");
         assert_eq!(
             store
                 .insert(
-                    "test.plugin".into(),
+                    "test.driver".into(),
                     "new".into(),
                     "Write failure".into(),
                     Value::Null,

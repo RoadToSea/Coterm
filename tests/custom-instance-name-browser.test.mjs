@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { assertFreshBuild, evaluate, findBrowser, openSession, startStaticServer, waitForValue } from "./support/browser-harness.mjs";
 import { defaultScenario, makeHostMockSource } from "./support/host-mock.js";
 
-test("the shared plugin configuration submits a separate custom instance name", async t => {
+test("the shared driver configuration submits a separate custom instance name", async t => {
   const browserPath = findBrowser();
   if (!browserPath) { t.skip("No Chrome/Edge binary; custom instance naming was not browser-verified"); return; }
   assertFreshBuild();
@@ -22,9 +22,9 @@ test("the shared plugin configuration submits a separate custom instance name", 
     await wait(`!!document.querySelector('button[aria-label="Manage SSH"]')`);
     await run(`document.querySelector('button[aria-label="Manage SSH"]').click()`);
     await wait(`!!document.getElementById('new-instance-name')`);
-    await wait(`Array.from(document.querySelectorAll('#plugin-configuration div')).some(element => element.shadowRoot?.querySelector('form'))`);
+    await wait(`Array.from(document.querySelectorAll('#driver-configuration div')).some(element => element.shadowRoot?.querySelector('form'))`);
     await run(`(() => {
-      window.configuration = [...document.querySelectorAll('#plugin-configuration div')]
+      window.configuration = [...document.querySelectorAll('#driver-configuration div')]
         .find(element => element.shadowRoot?.querySelector('form'))?.shadowRoot;
       const input = document.getElementById('new-instance-name');
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, 'Lab server');

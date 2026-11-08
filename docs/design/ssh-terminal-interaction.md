@@ -1,6 +1,6 @@
 # SSH 终端交互与块选择
 
-状态：2026-11-03 已按现场反馈调整并通过本机定向验证；实现能力以 [SSH 架构](../architecture/ssh-plugin.md) 与 [SSH 进度](../progress/ssh-plugin.md) 为准。
+状态：2026-11-03 已按现场反馈调整并通过本机定向验证；实现能力以 [SSH 架构](../architecture/ssh-driver.md) 与 [SSH 进度](../progress/ssh-driver.md) 为准。
 
 ## 执行边界与来源标签
 
@@ -13,7 +13,7 @@
 
 - 主终端内同时显示命令、回复和左侧块号；移除互斥的 Terminal / Command blocks Tab。
 - 人工直接在主终端输入，使用现有共享 PTY；不再提供底部「共享终端命令」输入栏与执行按钮。前端在常见 Shell 提示符后按 Enter 时观察已回显的命令行，随原始 Enter 交给后端登记 Human 块，立即显示统一块号；后端仍不解析原始按键历史。
-- 人工块显式标记 `boundary=observed`，结束后状态为 unknown、退出码为空；不把提示符猜测当成真实 Shell 起止。空行、无回显密码、备用屏幕和批量多行粘贴不生成块；重连 / 缺口 / resize 清除未提交观察。详见 [人工 Enter 观察](../architecture/ssh-plugin.md#人工-enter-观察)。
+- 人工块显式标记 `boundary=observed`，结束后状态为 unknown、退出码为空；不把提示符猜测当成真实 Shell 起止。空行、无回显密码、备用屏幕和批量多行粘贴不生成块；重连 / 缺口 / resize 清除未提交观察。详见 [人工 Enter 观察](../architecture/ssh-driver.md#人工-enter-观察)。
 - 采用终端行标记与单层 DOM 边框实现可点击块号、块边界与选中高亮，不再额外叠加 xterm decoration 描边。框按 border-box 限于网格内，相邻块不能相互覆盖；需要处理换行、滚动、缓冲淘汰及卸载生命周期。
 - 人工观察块在识别到返回的同类提示符时，将视觉结束位置放在提示符前一行；不会据此伪造执行完成状态。块号显示纯数字，移除 `#` 前缀。
 - 点击块号切换选择，允许多选；正常终端输入与正文文本选择保持可用。
@@ -21,7 +21,7 @@
 - 行号栏顶部只放一个红色圆形叉号按钮，采用 macOS 关闭控件的紧凑外观，tooltip 和可访问名称为「取消全选」；空选择时禁用，保留红色辨识。点击只清空选择，不关闭终端。
 - 行号栏根据当前有效 PTY 块号的最大字符数自适应宽度，最小 28px；编号增长、淘汰与重连后同步伸缩，不保留固定大空白。
 - 选择与上下文按实例隔离，使用实际块 ID；沿用有界数据、截断和缺口提示，不因选择而无限保留输出，不包含秘密。
-- 已选块通过 `mcp.ssh.selected_blocks` 提供给 Agent；观察边界与远端复测限制见 [SSH 进度](../progress/ssh-plugin.md#限制与下次入口)。
+- 已选块通过 `mcp.ssh.selected_blocks` 提供给 Agent；观察边界与远端复测限制见 [SSH 进度](../progress/ssh-driver.md#限制与下次入口)。
 
 ## Exec 面板与任务胶囊
 

@@ -16,8 +16,8 @@ test("workspace groups manage and move live/saved instances without reconnecting
   scenario.workspace = {
     groups:[{id:"default",name:"Default workspace"}],
     entries:[
-      {configRef:"ref-live",pluginId:"ssh",instanceId:"inst-1",label:"Prod-Server",workspaceId:"default"},
-      {configRef:"ref-saved",pluginId:"ssh",instanceId:null,label:"Standby",workspaceId:"default"},
+      {configRef:"ref-live",driverId:"ssh",instanceId:"inst-1",label:"Prod-Server",workspaceId:"default"},
+      {configRef:"ref-saved",driverId:"ssh",instanceId:null,label:"Standby",workspaceId:"default"},
     ], layout:{activeConfigRef:"ref-live",instancesCollapsed:false,activeWorkspaceId:"default"},
     approvalPolicy:{mode:"allow_matches",patterns:[]},historyPolicy:"session_only",persistence:"windows_dpapi",
   };
@@ -51,13 +51,13 @@ test("workspace groups manage and move live/saved instances without reconnecting
     await client.send("Page.navigate", {url:server.url});
     await wait(`!!document.querySelector('[data-instance-id="inst-1"]') && [...document.querySelectorAll('main div')].some(el=>el.shadowRoot?.querySelector('.xterm'))`, "real SSH workspace mounted");
     await run(`window.sshHost=[...document.querySelectorAll('main div')].find(el=>el.shadowRoot?.querySelector('.xterm'));
-      window.initialSubscriptions=__cotermTest.countCalls('subscribe_plugin_events');`);
+      window.initialSubscriptions=__cotermTest.countCalls('subscribe_driver_events');`);
     assert.equal(await run(`document.querySelector('[role=toolbar]').textContent.includes('Prod-Server')`), false);
     assert.equal(await run(`document.querySelector('[role=toolbar]').textContent.includes('MCP')`), false);
     assert.equal(await run(`document.querySelector('[role=toolbar] #toggle-instances-button')`), null);
-    assert.equal(await run(`document.querySelector('aside[aria-label="Installed plugins"] h1')`), null);
+    assert.equal(await run(`document.querySelector('aside[aria-label="Installed drivers"] h1')`), null);
     assert.equal(await run(`document.querySelectorAll('#toggle-instances-button').length`), 1);
-    assert.equal(await run(`document.querySelector('[data-instance-id] [data-plugin-icon]').innerHTML === document.querySelector('nav[aria-label="Plugin list"] [data-plugin-icon]').innerHTML`), true);
+    assert.equal(await run(`document.querySelector('[data-instance-id] [data-driver-icon]').innerHTML === document.querySelector('nav[aria-label="Driver list"] [data-driver-icon]').innerHTML`), true);
     assert.ok(await run(`parseFloat(getComputedStyle(document.querySelector('[data-saved-ref]')).borderRadius) > 0`), "saved cards use the same rounded layout");
     const actions = `[data-instance-id="inst-1"] > div`;
     await client.send("Input.dispatchMouseEvent", {type:"mouseMoved",x:900,y:100});
@@ -80,7 +80,7 @@ test("workspace groups manage and move live/saved instances without reconnecting
     await move('[data-saved-ref="ref-saved"]', lab);
     await wait(`document.querySelector('[data-saved-ref="ref-saved"]').closest('[data-workspace-id]').dataset.workspaceId === ${JSON.stringify(lab)}`, "saved instance moved");
     assert.equal(await run(`__cotermTest.workspace().entries.length`), 2);
-    assert.equal(await run(`sshHost.isConnected && __cotermTest.countCalls('subscribe_plugin_events') === initialSubscriptions`), true,
+    assert.equal(await run(`sshHost.isConnected && __cotermTest.countCalls('subscribe_driver_events') === initialSubscriptions`), true,
       "dragging does not remount or resubscribe the SSH frontend");
     assert.equal(await run(`__cotermTest.invocations.some(item=>['create_instance','destroy_instance'].includes(item.command) || item.args.operation==='ssh.connect')`), false);
 
@@ -90,7 +90,7 @@ test("workspace groups manage and move live/saved instances without reconnecting
     await run(`(() => {const select=document.querySelector('select[aria-label="Move to workspace"]');select.value='default';select.dispatchEvent(new Event('change',{bubbles:true}));})()`);
     await wait(`document.querySelector('[data-instance-id="inst-1"]').closest('[data-workspace-id]').dataset.workspaceId === 'default'`, "keyboard alternative moved instance");
     await run(`document.querySelector('dialog button[aria-label="Close dialog"]').click()`);
-    assert.equal(await run(`sshHost.isConnected && __cotermTest.countCalls('subscribe_plugin_events') === initialSubscriptions`), true);
+    assert.equal(await run(`sshHost.isConnected && __cotermTest.countCalls('subscribe_driver_events') === initialSubscriptions`), true);
 
     await run(`__cotermTest.setFailure('move_workspace_entry',true,[1])`);
     await move('[data-instance-id="inst-1"]', lab);

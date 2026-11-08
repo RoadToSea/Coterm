@@ -1,5 +1,5 @@
-//! 基座与插件的 v1.0 JSON 控制契约。wire 是唯一线缆编解码入口。
-//! stream 与 PluginEvent 的扩展事件为预留类型，不属于 v1.0 线缆契约。
+//! 基座与驱动的 v1.0 JSON 控制契约。wire 是唯一线缆编解码入口。
+//! stream 与 DriverEvent 的扩展事件为预留类型，不属于 v1.0 线缆契约。
 //! 旧版根模块中的终端类型仍供原型使用，不属于本组接口。
 
 pub mod backend;
@@ -19,8 +19,8 @@ use serde_json::Value;
 
 pub type RuntimeFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, RuntimeError>> + Send + 'a>>;
 
-pub type PluginId = String;
-pub type PluginInstanceId = String;
+pub type DriverId = String;
+pub type DriverInstanceId = String;
 pub type RequestId = String;
 pub type OperationId = String;
 pub type ProposalId = String;
@@ -28,7 +28,7 @@ pub type StreamId = String;
 pub type SubscriptionId = String;
 pub type InteractionId = String;
 
-/// 公共错误分类与插件领域错误码分开，调用方不解析 message。
+/// 公共错误分类与驱动领域错误码分开，调用方不解析 message。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ErrorCategory {

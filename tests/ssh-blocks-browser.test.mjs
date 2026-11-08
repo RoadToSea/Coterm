@@ -8,10 +8,10 @@ import { findBrowser, openSession, evaluate, waitForValue } from "./support/brow
 test("SSH integrates command blocks into the real terminal and publishes only human selection", async t => {
   const browserPath=findBrowser();
   if(!browserPath){t.skip("No browser; terminal blocks were not verified");return;}
-  const artifact=new URL("../plugins/plugin-ssh/dist/frontend/index.js",import.meta.url);
+  const artifact=new URL("../drivers/driver-ssh/dist/frontend/index.js",import.meta.url);
   const built=fs.statSync(artifact).mtimeMs;
   for(const file of ["index.ts","blocks.ts","jobs.ts","i18n.ts"]){
-    assert.ok(built>=fs.statSync(new URL("../plugins/plugin-ssh/frontend/src/"+file,import.meta.url)).mtimeMs,"build SSH first");
+    assert.ok(built>=fs.statSync(new URL("../drivers/driver-ssh/frontend/src/"+file,import.meta.url)).mtimeMs,"build SSH first");
   }
   const moduleURL="data:text/javascript;base64,"+fs.readFileSync(artifact).toString("base64");
   const session=await openSession({browserPath,totalTimeoutMs:60000});
@@ -40,7 +40,7 @@ test("SSH integrates command blocks into the real terminal and publishes only hu
       "add('',bound('one','begin'));add('reply one\\r\\n');add('',bound('one','end'));add('',bound('two','begin'));add('reply two\\r\\n');add('',bound('two','end'));"+
       "window.emit=(data='',annotation=null)=>event({name:'ssh.terminal.output',payload:add(data,annotation)});"+
       "const receipt=output=>({operationId:'fixture',status:'completed',output,error:null,proposalId:null,waitExpired:false});"+
-      "const api={pluginInstanceId:'ssh-one',i18n:{get locale(){return window.locale},subscribe(fn){window.translate=fn;return()=>window.localeStopped=true}},"+
+      "const api={driverInstanceId:'ssh-one',i18n:{get locale(){return window.locale},subscribe(fn){window.translate=fn;return()=>window.localeStopped=true}},"+
       "async invoke(operation,args,options){calls.push({operation,args,options});"+
       "if(operation==='ssh.status')return receipt({config:{host:'localhost',port:22,username:'operator'},connected:true,connectionId:'transport-one'});"+
       "if(operation==='ssh.resize'||operation==='ssh.input')return receipt({});"+
@@ -114,7 +114,7 @@ test("SSH integrates command blocks into the real terminal and publishes only hu
     assert.deepEqual(await run("(()=>{const b=root.querySelector('.coterm-terminal-clear');return [b.textContent,b.title,b.getAttribute('aria-label')]})()"),["×","取消全选","取消全选"]);
     await run("window.missingSelect=true;gutters()[0].click()");
     await waitForValue(client,"!root.querySelector('.ssh-blocks-error').hidden");
-    assert.deepEqual(await run("[root.querySelector('.ssh-blocks-error .error').textContent,root.querySelector('.ssh-blocks-error button').hidden]"),["SSH 插件后端版本过旧，请重新构建并重启插件。",true]);
+    assert.deepEqual(await run("[root.querySelector('.ssh-blocks-error .error').textContent,root.querySelector('.ssh-blocks-error button').hidden]"),["SSH 驱动后端版本过旧，请重新构建并重启驱动。",true]);
     await run("window.missingSelect=false;event({name:'ssh.blocks.changed',payload:{}})");
     await waitForValue(client,"root.querySelector('.ssh-blocks-error').hidden && context.length===1");
     await run("root.querySelector('.coterm-terminal-clear').click()");

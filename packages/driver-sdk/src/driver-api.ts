@@ -1,0 +1,190 @@
+/** SDK v2.0: additive optional features use minor versions; breaking changes use a major version. */
+export const FRONTEND_API_VERSION = "2.0" as const;
+
+export type OperationSource = "human" | "agent" | "system";
+export type OperationEffect = "read" | "draft" | "commit";
+export type OperationStatus =
+  | "accepted" | "awaiting_approval" | "dispatched" | "running"
+  | "completed" | "failed" | "rejected" | "cancelled" | "unknown";
+
+export interface OperationDescriptor {
+  name: string;
+  scope: "driver" | "instance";
+  effect: OperationEffect;
+  inputSchema: unknown;
+  outputSchema: unknown | null;
+  sensitiveInput?: boolean;
+  transient?: boolean;
+}
+
+export interface RuntimeError {
+  category: "invalid_request" | "not_found" | "unsupported" | "conflict"
+    | "interaction" | "transport" | "domain" | "internal";
+  code: string;
+  message: string;
+  details: unknown | null;
+}
+
+export interface OperationReceipt<T = unknown> {
+  operationId: string;
+  proposalId: string | null;
+  status: OperationStatus;
+  waitExpired: boolean;
+  output: T | null;
+  error: RuntimeError | null;
+}
+
+export interface OperationRecord<T = unknown> extends OperationReceipt<T> {
+  driverId: string;
+  driverInstanceId: string | null;
+  source: OperationSource;
+  effect: OperationEffect;
+  operation: string;
+  input: unknown;
+  createdAt: string;
+  updatedAt: string;
+  transient: boolean;
+}
+
+export interface InvokeOptions {
+  /** 不提供=默认等待；0=立即返回。超时不会取消操作。 */
+  waitTimeoutMs?: number;
+}
+
+export interface InteractionOptions {
+  title: string;
+  prompt: string;
+  timeoutMs?: number;
+  allowCancel?: boolean;
+}
+
+export interface SelectionOption { value: string; label: string }
+
+export interface SecretHandle {
+  readonly id: string;
+  readonly driverInstanceId: string;
+  readonly purpose: string;
+  readonly expiresAt: string;
+}
+
+export type InteractionOutcome<T> =
+  | { outcome: "submitted"; value: T }
+  | { outcome: "rejected" | "cancelled" | "timed_out" | "unavailable" };
+
+export interface FlowWindow { chunks: number; bytes: number }
+export type OverflowPolicy = "pause" | "drop_with_gap" | "close";
+
+/** sequence 是十进制字符串；u64 不应直接转换成 JS number。 */
+export type StreamDelivery<T = unknown> =
+  | { type: "data"; streamId: string; sequence: string; timestampMs: number; payload: T }
+  | { type: "gap"; streamId: string; fromSequence: string; toSequence: string;
+      reason: string; recoverable: boolean }
+  | { type: "closed"; streamId: string; reason: string | null };
+
+export interface StreamOptions {
+  window: FlowWindow;
+  overflow: OverflowPolicy;
+}
+
+/** 取消投递不会销毁实例、物理连接或 Broker 的协议订阅。 */
+export interface StreamSubscription {
+  readonly id: string;
+  grant(credit: FlowWindow): Promise<void>;
+  cancel(): Promise<void>;
+}
+
+export interface CommandBlock {
+  id: string;
+  index: number;
+  command: string;
+  /** Plain-text reply belonging to this command; block boundaries remain driver-owned. */
+  output?: string;
+  /** Driver-localized execution state or channel label, shown separately from reply text. */
+  statusText?: string;
+  actor: "human" | "robot";
+  exitCode?: number | null;
+  /** When supplied on update, overrides local selection; omitted values preserve it by id. */
+  selected?: boolean;
+}
+
+export interface BlockListProps {
+  blocks: CommandBlock[];
+  /** Accessible list name and empty-state copy can be supplied in the driver's language. */
+  ariaLabel?: string;
+  emptyText?: string;
+  onSelectionChange?: (selectedBlockIds: string[]) => void;
+}
+
+export interface BlockListView extends DriverFrontend {
+  update(props: BlockListProps): void;
+}
+
+/** Common UI is optional; block boundaries and records remain driver-owned. */
+export interface CommonComponents {
+  blocks: (container: HTMLElement, props: BlockListProps) => BlockListView;
+}
+
+/** 绑定当前实例；不允许从调用参数改目标、伪造来源或选择低风险 effect。 */
+export interface DriverAPI {
+  /** Optional host language capability; older hosts may omit it. */
+  readonly i18n?: DriverI18n;
+  readonly apiVersion: typeof FRONTEND_API_VERSION;
+  readonly capabilities: Readonly<{ interactions: true; events: true; streams: false }>;
+  readonly driverId: string;
+  readonly driverInstanceId: string;
+  /** Stable saved-instance identity; survives runtime recreation. Absent on older hosts or unsaved instances. */
+  readonly instanceConfigRef?: string;
+  readonly sessionId: string;
+  readonly components: Readonly<CommonComponents>;
+
+  invoke<T = unknown>(operation: string, args: unknown, options?: InvokeOptions): Promise<OperationReceipt<T>>;
+  /** Save this instance's driver-validated configuration. No reconnect or execution.
+   * Rejects stale identity and write failures; the previous saved value remains intact.
+   * Optional on older hosts. Configurations remain encrypted by the host on Windows.
+   */
+  saveConfiguration?(config: unknown): Promise<void>;
+  getOperation(operationId: string): Promise<OperationRecord>;
+  recentOperations(limit?: number): Promise<OperationRecord[]>;
+  cancelOperation(operationId: string): Promise<OperationReceipt>;
+
+  /** args 是用户确认的当前草稿快照，基座绑定 proposalId 与原操作。 */
+  approveProposal(proposalId: string, args: unknown): Promise<OperationReceipt>;
+  rejectProposal(proposalId: string): Promise<void>;
+
+  subscribe<T = unknown>(event: string, handler: (event: T) => void | Promise<void>): () => void;
+  /** Resolves after subscription is installed. Handler completion acknowledges delivery. */
+  subscribeEvents(handler: (event: DriverInstanceEvent) => void | Promise<void>): Promise<() => void>;
+  subscribeStream<T = Uint8Array>(streamId: string, options: StreamOptions,
+    handler: (event: StreamDelivery<T>) => void): Promise<StreamSubscription>;
+
+  requestText(request: InteractionOptions): Promise<InteractionOutcome<string>>;
+  requestSecret(request: InteractionOptions & { purpose: string }): Promise<InteractionOutcome<SecretHandle>>;
+  requestConfirmation(request: InteractionOptions): Promise<InteractionOutcome<boolean>>;
+  requestSelection(request: InteractionOptions & { options: SelectionOption[] }): Promise<InteractionOutcome<string>>;
+}
+
+export interface DriverInstanceEvent { name: string; payload: unknown }
+
+export interface DriverFrontend { unmount(): void }
+
+/** 前端模块导出 mount，容器内部 DOM 与状态全部由驱动负责。 */
+export type DriverMount = (container: HTMLElement, api: DriverAPI) => DriverFrontend;
+export interface DriverConfigurationAPI {
+  readonly i18n?: DriverI18n;
+  /** Completes driver-owned configuration; the host starts/creates the instance. */
+  submit(config: unknown): Promise<void>;
+  /** Optional driver-level operation invocation (e.g. querying device ports). */
+  invoke?<T = unknown>(operation: string, args?: unknown, options?: InvokeOptions): Promise<OperationReceipt<T>>;
+}
+
+export interface DriverI18n {
+  readonly locale: "en" | "zh-CN";
+  /** Release the subscription when the frontend is unmounted. */
+  subscribe(listener: () => void): () => void;
+}
+
+export interface DriverFrontendModule {
+  mount: DriverMount;
+  /** Optional driver-owned configuration screen, before an instance exists. */
+  configure?(container: HTMLElement, api: DriverConfigurationAPI): DriverFrontend;
+}

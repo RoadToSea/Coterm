@@ -1,0 +1,15 @@
+{
+  "name": "@coterm/driver-sdk",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./components/block-list": "./src/components/block-list.ts",
+    "./components/terminal-blocks": "./src/components/terminal-blocks.ts",
+    "./components/toasts": "./src/components/toasts.ts",
+    "./components/terminal-shortcuts": "./src/components/terminal-shortcuts.ts",
+    "./components/terminal-search": "./src/components/terminal-search.ts",
+    "./components/terminal-theme": "./src/components/terminal-theme.ts"
+  }
+}

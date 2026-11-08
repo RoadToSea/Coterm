@@ -2,7 +2,7 @@ import { t } from "../../i18n";
 import { useI18n } from "../../use-i18n";
 import { useEffect, useRef, useState } from "react";
 import { hostAPI, subscribeHostAttention, type AttentionApproval } from "../../host-api";
-import type { OperationRecord } from "@coterm/plugin-sdk";
+import type { OperationRecord } from "@coterm/driver-sdk";
 import { ApprovalCard } from "./ApprovalCard";
 
 /**
@@ -16,9 +16,9 @@ interface PendingApproval extends AttentionApproval {
 
 async function loadRecord(approval: AttentionApproval): Promise<{ record: OperationRecord | null; loadError?: string }> {
   try {
-    const record = approval.pluginInstanceId
-      ? await hostAPI.getOperation(approval.pluginInstanceId, approval.operationId)
-      : (await hostAPI.recentPluginOperations(approval.pluginId, 100))
+    const record = approval.driverInstanceId
+      ? await hostAPI.getOperation(approval.driverInstanceId, approval.operationId)
+      : (await hostAPI.recentDriverOperations(approval.driverId, 100))
         .find((item) => item.operationId === approval.operationId) ?? null;
     return { record };
   } catch (reason) {
@@ -26,7 +26,7 @@ async function loadRecord(approval: AttentionApproval): Promise<{ record: Operat
   }
 }
 
-/** Host-level approval surface: inactive instances and headless plugins share it. */
+/** Host-level approval surface: inactive instances and headless drivers share it. */
 export function HostApprovals() {
   useI18n();
   const [pending, setPending] = useState<PendingApproval[]>([]);
@@ -101,18 +101,18 @@ export function HostApprovals() {
       targetLabel={item.targetLabel}
       idPrefix="agent-approval"
       onApprove={async (args) => {
-        if (item.pluginInstanceId) {
-          await hostAPI.approveProposal(item.pluginInstanceId, item.proposalId, args);
+        if (item.driverInstanceId) {
+          await hostAPI.approveProposal(item.driverInstanceId, item.proposalId, args);
         } else {
-          await hostAPI.approvePluginProposal(item.pluginId, item.proposalId, args);
+          await hostAPI.approveDriverProposal(item.driverId, item.proposalId, args);
         }
         decide(item.operationId);
       }}
       onReject={async () => {
-        if (item.pluginInstanceId) {
-          await hostAPI.rejectProposal(item.pluginInstanceId, item.proposalId);
+        if (item.driverInstanceId) {
+          await hostAPI.rejectProposal(item.driverInstanceId, item.proposalId);
         } else {
-          await hostAPI.rejectPluginProposal(item.pluginId, item.proposalId);
+          await hostAPI.rejectDriverProposal(item.driverId, item.proposalId);
         }
         decide(item.operationId);
       }}
@@ -127,10 +127,10 @@ export function HostApprovals() {
         type="button"
         onClick={async () => {
           try {
-            if (item.pluginInstanceId) {
-              await hostAPI.rejectProposal(item.pluginInstanceId, item.proposalId);
+            if (item.driverInstanceId) {
+              await hostAPI.rejectProposal(item.driverInstanceId, item.proposalId);
             } else {
-              await hostAPI.rejectPluginProposal(item.pluginId, item.proposalId);
+              await hostAPI.rejectDriverProposal(item.driverId, item.proposalId);
             }
             decide(item.operationId);
           } catch (reason) {

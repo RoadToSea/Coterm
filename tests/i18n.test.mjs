@@ -4,7 +4,7 @@ import fs from "node:fs";
 import { getLocale, resolveLocale, setLocale, subscribeLocale, t, LOCALE_STORAGE_KEY } from "../apps/desktop/src/i18n.ts";
 import { en } from "../apps/desktop/src/locales/en.ts";
 import { zhCN } from "../apps/desktop/src/locales/zh-CN.ts";
-import { createTranslator } from "../plugins/plugin-ssh/frontend/src/i18n.ts";
+import { createTranslator } from "../drivers/driver-ssh/frontend/src/i18n.ts";
 
 test("language selection honors a saved preference and otherwise follows the system language", () => {
   assert.equal(resolveLocale("en", ["zh-CN"]), "en");
@@ -25,7 +25,7 @@ test("switching languages translates host text, interpolates values, and persist
     const stop = subscribeLocale(() => updates++);
     setLocale("zh-CN");
     assert.equal(getLocale(), "zh-CN");
-    assert.equal(t("Install plugin"), "安装插件");
+    assert.equal(t("Install driver"), "安装驱动");
     assert.equal(t("Manage {name}", { name: "SSH" }), "管理 SSH");
     assert.equal(t("vendor-owned text"), "vendor-owned text");
     assert.equal(values.get(LOCALE_STORAGE_KEY), "zh-CN");
@@ -33,7 +33,7 @@ test("switching languages translates host text, interpolates values, and persist
     assert.equal(updates, 1, "the same language does not notify listeners");
     stop();
     setLocale("en");
-    assert.equal(t("Install plugin"), "Install plugin");
+    assert.equal(t("Install driver"), "Install driver");
     assert.equal(updates, 1, "released subscribers stay released");
   } finally {
     if (original) Object.defineProperty(globalThis, "localStorage", original);
@@ -42,10 +42,10 @@ test("switching languages translates host text, interpolates values, and persist
   }
 });
 
-test("disabled storage and an exception in a plugin listener do not prevent language switching", () => {
+test("disabled storage and an exception in a driver listener do not prevent language switching", () => {
   const original = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
   Object.defineProperty(globalThis, "localStorage", { configurable: true, get() { throw new Error("storage disabled"); } });
-  const stopBad = subscribeLocale(() => { throw new Error("plugin listener failed"); });
+  const stopBad = subscribeLocale(() => { throw new Error("driver listener failed"); });
   let updated = false;
   const stopGood = subscribeLocale(() => { updated = true; });
   try {

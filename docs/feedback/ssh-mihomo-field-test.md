@@ -25,14 +25,14 @@
 - 操作：执行 `id`、系统版本、用户和 Docker 状态检查。
 - 结果：`ssh.command` 返回 `awaiting_approval`，需要桌面审批后才能取得检查结果。
 - 使用影响：Shell 命令统一为 commit；检查与修改使用同一入口，逐条部署会产生审批切换成本。后续调用没有再次停留在审批，不据此判断审批策略或 Bypass 的变更原因；本次未尝试通过 Agent 开启 Bypass。
-- 建议：提供插件原生的系统信息、文件元信息、容器状态等有限只读工具；不要依靠命令字符串猜测安全性，也不要让 Agent 自批。
+- 建议：提供驱动原生的系统信息、文件元信息、容器状态等有限只读工具；不要依靠命令字符串猜测安全性，也不要让 Agent 自批。
 
 ### 结果嵌套和 base64 增加客户端处理成本
 
 - 操作：读取直接完成的命令结果，以及 pending 后的 `coterm.get_operation`。
 - 结果：命令数据位于 `content[].text` 中的 JSON 字符串，终端字节在 `data` 内 base64 编码；操作查询还包含 `structuredContent` 与文本副本。直接结果的操作元信息也可能再次携带输出。
 - 使用影响：客户端需要多层 JSON 解析、base64 解码和去重，才能提取退出码与实际输出；原始响应明显大于实际命令输出。本次临时客户端增加了解码和展示去重才能顺畅检查。
-- 建议：插件提供原生 `structuredContent` 和 schema，保持二进制数据编码但补有界可读文本；收据尽量只包含操作元信息，避免重复大块输出。
+- 建议：驱动提供原生 `structuredContent` 和 schema，保持二进制数据编码但补有界可读文本；收据尽量只包含操作元信息，避免重复大块输出。
 
 ### 共享 PTY 的后台作业通知污染下一条输出
 
@@ -46,7 +46,7 @@
 - 操作：安装 Docker、拉取镜像。
 - 结果：为适应 SSH 命令最长 120 秒的已知限制，主动将任务放入后台，写日志与退出码文件，再查询进度。本次没有实际触发 120 秒超时。短 MCP 等待窗口返回 pending 后，也需要另调操作查询取得完成结果。
 - 使用影响：部署流程需要自行实现任务状态和日志读取；`ssh.read` 可以读取终端回放，但不等于独立后台作业管理。
-- 建议：插件增加有界、可取消的长任务接口，提供进度、退出码和日志读取；保持客户端等待时间与远端作业生命周期的明确区别。
+- 建议：驱动增加有界、可取消的长任务接口，提供进度、退出码和日志读取；保持客户端等待时间与远端作业生命周期的明确区别。
 
 ### 顶层 Shell 语法错误会关闭 SSH 会话
 
@@ -142,7 +142,7 @@
 |---|---|---|
 | MCP 会话满时无法开始任务 | 429 返回 `mcp_sessions_full`、上限、各会话客户端名与空闲时长、`Retry-After: 30` 和两条恢复路径；桌面 MCP 面板列出会话并按 8 位前缀关闭 | `crates/coterm-mcp/tests/http.rs` 新增会话限制用例 |
 | 只读 Shell 检查也必须审批 | 新增 `ssh.system_info`、`ssh.file_info`，固定脚本、effect=read、不执行调用方命令 | SSH 集成测试 `read_only_queries_use_fixed_scripts_outside_the_pty` |
-| 结果嵌套和 base64 增加处理成本 | 机器副本改为 `structuredContent`，文本块为有界摘要；可读 UTF-8 返回 `text`，二进制/控制字符保留 base64；`_meta` 收据只报输出大小 | 插件 MCP 测试、`crates/coterm-mcp/src/server.rs` 收据与摘要单测 |
+| 结果嵌套和 base64 增加处理成本 | 机器副本改为 `structuredContent`，文本块为有界摘要；可读 UTF-8 返回 `text`，二进制/控制字符保留 base64；`_meta` 收据只报输出大小 | 驱动 MCP 测试、`crates/coterm-mcp/src/server.rs` 收据与摘要单测 |
 | 共享 PTY 后台作业通知污染输出 | 新增 `ssh.exec` 独立 exec 通道，stdout/stderr 分离，不经过共享 PTY | `exec_is_isolated_from_the_shared_pty_and_streams_output` |
 | 长任务缺少作业进度入口 | `ssh.exec` 最长 30 分钟、最多 8 个并行作业；`ssh.output` 按游标读取 `done/exitCode/gap/more` | 同上，并通过 `ssh.output` 校验完整输出 |
 | 顶层 Shell 语法错误关闭会话 | 执行前用同一 Shell 的 `-n` 静态检查；语法错误返回 `syntaxError=true`、退出码 2，不进入 `eval` | `syntax_errors_are_rejected_without_killing_the_shared_shell`；另在真实 bash PTY 上验证 |
@@ -161,7 +161,7 @@
 
 ### 真实 PTY 验证
 
-在 WSL 交互式 bash 5.1 上直接写入插件 `Command::new` 生成的真实包装字节，确认：
+在 WSL 交互式 bash 5.1 上直接写入驱动 `Command::new` 生成的真实包装字节，确认：
 
 - 语法错误被拦截，输出 `bash: ... syntax error: unexpected end of file`；
 - 结束标记为 `end;2;syntax`；
@@ -173,8 +173,8 @@
 用户复核时指出三点，已追加处理：
 
 1. **会话满的真实成因**：`GET /mcp` 的 SSE 每 1 秒调用 `session.touch()`，只要客户端挂着事件流，空闲 30 分钟的规则就永远不生效。修复后 SSE 等待不再续期，会话到期即释放；`bind_at_with_idle` 让超时可注入，新增 `parked_event_stream_does_not_keep_a_session_alive` 回归测试。
-2. **只读放行应由基座提供**：`ssh.system_info` 返回的是固定字段（`user/uid/gid/groups/hostname/kernel/arch/shell/home/cwd/os/uptime`），不是可配置的命令列表。基座新增「Agent approval」面板与 `set_allowed_operations`/`get_allowed_operations`，按操作名放行并写入加密工作区；放行只跳过审批，不改变 effect、不绕过插件校验、Agent 不能自批。`effect=read` 且无敏感输入的操作本来就不进入审批。
-3. **后台作业的界面**：SSH 前端在终端底部增加作业行，每个执行中的 exec 作业是一个圆角 tab；点击后在作业行下方展开该作业的 stdout/stderr 与退出码，可停止或关闭视图；上方主终端保持独立。插件新增 `ssh.job` 事件（开始/结束各一次，不携带输出），输出仍通过 `ssh.output` 按游标读取。
+2. **只读放行应由基座提供**：`ssh.system_info` 返回的是固定字段（`user/uid/gid/groups/hostname/kernel/arch/shell/home/cwd/os/uptime`），不是可配置的命令列表。基座新增「Agent approval」面板与 `set_allowed_operations`/`get_allowed_operations`，按操作名放行并写入加密工作区；放行只跳过审批，不改变 effect、不绕过驱动校验、Agent 不能自批。`effect=read` 且无敏感输入的操作本来就不进入审批。
+3. **后台作业的界面**：SSH 前端在终端底部增加作业行，每个执行中的 exec 作业是一个圆角 tab；点击后在作业行下方展开该作业的 stdout/stderr 与退出码，可停止或关闭视图；上方主终端保持独立。驱动新增 `ssh.job` 事件（开始/结束各一次，不携带输出），输出仍通过 `ssh.output` 按游标读取。
 
 ### 尚未复测
 

@@ -1,7 +1,7 @@
 import { t } from "../../i18n";
 import { useI18n } from "../../use-i18n";
 import { useRef, useState } from "react";
-import type { OperationRecord } from "@coterm/plugin-sdk";
+import type { OperationRecord } from "@coterm/driver-sdk";
 
 interface ApprovalCardProps {
   record: OperationRecord;
@@ -17,7 +17,7 @@ function createEditor(record: OperationRecord) {
   const args: unknown = output && typeof output === "object" && "args" in output
     ? output.args : record.input;
   if (args && typeof args === "object" && !Array.isArray(args)) {
-    const fields = Object.entries(args).filter(([key]) => key !== "pluginInstanceId");
+    const fields = Object.entries(args).filter(([key]) => key !== "driverInstanceId");
     const [key, value] = fields[0] ?? [];
     if (fields.length === 1 && typeof value === "string" && !/[\r\n]/.test(value)) {
       return { value, json: false, parse: (text: string): unknown => ({ ...args, [key]: text }) };

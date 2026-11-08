@@ -8,9 +8,9 @@ import { evaluate, findBrowser, openSession, waitForValue } from "./support/brow
 test("Serial data mode is explicit and only Shell publishes human selection", async t => {
   const browserPath = findBrowser();
   if (!browserPath) { t.skip("No Chrome/Edge binary"); return; }
-  const artifact = new URL("../plugins/plugin-serial/dist/frontend/index.js", import.meta.url);
+  const artifact = new URL("../drivers/driver-serial/dist/frontend/index.js", import.meta.url);
   for (const name of ["index.ts", "i18n.ts", "console-settings.ts"]) {
-    assert.ok(fs.statSync(artifact).mtimeMs >= fs.statSync(new URL(`../plugins/plugin-serial/frontend/src/${name}`, import.meta.url)).mtimeMs);
+    assert.ok(fs.statSync(artifact).mtimeMs >= fs.statSync(new URL(`../drivers/driver-serial/frontend/src/${name}`, import.meta.url)).mtimeMs);
   }
   const moduleURL = `data:text/javascript;base64,${fs.readFileSync(artifact).toString("base64")}`;
   const session = await openSession({browserPath}); const {client} = session;
@@ -40,12 +40,12 @@ test("Serial data mode is explicit and only Shell publishes human selection", as
     await wait(`submitted.length===1`);
     assert.equal(await run(`submitted[0].mode`), "shell"); assert.equal(await run(`submitted[0].prompt`), "root# ");
     await run(`frontend.unmount();window.connected=true;window.config={...submitted[0]};window.connection='first';
-      window.api={pluginInstanceId:'shell',i18n,async invoke(operation,args){calls.push({operation,args});
+      window.api={driverInstanceId:'shell',i18n,async saveConfiguration(value){calls.push({operation:'save',args:value});if(!window.saveAttempt++){throw new Error('save failed')}},async invoke(operation,args){calls.push({operation,args});
         if(operation==='serial.status')return receipt({config,connected,connectionId:connection,signals:{dtr:false,rts:false},rxBytes:0,txBytes:0,commandQueue:0});
         if(operation==='serial.read')return receipt({text:'reply one\\r\\nreply two\\r\\nroot# ',bytes:30,cursor:1,gap:false,closed:false,more:false,connectionId:connection});
         if(operation==='serial.set_selection')return receipt({ok:true});
         if(operation==='serial.disconnect'){connected=false;return receipt({})}
-        if(operation==='serial.configure'){Object.assign(config,args);return receipt({})}
+        if(operation==='serial.configure'){Object.assign(config,args);return receipt({config:{...config}})}
         if(operation==='serial.connect'){connected=true;connection='second';return receipt({})}
         throw new Error('Unexpected operation '+operation);
       },async subscribeEvents(fn){window.event=fn;return()=>{}}};
@@ -69,8 +69,14 @@ test("Serial data mode is explicit and only Shell publishes human selection", as
       fs.mkdirSync(process.env.COTERM_SERIAL_SHELL_SCREENSHOT_DIR, {recursive:true});
       fs.writeFileSync(path.join(process.env.COTERM_SERIAL_SHELL_SCREENSHOT_DIR,"serial-shell-settings-360.png"),Buffer.from(shot.data,"base64"));
     }
-    await run(`root.querySelector('.settings-toggle').click();root.querySelector('.connect-button').click()`);
+    await run(`window.saveAttempt=0;root.querySelector('.settings-toggle').click();root.querySelector('.connect-button').click()`);
+    await wait(`saveAttempt===1&&!root.querySelector('.connect-button').disabled`);
+    assert.equal(await run(`connected`), false, 'save failure must prevent connection');
+    assert.equal(await run(`calls.filter(call=>call.operation==='serial.connect').length`), 0);
+    await run(`root.querySelector('.connect-button').click()`);
     await wait(`root.querySelector('.connect-button').dataset.connected==='true'`);
+    assert.equal(await run(`calls.filter(call=>call.operation==='save').length`), 2);
+    assert.equal(await run(`calls.filter(call=>call.operation==='save').at(-1).args.mode`), 'stream');
     assert.equal(await run(`calls.find(call=>call.operation==='serial.configure').args.mode`), "stream");
     assert.equal(await run(`calls.find(call=>call.operation==='serial.configure').args.prompt`), null);
     const before = await run(`calls.filter(call=>call.operation==='serial.set_selection').length`);

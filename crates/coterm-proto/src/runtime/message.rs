@@ -10,7 +10,7 @@ use super::operation::{
 };
 use super::stream::{FlowWindow, StreamData, StreamGap, StreamInfo, SubscribeStream};
 use super::{
-    InteractionId, OperationId, PluginInstanceId, ProposalId, RequestId, RuntimeError,
+    InteractionId, OperationId, DriverInstanceId, ProposalId, RequestId, RuntimeError,
     SubscriptionId,
 };
 
@@ -21,7 +21,7 @@ use super::{
     rename_all = "snake_case",
     rename_all_fields = "camelCase"
 )]
-pub enum PluginNotification {
+pub enum DriverNotification {
     OperationCompleted {
         operation_id: OperationId,
         result: Value,
@@ -31,7 +31,7 @@ pub enum PluginNotification {
         error: RuntimeError,
     },
     Event {
-        plugin_instance_id: PluginInstanceId,
+        driver_instance_id: DriverInstanceId,
         name: String,
         payload: Value,
     },
@@ -71,7 +71,7 @@ pub enum HostCommand {
     Hello(RuntimeHello),
     CreateInstance(CreateInstance),
     DestroyInstance {
-        plugin_instance_id: PluginInstanceId,
+        driver_instance_id: DriverInstanceId,
     },
     Invoke(InvokeRequest),
     Approve(ApproveProposal),
@@ -82,7 +82,7 @@ pub enum HostCommand {
     },
     Cancel(CancelTarget),
     InteractionResult(InteractionResult),
-    /// Private host-to-plugin delivery, separate from operations and events.
+    /// Private host-to-driver delivery, separate from operations and events.
     ProvideSecret(SecretDelivery),
     StreamSubscribe(SubscribeStream),
     StreamUnsubscribe {
@@ -96,9 +96,9 @@ pub enum HostCommand {
     Shutdown,
 }
 
-/// 宿主内部逻辑事件，不能直接序列化为线缆通知。v1.0 通知使用 PluginNotification。
+/// 宿主内部逻辑事件，不能直接序列化为线缆通知。v1.0 通知使用 DriverNotification。
 #[derive(Debug, Clone)]
-pub enum PluginEvent {
+pub enum DriverEvent {
     HelloResult {
         request_id: RequestId,
         result: Result<HelloResult, RuntimeError>,
@@ -111,7 +111,7 @@ pub enum PluginEvent {
         result: Result<Value, RuntimeError>,
     },
     InstanceStatus {
-        plugin_instance_id: PluginInstanceId,
+        driver_instance_id: DriverInstanceId,
         status: InstanceStatus,
     },
     ProposalPrepared {
@@ -149,7 +149,7 @@ pub enum PluginEvent {
     StreamGap(StreamGap),
     StreamClose {
         stream_id: String,
-        plugin_instance_id: PluginInstanceId,
+        driver_instance_id: DriverInstanceId,
         reason: Option<String>,
     },
     InteractionRequest(InteractionRequest),

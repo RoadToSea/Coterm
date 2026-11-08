@@ -9,9 +9,9 @@ import { findBrowser, openSession, evaluate, waitForValue } from "./support/brow
 test("receive newline settings update xterm, preserve raw bytes and persist per instance", async t => {
   const browserPath = findBrowser();
   if (!browserPath) { t.skip("No Chrome/Edge binary"); return; }
-  const artifact = new URL("../plugins/plugin-serial/dist/frontend/index.js", import.meta.url);
+  const artifact = new URL("../drivers/driver-serial/dist/frontend/index.js", import.meta.url);
   for (const file of ["index.ts", "i18n.ts", "receive-newlines.ts"]) {
-    assert.ok(fs.statSync(artifact).mtimeMs >= fs.statSync(new URL(`../plugins/plugin-serial/frontend/src/${file}`, import.meta.url)).mtimeMs,
+    assert.ok(fs.statSync(artifact).mtimeMs >= fs.statSync(new URL(`../drivers/driver-serial/frontend/src/${file}`, import.meta.url)).mtimeMs,
       "build the Serial frontend before testing");
   }
   const moduleURL = `data:text/javascript;base64,${fs.readFileSync(artifact).toString("base64")}`;
@@ -51,11 +51,11 @@ test("receive newline settings update xterm, preserve raw bytes and persist per 
       document.body.style.cssText='margin:0;width:1000px;height:760px';
       window.calls=[]; window.cursor=0; window.rawOutput=''; window.rx=0; window.connection='conn';
       window.locale='zh-CN';
-      window.pluginModule=await import(${JSON.stringify(moduleURL)});
+      window.driverModule=await import(${JSON.stringify(moduleURL)});
       window.receipt=output => ({operationId:'read',status:'completed',output,error:null,proposalId:null,waitExpired:false});
       window.mount=id => {
-        window.frontend=window.pluginModule.mount(document.body, {
-          pluginInstanceId:id,
+        window.frontend=window.driverModule.mount(document.body, {
+          driverInstanceId:id,
           instanceConfigRef:'saved-'+id,
           i18n:{get locale(){return window.locale;},subscribe(fn){window.translate=fn;return ()=>{};}},
           async invoke(operation,args){

@@ -1,4 +1,4 @@
-//! User-owned command approval rules. Plugins declare the text field in their schema.
+//! User-owned command approval rules. Drivers declare the text field in their schema.
 use coterm_proto::runtime::{
     operation::{OperationDescriptor, OperationEffect, OperationSource},
     ErrorCategory, RuntimeError,

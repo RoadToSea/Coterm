@@ -1,10 +1,10 @@
-//! 基座生成操作 ID 并保存最近 N 步。插件只报告执行事实和领域结果。
+//! 基座生成操作 ID 并保存最近 N 步。驱动只报告执行事实和领域结果。
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::{OperationId, PluginId, PluginInstanceId, ProposalId, RuntimeError};
+use super::{OperationId, DriverId, DriverInstanceId, ProposalId, RuntimeError};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -25,7 +25,7 @@ pub enum OperationEffect {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OperationScope {
-    Plugin,
+    Driver,
     Instance,
 }
 
@@ -80,7 +80,7 @@ pub enum DispatchMode {
 #[serde(rename_all = "camelCase")]
 pub struct InvokeRequest {
     pub operation_id: OperationId,
-    pub plugin_instance_id: Option<PluginInstanceId>,
+    pub driver_instance_id: Option<DriverInstanceId>,
     pub source: OperationSource,
     pub effect: OperationEffect,
     pub operation: String,
@@ -94,7 +94,7 @@ pub struct InvokeRequest {
 pub struct ApproveProposal {
     pub operation_id: OperationId,
     pub proposal_id: ProposalId,
-    pub plugin_instance_id: Option<PluginInstanceId>,
+    pub driver_instance_id: Option<DriverInstanceId>,
     pub args: Value,
 }
 
@@ -114,13 +114,13 @@ pub struct OperationReceipt {
 #[serde(rename_all = "camelCase")]
 pub struct OperationRecord {
     pub operation_id: OperationId,
-    pub plugin_id: PluginId,
-    pub plugin_instance_id: Option<PluginInstanceId>,
+    pub driver_id: DriverId,
+    pub driver_instance_id: Option<DriverInstanceId>,
     pub source: OperationSource,
     pub effect: OperationEffect,
     pub operation: String,
     pub status: OperationStatus,
-    /// 脱敏后的有界摘要；原始领域数据和完整流由插件保存。
+    /// 脱敏后的有界摘要；原始领域数据和完整流由驱动保存。
     pub input: Value,
     pub output: Option<Value>,
     pub error: Option<RuntimeError>,

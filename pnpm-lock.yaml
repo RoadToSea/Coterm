@@ -14,9 +14,9 @@ importers:
 
   apps/desktop:
     dependencies:
-      '@coterm/plugin-sdk':
+      '@coterm/driver-sdk':
         specifier: workspace:*
-        version: link:../../packages/plugin-sdk
+        version: link:../../packages/driver-sdk
       '@radix-ui/react-separator':
         specifier: ^1.2.0
         version: 1.2.0(@types/react-dom@18.3.7(@types/react@18.3.31))(@types/react@18.3.31)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
@@ -91,13 +91,11 @@ importers:
         specifier: ^5.4.9
         version: 5.4.21(@types/node@22.20.5)
 
-  packages/plugin-sdk: {}
-
-  plugins/plugin-serial/frontend:
+  drivers/driver-local/frontend:
     dependencies:
-      '@coterm/plugin-sdk':
+      '@coterm/driver-sdk':
         specifier: workspace:*
-        version: link:../../../packages/plugin-sdk
+        version: link:../../../packages/driver-sdk
       '@xterm/addon-fit':
         specifier: ^0.10.0
         version: 0.10.0(@xterm/xterm@5.5.0)
@@ -115,11 +113,11 @@ importers:
         specifier: ^5.4.9
         version: 5.4.21(@types/node@22.20.5)
 
-  plugins/plugin-ssh/frontend:
+  drivers/driver-serial/frontend:
     dependencies:
-      '@coterm/plugin-sdk':
+      '@coterm/driver-sdk':
         specifier: workspace:*
-        version: link:../../../packages/plugin-sdk
+        version: link:../../../packages/driver-sdk
       '@xterm/addon-fit':
         specifier: ^0.10.0
         version: 0.10.0(@xterm/xterm@5.5.0)
@@ -136,6 +134,30 @@ importers:
       vite:
         specifier: ^5.4.9
         version: 5.4.21(@types/node@22.20.5)
+
+  drivers/driver-ssh/frontend:
+    dependencies:
+      '@coterm/driver-sdk':
+        specifier: workspace:*
+        version: link:../../../packages/driver-sdk
+      '@xterm/addon-fit':
+        specifier: ^0.10.0
+        version: 0.10.0(@xterm/xterm@5.5.0)
+      '@xterm/addon-search':
+        specifier: ~0.15.0
+        version: 0.15.0(@xterm/xterm@5.5.0)
+      '@xterm/xterm':
+        specifier: ^5.5.0
+        version: 5.5.0
+    devDependencies:
+      typescript:
+        specifier: ^5.6.3
+        version: 5.9.3
+      vite:
+        specifier: ^5.4.9
+        version: 5.4.21(@types/node@22.20.5)
+
+  packages/driver-sdk: {}
 
 packages:
 

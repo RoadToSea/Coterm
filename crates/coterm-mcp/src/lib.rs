@@ -39,7 +39,7 @@ pub struct SendKeysParams {
 }
 
 pub struct McpGateway {
-    // 待后续挂载动态插件 Tools 与会话转发
+    // 待后续挂载动态驱动 Tools 与会话转发
 }
 
 impl Default for McpGateway {

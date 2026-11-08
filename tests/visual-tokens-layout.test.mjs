@@ -6,8 +6,8 @@ import path from "node:path";
 const rootDir = process.cwd();
 const indexCssPath = path.join(rootDir, "apps/desktop/src/index.css");
 const tailwindConfigPath = path.join(rootDir, "apps/desktop/tailwind.config.js");
-const sshPluginPath = path.join(rootDir, "plugins/plugin-ssh/frontend/src/index.ts");
-const blockListPath = path.join(rootDir, "packages/plugin-sdk/src/components/block-list.ts");
+const sshDriverPath = path.join(rootDir, "drivers/driver-ssh/frontend/src/index.ts");
+const blockListPath = path.join(rootDir, "packages/driver-sdk/src/components/block-list.ts");
 const appTsxPath = path.join(rootDir, "apps/desktop/src/App.tsx");
 
 test("Desktop CSS defines required semantic tokens in :root", () => {
@@ -49,12 +49,12 @@ test("Tailwind configuration maps coterm semantic tokens to CSS custom propertie
   assert.ok(tailwindContent.includes('"var(--coterm-font-sans)"'));
 });
 
-test("SSH Plugin Shadow DOM styles use semantic tokens with readable fallbacks", () => {
-  const sshContent = fs.readFileSync(sshPluginPath, "utf8");
+test("SSH Driver Shadow DOM styles use semantic tokens with readable fallbacks", () => {
+  const sshContent = fs.readFileSync(sshDriverPath, "utf8");
 
   // Extract the css template literal
   const match = sshContent.match(/const css = `([\s\S]*?)`;/);
-  assert.ok(match, "CSS template literal must exist in SSH plugin frontend");
+  assert.ok(match, "CSS template literal must exist in SSH driver frontend");
   const shadowCss = match[1];
 
   // Check that custom properties are used
@@ -77,7 +77,7 @@ test("SSH Plugin Shadow DOM styles use semantic tokens with readable fallbacks",
   }
 });
 
-test("Plugin SDK block-list component styles use semantic tokens with fallbacks", () => {
+test("Driver SDK block-list component styles use semantic tokens with fallbacks", () => {
   const blockListContent = fs.readFileSync(blockListPath, "utf8");
 
   const match = blockListContent.match(/const style = `([\s\S]*?)`;/);
@@ -138,25 +138,25 @@ test("App.tsx implements responsive navigation collapse and accessible controls"
 
   // 4. Verify workspace has min-w-0 flex-1 overflow-hidden
   assert.ok(
-    appContent.includes('main aria-label={t("Plugin workspace")} className="relative isolate min-w-0 flex-1 overflow-hidden'),
+    appContent.includes('main aria-label={t("Driver workspace")} className="relative isolate min-w-0 flex-1 overflow-hidden'),
     "Main workspace must be flex-1 min-w-0 to prevent horizontal overflow"
   );
 });
 
 test("Layout width simulation at 1280px, 1024px, and 768px", () => {
   // Screen specifications:
-  // 1280px: Wide screen. Plugins = 72px (sm:w-[72px]), Instances = 240px, Workspace = 1280 - (72 + 240) = 968px.
-  // 1024px: Medium screen. Plugins = 64px/72px, Instances = 200px (max-[1024px]:w-[200px]), Workspace = 1024 - (72 + 200) = 752px.
+  // 1280px: Wide screen. Drivers = 72px (sm:w-[72px]), Instances = 240px, Workspace = 1280 - (72 + 240) = 968px.
+  // 1024px: Medium screen. Drivers = 64px/72px, Instances = 200px (max-[1024px]:w-[200px]), Workspace = 1024 - (72 + 200) = 752px.
   // 768px: Compact screen. Breakpoint (<900px) collapses instances panel by default.
-  //   - Collapsed: Plugins = 72px (sm:w-[72px] applies as 768 >= 640), Instances = 0px, Workspace = 768 - 72 = 696px (prioritizing workspace).
-  //   - Expanded (user toggled): Plugins = 72px, Instances = 200px (max-[1024px]:w-[200px]), Workspace = 768 - (72 + 200) = 496px.
+  //   - Collapsed: Drivers = 72px (sm:w-[72px] applies as 768 >= 640), Instances = 0px, Workspace = 768 - 72 = 696px (prioritizing workspace).
+  //   - Expanded (user toggled): Drivers = 72px, Instances = 200px (max-[1024px]:w-[200px]), Workspace = 768 - (72 + 200) = 496px.
 
   const calculateLayout = (windowWidth, instancesOpen) => {
-    const pluginWidth = windowWidth >= 640 ? 72 : 64;
+    const driverWidth = windowWidth >= 640 ? 72 : 64;
     const instancesWidth = !instancesOpen ? 0 : (windowWidth <= 1024 ? 200 : 240);
-    const totalNavWidth = pluginWidth + instancesWidth;
+    const totalNavWidth = driverWidth + instancesWidth;
     const workspaceWidth = windowWidth - totalNavWidth;
-    return { pluginWidth, instancesWidth, totalNavWidth, workspaceWidth };
+    return { driverWidth, instancesWidth, totalNavWidth, workspaceWidth };
   };
 
   // 1280px - sidebars open

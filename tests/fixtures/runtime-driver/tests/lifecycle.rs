@@ -1,0 +1,551 @@
+use coterm_core::{
+    driver_manager::ProcessDriverRuntime,
+    driver_runtime::{CallerContext, DriverRuntime, Operations, SubmitOperation},
+};
+use coterm_proto::runtime::{
+    lifecycle::{InstanceInfo, InstanceStatus, RuntimeLimits},
+    operation::{OperationSource, OperationStatus},
+    stream::FlowWindow,
+};
+use serde_json::json;
+use std::{path::PathBuf, time::Duration};
+
+type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+const ID: &str = "coterm-runtime-fixture";
+
+fn runtime() -> ProcessDriverRuntime {
+    ProcessDriverRuntime::new(
+        format!(
+            "{}-{}",
+            std::env::consts::OS,
+            if cfg!(target_arch = "x86_64") {
+                "x64"
+            } else {
+                "arm64"
+            }
+        ),
+        RuntimeLimits {
+            max_control_bytes: 1024 * 1024,
+            max_data_chunk_bytes: 65536,
+            initial_window: FlowWindow {
+                chunks: 16,
+                bytes: 1024 * 1024,
+            },
+        },
+    )
+}
+fn package() -> Result<PathBuf> {
+    let root = std::env::temp_dir().join(format!("coterm-lifecycle-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&root)?;
+    let binary = std::path::Path::new(env!("CARGO_BIN_EXE_coterm-runtime-fixture"));
+    let filename = binary.file_name().ok_or("binary filename")?;
+    std::fs::copy(binary, root.join(filename))?;
+    let platform = format!(
+        "{}-{}",
+        std::env::consts::OS,
+        if cfg!(target_arch = "x86_64") {
+            "x64"
+        } else {
+            "arm64"
+        }
+    );
+    std::fs::write(
+        root.join("manifest.json"),
+        serde_json::to_vec(&json!({
+            "manifestVersion":1,"id":ID,"name":"Fixture","version":"0.1.0",
+            "runtime":{"interfaceMajor":2,"requires":["instances","backend-calls","operation-catalog","driver-events","async-operations","secret-delivery","deferred-interactions"]},
+            "backend":{platform:filename.to_string_lossy()},"mcp":{"provider":"backend"},"instances":{"type":"test","multiple":true},"capabilities":["secret-input"]
+        }))?,
+    )?;
+    Ok(root)
+}
+async fn submit(
+    runtime: &ProcessDriverRuntime,
+    instance: &InstanceInfo,
+    operation: &str,
+    source: OperationSource,
+    driver_scope: bool,
+) -> Result<coterm_proto::runtime::operation::OperationReceipt> {
+    Ok(runtime
+        .submit(
+            CallerContext {
+                source,
+                session_id: instance.session_id.clone(),
+                driver_id: Some(ID.into()),
+            },
+            SubmitOperation {
+                driver_id: ID.into(),
+                driver_instance_id: if driver_scope {
+                    None
+                } else {
+                    Some(instance.driver_instance_id.clone())
+                },
+                operation: operation.into(),
+                args: json!({}),
+                wait_timeout_ms: Some(100),
+            },
+        )
+        .await?)
+}
+
+#[tokio::test]
+async fn custom_instance_names_override_driver_labels_and_are_validated() -> Result<()> {
+    let root = package()?;
+    let runtime = runtime();
+    runtime.load(&root).await?;
+    runtime.start(ID).await?;
+
+    let first = runtime
+        .create_instance_with_name(
+            ID,
+            json!({"label":"Driver label"}),
+            Some("  Lab server  ".into()),
+        )
+        .await?;
+    assert_eq!(first.label, "Lab server");
+    let second = runtime
+        .create_instance_with_name(ID, json!({}), Some("Lab server".into()))
+        .await?;
+    assert_eq!(second.label, "Lab server (2)");
+
+    let invalid = runtime
+        .create_instance_with_name(ID, json!({}), Some("名".repeat(86)))
+        .await;
+    assert_eq!(
+        invalid.err().map(|error| error.code),
+        Some("instance_name_invalid".into())
+    );
+    assert_eq!(runtime.list_instances(None).await?.len(), 2);
+    Ok(())
+}
+
+#[tokio::test]
+async fn command_rules_control_real_agent_dispatch_and_preserve_pending_approvals() -> Result<()> {
+    use coterm_core::approval_policy::{ApprovalMode, ApprovalPolicy};
+    let root = package()?;
+    let runtime = runtime();
+    runtime.load(&root).await?;
+    runtime.start(ID).await?;
+    let instance = runtime.create_instance(ID, json!({})).await?;
+    let allow = ApprovalPolicy {
+        mode: ApprovalMode::AllowMatches,
+        patterns: vec![r"^ls$".into(), r"^cd /tmp$".into()],
+    };
+    runtime
+        .set_approval_policy(&instance.driver_instance_id, allow.clone())
+        .await?;
+    for (mode, commands, expected) in [
+        (
+            ApprovalMode::AllowMatches,
+            vec!["ls", "cd /tmp"],
+            OperationStatus::Completed,
+        ),
+        (
+            ApprovalMode::AllowMatches,
+            vec!["ls", "rm x"],
+            OperationStatus::AwaitingApproval,
+        ),
+        (
+            ApprovalMode::AllowMatches,
+            vec!["ls; rm x"],
+            OperationStatus::AwaitingApproval,
+        ),
+        (
+            ApprovalMode::ApproveMatches,
+            vec!["rm x"],
+            OperationStatus::Completed,
+        ),
+        (
+            ApprovalMode::ApproveMatches,
+            vec!["ls", "rm x"],
+            OperationStatus::AwaitingApproval,
+        ),
+    ] {
+        runtime
+            .set_approval_policy(
+                &instance.driver_instance_id,
+                ApprovalPolicy {
+                    mode,
+                    ..allow.clone()
+                },
+            )
+            .await?;
+        let receipt = runtime
+            .submit_until_approval(
+                CallerContext {
+                    source: OperationSource::Agent,
+                    session_id: instance.session_id.clone(),
+                    driver_id: Some(ID.into()),
+                },
+                SubmitOperation {
+                    driver_id: ID.into(),
+                    driver_instance_id: Some(instance.driver_instance_id.clone()),
+                    operation: "fixture.commit".into(),
+                    args: json!({"commands":commands}),
+                    wait_timeout_ms: Some(1000),
+                },
+            )
+            .await?;
+        assert_eq!(receipt.status, expected);
+    }
+    // An invalid replacement cannot weaken the last valid configuration.
+    let before = runtime
+        .approval_policy(&instance.driver_instance_id)
+        .await?;
+    assert!(runtime
+        .set_approval_policy(
+            &instance.driver_instance_id,
+            ApprovalPolicy {
+                mode: ApprovalMode::AllowMatches,
+                patterns: vec!["[".into()]
+            }
+        )
+        .await
+        .is_err());
+    assert_eq!(
+        runtime
+            .approval_policy(&instance.driver_instance_id)
+            .await?,
+        before
+    );
+    assert_eq!(runtime.attention_snapshot().await.approvals.len(), 3);
+    runtime.stop(ID).await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn crash_converges_all_scopes_clears_attention_and_allows_restart_without_replay(
+) -> Result<()> {
+    let root = package()?;
+    let runtime = runtime();
+    runtime.load(&root).await?;
+    runtime.start(ID).await?;
+    let first = runtime
+        .create_instance(ID, json!({"label":"First"}))
+        .await?;
+    let second = runtime
+        .create_instance(ID, json!({"label":"Second"}))
+        .await?;
+    let pending = submit(
+        &runtime,
+        &first,
+        "fixture.commit",
+        OperationSource::Agent,
+        false,
+    )
+    .await?;
+    assert_eq!(pending.status, OperationStatus::AwaitingApproval);
+    let running = submit(
+        &runtime,
+        &second,
+        "fixture.hang",
+        OperationSource::Human,
+        false,
+    )
+    .await?;
+    let driver_running = submit(
+        &runtime,
+        &first,
+        "fixture.driver_hang",
+        OperationSource::Human,
+        true,
+    )
+    .await?;
+    let secret = submit(
+        &runtime,
+        &first,
+        "fixture.secret",
+        OperationSource::Human,
+        false,
+    )
+    .await?;
+    assert_eq!(runtime.attention_snapshot().await.interactions.len(), 1);
+    let _ = submit(
+        &runtime,
+        &second,
+        "fixture.crash",
+        OperationSource::Human,
+        false,
+    )
+    .await;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while runtime.is_running(ID).await {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await?;
+    let instances = runtime.list_instances(None).await?;
+    assert_eq!(instances.len(), 2);
+    assert!(instances
+        .iter()
+        .all(|instance| instance.status == InstanceStatus::Failed));
+    assert!(runtime.attention_snapshot().await.approvals.is_empty());
+    assert!(runtime.attention_snapshot().await.interactions.is_empty());
+    for (receipt, instance) in [
+        (running, &second),
+        (driver_running, &first),
+        (secret, &first),
+    ] {
+        let caller = CallerContext {
+            source: OperationSource::Human,
+            session_id: instance.session_id.clone(),
+            driver_id: Some(ID.into()),
+        };
+        assert_eq!(
+            runtime.get(caller, &receipt.operation_id).await?.status,
+            OperationStatus::Unknown
+        );
+    }
+    assert_eq!(
+        runtime
+            .get(
+                CallerContext {
+                    source: OperationSource::Human,
+                    session_id: first.session_id.clone(),
+                    driver_id: Some(ID.into())
+                },
+                &pending.operation_id
+            )
+            .await?
+            .status,
+        OperationStatus::Cancelled
+    );
+    runtime.destroy_instance(&first.driver_instance_id).await?;
+    runtime.start(ID).await?;
+    let restored = runtime
+        .create_instance(ID, json!({"label":"First"}))
+        .await?;
+    assert_ne!(first.driver_instance_id, restored.driver_instance_id);
+    let info = submit(
+        &runtime,
+        &restored,
+        "fixture.info",
+        OperationSource::Human,
+        false,
+    )
+    .await?;
+    assert_eq!(info.output.ok_or("output")?["writes"], 0);
+    // Deleting a failed instance must not send its obsolete ID to the new process.
+    runtime.destroy_instance(&second.driver_instance_id).await?;
+    runtime.shutdown().await;
+    assert!(!runtime.is_running(ID).await);
+    assert!(runtime.list_instances(None).await?.is_empty());
+    std::fs::remove_dir_all(root)?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn early_completion_and_duplicate_approvals_preserve_operation_order() -> Result<()> {
+    use coterm_proto::runtime::operation::ApproveProposal;
+    let root = package()?;
+    let runtime = runtime();
+    runtime.load(&root).await?;
+    runtime.start(ID).await?;
+    let instance = runtime.create_instance(ID, json!({})).await?;
+    let caller = CallerContext {
+        source: OperationSource::Human,
+        session_id: instance.session_id.clone(),
+        driver_id: Some(ID.to_owned()),
+    };
+    let completed = runtime
+        .submit(
+            caller.clone(),
+            SubmitOperation {
+                driver_id: ID.to_owned(),
+                driver_instance_id: Some(instance.driver_instance_id.clone()),
+                operation: "fixture.early_completion".to_owned(),
+                args: json!({}),
+                wait_timeout_ms: Some(2000),
+            },
+        )
+        .await?;
+    assert_eq!(completed.status, OperationStatus::Completed);
+    assert_eq!(
+        completed.output.ok_or("missing completion")?["completedBeforeAck"],
+        true
+    );
+    let pending = submit(
+        &runtime,
+        &instance,
+        "fixture.commit",
+        OperationSource::Agent,
+        false,
+    )
+    .await?;
+    let request = ApproveProposal {
+        operation_id: pending.operation_id,
+        proposal_id: pending.proposal_id.ok_or("missing proposal")?,
+        driver_instance_id: Some(instance.driver_instance_id.clone()),
+        args: json!({}),
+    };
+    let (first, second) = tokio::join!(
+        runtime.approve(caller.clone(), request.clone()),
+        runtime.approve(caller, request)
+    );
+    assert_eq!(usize::from(first.is_ok()) + usize::from(second.is_ok()), 1);
+    let info = submit(
+        &runtime,
+        &instance,
+        "fixture.info",
+        OperationSource::Human,
+        false,
+    )
+    .await?;
+    assert_eq!(info.output.ok_or("missing info")?["writes"], 1);
+    runtime.shutdown().await;
+    std::fs::remove_dir_all(root)?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn blocked_control_keeps_runtime_queries_responsive() -> Result<()> {
+    let root = package()?;
+    let runtime = runtime();
+    runtime.load(&root).await?;
+    runtime.start(ID).await?;
+    let instance = runtime.create_instance(ID, json!({})).await?;
+    let blocked = submit(
+        &runtime,
+        &instance,
+        "fixture.block",
+        OperationSource::Human,
+        false,
+    )
+    .await?;
+    assert_eq!(blocked.status, OperationStatus::Dispatched);
+    let queried =
+        tokio::time::timeout(Duration::from_millis(250), runtime.list_instances(None)).await;
+    tokio::time::timeout(Duration::from_secs(3), runtime.shutdown()).await?;
+    std::fs::remove_dir_all(root)?;
+    assert_eq!(
+        queried
+            .map_err(|_| "Blocked control held the runtime state lock")??
+            .len(),
+        1
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn shutdown_reaps_a_child_even_when_control_holds_the_routing_lock() -> Result<()> {
+    let root = package()?;
+    let runtime = runtime();
+    runtime.load(&root).await?;
+    runtime.start(ID).await?;
+    let instance = runtime.create_instance(ID, json!({})).await?;
+    let receipt = submit(
+        &runtime,
+        &instance,
+        "fixture.block",
+        OperationSource::Human,
+        false,
+    )
+    .await?;
+    assert!(receipt.wait_expired);
+    tokio::time::timeout(Duration::from_secs(3), runtime.shutdown()).await?;
+    assert!(!runtime.is_running(ID).await);
+    assert!(runtime.list_instances(None).await?.is_empty());
+    assert_eq!(
+        runtime
+            .start(ID)
+            .await
+            .expect_err("shutdown rejects restart")
+            .code,
+        "runtime_shutting_down"
+    );
+    std::fs::remove_dir_all(root)?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn instance_approvals_isolate_rules_bypass_and_lifetime() -> Result<()> {
+    use coterm_core::approval_policy::{ApprovalMode, ApprovalPolicy};
+    let root = package()?;
+    let runtime = runtime();
+    runtime.load(&root).await?;
+    runtime.start(ID).await?;
+    let first = runtime.create_instance(ID, json!({})).await?;
+    let second = runtime.create_instance(ID, json!({})).await?;
+    let caller = |instance: &InstanceInfo| CallerContext {
+        source: OperationSource::Agent,
+        session_id: instance.session_id.clone(),
+        driver_id: Some(ID.into()),
+    };
+    let request = |instance: &InstanceInfo, command: &str| SubmitOperation {
+        driver_id: ID.into(),
+        driver_instance_id: Some(instance.driver_instance_id.clone()),
+        operation: "fixture.commit".into(),
+        args: json!({"commands":[command]}),
+        wait_timeout_ms: Some(1000),
+    };
+    runtime
+        .set_approval_policy(
+            &first.driver_instance_id,
+            ApprovalPolicy {
+                mode: ApprovalMode::AllowMatches,
+                patterns: vec!["^ls$".into()],
+            },
+        )
+        .await?;
+    assert_eq!(
+        runtime
+            .submit_until_approval(caller(&first), request(&first, "ls"))
+            .await?
+            .status,
+        OperationStatus::Completed
+    );
+    let pending = runtime
+        .submit_until_approval(caller(&second), request(&second, "ls"))
+        .await?;
+    assert_eq!(pending.status, OperationStatus::AwaitingApproval);
+    runtime.set_bypass(&second.driver_instance_id, true).await?;
+    assert!(!runtime.bypass_enabled(&first.driver_instance_id).await?);
+    assert!(runtime.bypass_enabled(&second.driver_instance_id).await?);
+    assert_eq!(
+        runtime
+            .get(caller(&second), &pending.operation_id)
+            .await?
+            .status,
+        OperationStatus::AwaitingApproval
+    );
+    assert_eq!(
+        runtime
+            .submit_until_approval(caller(&first), request(&first, "pwd"))
+            .await?
+            .status,
+        OperationStatus::AwaitingApproval
+    );
+    assert_eq!(
+        runtime
+            .submit_until_approval(caller(&second), request(&second, "pwd"))
+            .await?
+            .status,
+        OperationStatus::Completed
+    );
+    assert!(runtime
+        .submit_until_approval(caller(&first), request(&second, "ls"))
+        .await
+        .is_err());
+    assert!(runtime.set_bypass("missing", true).await.is_err());
+    assert!(runtime.approval_policy("missing").await.is_err());
+    runtime.destroy_instance(&second.driver_instance_id).await?;
+    assert!(runtime
+        .bypass_enabled(&second.driver_instance_id)
+        .await
+        .is_err());
+    let third = runtime.create_instance(ID, json!({})).await?;
+    assert!(!runtime.bypass_enabled(&third.driver_instance_id).await?);
+    assert_eq!(
+        runtime
+            .submit_until_approval(caller(&third), request(&third, "ls"))
+            .await?
+            .status,
+        OperationStatus::AwaitingApproval
+    );
+    runtime.stop(ID).await?;
+    assert!(runtime
+        .approval_policy(&first.driver_instance_id)
+        .await
+        .is_err());
+    Ok(())
+}

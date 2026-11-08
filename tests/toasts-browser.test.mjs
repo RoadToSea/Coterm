@@ -6,8 +6,8 @@ import { findBrowser, openSession, evaluate, waitForValue } from "./support/brow
 test("shared toasts are non-modal, colored, bounded, dismissible and automatically released", async t => {
   const browserPath = findBrowser();
   if (!browserPath) { t.skip("No Chrome/Edge binary; shared notifications were not verified"); return; }
-  const artifact = new URL("../packages/plugin-sdk/dist/browser/toasts.js", import.meta.url);
-  assert.ok(fs.statSync(artifact).mtimeMs >= fs.statSync(new URL("../packages/plugin-sdk/src/components/toasts.ts", import.meta.url)).mtimeMs,
+  const artifact = new URL("../packages/driver-sdk/dist/browser/toasts.js", import.meta.url);
+  assert.ok(fs.statSync(artifact).mtimeMs >= fs.statSync(new URL("../packages/driver-sdk/src/components/toasts.ts", import.meta.url)).mtimeMs,
     "run pnpm test:build before testing the shared toast component");
   const url = `data:text/javascript;base64,${fs.readFileSync(artifact).toString("base64")}`;
   const session = await openSession({ browserPath, totalTimeoutMs: 20_000 });

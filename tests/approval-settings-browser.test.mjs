@@ -9,7 +9,7 @@ test("command approval settings edit both modes, preserve failed saves and previ
   if (!browserPath) { t.skip("No Chrome/Edge binary"); return; }
   assertFreshBuild();
   const scenario = structuredClone(defaultScenario);
-  scenario.instances.push({ ...scenario.instances[0], pluginInstanceId: "inst-2", sessionId: "sess-2", label: "Staging-Server" });
+  scenario.instances.push({ ...scenario.instances[0], driverInstanceId: "inst-2", sessionId: "sess-2", label: "Staging-Server" });
   scenario.approvalPreview = { "ls": false, "rm x": true };
   const server = await startStaticServer();
   const session = await openSession({ browserPath });
@@ -31,7 +31,7 @@ test("command approval settings edit both modes, preserve failed saves and previ
     await wait(`!!document.getElementById('approval-pattern')`);
     assert.equal(await run(`__cotermTest.countCalls('list_operations')`), 0);
     assert.equal(await run(`document.querySelector('[data-approval-instance]')?.textContent`), "Prod-Server");
-    assert.equal(await run(`__cotermTest.invocations.find(call=>call.command==='get_approval_policy').args.pluginInstanceId`), "inst-1");
+    assert.equal(await run(`__cotermTest.invocations.find(call=>call.command==='get_approval_policy').args.driverInstanceId`), "inst-1");
     assert.equal(await run(`(() => {
       const dialog=document.getElementById('approval-settings-dialog');
       return [...dialog.querySelectorAll('button')].some(button=>button.textContent.includes('example'))
@@ -80,7 +80,7 @@ test("command approval settings edit both modes, preserve failed saves and previ
     await wait(`document.querySelector('button[aria-label="Enable approval bypass"]')?.disabled===false`);
     await run(`document.getElementById('instance-tab-inst-1').click()`);
     await wait(`document.querySelector('button[aria-label="Disable approval bypass"]')?.disabled===false`);
-    assert.equal(await run(`__cotermTest.invocations.find(call=>call.command==='set_bypass').args.pluginInstanceId`), "inst-1");
+    assert.equal(await run(`__cotermTest.invocations.find(call=>call.command==='set_bypass').args.driverInstanceId`), "inst-1");
     await run(`window.bypassReadGate=__cotermTest.gate('get_bypass');document.getElementById('instance-tab-inst-2').click()`);
     await wait(`bypassReadGate.size()===1`);
     await run(`document.getElementById('instance-tab-inst-1').click()`);
@@ -92,7 +92,7 @@ test("command approval settings edit both modes, preserve failed saves and previ
     await run(`window.bypassWriteGate=__cotermTest.gate('set_bypass');document.querySelector('button[aria-label="Disable approval bypass"]').click()`);
     await wait(`bypassWriteGate.size()===1`);
     await run(`document.getElementById('instance-tab-inst-2').click()`);
-    await wait(`__cotermTest.invocations.filter(call=>call.command==='get_bypass').at(-1)?.args.pluginInstanceId==='inst-2'`);
+    await wait(`__cotermTest.invocations.filter(call=>call.command==='get_bypass').at(-1)?.args.driverInstanceId==='inst-2'`);
     await run(`new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));bypassWriteGate.release(null)`);
     await wait(`document.querySelector('button[aria-label="Enable approval bypass"]')?.disabled===false`);
     await run(`document.getElementById('instance-tab-inst-1').click()`);

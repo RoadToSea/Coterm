@@ -1,5 +1,12 @@
 {
   "productName": "Coterm Smoke",
   "identifier": "com.coterm.smoke",
-  "bundle": { "targets": ["nsis"] }
+  "bundle": {
+    "targets": [
+      "nsis"
+    ]
+  },
+  "build": {
+    "beforeBuildCommand": "pnpm --dir ../.. drivers:build && pnpm build"
+  }
 }

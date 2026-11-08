@@ -5,7 +5,7 @@ import { cancelSecretInput, promptForSecret } from "../../secret-input";
 /** 剩余时间不足时不再弹窗，避免用户输入后才发现宿主已判定超时。 */
 const MIN_REMAINING_MS = 5_000;
 
-/** Lives outside the plugin workspace, so inactive/headless instances can prompt. */
+/** Lives outside the driver workspace, so inactive/headless instances can prompt. */
 export function HostInteractions() {
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
@@ -31,8 +31,8 @@ export function HostInteractions() {
       if (!request) return;
       const mine = ++ticket;
       epoch++;
-      active = { id: request.interactionId, instance: request.pluginInstanceId, ticket: mine };
-      void promptForSecret<void>(request.pluginInstanceId, {
+      active = { id: request.interactionId, instance: request.driverInstanceId, ticket: mine };
+      void promptForSecret<void>(request.driverInstanceId, {
         title: request.title,
         prompt: request.prompt,
         timeoutMs: request.remainingMs,
@@ -87,7 +87,7 @@ export function HostInteractions() {
         if (!attention.interactions.some((request) => request.interactionId === id)) settled.delete(id);
       }
       if (active && !attention.interactions.some((request) => request.interactionId === active?.id)) {
-        // 过期、取消、插件停止或实例销毁：宿主已收敛，弹窗必须跟着关闭。
+        // 过期、取消、驱动停止或实例销毁：宿主已收敛，弹窗必须跟着关闭。
         cancelSecretInput(`backend:${active.id}`);
         active = null;
       }

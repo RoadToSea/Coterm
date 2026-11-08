@@ -2,7 +2,7 @@ use crate::{
     workspace::{self, Snapshot, WorkspaceGroup, WorkspaceStore},
     AppState,
 };
-use coterm_core::plugin_runtime::PluginRuntime;
+use coterm_core::driver_runtime::DriverRuntime;
 use coterm_proto::runtime::{
     lifecycle::{InstanceInfo, InstanceStatus},
     RuntimeError,
@@ -28,16 +28,39 @@ pub async fn workspace_snapshot(
     state: tauri::State<'_, AppState>,
 ) -> Result<Snapshot, RuntimeError> {
     let mut snapshot = access(&state, |store| Ok(store.snapshot())).await?;
-    let live = state.plugin_runtime.list_instances(None).await?;
+    let live = state.driver_runtime.list_instances(None).await?;
     for entry in &mut snapshot.entries {
         if !live
             .iter()
-            .any(|instance| Some(&instance.plugin_instance_id) == entry.instance_id.as_ref())
+            .any(|instance| Some(&instance.driver_instance_id) == entry.instance_id.as_ref())
         {
             entry.instance_id = None;
         }
     }
     Ok(snapshot)
+}
+
+/// Saves a driver-validated configuration for the bound live instance. Does not
+/// execute commands or reconnect. Stale bindings and persistence failures are errors.
+#[tauri::command]
+pub async fn save_instance_configuration(
+    driver_instance_id: String,
+    config: serde_json::Value,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), RuntimeError> {
+    let _guard = state.workspace_actions.lock().await;
+    if state
+        .driver_runtime
+        .get_instance(&driver_instance_id)
+        .await
+        .is_none()
+    {
+        return Err(workspace::error("workspace_entry_not_found"));
+    }
+    access(&state, move |store| {
+        store.save_configuration(&driver_instance_id, config)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -102,38 +125,38 @@ pub async fn restore_saved_instance(
     let reference = config_ref.clone();
     let entry = access(&state, move |store| store.find(&reference)).await?;
     if let Some(old_id) = &entry.instance_id {
-        if let Some(old) = state.plugin_runtime.get_instance(old_id).await {
+        if let Some(old) = state.driver_runtime.get_instance(old_id).await {
             if old.status != InstanceStatus::Failed {
                 return Err(workspace::error("workspace_instance_already_running"));
             }
-            state.plugin_runtime.destroy_instance(old_id).await?;
+            state.driver_runtime.destroy_instance(old_id).await?;
         }
     }
     // Only create/configure. Never invoke connect, commit or a historical operation.
-    if !state.plugin_runtime.is_running(&entry.plugin_id).await {
-        state.plugin_runtime.start(&entry.plugin_id).await?;
+    if !state.driver_runtime.is_running(&entry.driver_id).await {
+        state.driver_runtime.start(&entry.driver_id).await?;
     }
     let instance = state
-        .plugin_runtime
-        .create_instance_with_name(&entry.plugin_id, entry.config, Some(entry.label))
+        .driver_runtime
+        .create_instance_with_name(&entry.driver_id, entry.config, Some(entry.label))
         .await?;
     if let Err(error) = state
-        .plugin_runtime
-        .set_approval_policy(&instance.plugin_instance_id, entry.approval_policy)
+        .driver_runtime
+        .set_approval_policy(&instance.driver_instance_id, entry.approval_policy)
         .await
     {
         let _ = state
-            .plugin_runtime
-            .destroy_instance(&instance.plugin_instance_id)
+            .driver_runtime
+            .destroy_instance(&instance.driver_instance_id)
             .await;
         return Err(error);
     }
-    let id = instance.plugin_instance_id.clone();
+    let id = instance.driver_instance_id.clone();
     let label = instance.label.clone();
     if let Err(error) = access(&state, move |store| store.bind(&config_ref, id, label)).await {
         let _ = state
-            .plugin_runtime
-            .destroy_instance(&instance.plugin_instance_id)
+            .driver_runtime
+            .destroy_instance(&instance.driver_instance_id)
             .await;
         return Err(error);
     }
@@ -149,7 +172,7 @@ pub async fn forget_saved_instance(
     let reference = config_ref.clone();
     let entry = access(&state, move |store| store.find(&reference)).await?;
     if let Some(id) = entry.instance_id {
-        if state.plugin_runtime.get_instance(&id).await.is_some() {
+        if state.driver_runtime.get_instance(&id).await.is_some() {
             return Err(workspace::error("workspace_instance_still_present"));
         }
     }
@@ -159,7 +182,7 @@ pub async fn forget_saved_instance(
 #[tauri::command]
 pub async fn reset_saved_workspace(state: tauri::State<'_, AppState>) -> Result<(), RuntimeError> {
     let _guard = state.workspace_actions.lock().await;
-    if !state.plugin_runtime.list_instances(None).await?.is_empty() {
+    if !state.driver_runtime.list_instances(None).await?.is_empty() {
         return Err(workspace::error("workspace_instance_still_present"));
     }
     let store = state.workspace.clone();

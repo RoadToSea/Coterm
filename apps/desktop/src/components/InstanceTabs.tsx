@@ -29,18 +29,18 @@ export function InstanceTabs({ instances, activeId, onSelect, onClose }: Props) 
   if (!instances.length) return null;
   const focus = (instance: InstanceInfo | undefined) => {
     if (!instance) return;
-    onSelect(instance.pluginInstanceId);
-    document.getElementById(instanceTabId(instance.pluginInstanceId))?.focus();
+    onSelect(instance.driverInstanceId);
+    document.getElementById(instanceTabId(instance.driverInstanceId))?.focus();
   };
   const close = (index: number) => {
     const instance = instances[index];
     const restoreFocus = list.current?.contains(document.activeElement);
-    const target = activeId === instance.pluginInstanceId
+    const target = activeId === instance.driverInstanceId
       ? instances[index + 1] ?? instances[index - 1]
-      : instances.find(item => item.pluginInstanceId === activeId) ?? instances[index + 1] ?? instances[index - 1];
-    onClose(instance.pluginInstanceId);
+      : instances.find(item => item.driverInstanceId === activeId) ?? instances[index + 1] ?? instances[index - 1];
+    onClose(instance.driverInstanceId);
     if (restoreFocus) {
-      if (target) document.getElementById(instanceTabId(target.pluginInstanceId))?.focus();
+      if (target) document.getElementById(instanceTabId(target.driverInstanceId))?.focus();
       else list.current?.parentElement?.focus();
     }
   };
@@ -60,13 +60,13 @@ export function InstanceTabs({ instances, activeId, onSelect, onClose }: Props) 
   };
   return <div ref={list} role="tablist" aria-label={t("Open instances")} aria-orientation="horizontal"
     className="flex min-h-11 shrink-0 gap-1 overflow-x-auto border-b border-border bg-card px-2 pt-1">
-    {instances.map((instance, index) => <div key={instance.pluginInstanceId} role="presentation"
-      className={cn("flex shrink-0 items-center rounded-t-lg border border-b-0", activeId === instance.pluginInstanceId ? "border-border bg-background" : "border-transparent")}>
-      <Button type="button" variant="ghost" size="sm" role="tab" id={instanceTabId(instance.pluginInstanceId)}
-        aria-selected={activeId === instance.pluginInstanceId} aria-controls={instancePanelId(instance.pluginInstanceId)}
-        tabIndex={activeId === instance.pluginInstanceId || (!activeId && index === 0) ? 0 : -1}
-        title={`${instance.label} · ${instance.pluginId}`} className="max-w-52 justify-start"
-        onClick={() => onSelect(instance.pluginInstanceId)} onKeyDown={event => navigate(event, index)}>
+    {instances.map((instance, index) => <div key={instance.driverInstanceId} role="presentation"
+      className={cn("flex shrink-0 items-center rounded-t-lg border border-b-0", activeId === instance.driverInstanceId ? "border-border bg-background" : "border-transparent")}>
+      <Button type="button" variant="ghost" size="sm" role="tab" id={instanceTabId(instance.driverInstanceId)}
+        aria-selected={activeId === instance.driverInstanceId} aria-controls={instancePanelId(instance.driverInstanceId)}
+        tabIndex={activeId === instance.driverInstanceId || (!activeId && index === 0) ? 0 : -1}
+        title={`${instance.label} · ${instance.driverId}`} className="max-w-52 justify-start"
+        onClick={() => onSelect(instance.driverInstanceId)} onKeyDown={event => navigate(event, index)}>
         <PlugZap data-icon="inline-start" /><span className="truncate">{instance.label}</span>
       </Button>
       <Button type="button" variant="ghost" size="icon" className="mr-1 size-6 shrink-0"

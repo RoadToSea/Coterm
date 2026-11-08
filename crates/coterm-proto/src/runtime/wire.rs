@@ -1,7 +1,7 @@
 //! v1.0 JSON 控制协议的唯一编解码入口；不依赖进程或平台。
 
 use super::{
-    message::{HostCommand, HostMessage, PluginEvent},
+    message::{HostCommand, HostMessage, DriverEvent},
     ErrorCategory, RuntimeError,
 };
 use crate::{JsonRpcError, JsonRpcRequest, JsonRpcResponse};
@@ -11,16 +11,16 @@ pub const NOTIFICATION_METHOD: &str = "coterm.notification";
 /// UTF-8 字节数，包含结尾 LF（输入也接受 CRLF）。
 pub const MAX_CONTROL_BYTES: usize = 1024 * 1024;
 
-/// 插件内部适配器可复用方法映射，避免复制线缆字段。
+/// 驱动内部适配器可复用方法映射，避免复制线缆字段。
 pub fn command_params(command: HostCommand) -> Result<(&'static str, Value), RuntimeError> {
     let (method, params) = match command {
         HostCommand::Hello(hello) => ("initialize", serde_json::to_value(hello)),
         HostCommand::CreateInstance(instance) => {
             ("create_instance", serde_json::to_value(instance))
         }
-        HostCommand::DestroyInstance { plugin_instance_id } => (
+        HostCommand::DestroyInstance { driver_instance_id } => (
             "destroy_instance",
-            serde_json::to_value(json!({ "pluginInstanceId": plugin_instance_id })),
+            serde_json::to_value(json!({ "driverInstanceId": driver_instance_id })),
         ),
         HostCommand::Invoke(request) => ("invoke", serde_json::to_value(request)),
         HostCommand::Approve(request) => ("approve", serde_json::to_value(request)),
@@ -73,7 +73,7 @@ pub fn encode_line(value: &impl serde::Serialize, limit: usize) -> Result<Vec<u8
     let mut line = serde_json::to_vec(value)
         .map_err(|error| protocol_error_with("request_encode_failed", error))?;
     if line.len().saturating_add(1) > limit.min(MAX_CONTROL_BYTES) {
-        return Err(protocol_error("plugin_control_too_large"));
+        return Err(protocol_error("driver_control_too_large"));
     }
     line.push(b'\n');
     Ok(line)
@@ -152,26 +152,26 @@ pub fn reply(id: String, result: Result<Value, RuntimeError>) -> JsonRpcResponse
     }
 }
 
-pub fn decode_response(line: &str) -> Result<PluginEvent, RuntimeError> {
+pub fn decode_response(line: &str) -> Result<DriverEvent, RuntimeError> {
     let response: Value = serde_json::from_str(line)
-        .map_err(|error| protocol_error_with("plugin_response_invalid", error))?;
+        .map_err(|error| protocol_error_with("driver_response_invalid", error))?;
     if response.get("jsonrpc").and_then(Value::as_str) != Some("2.0") {
-        return Err(protocol_error("plugin_jsonrpc_version_invalid"));
+        return Err(protocol_error("driver_jsonrpc_version_invalid"));
     }
     let request_id = match response.get("id") {
         Some(Value::String(id)) => id.clone(),
-        _ => return Err(protocol_error("plugin_response_id_invalid")),
+        _ => return Err(protocol_error("driver_response_id_invalid")),
     };
     let result = match (response.get("result"), response.get("error")) {
         (Some(result), None) => Ok(result.clone()),
         (None, Some(error)) => {
             let error: JsonRpcError = serde_json::from_value(error.clone())
-                .map_err(|cause| protocol_error_with("plugin_rpc_error_invalid", cause))?;
+                .map_err(|cause| protocol_error_with("driver_rpc_error_invalid", cause))?;
             Err(map_rpc_error(error))
         }
-        _ => return Err(protocol_error("plugin_response_shape_invalid")),
+        _ => return Err(protocol_error("driver_response_shape_invalid")),
     };
-    Ok(PluginEvent::Reply { request_id, result })
+    Ok(DriverEvent::Reply { request_id, result })
 }
 
 fn map_rpc_error(error: JsonRpcError) -> RuntimeError {
@@ -182,7 +182,7 @@ fn map_rpc_error(error: JsonRpcError) -> RuntimeError {
             }
         }
     }
-    // 接受旧插件和标准 JSON-RPC 错误，但不从展示文本猜测业务错误码。
+    // 接受旧驱动和标准 JSON-RPC 错误，但不从展示文本猜测业务错误码。
     RuntimeError {
         category: match error.code {
             -32601 => ErrorCategory::Unsupported,
@@ -190,7 +190,7 @@ fn map_rpc_error(error: JsonRpcError) -> RuntimeError {
             -32603 => ErrorCategory::Internal,
             _ => ErrorCategory::Domain,
         },
-        code: format!("plugin_rpc_{}", error.code),
+        code: format!("driver_rpc_{}", error.code),
         message: error.message,
         details: error.data,
     }

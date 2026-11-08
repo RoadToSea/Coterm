@@ -1,9 +1,9 @@
-//! 插件后端与基座之间的 stdio 传输骨架。
+//! 驱动后端与基座之间的 stdio 传输骨架。
 //!
 //! 物理编码是「一行一个 JSON-RPC 2.0 消息」：基座按命令种类发不同的方法名（`initialize`、
-//! `invoke`、`create_instance` …），插件回 `JsonRpcResponse`，插件主动推送走
-//! `coterm.notification`。信封、读行、大小上限和输出串行化在这一层统一，插件只实现
-//! [`PluginBackend`] 的领域逻辑。
+//! `invoke`、`create_instance` …），驱动回 `JsonRpcResponse`，驱动主动推送走
+//! `coterm.notification`。信封、读行、大小上限和输出串行化在这一层统一，驱动只实现
+//! [`DriverBackend`] 的领域逻辑。
 
 use std::{sync::Arc, time::Duration};
 
@@ -11,11 +11,11 @@ use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 use super::lifecycle::{HelloResult, RuntimeHello, INTERFACE_MAJOR};
-use super::message::{HostCommand, PluginNotification};
+use super::message::{HostCommand, DriverNotification};
 use super::wire::{decode_request, encode_line, reply};
 use super::{ErrorCategory, RuntimeError};
 
-pub use super::backend::PluginBackend;
+pub use super::backend::DriverBackend;
 pub use super::wire::{MAX_CONTROL_BYTES, NOTIFICATION_METHOD};
 pub const DEFAULT_TICK: Duration = Duration::from_secs(1);
 
@@ -43,10 +43,10 @@ impl From<std::io::Error> for TransportError {
     }
 }
 
-/// 读取一条控制行，并在等待期间按 `tick` 驱动插件钩子；返回 `None` 表示 stdin 已关闭。
+/// 读取一条控制行，并在等待期间按 `tick` 驱动驱动钩子；返回 `None` 表示 stdin 已关闭。
 ///
 /// 每次 consume 后保留已读字节；tick 只取消尚未消费的 fill_buf 等待。
-async fn read_line_with_tick<B: PluginBackend, R: tokio::io::AsyncBufRead + Unpin>(
+async fn read_line_with_tick<B: DriverBackend, R: tokio::io::AsyncBufRead + Unpin>(
     backend: &mut B,
     reader: &mut R,
     tick: Duration,
@@ -66,14 +66,14 @@ async fn read_line_with_tick<B: PluginBackend, R: tokio::io::AsyncBufRead + Unpi
                 return Ok(None);
             }
             return Err(TransportError::Protocol(
-                "plugin runtime control line is unterminated".to_owned(),
+                "driver runtime control line is unterminated".to_owned(),
             ));
         }
         let end = available.iter().position(|byte| *byte == b'\n');
         let count = end.map_or(available.len(), |index| index + 1);
         if line.len() + count > limit {
             return Err(TransportError::Protocol(
-                "plugin runtime control line exceeds limit".to_owned(),
+                "driver runtime control line exceeds limit".to_owned(),
             ));
         }
         // copy 在 consume 之前完成，两个 await 之间不持有 `available`。
@@ -86,13 +86,13 @@ async fn read_line_with_tick<B: PluginBackend, R: tokio::io::AsyncBufRead + Unpi
     }
 }
 
-/// 在 stdin/stdout 上运行插件后端，直到 stdin 关闭或收到 `shutdown`。
-pub async fn serve<B: PluginBackend>(backend: B) -> Result<(), TransportError> {
+/// 在 stdin/stdout 上运行驱动后端，直到 stdin 关闭或收到 `shutdown`。
+pub async fn serve<B: DriverBackend>(backend: B) -> Result<(), TransportError> {
     serve_with_tick(backend, DEFAULT_TICK).await
 }
 
 /// 与 [`serve`] 相同，但可指定 tick 间隔。
-pub async fn serve_with_tick<B: PluginBackend>(
+pub async fn serve_with_tick<B: DriverBackend>(
     backend: B,
     tick: Duration,
 ) -> Result<(), TransportError> {
@@ -107,7 +107,7 @@ pub async fn serve_with_io<B, R, W>(
     tick: Duration,
 ) -> Result<(), TransportError>
 where
-    B: PluginBackend,
+    B: DriverBackend,
     R: tokio::io::AsyncRead + Unpin,
     W: tokio::io::AsyncWrite + Unpin,
 {
@@ -143,7 +143,7 @@ where
                     let negotiated = current.borrow().clone()
                         .ok_or_else(|| TransportError::Protocol("notification before initialize".to_owned()))?;
                     let feature = match notification {
-                        PluginNotification::Event { .. } => "plugin-events",
+                        DriverNotification::Event { .. } => "driver-events",
                         _ => "async-operations",
                     };
                     if !negotiated.enabled_features.iter().any(|f| f == feature) {
@@ -173,7 +173,7 @@ fn rejected(category: ErrorCategory, code: &str) -> RuntimeError {
     }
 }
 
-async fn dispatch<B: PluginBackend>(
+async fn dispatch<B: DriverBackend>(
     backend: &mut B,
     command: HostCommand,
     state: Option<&HelloResult>,
@@ -188,7 +188,7 @@ async fn dispatch<B: PluginBackend>(
         if hello.interface_major != INTERFACE_MAJOR || hello.limits.max_control_bytes == 0 {
             return Err(rejected(
                 ErrorCategory::Unsupported,
-                "plugin_handshake_incompatible",
+                "driver_handshake_incompatible",
             ));
         }
     } else if !matches!(command, HostCommand::Shutdown) {
@@ -209,7 +209,7 @@ async fn dispatch<B: PluginBackend>(
     backend.request(command).await
 }
 
-async fn read_loop<B: PluginBackend, R: tokio::io::AsyncBufRead + Unpin>(
+async fn read_loop<B: DriverBackend, R: tokio::io::AsyncBufRead + Unpin>(
     backend: &mut B,
     mut reader: R,
     replies: &tokio::sync::mpsc::Sender<Vec<u8>>,
@@ -240,7 +240,7 @@ async fn read_loop<B: PluginBackend, R: tokio::io::AsyncBufRead + Unpin>(
                 if let (Some(hello), Ok(value)) = (hello, &result) {
                     let validated = serde_json::from_value::<HelloResult>(value.clone())
                         .map_err(|_| {
-                            rejected(ErrorCategory::InvalidRequest, "plugin_handshake_invalid")
+                            rejected(ErrorCategory::InvalidRequest, "driver_handshake_invalid")
                         })
                         .and_then(|negotiated| {
                             hello.validate_result(&negotiated)?;

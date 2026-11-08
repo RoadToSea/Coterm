@@ -1,4 +1,4 @@
-import type { InteractionOptions, InteractionOutcome, SecretHandle, SelectionOption } from "@coterm/plugin-sdk";
+import type { InteractionOptions, InteractionOutcome, SecretHandle, SelectionOption } from "@coterm/driver-sdk";
 import { subscribeLocale, t } from "./i18n";
 
 const pending = new Map<string, () => void>();

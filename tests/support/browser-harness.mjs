@@ -75,15 +75,15 @@ export function assertFreshBuild() {
   if (!fs.existsSync(entry)) {
     throw new Error(`apps/desktop/dist is missing; run "pnpm build" before the browser suite`);
   }
-  const sshDist = path.join(rootDir, "plugins/plugin-ssh/dist/frontend/index.js");
+  const sshDist = path.join(rootDir, "drivers/driver-ssh/dist/frontend/index.js");
   if (!fs.existsSync(sshDist)) {
-    throw new Error(`plugins/plugin-ssh/dist/frontend/index.js is missing; run "pnpm --filter coterm-plugin-ssh-ui build"`);
+    throw new Error(`drivers/driver-ssh/dist/frontend/index.js is missing; run "pnpm --filter coterm-driver-ssh-ui build"`);
   }
-  assertNotStale(entry, [path.join(rootDir, "apps/desktop/src"), path.join(rootDir, "packages/plugin-sdk/src")]);
+  assertNotStale(entry, [path.join(rootDir, "apps/desktop/src"), path.join(rootDir, "packages/driver-sdk/src")]);
 }
 
 const HOST_INTERACTIONS_ENTRY = path.join(distDir, "host-interactions/entry.js");
-const SDK_BROWSER_MODULE = path.join(rootDir, "packages/plugin-sdk/dist/browser/block-list.js");
+const SDK_BROWSER_MODULE = path.join(rootDir, "packages/driver-sdk/dist/browser/block-list.js");
 
 /** 交互与 SDK 组件的测试产物：缺失或比源码旧都必须失败，不许静默测旧实现。 */
 export function assertFreshTestArtifacts() {
@@ -93,7 +93,7 @@ export function assertFreshTestArtifacts() {
       path.join(rootDir, "apps/desktop/src/secret-input.ts"),
       path.join(rootDir, "apps/desktop/src/host-api.ts"),
     ]],
-    [SDK_BROWSER_MODULE, [path.join(rootDir, "packages/plugin-sdk/src/components/block-list.ts")]],
+    [SDK_BROWSER_MODULE, [path.join(rootDir, "packages/driver-sdk/src/components/block-list.ts")]],
   ]) {
     if (!fs.existsSync(artifact)) {
       throw new Error(`${path.relative(rootDir, artifact)} is missing; run "pnpm test:build"`);
@@ -148,8 +148,8 @@ export async function startStaticServer() {
     // 真实 SDK 模块：直接给源文件的构建产物，测试里不存在替身。
     const sdkMatch = requestPath.match(/^\/__sdk\/(.+)$/);
     if (sdkMatch) {
-      const sdkPath = path.join(rootDir, "packages/plugin-sdk/dist/browser", sdkMatch[1]);
-      if (!sdkPath.startsWith(path.join(rootDir, "packages/plugin-sdk/dist/browser")) || !fs.existsSync(sdkPath)) {
+      const sdkPath = path.join(rootDir, "packages/driver-sdk/dist/browser", sdkMatch[1]);
+      if (!sdkPath.startsWith(path.join(rootDir, "packages/driver-sdk/dist/browser")) || !fs.existsSync(sdkPath)) {
         response.writeHead(404, { "Content-Type": "text/plain" });
         response.end("Not Found");
         return;

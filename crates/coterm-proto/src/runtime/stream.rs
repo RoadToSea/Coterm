@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::{OperationId, PluginInstanceId, StreamId, SubscriptionId};
+use super::{OperationId, DriverInstanceId, StreamId, SubscriptionId};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -24,7 +24,7 @@ pub enum OverflowPolicy {
 #[serde(rename_all = "camelCase")]
 pub struct SubscribeStream {
     pub subscription_id: SubscriptionId,
-    pub plugin_instance_id: PluginInstanceId,
+    pub driver_instance_id: DriverInstanceId,
     pub stream_id: StreamId,
     pub window: FlowWindow,
     pub overflow: OverflowPolicy,
@@ -34,7 +34,7 @@ pub struct SubscribeStream {
 #[serde(rename_all = "camelCase")]
 pub struct StreamInfo {
     pub stream_id: StreamId,
-    pub plugin_instance_id: PluginInstanceId,
+    pub driver_instance_id: DriverInstanceId,
     pub operation_id: Option<OperationId>,
     pub content_type: String,
     pub metadata: Value,
@@ -52,7 +52,7 @@ pub enum StreamPayload {
 pub struct StreamData {
     pub stream_id: StreamId,
     pub subscription_id: SubscriptionId,
-    pub plugin_instance_id: PluginInstanceId,
+    pub driver_instance_id: DriverInstanceId,
     pub sequence: u64,
     pub timestamp_ms: u64,
     pub payload: StreamPayload,
@@ -63,7 +63,7 @@ pub struct StreamData {
 pub struct StreamGap {
     pub stream_id: StreamId,
     pub subscription_id: SubscriptionId,
-    pub plugin_instance_id: PluginInstanceId,
+    pub driver_instance_id: DriverInstanceId,
     pub from_sequence: u64,
     pub to_sequence: u64,
     pub reason: String,

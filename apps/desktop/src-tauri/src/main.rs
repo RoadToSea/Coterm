@@ -3,23 +3,22 @@
 
 mod mcp_commands;
 mod mcp_settings;
-mod plugin_install_commands;
 mod workspace;
 mod workspace_commands;
 
 use std::{
-    path::{Path, PathBuf},
+    path::PathBuf,
     sync::Arc,
 };
 
 use coterm_core::{
-    plugin_manager::{DiscoveredPackage, PackageOrigin, PluginLoadIssue, ProcessPluginRuntime},
-    plugin_runtime::{CallerContext, Operations, PluginRuntime, SubmitOperation},
+    driver_manager::{DiscoveredPackage, PackageOrigin, DriverLoadIssue, ProcessDriverRuntime},
+    driver_runtime::{CallerContext, Operations, DriverRuntime, SubmitOperation},
     SessionManager,
 };
 use coterm_proto::runtime::{
     lifecycle::{InstanceInfo, RuntimeLimits},
-    manifest::PluginManifest,
+    manifest::DriverManifest,
     operation::{ApproveProposal, OperationDescriptor, OperationSource},
     stream::FlowWindow,
 };
@@ -58,15 +57,14 @@ struct AppState {
     exiting: std::sync::atomic::AtomicBool,
     event_subscriptions: EventSubscriptions,
     _session_mgr: Arc<SessionManager>,
-    plugin_runtime: Arc<ProcessPluginRuntime>,
-    plugin_install: tokio::sync::Mutex<Option<plugin_install_commands::PendingInstall>>,
-    plugins_dir: PathBuf,
+    driver_runtime: Arc<ProcessDriverRuntime>,
+    drivers_root: PathBuf,
     stdio_bridge: mcp_commands::StdioBridge,
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct PluginSummary {
+struct DriverSummary {
     id: String,
     name: String,
     version: String,
@@ -76,73 +74,22 @@ struct PluginSummary {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct PluginCatalog {
-    plugins: Vec<PluginSummary>,
-    /// 逐包诊断：多个坏包不会让整次发现失败，也不会隐藏其余有效插件。
-    issues: Vec<PluginLoadIssue>,
+struct DriverCatalog {
+    drivers: Vec<DriverSummary>,
+    /// 逐包诊断：多个坏包不会让整次发现失败，也不会隐藏其余有效驱动。
+    issues: Vec<DriverLoadIssue>,
 }
 
-/// 列出扫描根下的子目录，只保留标准目录名；不跟随符号链接、不暴露绝对路径。
-async fn scan_packages(
-    root: &Path,
-    origin: PackageOrigin,
-    priority: u8,
-    scanned: &mut Vec<DiscoveredPackage>,
-    issues: &mut Vec<PluginLoadIssue>,
-) {
-    let mut entries = match tokio::fs::read_dir(root).await {
-        Ok(entries) => entries,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
-        Err(_) => {
-            issues.push(PluginLoadIssue {
-                directory: String::new(),
-                plugin_id: None,
-                code: "plugin_search_unavailable".to_owned(),
-                message: match origin {
-                    PackageOrigin::Development => "Development plugin directory is unavailable",
-                    PackageOrigin::Installed => "Installed plugin directory is unavailable",
-                }
-                .to_owned(),
-            });
-            return;
-        }
-    };
-    let mut names = Vec::new();
-    while let Ok(Some(entry)) = entries.next_entry().await {
-        let Ok(file_type) = entry.file_type().await else {
-            continue;
-        };
-        // symlink 跳过：避免从插件目录外加载入口。
-        if !file_type.is_dir() || file_type.is_symlink() {
-            continue;
-        }
-        let Ok(name) = entry.file_name().into_string() else {
-            continue;
-        };
-        names.push(name);
-    }
-    // 排序保证扫描顺序与文件系统返回顺序无关。
-    names.sort();
-    for name in names {
-        scanned.push(DiscoveredPackage {
-            root: root.join(&name),
-            directory: name,
-            priority,
-            origin,
-        });
-    }
-}
-
-/// JSON-event MVP: one unacknowledged delivery per subscriber, bounded replay in plugin.
+/// JSON-event MVP: one unacknowledged delivery per subscriber, bounded replay in driver.
 #[tauri::command]
-async fn subscribe_plugin_events(
-    plugin_instance_id: String,
+async fn subscribe_driver_events(
+    driver_instance_id: String,
     on_event: tauri::ipc::Channel<InstanceEvent>,
     state: tauri::State<'_, AppState>,
 ) -> Result<String, String> {
     let mut events = state
-        .plugin_runtime
-        .subscribe_events(&plugin_instance_id)
+        .driver_runtime
+        .subscribe_events(&driver_instance_id)
         .await
         .map_err(|e| e.to_string())?;
     let mut subscriptions = state.event_subscriptions.lock().await;
@@ -151,18 +98,18 @@ async fn subscribe_plugin_events(
     }
     let id = uuid::Uuid::new_v4().to_string();
     let (ack, mut acknowledged) = tokio::sync::mpsc::channel(1);
-    let instance = plugin_instance_id.clone();
+    let instance = driver_instance_id.clone();
     let cleanup = Arc::downgrade(&state.event_subscriptions);
     let subscription_id = id.clone();
     let task = tokio::spawn(async move {
         loop {
             let event = match events.recv().await {
-                Ok(coterm_proto::runtime::message::PluginNotification::Event {
-                    plugin_instance_id,
+                Ok(coterm_proto::runtime::message::DriverNotification::Event {
+                    driver_instance_id,
                     name,
                     payload,
-                }) if plugin_instance_id == instance
-                    || (plugin_instance_id.is_empty() && name == "runtime.closed") =>
+                }) if driver_instance_id == instance
+                    || (driver_instance_id.is_empty() && name == "runtime.closed") =>
                 {
                     InstanceEvent { name, payload }
                 }
@@ -199,7 +146,7 @@ async fn subscribe_plugin_events(
     subscriptions.insert(
         id.clone(),
         EventSubscription {
-            instance_id: plugin_instance_id,
+            instance_id: driver_instance_id,
             ack,
             task,
         },
@@ -208,15 +155,15 @@ async fn subscribe_plugin_events(
 }
 
 #[tauri::command]
-async fn ack_plugin_event(
-    plugin_instance_id: String,
+async fn ack_driver_event(
+    driver_instance_id: String,
     subscription_id: String,
     state: tauri::State<'_, AppState>,
 ) -> Result<(), String> {
     let subscriptions = state.event_subscriptions.lock().await;
     let subscription = subscriptions
         .get(&subscription_id)
-        .filter(|s| s.instance_id == plugin_instance_id)
+        .filter(|s| s.instance_id == driver_instance_id)
         .ok_or("Event subscription not found")?;
     subscription
         .ack
@@ -225,15 +172,15 @@ async fn ack_plugin_event(
 }
 
 #[tauri::command]
-async fn unsubscribe_plugin_events(
-    plugin_instance_id: String,
+async fn unsubscribe_driver_events(
+    driver_instance_id: String,
     subscription_id: String,
     state: tauri::State<'_, AppState>,
 ) -> Result<(), String> {
     let mut subscriptions = state.event_subscriptions.lock().await;
     if subscriptions
         .get(&subscription_id)
-        .is_some_and(|s| s.instance_id == plugin_instance_id)
+        .is_some_and(|s| s.instance_id == driver_instance_id)
     {
         if let Some(subscription) = subscriptions.remove(&subscription_id) {
             subscription.task.abort();
@@ -248,92 +195,51 @@ fn get_version() -> String {
 }
 
 #[tauri::command]
-async fn list_plugins(state: tauri::State<'_, AppState>) -> Result<PluginCatalog, String> {
-    // 已安装包优先；开发包随后扫描并记诊断，绝不覆盖已安装的同 ID 包。
-    let mut scanned = Vec::new();
-    let mut issues = Vec::new();
-    scan_packages(
-        &state.plugins_dir,
-        PackageOrigin::Installed,
-        0,
-        &mut scanned,
-        &mut issues,
-    )
-    .await;
-    // 开发包只在 Windows/macOS/Linux 的开发构建中出现：
-    // 路径来自编译期 CARGO_MANIFEST_DIR（apps/desktop/src-tauri），向上三级到仓库根的 plugins/。
-    // 该路径只在本进程内用于读取，不写入任何 IPC 负载。
-    #[cfg(debug_assertions)]
-    {
-        let development = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../plugins");
-        scan_packages(
-            &development,
-            PackageOrigin::Development,
-            1,
-            &mut scanned,
-            &mut issues,
-        )
-        .await;
-        // 开发包位于 <repo>/plugins/<dir>/dist；已安装包直接是 <dir>。
-        for package in scanned
-            .iter_mut()
-            .filter(|p| p.origin == PackageOrigin::Development)
-        {
-            package.root = package.root.join("dist");
-        }
-    }
-    scanned.sort_by(|left, right| {
-        left.priority
-            .cmp(&right.priority)
-            .then_with(|| left.directory.cmp(&right.directory))
-    });
-    let catalog = state.plugin_runtime.discover(scanned).await;
-    issues.extend(catalog.issues);
-    // 只暴露目录名与稳定错误码，不暴露绝对路径。
-    let mut plugins = Vec::with_capacity(catalog.plugins.len());
-    for manifest in catalog.plugins {
-        plugins.push(summary(&state, manifest).await);
-    }
-    plugins.sort_by(|left, right| {
-        left.name
-            .cmp(&right.name)
-            .then_with(|| left.id.cmp(&right.id))
-    });
-    issues.sort_by(|left, right| {
-        left.directory
-            .cmp(&right.directory)
-            .then_with(|| left.code.cmp(&right.code))
-    });
-    Ok(PluginCatalog { plugins, issues })
+async fn list_drivers(state: tauri::State<'_, AppState>) -> Result<DriverCatalog, String> {
+    let _guard = state.workspace_actions.lock().await;
+    discover_drivers(&state).await
+}
+
+async fn discover_drivers(state: &AppState) -> Result<DriverCatalog, String> {
+    // The distribution owns this allowlist; user data directories cannot add executables.
+    let packages = ["ssh", "serial", "local"].into_iter().map(|name| DiscoveredPackage {
+        directory:name.into(), root:state.drivers_root.join(name), priority:0,
+        origin:PackageOrigin::Installed,
+    }).collect();
+    let catalog = state.driver_runtime.discover(packages).await;
+    let mut drivers = Vec::new();
+    for manifest in catalog.drivers { drivers.push(summary(state,manifest).await); }
+    drivers.sort_by(|a,b| a.name.cmp(&b.name));
+    Ok(DriverCatalog {drivers, issues:catalog.issues})
 }
 
 #[tauri::command]
-async fn start_plugin(plugin_id: String, state: tauri::State<'_, AppState>) -> Result<(), String> {
+async fn start_driver(driver_id: String, state: tauri::State<'_, AppState>) -> Result<(), String> {
     state
-        .plugin_runtime
-        .start(&plugin_id)
+        .driver_runtime
+        .start(&driver_id)
         .await
         .map_err(|error| format!("{}: {}", error.code, error.message))
 }
 
 #[tauri::command]
-async fn stop_plugin(plugin_id: String, state: tauri::State<'_, AppState>) -> Result<(), String> {
+async fn stop_driver(driver_id: String, state: tauri::State<'_, AppState>) -> Result<(), String> {
     let _guard = state.workspace_actions.lock().await;
     state
-        .plugin_runtime
-        .stop(&plugin_id)
+        .driver_runtime
+        .stop(&driver_id)
         .await
         .map_err(|error| format!("{}: {}", error.code, error.message))
 }
 
 #[tauri::command]
 async fn list_instances(
-    plugin_id: Option<String>,
+    driver_id: Option<String>,
     state: tauri::State<'_, AppState>,
 ) -> Result<Vec<InstanceInfo>, String> {
     state
-        .plugin_runtime
-        .list_instances(plugin_id.as_deref())
+        .driver_runtime
+        .list_instances(driver_id.as_deref())
         .await
         .map_err(|error| format!("{}: {}", error.code, error.message))
 }
@@ -342,44 +248,44 @@ async fn list_instances(
 #[serde(rename_all = "camelCase")]
 struct RuntimeSnapshot {
     instances: Vec<InstanceInfo>,
-    running_plugins: Vec<String>,
+    running_drivers: Vec<String>,
 }
 
 #[tauri::command]
 async fn runtime_snapshot(state: tauri::State<'_, AppState>) -> Result<RuntimeSnapshot, String> {
     let instances = state
-        .plugin_runtime
+        .driver_runtime
         .list_instances(None)
         .await
         .map_err(|error| error.code)?;
-    let mut running_plugins = Vec::new();
-    for manifest in state.plugin_runtime.loaded_manifests().await {
-        if state.plugin_runtime.is_running(&manifest.id).await {
-            running_plugins.push(manifest.id);
+    let mut running_drivers = Vec::new();
+    for manifest in state.driver_runtime.loaded_manifests().await {
+        if state.driver_runtime.is_running(&manifest.id).await {
+            running_drivers.push(manifest.id);
         }
     }
     Ok(RuntimeSnapshot {
         instances,
-        running_plugins,
+        running_drivers,
     })
 }
 
 #[tauri::command]
 async fn list_operations(
-    plugin_id: String,
+    driver_id: String,
     state: tauri::State<'_, AppState>,
 ) -> Result<Vec<OperationDescriptor>, String> {
-    Ok(state.plugin_runtime.operation_catalog(&plugin_id).await)
+    Ok(state.driver_runtime.operation_catalog(&driver_id).await)
 }
 
 #[tauri::command]
-async fn plugin_frontend_source(
-    plugin_id: String,
+async fn driver_frontend_source(
+    driver_id: String,
     state: tauri::State<'_, AppState>,
 ) -> Result<Option<String>, String> {
     state
-        .plugin_runtime
-        .frontend_source(&plugin_id)
+        .driver_runtime
+        .frontend_source(&driver_id)
         .await
         .map_err(|error| format!("{}: {}", error.code, error.message))
 }
@@ -387,14 +293,14 @@ async fn plugin_frontend_source(
 /// Only the trusted desktop secret prompt calls this; never an MCP operation.
 #[tauri::command]
 async fn provide_secret(
-    plugin_instance_id: String,
+    driver_instance_id: String,
     purpose: String,
     value: String,
     state: tauri::State<'_, AppState>,
 ) -> Result<coterm_proto::runtime::interaction::SecretHandle, String> {
     state
-        .plugin_runtime
-        .provide_secret(&plugin_instance_id, purpose, value)
+        .driver_runtime
+        .provide_secret(&driver_instance_id, purpose, value)
         .await
         .map_err(|error| format!("{}: {}", error.code, error.message))
 }
@@ -403,15 +309,15 @@ async fn provide_secret(
 async fn pending_interactions(
     state: tauri::State<'_, AppState>,
 ) -> Result<Vec<coterm_proto::runtime::interaction::InteractionRequest>, String> {
-    Ok(state.plugin_runtime.pending_interactions().await)
+    Ok(state.driver_runtime.pending_interactions().await)
 }
 
 /// 宿主级待处理快照；事件只携带版本号，前端据此重取。
 #[tauri::command]
 async fn host_attention(
     state: tauri::State<'_, AppState>,
-) -> Result<coterm_core::plugin_manager::AttentionSnapshot, String> {
-    Ok(state.plugin_runtime.attention_snapshot().await)
+) -> Result<coterm_core::driver_manager::AttentionSnapshot, String> {
+    Ok(state.driver_runtime.attention_snapshot().await)
 }
 
 #[tauri::command]
@@ -421,7 +327,7 @@ async fn respond_secret(
     state: tauri::State<'_, AppState>,
 ) -> Result<(), coterm_proto::runtime::RuntimeError> {
     state
-        .plugin_runtime
+        .driver_runtime
         .respond_secret(&interaction_id, value)
         .await
 }
@@ -445,7 +351,7 @@ async fn set_mcp_stdio_enabled(
 
 #[tauri::command]
 async fn create_instance(
-    plugin_id: String,
+    driver_id: String,
     config: Value,
     workspace_id: Option<String>,
     name: Option<String>,
@@ -453,20 +359,20 @@ async fn create_instance(
 ) -> Result<InstanceInfo, String> {
     let _guard = state.workspace_actions.lock().await;
     let instance = state
-        .plugin_runtime
-        .create_instance_with_name(&plugin_id, config.clone(), name)
+        .driver_runtime
+        .create_instance_with_name(&driver_id, config.clone(), name)
         .await
         .map_err(|error| format!("{}: {}", error.code, error.message))?;
-    let id = instance.plugin_instance_id.clone();
+    let id = instance.driver_instance_id.clone();
     let label = instance.label.clone();
     if let Err(error) = workspace_commands::access(&state, move |store| {
-        store.insert(plugin_id, id, label, config, workspace_id)
+        store.insert(driver_id, id, label, config, workspace_id)
     })
     .await
     {
         let _ = state
-            .plugin_runtime
-            .destroy_instance(&instance.plugin_instance_id)
+            .driver_runtime
+            .destroy_instance(&instance.driver_instance_id)
             .await;
         return Err(format!("{}: {}", error.code, error.message));
     }
@@ -475,17 +381,17 @@ async fn create_instance(
 
 #[tauri::command]
 async fn destroy_instance(
-    plugin_instance_id: String,
+    driver_instance_id: String,
     state: tauri::State<'_, AppState>,
 ) -> Result<(), String> {
     let _guard = state.workspace_actions.lock().await;
     state
-        .plugin_runtime
-        .destroy_instance(&plugin_instance_id)
+        .driver_runtime
+        .destroy_instance(&driver_instance_id)
         .await
         .map_err(|error| format!("{}: {}", error.code, error.message))?;
     workspace_commands::access(&state, move |store| {
-        store.remove_instance(&plugin_instance_id)
+        store.remove_instance(&driver_instance_id)
     })
     .await
     .map_err(|error| format!("{}: {}", error.code, error.message))
@@ -493,28 +399,28 @@ async fn destroy_instance(
 
 #[tauri::command]
 async fn invoke_operation(
-    plugin_instance_id: String,
+    driver_instance_id: String,
     operation: String,
     args: Value,
     wait_timeout_ms: Option<u64>,
     state: tauri::State<'_, AppState>,
 ) -> Result<coterm_proto::runtime::operation::OperationReceipt, String> {
     let instance = state
-        .plugin_runtime
-        .get_instance(&plugin_instance_id)
+        .driver_runtime
+        .get_instance(&driver_instance_id)
         .await
-        .ok_or_else(|| "plugin instance not found".to_owned())?;
+        .ok_or_else(|| "driver instance not found".to_owned())?;
     state
-        .plugin_runtime
+        .driver_runtime
         .submit(
             CallerContext {
                 source: OperationSource::Human,
                 session_id: instance.session_id.clone(),
-                plugin_id: Some(instance.plugin_id.clone()),
+                driver_id: Some(instance.driver_id.clone()),
             },
             SubmitOperation {
-                plugin_id: instance.plugin_id,
-                plugin_instance_id: Some(plugin_instance_id),
+                driver_id: instance.driver_id,
+                driver_instance_id: Some(driver_instance_id),
                 operation,
                 args,
                 wait_timeout_ms,
@@ -525,24 +431,24 @@ async fn invoke_operation(
 }
 
 #[tauri::command]
-async fn invoke_plugin_operation(
-    plugin_id: String,
+async fn invoke_driver_operation(
+    driver_id: String,
     operation: String,
     args: Value,
     wait_timeout_ms: Option<u64>,
     state: tauri::State<'_, AppState>,
 ) -> Result<coterm_proto::runtime::operation::OperationReceipt, String> {
     state
-        .plugin_runtime
+        .driver_runtime
         .submit(
             CallerContext {
                 source: OperationSource::Human,
                 session_id: String::new(),
-                plugin_id: Some(plugin_id.clone()),
+                driver_id: Some(driver_id.clone()),
             },
             SubmitOperation {
-                plugin_id,
-                plugin_instance_id: None,
+                driver_id,
+                driver_instance_id: None,
                 operation,
                 args,
                 wait_timeout_ms,
@@ -553,41 +459,41 @@ async fn invoke_plugin_operation(
 }
 
 #[tauri::command]
-async fn recent_plugin_operations(
-    plugin_id: String,
+async fn recent_driver_operations(
+    driver_id: String,
     limit: usize,
     state: tauri::State<'_, AppState>,
 ) -> Result<Vec<coterm_proto::runtime::operation::OperationRecord>, String> {
     Ok(state
-        .plugin_runtime
-        .recent_plugin_operations(&plugin_id, limit)
+        .driver_runtime
+        .recent_driver_operations(&driver_id, limit)
         .await)
 }
 
 #[tauri::command]
-async fn approve_plugin_proposal(
-    plugin_id: String,
+async fn approve_driver_proposal(
+    driver_id: String,
     proposal_id: String,
     args: Value,
     state: tauri::State<'_, AppState>,
 ) -> Result<coterm_proto::runtime::operation::OperationReceipt, String> {
     let operation_id = state
-        .plugin_runtime
-        .pending_plugin_operation(&plugin_id, &proposal_id)
+        .driver_runtime
+        .pending_driver_operation(&driver_id, &proposal_id)
         .await
-        .ok_or_else(|| "pending proposal not found for this plugin".to_owned())?;
+        .ok_or_else(|| "pending proposal not found for this driver".to_owned())?;
     state
-        .plugin_runtime
+        .driver_runtime
         .approve(
             CallerContext {
                 source: OperationSource::Human,
                 session_id: String::new(),
-                plugin_id: Some(plugin_id.clone()),
+                driver_id: Some(driver_id.clone()),
             },
             ApproveProposal {
                 operation_id,
                 proposal_id,
-                plugin_instance_id: None,
+                driver_instance_id: None,
                 args,
             },
         )
@@ -596,23 +502,23 @@ async fn approve_plugin_proposal(
 }
 
 #[tauri::command]
-async fn reject_plugin_proposal(
-    plugin_id: String,
+async fn reject_driver_proposal(
+    driver_id: String,
     proposal_id: String,
     state: tauri::State<'_, AppState>,
 ) -> Result<(), String> {
     let operation_id = state
-        .plugin_runtime
-        .pending_plugin_operation(&plugin_id, &proposal_id)
+        .driver_runtime
+        .pending_driver_operation(&driver_id, &proposal_id)
         .await
-        .ok_or_else(|| "pending proposal not found for this plugin".to_owned())?;
+        .ok_or_else(|| "pending proposal not found for this driver".to_owned())?;
     state
-        .plugin_runtime
+        .driver_runtime
         .reject(
             CallerContext {
                 source: OperationSource::Human,
                 session_id: String::new(),
-                plugin_id: Some(plugin_id),
+                driver_id: Some(driver_id),
             },
             &operation_id,
             &proposal_id,
@@ -624,21 +530,21 @@ async fn reject_plugin_proposal(
 #[tauri::command]
 async fn get_operation(
     operation_id: String,
-    plugin_instance_id: String,
+    driver_instance_id: String,
     state: tauri::State<'_, AppState>,
 ) -> Result<coterm_proto::runtime::operation::OperationRecord, String> {
     let instance = state
-        .plugin_runtime
-        .get_instance(&plugin_instance_id)
+        .driver_runtime
+        .get_instance(&driver_instance_id)
         .await
-        .ok_or_else(|| "plugin instance not found".to_owned())?;
+        .ok_or_else(|| "driver instance not found".to_owned())?;
     state
-        .plugin_runtime
+        .driver_runtime
         .get(
             CallerContext {
                 source: OperationSource::Human,
                 session_id: instance.session_id.clone(),
-                plugin_id: Some(instance.plugin_id.clone()),
+                driver_id: Some(instance.driver_id.clone()),
             },
             &operation_id,
         )
@@ -648,24 +554,24 @@ async fn get_operation(
 
 #[tauri::command]
 async fn recent_operations(
-    plugin_instance_id: String,
+    driver_instance_id: String,
     limit: usize,
     state: tauri::State<'_, AppState>,
 ) -> Result<Vec<coterm_proto::runtime::operation::OperationRecord>, String> {
     let instance = state
-        .plugin_runtime
-        .get_instance(&plugin_instance_id)
+        .driver_runtime
+        .get_instance(&driver_instance_id)
         .await
-        .ok_or_else(|| "plugin instance not found".to_owned())?;
+        .ok_or_else(|| "driver instance not found".to_owned())?;
     state
-        .plugin_runtime
+        .driver_runtime
         .recent(
             CallerContext {
                 source: OperationSource::Human,
                 session_id: instance.session_id.clone(),
-                plugin_id: Some(instance.plugin_id.clone()),
+                driver_id: Some(instance.driver_id.clone()),
             },
-            &plugin_instance_id,
+            &driver_instance_id,
             limit,
         )
         .await
@@ -674,33 +580,33 @@ async fn recent_operations(
 
 #[tauri::command]
 async fn approve_proposal(
-    plugin_instance_id: String,
+    driver_instance_id: String,
     proposal_id: String,
     args: Value,
     state: tauri::State<'_, AppState>,
 ) -> Result<coterm_proto::runtime::operation::OperationReceipt, String> {
     let instance = state
-        .plugin_runtime
-        .get_instance(&plugin_instance_id)
+        .driver_runtime
+        .get_instance(&driver_instance_id)
         .await
-        .ok_or_else(|| "plugin instance not found".to_owned())?;
+        .ok_or_else(|| "driver instance not found".to_owned())?;
     let operation_id = state
-        .plugin_runtime
-        .pending_operation(&plugin_instance_id, &proposal_id)
+        .driver_runtime
+        .pending_operation(&driver_instance_id, &proposal_id)
         .await
         .ok_or_else(|| "pending proposal not found for this instance".to_owned())?;
     state
-        .plugin_runtime
+        .driver_runtime
         .approve(
             CallerContext {
                 source: OperationSource::Human,
                 session_id: instance.session_id.clone(),
-                plugin_id: Some(instance.plugin_id.clone()),
+                driver_id: Some(instance.driver_id.clone()),
             },
             ApproveProposal {
                 operation_id,
                 proposal_id,
-                plugin_instance_id: Some(plugin_instance_id),
+                driver_instance_id: Some(driver_instance_id),
                 args,
             },
         )
@@ -710,27 +616,27 @@ async fn approve_proposal(
 
 #[tauri::command]
 async fn reject_proposal(
-    plugin_instance_id: String,
+    driver_instance_id: String,
     proposal_id: String,
     state: tauri::State<'_, AppState>,
 ) -> Result<(), String> {
     let instance = state
-        .plugin_runtime
-        .get_instance(&plugin_instance_id)
+        .driver_runtime
+        .get_instance(&driver_instance_id)
         .await
-        .ok_or_else(|| "plugin instance not found".to_owned())?;
+        .ok_or_else(|| "driver instance not found".to_owned())?;
     let operation_id = state
-        .plugin_runtime
-        .pending_operation(&plugin_instance_id, &proposal_id)
+        .driver_runtime
+        .pending_operation(&driver_instance_id, &proposal_id)
         .await
         .ok_or_else(|| "pending proposal not found for this instance".to_owned())?;
     state
-        .plugin_runtime
+        .driver_runtime
         .reject(
             CallerContext {
                 source: OperationSource::Human,
                 session_id: instance.session_id.clone(),
-                plugin_id: Some(instance.plugin_id.clone()),
+                driver_id: Some(instance.driver_id.clone()),
             },
             &operation_id,
             &proposal_id,
@@ -741,22 +647,22 @@ async fn reject_proposal(
 
 #[tauri::command]
 async fn cancel_operation(
-    plugin_instance_id: String,
+    driver_instance_id: String,
     operation_id: String,
     state: tauri::State<'_, AppState>,
 ) -> Result<coterm_proto::runtime::operation::OperationReceipt, String> {
     let instance = state
-        .plugin_runtime
-        .get_instance(&plugin_instance_id)
+        .driver_runtime
+        .get_instance(&driver_instance_id)
         .await
-        .ok_or_else(|| "plugin instance not found".to_owned())?;
+        .ok_or_else(|| "driver instance not found".to_owned())?;
     state
-        .plugin_runtime
+        .driver_runtime
         .cancel(
             CallerContext {
                 source: OperationSource::Human,
                 session_id: instance.session_id.clone(),
-                plugin_id: Some(instance.plugin_id.clone()),
+                driver_id: Some(instance.driver_id.clone()),
             },
             &operation_id,
         )
@@ -766,57 +672,57 @@ async fn cancel_operation(
 
 #[tauri::command]
 async fn set_bypass(
-    plugin_instance_id: String,
+    driver_instance_id: String,
     enabled: bool,
     state: tauri::State<'_, AppState>,
 ) -> Result<(), coterm_proto::runtime::RuntimeError> {
     state
-        .plugin_runtime
-        .set_bypass(&plugin_instance_id, enabled)
+        .driver_runtime
+        .set_bypass(&driver_instance_id, enabled)
         .await
 }
 
 #[tauri::command]
 async fn get_bypass(
-    plugin_instance_id: String,
+    driver_instance_id: String,
     state: tauri::State<'_, AppState>,
 ) -> Result<bool, coterm_proto::runtime::RuntimeError> {
     state
-        .plugin_runtime
-        .bypass_enabled(&plugin_instance_id)
+        .driver_runtime
+        .bypass_enabled(&driver_instance_id)
         .await
 }
 
 /// Only the trusted desktop settings UI can change a specific instance's rules.
 #[tauri::command]
 async fn set_approval_policy(
-    plugin_instance_id: String,
+    driver_instance_id: String,
     policy: coterm_core::approval_policy::ApprovalPolicy,
     state: tauri::State<'_, AppState>,
 ) -> Result<coterm_core::approval_policy::ApprovalPolicy, coterm_proto::runtime::RuntimeError> {
     let _guard = state.workspace_actions.lock().await;
     policy.compile()?;
     state
-        .plugin_runtime
-        .approval_policy(&plugin_instance_id)
+        .driver_runtime
+        .approval_policy(&driver_instance_id)
         .await?;
-    workspace_commands::store_approval_policy(&state, plugin_instance_id.clone(), policy.clone())
+    workspace_commands::store_approval_policy(&state, driver_instance_id.clone(), policy.clone())
         .await?;
     state
-        .plugin_runtime
-        .set_approval_policy(&plugin_instance_id, policy.clone())
+        .driver_runtime
+        .set_approval_policy(&driver_instance_id, policy.clone())
         .await?;
     Ok(policy)
 }
 
 #[tauri::command]
 async fn get_approval_policy(
-    plugin_instance_id: String,
+    driver_instance_id: String,
     state: tauri::State<'_, AppState>,
 ) -> Result<coterm_core::approval_policy::ApprovalPolicy, coterm_proto::runtime::RuntimeError> {
     state
-        .plugin_runtime
-        .approval_policy(&plugin_instance_id)
+        .driver_runtime
+        .approval_policy(&driver_instance_id)
         .await
 }
 
@@ -828,10 +734,10 @@ fn preview_approval_policy(
     Ok(policy.compile()?.requires_approval(&[&text]))
 }
 
-async fn summary(state: &AppState, manifest: PluginManifest) -> PluginSummary {
+async fn summary(state: &AppState, manifest: DriverManifest) -> DriverSummary {
     let id = manifest.id;
-    PluginSummary {
-        running: state.plugin_runtime.is_running(&id).await,
+    DriverSummary {
+        running: state.driver_runtime.is_running(&id).await,
         id,
         name: manifest.name,
         version: manifest.version,
@@ -839,7 +745,7 @@ async fn summary(state: &AppState, manifest: PluginManifest) -> PluginSummary {
     }
 }
 
-/// MCP 客户端以 `mcp stdio` 启动本程序；该模式不创建窗口或插件运行时，
+/// MCP 客户端以 `mcp stdio` 启动本程序；该模式不创建窗口或驱动运行时，
 /// stdout 只承载 MCP 帧。前缀匹配后由适配器校验选项，错误选项不会启动窗口。
 fn is_stdio_adapter(args: &[String]) -> bool {
     coterm_mcp::stdio::is_adapter_command(args)
@@ -883,28 +789,30 @@ fn main() {
 
     let application = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let app_data = app.path().app_data_dir()?;
-            let plugins_dir = app_data.join("plugins");
-            std::fs::create_dir_all(&plugins_dir)?;
+            std::fs::create_dir_all(&app_data)?;
             let workspace_path = app_data.join("workspace.v1.dpapi");
             let workspace = workspace::WorkspaceStore::open(workspace_path.clone());
-            let plugin_runtime = Arc::new(ProcessPluginRuntime::new(
+            #[cfg(not(debug_assertions))]
+            let drivers_root = app.path().resource_dir()?.join("drivers");
+            #[cfg(debug_assertions)]
+            let drivers_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../target/bundled-drivers");
+            let driver_runtime = Arc::new(ProcessDriverRuntime::new(
                 current_platform(),
                 runtime_limits,
             ));
 
             // 适配器就是本可执行文件的 `mcp stdio` 子命令：不搜索 PATH，也不依赖旁路文件。
             let stdio_bridge = mcp_commands::StdioBridge::new(
-                plugin_runtime.clone(),
+                driver_runtime.clone(),
                 std::env::current_exe().ok(),
                 app_data.join("mcp-settings.v1.json"),
             );
             if let Err(error) = tauri::async_runtime::block_on(stdio_bridge.start_on_launch()) {
                 eprintln!("Failed to auto-start MCP Stdio bridge: {error}");
             }
-            let expiry_runtime = plugin_runtime.clone();
+            let expiry_runtime = driver_runtime.clone();
             let app_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 let mut expiry = tokio::time::interval(std::time::Duration::from_secs(1));
@@ -933,15 +841,15 @@ fn main() {
                     std::collections::HashMap::new(),
                 )),
                 _session_mgr: Arc::new(SessionManager::new()),
-                plugin_runtime,
-                plugin_install: tokio::sync::Mutex::new(None),
+                driver_runtime,
                 stdio_bridge,
-                plugins_dir,
+                drivers_root,
             });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             workspace_commands::workspace_snapshot,
+            workspace_commands::save_instance_configuration,
             workspace_commands::save_workspace_layout,
             workspace_commands::create_workspace_group,
             workspace_commands::delete_workspace_group,
@@ -949,20 +857,17 @@ fn main() {
             workspace_commands::restore_saved_instance,
             workspace_commands::forget_saved_instance,
             workspace_commands::reset_saved_workspace,
-            subscribe_plugin_events,
-            ack_plugin_event,
-            unsubscribe_plugin_events,
+            subscribe_driver_events,
+            ack_driver_event,
+            unsubscribe_driver_events,
             get_version,
-            list_plugins,
-            plugin_install_commands::prepare_plugin_install,
-            plugin_install_commands::install_plugin_package,
-            plugin_install_commands::discard_plugin_install,
-            start_plugin,
-            stop_plugin,
+            list_drivers,
+            start_driver,
+            stop_driver,
             list_instances,
             runtime_snapshot,
             list_operations,
-            plugin_frontend_source,
+            driver_frontend_source,
             provide_secret,
             pending_interactions,
             host_attention,
@@ -974,10 +879,10 @@ fn main() {
             create_instance,
             destroy_instance,
             invoke_operation,
-            invoke_plugin_operation,
-            recent_plugin_operations,
-            approve_plugin_proposal,
-            reject_plugin_proposal,
+            invoke_driver_operation,
+            recent_driver_operations,
+            approve_driver_proposal,
+            reject_driver_proposal,
             get_operation,
             recent_operations,
             approve_proposal,
@@ -1011,7 +916,7 @@ fn main() {
             }
             api.prevent_exit();
             let handle = app.clone();
-            let runtime = state.plugin_runtime.clone();
+            let runtime = state.driver_runtime.clone();
             let subscriptions = state.event_subscriptions.clone();
             tauri::async_runtime::spawn(async move {
                 for (_, subscription) in subscriptions.lock().await.drain() {

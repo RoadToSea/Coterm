@@ -33,14 +33,14 @@ Ctrl+F 搜索的是该实例当前终端保留的输出（含现有 3000 行滚�
 
 ## 实现与验证
 
-公共实现位于 [`terminal-shortcuts.ts`](../../packages/plugin-sdk/src/components/terminal-shortcuts.ts)，由 SDK 子路径 `@coterm/plugin-sdk/components/terminal-shortcuts` 导出。它只依赖终端的选择和键盘接口，不引入 xterm 依赖、不监听全局键盘，也不改变宿主通信协议。SSH 和串口前端在挂载时安装，卸载时回收。
+公共实现位于 [`terminal-shortcuts.ts`](../../packages/driver-sdk/src/components/terminal-shortcuts.ts)，由 SDK 子路径 `@coterm/driver-sdk/components/terminal-shortcuts` 导出。它只依赖终端的选择和键盘接口，不引入 xterm 依赖、不监听全局键盘，也不改变宿主通信协议。SSH 和串口前端在挂载时安装，卸载时回收。
 
-搜索条位于 [`terminal-search.ts`](../../packages/plugin-sdk/src/components/terminal-search.ts)，由 `@coterm/plugin-sdk/components/terminal-search` 导出。插件前端各自加载 `@xterm/addon-search ~0.15.0`，兼容现有 xterm 5.5；SDK 只接收搜索适配接口。该依赖为纯浏览器 JavaScript，无原生进程、OS IO 或 Tauri 权限变化；通过 `allowProposedApi` 开启的是 xterm 渲染器的高亮装饰接口，不是宿主权限。Windows 浏览器构建与回归已覆盖，macOS/Linux 真机仍需独立验收。
+搜索条位于 [`terminal-search.ts`](../../packages/driver-sdk/src/components/terminal-search.ts)，由 `@coterm/driver-sdk/components/terminal-search` 导出。驱动前端各自加载 `@xterm/addon-search ~0.15.0`，兼容现有 xterm 5.5；SDK 只接收搜索适配接口。该依赖为纯浏览器 JavaScript，无原生进程、OS IO 或 Tauri 权限变化；通过 `allowProposedApi` 开启的是 xterm 渲染器的高亮装饰接口，不是宿主权限。Windows 浏览器构建与回归已覆盖，macOS/Linux 真机仍需独立验收。
 
 ```bash
-pnpm --filter coterm-plugin-ssh-ui build
-pnpm --filter coterm-plugin-serial-ui build
+pnpm --filter coterm-driver-ssh-ui build
+pnpm --filter coterm-driver-serial-ui build
 node --import ./scripts/test-ts-loader.mjs --test tests/terminal-shortcuts.test.mjs tests/terminal-shortcuts-browser.test.mjs tests/serial-terminal-browser.test.mjs
 ```
 
-单元测试验证快捷键分流、IME/AltGr、长按、焦点转移、复制失败及卸载。浏览器回归使用两种插件的实际构建与 xterm，验证选区复制、无选区 Ctrl+C、Shell 控制字符、粘贴一次投递及 bracketed paste、其他输入框不受影响。浏览器测试替换剪贴板写入并注入 paste 数据，不读写用户的系统剪贴板，不代表真实桌面剪贴板或 macOS/Linux 真机验收。
+单元测试验证快捷键分流、IME/AltGr、长按、焦点转移、复制失败及卸载。浏览器回归使用两种驱动的实际构建与 xterm，验证选区复制、无选区 Ctrl+C、Shell 控制字符、粘贴一次投递及 bracketed paste、其他输入框不受影响。浏览器测试替换剪贴板写入并注入 paste 数据，不读写用户的系统剪贴板，不代表真实桌面剪贴板或 macOS/Linux 真机验收。
