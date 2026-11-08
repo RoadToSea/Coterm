@@ -9,6 +9,12 @@
 - 每个运行实例独立管理命令规则及会话内 Bypass，同一驱动不同实例可配置不同规则，保存项恢复时只加载自身规则。
 - Agent 命令审批支持用户自定义正则：正向放行匹配命令，反向拦截匹配命令；编辑器支持追加/删除、试匹配和显式保存。规则作用于实际命令文本，旧接口级放行不再生效。
 
+## 2026-11-08：串口 Shell / stream 读取
+
+- 串口 Agent 读取改用后端 `read_lines`；Shell 实例还支持 `read_selected_lines` 与最近 `read_dialogue_pairs(count)`，原游标工具不再注册到 MCP。模式与提示符显式配置，不从 UART / 终端显示视图猜测设备语义。
+- Shell 列表逐条等待完整字面提示符，超时停止余项；保留输入及合并输出、空 stderr 与未知退出码，不把提示符当业务成功。stream 不创建对话，Shell 专用读取明确拒绝；共享目录的能力并集由实例 status 中的 `capabilities` 说明。
+- 实现、设备验收及后续入口集中维护在 [Serial 进度](../../plugins/plugin-serial/docs/progress.md)，稳定字段见 [串口接口](../../plugins/plugin-serial/docs/interfaces.md)。
+
 ## 2026-11-08：每实例审批对象与独立配置
 
 - 新建实例创建 `InstanceApproval`，集中接收已验证的 `ApprovalContext {source, descriptor, args}`；销毁/停止释放对象。删除运行时全局规则及全局 Bypass，插件级 Agent commit 仍要求审批，不借用实例的放行配置。

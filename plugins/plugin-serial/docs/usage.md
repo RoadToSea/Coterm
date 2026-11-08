@@ -47,10 +47,12 @@ pnpm tauri:dev
 
 ## MCP 调用流程
 
+先在创建页或断开后的配置中选择实际的数据模式。默认 `stream` 只读取逻辑行，不生成对话；设备确实运行 Shell 时选择 `shell`，填写设备的完整可见提示符（例如独占一行的 `# `，或 `root@board:~# `）。终端 / UART 视图切换不改变此配置。登录和密码由人工终端完成，Agent 通过 `serial.status` 的 `shellReady` 确认已经观察到 Shell 提示符，再发命令。
+
 1. 在桌面创建实例，连接 MCP 后调用 `coterm.list_instances` 获取真实名称；MCP 不提供创建或自动恢复实例的工具。
 2. 按需调用 `coterm_serial_probe` 检查配置和端口，再调用 `coterm_serial_connect` 连接。
 3. 调用文本或 HEX 命令工具；若返回 `pending_approval`，等待用户批准后查询原操作，不重提写入。
-4. 查看命令捕获结果，或使用 `get_recent` / `read` / `read_hex` 读取输出。
+4. 用 `read_lines` 读取后端尾部逻辑行；Shell 还可用 `read_selected_lines` 读取人工选区、`read_dialogue_pairs(2)` 读取最近两次对话。
 
 也可先调用无参数 `coterm.status` 查看连接状态。恰有一个确认已连接的串口实例且无未知状态时，后续实例工具可省略 `name`；连接前或多连接时仍使用真实名称。审批后查询建议保留原实例名称，避免连接状态变化影响默认路由。
 
@@ -71,11 +73,13 @@ pnpm tauri:dev
 }
 ```
 
-`lineEnding` 默认 CR，每项末尾自动追加。提示符必须匹配设备真实输出；它是普通子串而非正则，不会验证命令退出码。仅传 `waitTimeoutMs` 可定时收集；两个等待字段均不传时只确认发送。
+此例要求实例为 Shell 模式，且实际提示符的完整可见行是 `# `。`lineEnding` 默认 CR，每项末尾自动追加。提示符按完整可见行匹配，忽略尾部空白，支持分包和 ANSI 颜色；它不是正则，也不能证明退出码。省略 `waitForPrompt` 时使用实例配置；Shell 默认每条等待 5 秒，stream 仅传 `waitTimeoutMs` 表示定时收集。
 
-列表如 `["cd /tmp", "pwd", "ls -la"]` 只保证顺序发送，并不等待前一条命令执行结束后再发送下一条。交互式任务应逐步确认设备状态。完成结果在 `structuredContent`，捕获文本位于 `structuredContent.output.text`，同时出现在 `content[].text`。
+Shell 列表逐条发送，每条观察到提示符后才发下一条；当前条超时、取消或断线会停止余项，不自动重放。Shell 结果在 `structuredContent`，始终保留 `stdin/stdout/stderr`；串口输出合并在 `stdout`，`stderr` 是空串，`exitCode` 是 null。运行中输出及最近对话可用读取工具查询。stream 列表仅保证发送顺序，其定时捕获文本位于 `structuredContent.output.text`，不形成对话。
 
 ### 发送控制字符与 HEX
+
+下表的原样文本列表用于 stream 模式。人工终端输入在两种模式下均保留控制字符语义；Shell 的命令列表需要已就绪提示符，不能冒充登录或任意交互输入。
 
 | 工具 | arguments 示例 | 实际发送 |
 |---|---|---|
@@ -89,11 +93,11 @@ pnpm tauri:dev
 
 | 工具 | arguments 示例 | 适用场景 |
 |---|---|---|
-| `coterm_serial_get_recent` | `{"name":"COM6@115200","lines":50}` | 直接查看最近文本，无需保存游标；重复调用可能看到相同内容 |
-| `coterm_serial_read` | `{"name":"COM6@115200","cursor":0}` | 从当前缓冲开头分页读文本，之后传上次返回的 cursor |
-| `coterm_serial_read_hex` | `{"name":"COM6@115200","cursor":0}` | 原字节分页读取，返回小写 HEX 字符串 |
+| `coterm_serial_read_lines` | `{"name":"COM6@115200","lines":50}` | Shell / stream 均支持，读取后端最近逻辑行，无需游标 |
+| `coterm_serial_read_selected_lines` | `{"name":"COM6@115200"}` | 仅 Shell；读取人工在 xterm 中选中的文本，未选中则为空 |
+| `coterm_serial_read_dialogue_pairs` | `{"name":"COM6@115200","count":2}` | 仅 Shell；最近两次输入及输出，最新在前，检查状态和截断标记 |
 
-`more:true` 时继续读取下一页。`gap:true` 表示早期数据已被淘汰，不能当作完整日志；`truncated:true` 表示快照或捕获结果达到预算。连接 ID 变化后重新建立游标，不复用旧连接的 cursor。MCP 客户端通过读取工具查询，没有这些事件的订阅；前端通知推送丢失时从回放缓冲恢复。
+这些读取不暴露游标，不需要 Agent 维护状态。`dropped` 表示旧数据曾被淘汰，`truncated:true` 表示结果达到预算；对话可能仍在运行，也可能是超时、取消或断线后的未知结果。`capabilities` 指示目标实例支持哪些读取；共享工具目录会列出 Shell 专用工具，但 stream 目标会明确拒绝它们。前端通知推送丢失时仍使用内部回放接口恢复，这不是 MCP 的读取契约。
 
 ### 查询审批结果与取消
 
@@ -102,7 +106,7 @@ pnpm tauri:dev
 | `coterm.get_operation` | `{"name":"COM6@115200","operationId":"<原操作ID>"}` | 待审批、等待到期后查询同一个操作；最终输出在操作记录的 output |
 | `coterm.cancel_operation` | `{"name":"COM6@115200","operationId":"<原操作ID>"}` | 请求停止命令列表，按返回结果判断；已发出的字节不能撤回 |
 
-`coterm.get_operation` 返回的 `structuredContent` 是操作记录。对于串口 MCP 操作，记录的 `output` 保留插件的 MCP 结果形状：业务结果路径为 `structuredContent.output.structuredContent`，捕获回显为 `structuredContent.output.structuredContent.output.text`。这与首次调用直接完成时的 `structuredContent.output.text` 路径不同。
+`coterm.get_operation` 返回的 `structuredContent` 是操作记录。对于串口 MCP 操作，记录的 `output` 保留驱动的 MCP 结果形状：业务结果路径为 `structuredContent.output.structuredContent`。Shell 输出读取该对象的 `stdout`；stream 定时捕获读取该对象的 `output.text`。首次调用直接完成时，业务结果直接位于 `structuredContent`。
 
 这两个是基座工具，不带插件前缀。Agent 不能自行批准、开启 Bypass 或放行。取消不确定、客户端超时和连接断开都不能作为自动重发依据。
 
@@ -158,6 +162,17 @@ cargo test -p coterm-plugin-serial --test live -- --ignored --nocapture
 ```
 
 用例验证真实字节往返、收发计数与 DTR/RTS，不验证设备业务语义；缺少设备配置会失败。手工诊断可用 `cargo run -p coterm-plugin-serial --example live -- COM6 115200`。
+
+Shell 专项验收要求人工先完成登录、释放串口占用，并提供精确提示符；仅发送回车、两条 `printf` 及 `uname -s`。打开时 DTR / RTS 配置为低电平，不执行额外的控制线切换，也不自动输入账号密码：
+
+```powershell
+$env:COTERM_SERIAL_SHELL_LIVE = "<实际端口>"
+$env:COTERM_SERIAL_SHELL_PROMPT = "<完整可见提示符>"
+$env:COTERM_SERIAL_LIVE_BAUD = "115200"
+cargo test --locked -p coterm-plugin-serial --test shell_live -- --ignored --nocapture
+```
+
+验证两个对话互不串输出、stderr 合并、退出码未知、无游标行读取、断开后的后端快照，以及 stream 明确拒绝对话读取。默认忽略，避免普通回归向硬件发送数据。
 
 ### 虚拟串口配对
 

@@ -11,6 +11,11 @@ const zhCN: Readonly<Record<string, string>> = {
   // 配置界面
   "Port": "端口",
   "Baud rate": "波特率",
+  "Data mode": "数据模式",
+  "Byte stream": "字节流",
+  "Shell": "Shell",
+  "Shell prompt": "Shell 提示符",
+  "Enter a literal Shell prompt of 1–256 UTF-8 bytes.": "请填写 1–256 字节的完整 Shell 提示符文本。",
   "Backspace key": "退格键",
   "Data bits": "数据位",
   "Stop bits": "停止位",

@@ -49,6 +49,8 @@ MCP 只有一个对外入口：本地 Stdio 子进程。桌面前端通过 Tauri
 
 SSH 命令统一由 `coterm_ssh_command` 提交，默认 `mode=terminal`；预计长任务或用户明确要求后台时显式选择 `mode=exec`。读取使用 `coterm_ssh_read_lines`、`coterm_ssh_read_selected_lines` 和 `coterm_ssh_read_dialogue_pairs`，均为后端快照，不要求 Agent 维护游标。xterm 选区由仅 Human 可用的 `ssh.select_lines` 同步；Agent 不能伪造选择。数据结构和界限见 [SSH 驱动](ssh-plugin.md#后端-json-记录与读取)。
 
+串口的 `coterm_serial_read_lines` 同样无需游标；只有 `mode=shell` 的实例支持 `coterm_serial_read_selected_lines` 和 `coterm_serial_read_dialogue_pairs`。stream 不创建对话，专用读取会被目标实例拒绝；共享目录列出驱动能力并集，目标 `status.capabilities` 明确当前可用能力。Shell 逐条发送并等待完整字面提示符，超时停止余项、不自动重发，结果保留 `stdin/stdout/stderr`；串口输出合并、退出码未知。内部前端回放游标不向 MCP 开放，字段与限制见 [串口驱动](serial-plugin.md)。
+
 工具名映射先去掉插件 ID 的 `coterm-plugin-` 前缀，再去掉原生工具名重复的 `<plugin>.` 前缀，非 ASCII 字母数字统一替换为 `_`，最后添加 `coterm_`。例如 `coterm-plugin-ssh` + `ssh.command` → `coterm_ssh_command`。`tools/list` 只发布新名称；旧 `<pluginId>__<toolName>` 仍作为未列出的兼容别名接受，不重复发布。映射碰撞时目录明确报 `mcp_tool_name_conflict`，调用歧义名称也拒绝，绝不按注册顺序任选插件。内部操作名与进程协议不变。
 
 Bridge 保留插件参数和原生 `CallToolResult`，仅处理命名空间、目标路由及操作元信息。不会自动把整个内部操作目录公开为 MCP。

@@ -13,6 +13,8 @@ use std::{
 use crate::command::{CommandHandle, CommandJob, CommandList};
 use crate::payload::{bounded_output_text, encode_hex, Utf8Decoder, OUTPUT_TEXT_JSON_BUDGET};
 use crate::serial_io::SerialWriter;
+pub use crate::shell::Mode;
+use crate::shell::{validate_prompt, ShellHistory};
 use anyhow::{anyhow, bail, Result};
 use coterm_proto::runtime::{message::PluginNotification, ErrorCategory, RuntimeError};
 use serde::{Deserialize, Serialize};
@@ -60,6 +62,10 @@ pub struct Config {
     /// 打开端口后立即设置的请求发送电平。
     #[serde(default = "default_line_level")]
     pub rts: bool,
+    #[serde(default)]
+    pub mode: Mode,
+    #[serde(default)]
+    pub prompt: Option<String>,
 }
 
 fn default_data_bits() -> u8 {
@@ -91,6 +97,12 @@ impl Config {
         }
         if !matches!(self.stop_bits, 1 | 2) {
             bail!("Invalid serial stop bits");
+        }
+        if let Some(prompt) = &self.prompt {
+            validate_prompt(prompt)?;
+        }
+        if self.mode == Mode::Shell && self.prompt.is_none() {
+            bail!("mode=shell requires an explicit literal prompt");
         }
         Ok(())
     }
@@ -141,9 +153,17 @@ pub struct OutputBuffer {
     bytes: usize,
     sequence: u64,
     pub closed: bool,
+    pub(crate) shell: ShellHistory,
 }
 
 impl OutputBuffer {
+    pub(crate) fn configured(config: &Config) -> Self {
+        Self {
+            shell: ShellHistory::new(config.mode, config.prompt.as_deref()),
+            ..Self::default()
+        }
+    }
+
     pub fn cursor(&self) -> u64 {
         self.sequence
     }
@@ -163,11 +183,20 @@ impl OutputBuffer {
                 }
             }
         }
+        self.shell.feed(&text);
         text
     }
 
     pub fn close(&mut self) {
+        if self.closed {
+            return;
+        }
         let tail = self.decoder.finish();
+        self.shell.feed(&tail);
+        self.shell.interrupt("unknown");
+        if self.shell.enabled() {
+            let _ = self.shell.set_selection("", false);
+        }
         if !tail.is_empty() {
             self.sequence += 1;
             self.chunks.push_back((self.sequence, Vec::new(), tail));
@@ -212,6 +241,39 @@ impl OutputBuffer {
             "gap": self.chunks.front().is_some_and(|chunk| chunk.0 > 1),
             "truncated": truncated,
         }))
+    }
+
+    /// Returns 1–1000 trailing LF-delimited lines, bounded by the result JSON budget.
+    pub fn read_lines(&self, count: usize) -> Result<Value> {
+        if !(1..=1000).contains(&count) {
+            bail!("Serial line count must be between 1 and 1000");
+        }
+        let text = self
+            .chunks
+            .iter()
+            .map(|(_, _, text)| text.as_str())
+            .collect::<String>();
+        let mut lines: Vec<_> = text.lines().rev().take(count).map(str::to_owned).collect();
+        lines.reverse();
+        let mut truncated = false;
+        while serde_json::to_vec(&lines)?.len() > 10 * 1024 {
+            truncated = true;
+            if lines.len() > 1 {
+                lines.remove(0);
+            } else if let Some(line) = lines.first_mut() {
+                let mut start = line.len() / 2;
+                while !line.is_char_boundary(start) {
+                    start += 1;
+                }
+                *line = line[start..].into();
+            } else {
+                break;
+            }
+        }
+        Ok(
+            json!({"lines":lines,"stderrLines":[],"streamMode":"merged","closed":self.closed,
+            "truncated":truncated,"dropped":self.chunks.front().is_some_and(|chunk| chunk.0>1)}),
+        )
     }
 
     fn read_page(&self, after: u64, hex: bool) -> Result<Value> {
@@ -323,7 +385,7 @@ impl Connection {
         };
         let mut writer = Some(writer);
 
-        let output = Arc::new(Mutex::new(OutputBuffer::default()));
+        let output = Arc::new(Mutex::new(OutputBuffer::configured(config)));
         let (actions, mut receiver) = mpsc::channel::<Action>(64);
         let id = uuid::Uuid::new_v4().to_string();
         let connection_id = id.clone();
@@ -891,6 +953,8 @@ mod tests {
             parity: Parity::None,
             dtr: true,
             rts: true,
+            mode: Mode::Stream,
+            prompt: None,
         }
     }
 

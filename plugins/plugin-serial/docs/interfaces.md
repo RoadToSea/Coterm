@@ -14,24 +14,28 @@
 
 ## 操作总表
 
-共 14 个业务操作，其中 10 个向 MCP 开放。下表省略 MCP 实例工具公共参数 `name`；`?` 表示可选。MCP 实际名称将表中 `serial.` 替换为 `coterm_serial_`，例如 `serial.command_hex` → `coterm_serial_command_hex`。
+共 18 个业务操作，其中 10 个向 MCP 开放。下表省略 MCP 实例工具公共参数 `name`；`?` 表示可选。MCP 实际名称将表中 `serial.` 替换为 `coterm_serial_`，例如 `serial.command_hex` → `coterm_serial_command_hex`。
 
 | 操作 | MCP | effect | 业务参数 | 业务结果 / 用途 |
 |---|:---:|---|---|---|
 | `serial.plugin_info` | 是 | read | 无 | `pluginId / instanceCount / ports`；插件级操作，不绑定实例，无实例时也可枚举本机端口；`ports` 项结构同 probe |
-| `serial.status` | 是 | read | 无 | `config / connected / connectionId / signals / rxBytes / txBytes / commandQueue` |
+| `serial.status` | 是 | read | 无 | `config / connected / connectionId / signals / rxBytes / txBytes / commandQueue / shellReady / capabilities` |
 | `serial.probe` | 是 | read | 无 | status 结果及 `ports`；端口项含 `portName / portType`，USB 类型可带 VID/PID、厂商、产品与序列号 |
 | `serial.connect` | 是 | commit | 无 | 按实例配置打开端口，返回 `connected:true`；已连接时拒绝重复打开 |
 | `serial.disconnect` | 是 | commit | 无 | 关闭端口并丢弃剩余队列，返回 `connected:false` |
-| `serial.read` | 是 | read | `cursor?: integer`，默认 `0` | 文本分页：`text / bytes / cursor / gap / closed / more / connectionId` |
-| `serial.get_recent` | 是 | read | `lines?: integer`，默认 `50`，范围 `1–200` | 最近文本行快照：`text / lines / cursor / gap / closed / truncated / connectionId` |
-| `serial.read_hex` | 是 | read | `cursor?: integer`，默认 `0` | 原始字节的 HEX 分页，字段同 read，以 `hex` 替代 `text` |
+| `serial.read` | 否 | read | `cursor?: integer`，默认 `0` | 前端文本回放：`text / bytes / cursor / gap / closed / more / connectionId` |
+| `serial.get_recent` | 否 | read | `lines?: integer`，默认 `50`，范围 `1–200` | 内部兼容的尾部文本快照；Agent 使用 `read_lines` |
+| `serial.read_hex` | 否 | read | `cursor?: integer`，默认 `0` | 前端 HEX 回放；字段同 read，以 `hex` 替代 `text` |
+| `serial.read_lines` | 是 | read | `lines?: integer`，默认 `100`，范围 `1–1000` | 后端尾部逻辑行：`lines / stderrLines / streamMode / closed / dropped / truncated`，无需游标 |
+| `serial.read_selected_lines` | 是，限 Shell | read | 无 | 人工 xterm 选中文本：`text / truncated`；未选中时为空串 |
+| `serial.read_dialogue_pairs` | 是，限 Shell | read | `count?: integer`，默认 `2`，范围 `1–32` | 最近对话，最新在前：`pairs / dropped / truncated` |
+| `serial.set_selection` | 否，限 Shell | commit | `connectionId / text / truncated?` | 人工界面更新有界选中快照；连接不匹配时拒绝 |
 | `serial.command` | 是 | commit | `commands: string[]`，及下表可选参数 | 按序发送文本列表，可捕获回显；返回发送进度和可选 `output` |
 | `serial.command_hex` | 是 | commit | `commands: string[]`、`intervalMs?` | 按序发送 HEX 列表；不补换行，不接受文本行结束符或等待回显参数 |
 | `serial.write` | 否 | commit | `text: string`、`lineEnding?`，默认 `none` | 人工单次文本写入，返回 `submitted / bytes` |
 | `serial.write_hex` | 否 | commit | `hex: string` | 人工单次 HEX 写入，返回 `submitted / bytes` |
 | `serial.signals` | 否 | commit | `dtr?: boolean`、`rts?: boolean`，至少一个 | 仅修改给定信号，返回修改后的 `dtr / rts` |
-| `serial.configure` | 否 | commit | `baudRate? / dataBits? / stopBits? / parity? / dtr? / rts?`，至少一个 | 断开后更新通信参数；返回与 status 相同的完整状态，不打开端口 |
+| `serial.configure` | 否 | commit | `baudRate? / dataBits? / stopBits? / parity? / dtr? / rts? / mode? / prompt?`，至少一个 | 断开后更新通信及解释参数；返回完整状态，不打开端口 |
 
 `read` 操作不触发写入审批。Agent 来源的 `commit` 操作默认经过宿主审批；用户主动开启 Bypass 或明确放行后可跳过提交审批，协议自身的认证与人工交互仍保留。`write/write_hex/signals/configure` 未注册 MCP descriptor，人工界面通过基座调用。
 
@@ -42,10 +46,10 @@
 | `commands` | string[] | 是 | — | 1–64 项；文本列表按 UTF-8 编码，HEX 列表解码为原字节 |
 | `lineEnding` | string | 否 | `cr` | 仅文本列表；支持 `none/cr/lf/crlf`，追加到每一项末尾 |
 | `intervalMs` | integer | 否 | `100` | 文本和 HEX 列表均支持，范围 `0–1000 ms`，只在两项之间等待 |
-| `waitForPrompt` | string | 否 | 不启用 | 仅文本列表；非空、区分大小写的字面子串，不是正则 |
-| `waitTimeoutMs` | integer | 否 | 指定提示符但未指定期限时为 `5000` | 仅文本列表；范围 `0–300000 ms`，单独指定表示定时收集输出 |
+| `waitForPrompt` | string | 否 | 使用 Shell 实例的 `prompt` | 仅 Shell 文本列表；覆盖本批次的完整可见提示符行，忽略尾部空白，最长 256 UTF-8 字节，不是正则或任意子串 |
+| `waitTimeoutMs` | integer | 否 | Shell 为 `5000` | 范围 `0–300000 ms`；Shell 是每条命令等待提示符的上限，stream 中表示发送后定时收集输出 |
 
-未提供两个等待参数时，命令结果仅确认发送。每项实际载荷为 1–4096 字节，包含追加的行结束符；整批最多 16 KiB。文本空字符串在追加行结束符后非空时有效。整批先校验，任何一项不合法时均不发送。
+stream 未指定等待时，命令结果仅确认发送，不创建对话。Shell 先确认已观察到实例提示符，再逐条发送、逐条等待；当前条超时或取消后不再发送余项，迟到的提示符不会重放队列。每项实际载荷为 1–4096 字节，包含追加的行结束符；整批最多 16 KiB。文本空字符串在追加行结束符后非空时有效。整批先校验，任何一项不合法时均不发送。
 
 文本保留 Ctrl+C、Tab、ESC、换行、DEL、NUL 等控制字符；原样输入必须显式设置 `lineEnding:"none"`。人工 `serial.write` 默认不追加结束符，与列表默认 CR 不同。
 
@@ -72,14 +76,22 @@ HEX 接受偶数位十六进制字符，可包含 ASCII 空白和一个开头 `0
 | `parity` | string | 默认 `none`，支持 `none/odd/even` |
 | `dtr` | boolean | 默认 `true`，打开端口时设置 |
 | `rts` | boolean | 默认 `true`，打开端口时设置 |
+| `mode` | string | 默认 `stream`，支持 `stream/shell`；旧保存配置不猜测设备类型 |
+| `prompt` | string 或 null | Shell 必填，1–256 UTF-8 字节，无控制字符；填写完整可见提示符，如 `root@board:~# `。stream 可为 null |
+
+数据模式与终端 / UART 显示视图独立。在创建页或断开后的配置中显式选择；切换显示视图不修改数据模式。新建实例的模式和提示符进入宿主已有的初始配置保存流程，运行中 `serial.configure` 仍只修改当前实例，不更新宿主保存的初始配置。
+
+每个实例的 `capabilities` 明确返回 `readLines / readSelectedLines / readDialoguePairs`。stream 仅支持第一项读取能力，后两项调用返回不支持错误；它仍可使用已有的审批文本 / HEX 写入工具，不把字节流强行解释为 Shell。MCP 工具目录按驱动共享，是支持能力的并集；Shell 专用工具描述及目标实例能力共同约束调用，不为此新增跨进程消息或宿主筛选协议。
 
 每个插件进程最多 32 个实例，同一端口不能分配给多个实例。实例创建不自动打开串口；切换实例或视图不关闭连接。重新连接生成新的 `connectionId`，消费者需要按连接重新建立游标。打开、关闭连接会清理该实例旧提案；销毁实例和插件退出会释放连接并清理提案。
 
 ## 返回结果、审批与取消
 
-命令完成结果包含 `operationId / total / sent / remaining / bytes / finished / cancelled / deviceCompletion`。其中 `deviceCompletion` 为 `unknown`：发送完成仅表示所有字节写入并 flush 成功，不代表设备业务执行成功，不推断退出码，也不根据设备输出自动停止后续项。
+命令结果包含 `operationId / total / sent / remaining / bytes / finished / cancelled / deviceCompletion`。stream 的 `deviceCompletion` 为 `unknown`，发送完成仅表示写入并 flush 成功。Shell 另含 `stdin / stdout / stderr / streamMode / exitCode / status / timedOut / error / truncated`，空流保留空串；串口无法拆分 stdout/stderr，故 `streamMode:"merged"`、`stderr:""`、`exitCode:null`。
 
-启用等待时，`output` 包含 `text / cursor / promptMatched / truncated / gap`。收集从本批发送前的缓冲游标开始，发送后进行匹配与有界读取；这段数据可能包含设备异步输出，不是经过协议识别的独占命令响应。超时不代表设备失败。
+对话记录同样保留 `stdin/stdout/stderr`，并包含 `operationId / commandIndex / status / boundary / deviceCompletion / observedInput / truncated`。提示符匹配只令该对话 `status:"completed"`、`deviceCompletion:"prompt_observed"`，不证明业务成功；超时标为 `timed_out`，取消标为 `cancelled`，断线或交付不确定标为 `unknown`。原始按键不会直接作为人工命令存储；只有设备在已确认提示符后的回显行会形成 `observedInput:true` 的人工对话。登录过程、无回显密码及未确认边界的文本不推断为命令。
+
+stream 启用定时等待时，兼容结果 `output` 含 `text / cursor / promptMatched / truncated / gap`；内部采集使用游标，Agent 不需管理。设备异步日志可能混入结果。Shell 提示符按完整可见行匹配，支持跨包 UTF-8、ANSI 颜色及 OSC；若实际输出与提示符完全相同，仍可能误判。应配置尽量具体的完整提示符；目录、权限或提示符变化后，由用户更新配置，或在下一次调用显式指定 `waitForPrompt`。不注入 Shell 包装器、不探测密码、不伪造退出码。
 
 MCP 完成结果的机器可读副本位于 `structuredContent`，文本块包含发送摘要和捕获回显；非命令读取同样提供可读文本。`_meta["coterm/operation"]` 保存操作收据，不再次复制完整结果。
 
@@ -98,7 +110,9 @@ MCP 完成结果的机器可读副本位于 `structuredContent`，文本块包�
 
 `serial.read/read_hex` 使用连接内非负块序号游标，不是字节偏移；文本和 HEX 共用序号，每个消费者独立保存。游标过期时从仍保留的数据继续并报告 `gap:true`，超出末尾时报错；`more:true` 表示应继续分页。文本增量解码保留跨块 UTF-8 尾字节，非法编码用替换字符表示，HEX 精确保留原字节。
 
-`serial.get_recent` 按 LF 分行，返回尾部快照，重复调用可读到相同内容；`gap` 表示缓冲曾淘汰早期块，`truncated` 表示选中的尾部文本又因结果预算被裁剪。它不维护隐式共享游标。
+`serial.read_lines` 按 LF 分行，返回后端有界缓冲的尾部快照，重复调用可读到相同内容，不维护隐式共享游标。它不是 xterm 屏幕行，保留设备文本和控制序列；非法 UTF-8 用替换字符表示。`dropped` 表示缓冲淘汰过旧块，`truncated` 表示本次结果又因预算裁剪。`get_recent` 仅作内部兼容，不向 MCP 注册。MCP 不再注册 `read/read_hex/get_recent`，前端推送、缺口恢复和 HEX 导出仍使用内部回放接口。
+
+命令、对话及选中读取都查询后端 JSON 快照，不依赖前端窗口存活。对话保留最近 32 项，每项 stdout 最多 16 KiB；输出溢出后继续识别提示符并标记截断。单次对话结构化结果预算为 12 KiB，可读预览不重复完整数据。选中快照最多 16 KiB，前端裁剪也保留截断标记；清空、断开及连接更换清除选中内容。断开保留该实例当前的有界输出和对话快照，重新配置、重新连接或销毁实例后不混用旧数据。数据只驻留内存，不新增明文落盘日志。
 
 | 事件 | 主要 payload | 用途 |
 |---|---|---|

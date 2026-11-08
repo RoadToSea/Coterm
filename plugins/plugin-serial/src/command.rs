@@ -45,6 +45,7 @@ pub struct CommandList {
     pub payloads: Vec<Vec<u8>>,
     pub interval: Duration,
     pub wait: Option<WaitSpec>,
+    shell: Option<WaitSpec>,
 }
 
 #[derive(Clone, Debug)]
@@ -54,6 +55,31 @@ pub struct WaitSpec {
 }
 
 impl CommandList {
+    /// Applies the target instance mode; a stream cannot opt into prompt interpretation.
+    pub(crate) fn configure_shell(&mut self, config: &crate::session::Config) -> Result<()> {
+        if config.mode == crate::shell::Mode::Stream {
+            if self.wait.as_ref().is_some_and(|wait| wait.prompt.is_some()) {
+                bail!("waitForPrompt requires mode=shell; byte streams support timed reads only");
+            }
+            return Ok(());
+        }
+        let prompt = self
+            .wait
+            .as_ref()
+            .and_then(|wait| wait.prompt.clone())
+            .or_else(|| config.prompt.clone())
+            .ok_or_else(|| anyhow!("Shell commands require a configured prompt"))?;
+        crate::shell::validate_prompt(&prompt)?;
+        self.shell = Some(WaitSpec {
+            prompt: Some(prompt),
+            timeout: self
+                .wait
+                .as_ref()
+                .map_or(Duration::from_secs(5), |wait| wait.timeout),
+        });
+        Ok(())
+    }
+
     pub fn parse(args: &Value) -> Result<Self> {
         let args: CommandArgs = serde_json::from_value(args.clone())
             .map_err(|_| anyhow!("Invalid serial command list parameters"))?;
@@ -105,6 +131,7 @@ impl CommandList {
             payloads,
             interval: Duration::from_millis(interval_ms),
             wait,
+            shell: None,
         })
     }
 }
@@ -132,7 +159,7 @@ pub fn properties() -> Value {
             "items":{"type":"string","minLength":0,"maxLength":4096}},
         "lineEnding":{"type":"string","enum":["none","cr","lf","crlf"],"default":"cr","description":"Line ending appended to each text entry. Defaults to CR so shell commands are submitted; use none for raw input."},
         "intervalMs":{"type":"integer","minimum":0,"maximum":1000,"default":100,"description":"Delay between serial writes, in milliseconds."},
-        "waitForPrompt":{"type":"string","minLength":1,"description":"Optional case-sensitive literal substring to stop output collection when found."},
+        "waitForPrompt":{"type":"string","minLength":1,"maxLength":256,"description":"Shell only: override the literal visible prompt line for this batch. Must match the entire line (trailing spaces ignored), not an output substring or regex."},
         "waitTimeoutMs":{"type":"integer","minimum":0,"maximum":300000,"description":"Maximum time to collect output after sending; used alone, this collects output for the specified duration."}
     })
 }
@@ -242,6 +269,11 @@ impl CommandJob {
         connection_id: &str,
         output: std::sync::Arc<Mutex<OutputBuffer>>,
     ) -> (Option<W>, bool) {
+        if self.list.shell.is_some() {
+            return self
+                .run_shell(writer, stop, tx, events, connection_id, output)
+                .await;
+        }
         let mut state = Progress {
             started: true,
             ..Progress::default()
@@ -428,6 +460,192 @@ impl CommandJob {
             }
         }
         (writer, false)
+    }
+
+    async fn run_shell<W: Write + Send + 'static>(
+        mut self,
+        mut writer: Option<W>,
+        stop: &AtomicBool,
+        tx: &AtomicU64,
+        events: &Option<(String, mpsc::Sender<PluginNotification>)>,
+        connection_id: &str,
+        output: std::sync::Arc<Mutex<OutputBuffer>>,
+    ) -> (Option<W>, bool) {
+        let Some(wait) = self.list.shell.clone() else {
+            return (writer, false);
+        };
+        let prompt = wait.prompt.unwrap_or_default();
+        let mut state = Progress {
+            started: true,
+            ..Progress::default()
+        };
+        let mut transport_failed = false;
+        let mut timed_out = false;
+        let mut error = None;
+        self.publish(&state, events, connection_id, tx.load(Ordering::Relaxed));
+        for (index, payload) in self.list.payloads.iter().enumerate() {
+            if *self.cancel.borrow() {
+                state.cancelled = true;
+                break;
+            }
+            if stop.load(Ordering::SeqCst) {
+                transport_failed = true;
+                error = Some("Serial connection closed");
+                break;
+            }
+            let input = String::from_utf8_lossy(payload);
+            if output
+                .lock()
+                .await
+                .shell
+                .begin(&self.operation_id, index, &input, &prompt)
+                .is_err()
+            {
+                error = Some("Shell prompt has not been observed; no further input was sent");
+                break;
+            }
+            let Some(mut handle) = writer.take() else {
+                transport_failed = true;
+                error = Some("Serial writer unavailable");
+                break;
+            };
+            let bytes = payload.len();
+            let payload = payload.clone();
+            match timeout(
+                Duration::from_secs(2),
+                tokio::task::spawn_blocking(move || {
+                    let result = handle.write_all(&payload).and_then(|()| handle.flush());
+                    (handle, result)
+                }),
+            )
+            .await
+            {
+                Ok(Ok((returned, result))) => {
+                    writer = Some(returned);
+                    if result.is_err() {
+                        transport_failed = true;
+                        error = Some("Serial write failed; delivery may be unknown");
+                        break;
+                    }
+                }
+                _ => {
+                    transport_failed = true;
+                    error = Some("Serial write timed out; delivery may be unknown");
+                    break;
+                }
+            }
+            state.sent += 1;
+            state.bytes += bytes;
+            tx.fetch_add(bytes as u64, Ordering::Relaxed);
+            self.publish(&state, events, connection_id, tx.load(Ordering::Relaxed));
+            let deadline = tokio::time::Instant::now() + wait.timeout;
+            loop {
+                if *self.cancel.borrow() {
+                    state.cancelled = true;
+                    break;
+                }
+                if stop.load(Ordering::SeqCst) {
+                    transport_failed = true;
+                    error = Some("Serial connection closed while waiting for the prompt");
+                    break;
+                }
+                if output
+                    .lock()
+                    .await
+                    .shell
+                    .completed(&self.operation_id, index)
+                {
+                    break;
+                }
+                if tokio::time::Instant::now() >= deadline {
+                    timed_out = true;
+                    break;
+                }
+                tokio::select! {
+                    _ = self.cancel.changed() => {},
+                    _ = sleep(Duration::from_millis(20).min(deadline.saturating_duration_since(tokio::time::Instant::now()))) => {},
+                }
+            }
+            if state.cancelled || timed_out || error.is_some() {
+                break;
+            }
+            if index + 1 < self.list.payloads.len() {
+                tokio::select! { _ = self.cancel.changed() => {}, _ = sleep(self.list.interval) => {} }
+            }
+        }
+        state.finished = true;
+        let mut buffer = output.lock().await;
+        if transport_failed || timed_out || state.cancelled {
+            buffer.shell.interrupt_operation(
+                &self.operation_id,
+                if state.cancelled {
+                    "cancelled"
+                } else if timed_out {
+                    "timed_out"
+                } else {
+                    "unknown"
+                },
+            );
+        }
+        let mut domain = buffer.shell.operation_result(&self.operation_id);
+        drop(buffer);
+        for (key, value) in self.summary(&state).as_object().into_iter().flatten() {
+            domain[key] = value.clone();
+        }
+        domain["timedOut"] = json!(timed_out);
+        domain["status"] = json!(if state.cancelled {
+            "cancelled"
+        } else if timed_out {
+            "timed_out"
+        } else if error.is_some() {
+            "unknown"
+        } else {
+            "completed"
+        });
+        domain["error"] = error.map_or(Value::Null, |message| json!({"message":message}));
+        domain["deviceCompletion"] = json!(if error.is_none() && !timed_out && !state.cancelled {
+            "prompt_observed"
+        } else {
+            "unknown"
+        });
+        self.publish(&state, events, connection_id, tx.load(Ordering::Relaxed));
+        if let Some((_, sender)) = events {
+            if let Some(message) = error {
+                let _ = sender
+                    .send(PluginNotification::OperationFailed {
+                        operation_id: self.operation_id.clone(),
+                        error: RuntimeError {
+                            category: if transport_failed {
+                                ErrorCategory::Transport
+                            } else {
+                                ErrorCategory::Domain
+                            },
+                            code: if transport_failed {
+                                "serial_command_delivery_unknown"
+                            } else {
+                                "serial_shell_not_ready"
+                            }
+                            .into(),
+                            message: message.into(),
+                            details: Some(domain),
+                        },
+                    })
+                    .await;
+            } else if !state.cancelled {
+                let result = if self.mcp {
+                    crate::result::tool_result(domain)
+                } else {
+                    domain
+                };
+                let _ = sender
+                    .send(PluginNotification::OperationCompleted {
+                        operation_id: self.operation_id,
+                        result,
+                    })
+                    .await;
+            }
+        }
+        (writer, transport_failed)
     }
 }
 
@@ -943,6 +1161,180 @@ mod tests {
             assert!(CommandList::parse(&args).is_err(), "{args}");
         }
         assert!(CommandList::parse(&json!({"commands":vec!["x".repeat(4095);4]})).is_ok());
+    }
+
+    fn shell_output() -> Result<std::sync::Arc<tokio::sync::Mutex<OutputBuffer>>> {
+        let config = serde_json::from_value(
+            json!({"port":"COM6","baudRate":115200,"mode":"shell","prompt":"# "}),
+        )?;
+        let mut output = OutputBuffer::configured(&config);
+        output.push(b"# ");
+        Ok(std::sync::Arc::new(tokio::sync::Mutex::new(output)))
+    }
+
+    fn shell_list(args: Value) -> Result<CommandList> {
+        let config = serde_json::from_value(
+            json!({"port":"COM6","baudRate":115200,"mode":"shell","prompt":"# "}),
+        )?;
+        let mut list = CommandList::parse(&args)?;
+        list.configure_shell(&config)?;
+        Ok(list)
+    }
+
+    #[tokio::test]
+    async fn shell_waits_after_each_entry_and_returns_two_distinct_pairs() -> Result<()> {
+        struct Writer {
+            output: Arc<tokio::sync::Mutex<OutputBuffer>>,
+            writes: Arc<Mutex<Vec<Vec<u8>>>>,
+        }
+        impl Write for Writer {
+            fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+                let mut writes = self
+                    .writes
+                    .lock()
+                    .map_err(|_| io::Error::other("test lock poisoned"))?;
+                writes.push(bytes.to_vec());
+                self.output.blocking_lock().push(if writes.len() == 1 {
+                    b"one\r\n"
+                } else {
+                    b"two\r\n# "
+                });
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+        let output = shell_output()?;
+        let writes = Arc::new(Mutex::new(Vec::new()));
+        let list =
+            shell_list(json!({"commands":["first","second"],"intervalMs":0,"waitTimeoutMs":2000}))?;
+        let (job, mut handle) = CommandJob::new("shell-pair".into(), true, list);
+        let (sender, mut events) = mpsc::channel(16);
+        let target = output.clone();
+        let recorded = writes.clone();
+        let task = tokio::spawn(async move {
+            job.run(
+                Some(Writer {
+                    output: target.clone(),
+                    writes: recorded,
+                }),
+                &AtomicBool::new(false),
+                &AtomicU64::new(0),
+                &Some(("shell".into(), sender)),
+                "connection",
+                target,
+            )
+            .await
+        });
+        timeout(Duration::from_secs(1), async {
+            while handle.progress.borrow().sent == 0 {
+                handle.progress.changed().await?;
+            }
+            Result::<()>::Ok(())
+        })
+        .await??;
+        assert_eq!(writes.lock().map_err(|_| anyhow!("poisoned"))?.len(), 1);
+        assert_eq!(
+            output.lock().await.shell.pairs(2)?["pairs"][0]["status"],
+            "running"
+        );
+        output.lock().await.push(b"# ");
+        assert!(!timeout(Duration::from_secs(2), task).await??.1);
+        assert_eq!(writes.lock().map_err(|_| anyhow!("poisoned"))?.len(), 2);
+        let pairs = output.lock().await.shell.pairs(2)?;
+        assert_eq!(pairs["pairs"][0]["stdin"], "second\r");
+        assert_eq!(pairs["pairs"][1]["stdin"], "first\r");
+        assert!(pairs["pairs"][0]["stdout"]
+            .as_str()
+            .is_some_and(|text| !text.contains("one")));
+        let mut completed = None;
+        while let Ok(event) = events.try_recv() {
+            if let PluginNotification::OperationCompleted { result, .. } = event {
+                completed = Some(result);
+            }
+        }
+        let result = completed.ok_or_else(|| anyhow!("missing result"))?;
+        assert_eq!(
+            result["structuredContent"]["deviceCompletion"],
+            "prompt_observed"
+        );
+        assert_eq!(result["structuredContent"]["stderr"], "");
+        assert_eq!(result["structuredContent"]["exitCode"], Value::Null);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn missing_shell_prompt_stops_remaining_entries_without_closing_or_replaying(
+    ) -> Result<()> {
+        let output = shell_output()?;
+        let list = shell_list(json!({"commands":["long","never-send"],"waitTimeoutMs":10}))?;
+        let writer = RecordingWriter::default();
+        let writes = writer.writes.clone();
+        let (job, handle) = CommandJob::new("timeout-shell".into(), true, list);
+        let (sender, mut events) = mpsc::channel(16);
+        let (_, failed) = job
+            .run(
+                Some(writer),
+                &AtomicBool::new(false),
+                &AtomicU64::new(0),
+                &Some(("shell".into(), sender)),
+                "connection",
+                output.clone(),
+            )
+            .await;
+        assert!(!failed, "a prompt timeout must not close the physical port");
+        assert_eq!(writes.lock().map_err(|_| anyhow!("poisoned"))?.len(), 1);
+        assert_eq!(handle.progress.borrow().sent, 1);
+        assert_eq!(
+            output.lock().await.shell.pairs(2)?["pairs"][0]["status"],
+            "timed_out"
+        );
+        let mut completed = None;
+        while let Ok(event) = events.try_recv() {
+            if let PluginNotification::OperationCompleted { result, .. } = event {
+                completed = Some(result);
+            }
+        }
+        let result = completed.ok_or_else(|| anyhow!("missing completion"))?;
+        assert_eq!(result["isError"], true);
+        assert_eq!(result["structuredContent"]["remaining"], 1);
+        assert_eq!(result["structuredContent"]["timedOut"], true);
+        assert_eq!(result["structuredContent"]["deviceCompletion"], "unknown");
+        output.lock().await.push(b"\r\n# ");
+        assert!(output.lock().await.shell.ready());
+        assert_eq!(writes.lock().map_err(|_| anyhow!("poisoned"))?.len(), 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn cancelling_queued_shell_input_preserves_the_observed_prompt() -> Result<()> {
+        let output = shell_output()?;
+        let writer = RecordingWriter::default();
+        let writes = writer.writes.clone();
+        let (job, handle) = CommandJob::new(
+            "cancelled-shell".into(),
+            true,
+            shell_list(json!({"commands":["never-send"]}))?,
+        );
+        handle.cancel.send(true)?;
+        let (_, failed) = job
+            .run(
+                Some(writer),
+                &AtomicBool::new(false),
+                &AtomicU64::new(0),
+                &None,
+                "connection",
+                output.clone(),
+            )
+            .await;
+        assert!(!failed);
+        assert!(output.lock().await.shell.ready());
+        assert!(writes.lock().map_err(|_| anyhow!("poisoned"))?.is_empty());
+        assert!(output.lock().await.shell.pairs(2)?["pairs"]
+            .as_array()
+            .is_some_and(Vec::is_empty));
+        Ok(())
     }
 
     #[test]

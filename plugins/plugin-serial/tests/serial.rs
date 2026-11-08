@@ -447,35 +447,33 @@ async fn process_host_loads_the_serial_package_and_validates_mcp_tools() -> Resu
             .as_str()
             .is_some_and(|description| description.contains("coterm.list_instances"))
     );
-    let read_tool = tools["tools"]
+    let listed = tools["tools"]
         .as_array()
-        .and_then(|tools| {
-            tools
-                .iter()
-                .find(|tool| tool["name"] == "coterm_serial_read")
-        })
-        .ok_or_else(|| anyhow::anyhow!("Missing public read tool"))?;
+        .ok_or_else(|| anyhow::anyhow!("Missing tools"))?;
+    let read_tool = listed
+        .iter()
+        .find(|tool| tool["name"] == "coterm_serial_read_lines")
+        .ok_or_else(|| anyhow::anyhow!("Missing public line-read tool"))?;
     assert_eq!(
-        read_tool["inputSchema"]["properties"]["cursor"]["type"],
-        "integer"
+        read_tool["inputSchema"]["properties"]["lines"]["default"],
+        100
     );
-    let recent_tool = tools["tools"]
-        .as_array()
-        .and_then(|tools| {
-            tools
-                .iter()
-                .find(|tool| tool["name"] == "coterm_serial_get_recent")
-        })
-        .ok_or_else(|| anyhow::anyhow!("Missing public recent-output tool"))?;
-    assert_eq!(
-        recent_tool["inputSchema"]["properties"]["lines"]["default"],
-        50
-    );
-    assert!(
-        recent_tool["inputSchema"]["properties"]["name"]["description"]
-            .as_str()
-            .is_some()
-    );
+    assert!(read_tool["inputSchema"]["properties"]
+        .get("cursor")
+        .is_none());
+    for removed in [
+        "coterm_serial_read",
+        "coterm_serial_read_hex",
+        "coterm_serial_get_recent",
+    ] {
+        assert!(!listed.iter().any(|tool| tool["name"] == removed));
+    }
+    for name in [
+        "coterm_serial_read_selected_lines",
+        "coterm_serial_read_dialogue_pairs",
+    ] {
+        assert!(listed.iter().any(|tool| tool["name"] == name));
+    }
     let missing_name = coterm_mcp::server::call_tool(
         &runtime,
         &json!({"name":"coterm_serial_status","arguments":{}}),

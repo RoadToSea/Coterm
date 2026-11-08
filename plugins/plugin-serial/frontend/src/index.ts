@@ -361,6 +361,14 @@ export function configure(container: HTMLElement, api: PluginConfigurationAPI): 
   framing.className = "triple";
   framing.append(dataBitsLabel, stopBitsLabel, parityLabel);
 
+  const dataMode = document.createElement("select"); dataMode.name = "mode";
+  dataMode.append(option("stream", t("Byte stream")), option("shell", t("Shell")));
+  const modeLabel = caption(t("Data mode")); modeLabel.append(dataMode);
+  const prompt = document.createElement("input"); prompt.name = "prompt"; prompt.value = "# "; prompt.maxLength = 256; prompt.disabled = true;
+  const promptLabel = caption(t("Shell prompt")); promptLabel.append(prompt);
+  const shellFields = document.createElement("div"); shellFields.className = "pair"; shellFields.append(modeLabel, promptLabel);
+  dataMode.addEventListener("change", () => { prompt.disabled = dataMode.value !== "shell"; });
+
   const dtrLabel = document.createElement("label");
   const dtr = document.createElement("input");
   dtr.type = "checkbox";
@@ -392,7 +400,7 @@ export function configure(container: HTMLElement, api: PluginConfigurationAPI): 
   submit.type = "submit";
   submit.className = "primary";
   submit.textContent = t("Open serial port");
-  form.append(portRow, framing, checks, hint, lineHint, error, submit);
+  form.append(portRow, framing, shellFields, checks, hint, lineHint, error, submit);
   root.append(form);
 
   const stopLocale = api.i18n?.subscribe(() => {
@@ -402,6 +410,8 @@ export function configure(container: HTMLElement, api: PluginConfigurationAPI): 
     retitle(dataBitsLabel, next("Data bits"));
     retitle(stopBitsLabel, next("Stop bits"));
     retitle(parityLabel, next("Parity"));
+    retitle(modeLabel, next("Data mode")); retitle(promptLabel, next("Shell prompt"));
+    dataMode.options[0].textContent = next("Byte stream"); dataMode.options[1].textContent = next("Shell");
     parity.options[0].textContent = next("None");
     parity.options[1].textContent = next("Odd");
     parity.options[2].textContent = next("Even");
@@ -492,6 +502,9 @@ export function configure(container: HTMLElement, api: PluginConfigurationAPI): 
     if (busy || loading || disposed) return;
     const name = port.value.trim();
     if (!name) { error.textContent = t("A serial port name is required."); return; }
+    if (dataMode.value === "shell" && (!prompt.value.trim() || /[\x00-\x1f\x7f]/.test(prompt.value) || new TextEncoder().encode(prompt.value).length > 256)) {
+      error.textContent = t("Enter a literal Shell prompt of 1–256 UTF-8 bytes."); return;
+    }
     busy = true;
     syncActions();
     try {
@@ -503,6 +516,8 @@ export function configure(container: HTMLElement, api: PluginConfigurationAPI): 
         parity: parity.value,
         dtr: dtr.checked,
         rts: rts.checked,
+        mode: dataMode.value,
+        prompt: dataMode.value === "shell" ? prompt.value : null,
       });
     } catch (reason) {
       if (!disposed) error.textContent = String(reason);
@@ -809,6 +824,8 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
   let resizeTimer = 0;
   let queuedBytes = 0;
   let inputQueue = Promise.resolve();
+  let selectionQueue = Promise.resolve();
+  let selectionTimer = 0;
   let commandQueue = 0;
   let mode: "terminal" | "uart" = "terminal";
   let uartView: "text" | "hex" = displayPreferences.receiveFormat;
@@ -850,6 +867,21 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
   const invoke = async <T = unknown>(operation: string, args: unknown): Promise<T> => output(await api.invoke<T>(operation, args));
   const notify = (message: string, tone: ToastTone = "info") => { if (!disposed) toasts.show({ message, tone }); };
   const showError = (reason: unknown) => notify(reason instanceof Error ? reason.message : String(reason), "error");
+  const onSelection = terminal.onSelectionChange(() => {
+    window.clearTimeout(selectionTimer);
+    selectionTimer = window.setTimeout(() => {
+      if (disposed || !connected || !connectionId || currentConfig?.mode !== "shell") return;
+      const targetConnection = connectionId;
+      const bytes = new TextEncoder().encode(terminal.getSelection());
+      let end = Math.min(bytes.length, 16384);
+      while (end < bytes.length && (bytes[end] & 0xc0) === 0x80) end--;
+      const text = new TextDecoder().decode(bytes.subarray(0, end));
+      selectionQueue = selectionQueue.then(async () => {
+        if (disposed || !connected || connectionId !== targetConnection || currentConfig?.mode !== "shell") return;
+        await invoke("serial.set_selection", {connectionId:targetConnection, text, truncated:end < bytes.length});
+      }).catch(showError);
+    }, 100);
+  });
   const renderConnection = () => {
     connect.dataset.connected = String(connected);
     connect.textContent = working ? t("Working…") : connected ? t("Connected") : t("Connect");
@@ -1485,6 +1517,8 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
     history.length = 0;
     observer.disconnect();
     onData.dispose();
+    onSelection.dispose();
+    window.clearTimeout(selectionTimer);
     stopShortcuts();
     toolbar.unmount(); receiveFormats.unmount(); sendFormat.unmount(); toasts.unmount();
     searchView.dispose();

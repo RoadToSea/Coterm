@@ -4,6 +4,16 @@
 
 领域接口与容量限制见 [接口设计](interfaces.md)，交互和运行方式见 [使用说明](usage.md)。插件独立管理配置、连接、收发、输出缓冲、命令队列及前端界面。
 
+## 2026-11-08：Shell / 字节流读取能力与提示符
+
+- 实例显式配置 `mode:stream|shell`，默认 stream，Shell 要求完整字面提示符；数据模式独立于终端 / UART 显示视图。创建配置进入已有保存流程，断开后的配置补丁仅更新当前实例。
+- MCP 读取收敛为 `read_lines`，Shell 另支持 `read_selected_lines` 和 `read_dialogue_pairs`；移除 MCP 游标读取，保留前端内部文本 / HEX 回放。共享目录列出能力并集，目标 `capabilities` 明确约束 Shell 专用调用；stream 不保存对话或选中快照。
+- Shell 每条命令分别发送、等待提示符并保存后端 JSON 对话；空 `stdin/stdout/stderr` 键保留，stderr 合并到 stdout，退出码为 null。提示符分包、ANSI、输出截断和取消均有界处理；超时停止余项，不重放，断开保留快照，重连不混入旧记录。人工命令仅从已观察提示符后的设备回显识别，不直接记录原始按键或猜测密码。
+- 验证通过：隔离本次提交源码后，`cargo check --locked --workspace`、64 项串口 Rust 测试、Core / MCP / Serial 全目标 Clippy（`-D warnings`）、桌面与 Serial 前端构建、20 项前端回归通过；宿主浏览器用例先补构建其依赖的 SSH 前端后通过。中文 360px 配置面板已目视核对，原有工作区改动不进入本次提交。
+- 真实开发板 `COM6@115200`、提示符 `# ` 验收通过：两条 `printf`（第二条写 stderr 并运行 `uname -s`）形成独立对话，stderr 合并、退出码未知、无游标行读取、断开保留快照和 stream 拒绝对话均已验证；测试后关闭连接并释放端口。验收使用驱动 Backend，进程加载与 MCP schema 由无硬件集成测试覆盖，浏览器使用宿主 API 替身，未验收真实桌面全链路或非 Windows 平台。原控制线硬件测试和虚拟串口配对测试未启用。
+- 限制：提示符是观察性边界；相同输出可误判，提示符随目录或权限变化时需更新配置或显式覆盖。对话最多 32 项、每项输出 16 KiB，结构化快照预算 12 KiB。未新增依赖、宿主权限、跨进程消息或明文落盘日志。
+- 继续入口：[Shell 记录与识别](../src/shell.rs)、[命令队列](../src/command.rs)、[读取路由](../src/backend.rs)、[读取契约测试](../tests/shell_reads.rs)、[可选硬件验收](../tests/shell_live.rs)、[前端回归](../../../tests/serial-shell-browser.test.mjs)。
+
 ## 2026-11-04：显示偏好跨启动恢复与串口退格
 
 - 复现重启后运行实例 ID 重新生成，旧换行偏好因此不可达。改用工作区已有固定 `configRef`，经 SDK 可选 `instanceConfigRef` 交给插件；不按 COM、名称或运行 ID 跨启动保存，不新增后端消息或权限。
