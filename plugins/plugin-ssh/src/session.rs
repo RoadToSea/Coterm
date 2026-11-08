@@ -2,7 +2,7 @@
 //!
 //! Two execution paths share one transport:
 //! - the interactive PTY (`ssh.command`) preserves `cd`/`export` for humans and agents;
-//! - one-shot exec channels (`ssh.exec`, read-only queries) isolate stdout/stderr and
+//! - one-shot exec channels (`ssh.command` mode=exec, read-only queries) isolate stdout/stderr and
 //!   cannot be polluted by shell job notices or kill the login shell on a syntax error.
 use std::{
     collections::{HashMap, VecDeque},
@@ -37,10 +37,6 @@ const IO_TIMEOUT: Duration = Duration::from_secs(2);
 pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(7);
 /// How long Ctrl+C may take to produce the completion marker before the terminal is reset.
 const CANCEL_GRACE: Duration = Duration::from_secs(2);
-/// Exec output retained for `ssh.output` polling, per stream and per job.
-const EXEC_OUTPUT_LIMIT: usize = 64 * 1024;
-/// Exec preview returned with the operation result; larger reads use `ssh.output`.
-const EXEC_RESULT_LIMIT: usize = 32 * 1024;
 const MAX_EXEC_JOBS: usize = 8;
 const EXEC_MAX_DURATION: Duration = Duration::from_secs(30 * 60);
 const QUERY_LIMIT: usize = 8 * 1024;
@@ -354,73 +350,29 @@ impl OutputBuffer {
         }
     }
 
-    /// Reads a job stream with a readable representation when the bytes are safe text.
-    pub fn read_encoded(&self, after: u64) -> Result<Value> {
-        // Two 32 KiB streams plus their readable digest fit the 192 KiB host result
-        // budget, including JSON/base64 expansion.
-        self.read_encoded_limit(after, EXEC_RESULT_LIMIT)
-    }
-
-    pub fn read_encoded_limit(&self, after: u64, limit: usize) -> Result<Value> {
-        let (data, next, gap, more) = self.collect(after, limit)?;
-        let (encoding, field, value) = crate::command::encode_output(&data, false);
-        Ok(
-            json!({field: value, "encoding": encoding, "cursor": next.to_string(), "gap": gap, "closed": self.closed, "more": more}),
-        )
-    }
-
-    /// First `limit` retained bytes with explicit loss accounting.
-    pub fn preview(&self, limit: usize) -> Value {
-        let mut data = Vec::new();
-        for (_, part) in &self.chunks {
-            if data.len() >= limit {
-                break;
-            }
-            let take = (limit - data.len()).min(part.len());
-            data.extend_from_slice(&part[..take]);
-        }
-        let (encoding, field, value) = crate::command::encode_output(&data, false);
-        let dropped = self.dropped + self.bytes.saturating_sub(data.len());
-        json!({
-            field: value,
-            "encoding": encoding,
-            "bytes": data.len(),
-            "retainedBytes": self.bytes,
-            "originalBytes": self.total,
-            "droppedBytes": dropped,
-            "truncated": dropped > 0,
-            "limit": limit,
-        })
-    }
-
     pub fn sequence(&self) -> u64 {
         self.sequence
+    }
+
+    /// Snapshot of the latest 1–1000 logical lines; callers validate the count.
+    /// Retention loss is reported even when the requested lines still fit.
+    pub fn recent_lines(&self, count: usize) -> Value {
+        let bytes: Vec<_> = self
+            .chunks
+            .iter()
+            .flat_map(|(_, part)| part.iter().copied())
+            .collect();
+        let mut value = crate::blocks::line_snapshot(&bytes, count);
+        value["truncated"] = json!(self.dropped > 0 || value["truncated"] == true);
+        value["closed"] = json!(self.closed);
+        value
     }
 }
 
 struct Job {
-    stdout: OutputBuffer,
-    stderr: OutputBuffer,
     done: bool,
-    exit_code: Option<i32>,
-    signal: Option<String>,
-    error: Option<RuntimeError>,
-    cancelled: bool,
-    timed_out: bool,
-    started: Instant,
     cancel: watch::Sender<bool>,
     cancel_reply: Option<oneshot::Sender<Result<Value>>>,
-}
-
-/// Terminal facts about one exec job, kept separately from the cancel reply.
-struct JobResult {
-    stdout: OutputBuffer,
-    stderr: OutputBuffer,
-    exit_code: Option<i32>,
-    signal: Option<String>,
-    error: Option<RuntimeError>,
-    cancelled: bool,
-    timed_out: bool,
 }
 
 #[derive(Default)]
@@ -445,15 +397,7 @@ impl JobRegistry {
         self.jobs.insert(
             operation_id.to_owned(),
             Job {
-                stdout: OutputBuffer::new(EXEC_OUTPUT_LIMIT),
-                stderr: OutputBuffer::new(EXEC_OUTPUT_LIMIT),
                 done: false,
-                exit_code: None,
-                signal: None,
-                error: None,
-                cancelled: false,
-                timed_out: false,
-                started: Instant::now(),
                 cancel,
                 cancel_reply: None,
             },
@@ -467,22 +411,9 @@ impl JobRegistry {
         self.order.retain(|id| id != operation_id);
     }
 
-    fn finish(
-        &mut self,
-        operation_id: &str,
-        result: JobResult,
-        cancel_reply: Option<oneshot::Sender<Result<Value>>>,
-    ) -> Option<oneshot::Sender<Result<Value>>> {
+    fn finish(&mut self, operation_id: &str) -> Option<oneshot::Sender<Result<Value>>> {
         let job = self.jobs.get_mut(operation_id)?;
-        job.stdout = result.stdout;
-        job.stderr = result.stderr;
         job.done = true;
-        job.exit_code = result.exit_code;
-        job.signal = result.signal;
-        job.error = result.error;
-        job.cancelled = result.cancelled;
-        job.timed_out = result.timed_out;
-        let _ = cancel_reply;
         job.cancel_reply.take()
     }
 
@@ -506,44 +437,6 @@ impl JobRegistry {
         let _ = job.cancel.send(true);
         true
     }
-
-    pub fn read(
-        &self,
-        operation_id: &str,
-        stdout_cursor: u64,
-        stderr_cursor: u64,
-    ) -> Result<Value> {
-        let job = self.jobs.get(operation_id).ok_or_else(|| {
-            anyhow!(
-                "SSH output is unavailable for this operation; use ssh.read for terminal commands"
-            )
-        })?;
-        let mut result = json!({
-            "operationId": operation_id,
-            "done": job.done,
-            "exitCode": job.exit_code,
-            "signal": job.signal,
-            "cancelled": job.cancelled,
-            "timedOut": job.timed_out,
-            "elapsedMs": job.started.elapsed().as_millis() as u64,
-            "stdout": job.stdout.read_encoded(stdout_cursor)?,
-            "stderr": job.stderr.read_encoded(stderr_cursor)?,
-        });
-        if let Some(error) = &job.error {
-            result["error"] = json!(error);
-        }
-        Ok(result)
-    }
-
-    /// Bounded preview embedded in the completed operation result; full streams stay
-    /// available through `ssh.output`.
-    pub fn read_preview(&self, operation_id: &str) -> Option<Value> {
-        let job = self.jobs.get(operation_id)?;
-        Some(json!({
-            "stdout": job.stdout.preview(EXEC_RESULT_LIMIT),
-            "stderr": job.stderr.preview(EXEC_RESULT_LIMIT),
-        }))
-    }
 }
 
 /// Frontend observation of an echoed shell line, never a parsed raw-key history.
@@ -557,7 +450,7 @@ pub(crate) struct ObservedInput {
 enum Input {
     Data(Vec<u8>, Option<ObservedInput>),
     Resize(u32, u32),
-    Command(Command, Vec<u8>, BlockSpec),
+    Command(Box<Command>, Vec<u8>, BlockSpec),
     Exec {
         operation_id: String,
         mcp: bool,
@@ -584,6 +477,7 @@ struct PendingCancel {
 pub struct Connection {
     actions: mpsc::Sender<Action>,
     pub output: Arc<Mutex<OutputBuffer>>,
+    pub(crate) stderr: Arc<Mutex<OutputBuffer>>,
     pub jobs: Arc<Mutex<JobRegistry>>,
     pub(crate) blocks: BlockLog,
     handle: Arc<client::Handle<HostKey>>,
@@ -659,6 +553,8 @@ impl Connection {
         })??;
         let (actions, mut receiver) = mpsc::channel::<Action>(64);
         let task_output = output.clone();
+        let stderr = Arc::new(Mutex::new(OutputBuffer::default()));
+        let task_stderr = stderr.clone();
         let task_jobs = jobs.clone();
         let blocks = BlockLog::default();
         let task_blocks = blocks.clone();
@@ -675,15 +571,12 @@ impl Connection {
             let mut shell_signal: Option<String> = None;
             let mut exec_tasks = JoinSet::new();
             loop {
-                let command_deadline = active
-                    .as_ref()
-                    .filter(|command| !command.timed_out)
-                    .map(|command| command.deadline);
                 tokio::select! {
                     action = receiver.recv() => {
                         let Some(action) = action else { break; };
                         match action.input {
-                            Input::Command(mut command, data, spec) => {
+                            Input::Command(command, data, spec) => {
+                                let mut command = *command;
                                 if active.is_some() {
                                     let _ = action.reply.send(Err(anyhow!(
                                         "A command is still running or its completion is unknown; reset the terminal to recover"
@@ -702,6 +595,7 @@ impl Connection {
                                         let _ = action.reply.send(Ok(json!({})));
                                     }
                                     _ => {
+                                        command.record_error("ssh_input_delivery_unknown", "SSH input was not confirmed; connection closed");
                                         let _ = action.reply.send(Err(anyhow!(
                                             "SSH input was not confirmed; connection closed"
                                         )));
@@ -718,6 +612,7 @@ impl Connection {
                                         continue;
                                     }
                                 }
+                                let command_text = block.text.clone();
                                 let block = match task_blocks.begin(&operation_id, block, "exec") {
                                     Ok(block) => block,
                                     Err(error) => {
@@ -726,7 +621,6 @@ impl Connection {
                                         continue;
                                     }
                                 };
-                                let command_text = text.clone();
                                 exec_tasks.spawn(run_exec(
                                     task_handle.clone(),
                                     task_jobs.clone(),
@@ -869,7 +763,14 @@ impl Connection {
                         }
                     }
                     message = read.wait() => match message {
-                        Some(ChannelMsg::Data { data }) | Some(ChannelMsg::ExtendedData { data, .. }) => {
+                        Some(ChannelMsg::ExtendedData { data, .. }) => {
+                            task_stderr.lock().await.push(&data);
+                            if let Some(command) = active.as_mut() { command.feed_stderr(&data); }
+                            if let Some(block) = &observed { block.append(&data, true); }
+                            // A distinct extended stream stays in backend records; xterm
+                            // receives the ordinary terminal stream only.
+                        }
+                        Some(ChannelMsg::Data { data }) => {
                             let (visible, completed) = match active.as_mut() {
                                 Some(command) => command.feed(&data),
                                 None => (data.to_vec(), None),
@@ -904,7 +805,7 @@ impl Connection {
                                         if cancelled { BlockState::Cancelled } else { BlockState::Completed },
                                         result["exitCode"].as_i64().and_then(|code| i32::try_from(code).ok()),
                                     );
-                                    if !command.timed_out && !cancelled {
+                                    if !cancelled {
                                         emit_completion(&events, &command, result).await;
                                     }
                                 }
@@ -916,38 +817,6 @@ impl Connection {
                         }
                         Some(ChannelMsg::Close) | None => break,
                         _ => {}
-                    },
-                    _ = sleep_until(command_deadline.unwrap_or_else(|| Instant::now() + Duration::from_secs(86400))), if command_deadline.is_some() => {
-                        if let Some(command) = active.take() {
-                            fail_command(
-                                &events,
-                                &command,
-                                "ssh_command_completion_unknown",
-                                "SSH command did not complete within 120 seconds; the terminal was reset",
-                                Some(json!({"timeoutMs": 120_000, "terminalReset": true})),
-                            )
-                            .await;
-                            match timeout(
-                                CONNECT_TIMEOUT,
-                                reopen_shell(&task_handle, &task_output, &mut read, &mut write),
-                            )
-                            .await
-                            {
-                                Ok(Ok(())) => {
-                                    shell_exit = None;
-                                    shell_signal = None;
-                                    emit_status(
-                                        &events,
-                                        &connection_id,
-                                        true,
-                                        true,
-                                        &task_output,
-                                    )
-                                    .await;
-                                }
-                                _ => break,
-                            }
-                        }
                     },
                     _ = exec_tasks.join_next(), if !exec_tasks.is_empty() => {}
                     _ = sleep_until(cancel_deadline.unwrap_or_else(|| Instant::now() + Duration::from_secs(86400))), if cancel_deadline.is_some() => {
@@ -991,7 +860,7 @@ impl Connection {
                 if let Some(pending) = pending_cancel.take() {
                     let _ = pending.reply.send(Ok(json!({"outcome":"unknown"})));
                 }
-                if !command.timed_out {
+                {
                     let (code, message, details) = if closed_by_transport {
                         (
                             "ssh_connection_lost_before_completion",
@@ -1009,6 +878,7 @@ impl Connection {
                 }
             }
             task_output.lock().await.closed = true;
+            task_stderr.lock().await.closed = true;
             if let Some((instance, sender)) = &events {
                 let cursor = task_output.lock().await.sequence().to_string();
                 let _ = sender.send(PluginNotification::Event {
@@ -1026,6 +896,7 @@ impl Connection {
         Ok(Self {
             actions,
             output,
+            stderr,
             jobs,
             blocks,
             handle,
@@ -1089,10 +960,8 @@ impl Connection {
         block: BlockSpec,
     ) -> Result<()> {
         let (command, wire) = Command::new(operation_id, mcp, text);
-        if wire.len() > 4000 {
-            bail!("Encoded command exceeds the 4000-byte shared PTY line limit; use ssh.exec for long/multiline scripts or ssh.write_file for file content");
-        }
-        self.submit(Input::Command(command, wire, block)).await?;
+        self.submit(Input::Command(Box::new(command), wire, block))
+            .await?;
         Ok(())
     }
 
@@ -1644,9 +1513,10 @@ async fn emit_status(
 async fn emit_completion(
     events: &Option<(String, mpsc::Sender<PluginNotification>)>,
     command: &Command,
-    result: Value,
+    mut result: Value,
 ) {
-    if let Some((_, sender)) = events {
+    if let Some((instance, sender)) = events {
+        result["instanceId"] = json!(instance);
         let result = if command.mcp {
             tool_result(&result)
         } else {
@@ -1668,6 +1538,7 @@ async fn fail_command(
     message: &str,
     details: Option<Value>,
 ) {
+    command.record_error(code, message);
     command.finish_block(
         if code == "ssh_command_completion_unknown" {
             BlockState::TimedOut
@@ -1731,8 +1602,6 @@ async fn run_exec(
     // Announce the job before it starts so the terminal can show a running tab.
     emit_job(&events, &connection_id, &operation_id, &command_text, false).await;
     let started = Instant::now();
-    let mut stdout = OutputBuffer::new(EXEC_OUTPUT_LIMIT);
-    let mut stderr = OutputBuffer::new(EXEC_OUTPUT_LIMIT);
     let mut exit_code = None;
     let mut signal = None;
     let mut timed_out = false;
@@ -1789,8 +1658,8 @@ async fn run_exec(
         loop {
             tokio::select! {
                 message = channel.wait() => match message {
-                    Some(ChannelMsg::Data { data }) => { block.append(&data, false); stdout.push(&data); }
-                    Some(ChannelMsg::ExtendedData { data, .. }) => { block.append(&data, true); stderr.push(&data); }
+                    Some(ChannelMsg::Data { data }) => { block.append(&data, false); }
+                    Some(ChannelMsg::ExtendedData { data, .. }) => { block.append(&data, true); }
                     Some(ChannelMsg::ExitStatus { exit_status }) => exit_code = Some(exit_status as i32),
                     Some(ChannelMsg::ExitSignal { signal_name, .. }) => {
                         signal = Some(format!("{signal_name:?}"));
@@ -1823,6 +1692,15 @@ async fn run_exec(
             }
         }
     }
+    if let Some(error) = &error {
+        block.set_error(&error.code, &error.message);
+    }
+    if timed_out {
+        block.set_error(
+            "ssh_command_timeout",
+            "SSH command exceeded the job time limit",
+        );
+    }
     block.finish(
         if cancelled {
             BlockState::Cancelled
@@ -1837,43 +1715,20 @@ async fn run_exec(
     );
     let mut cancel_reply = {
         let mut jobs = jobs.lock().await;
-        jobs.finish(
-            &operation_id,
-            JobResult {
-                stdout,
-                stderr,
-                exit_code,
-                signal: signal.clone(),
-                error: error.clone(),
-                cancelled,
-                timed_out,
-            },
-            None,
-        )
+        jobs.finish(&operation_id)
     };
     if let Some(reply) = cancel_reply.take() {
         let outcome = if cancelled { "stopped" } else { "unknown" };
         let _ = reply.send(Ok(json!({"outcome": outcome})));
     }
-    let job_snapshot = {
-        let jobs = jobs.lock().await;
-        jobs.read_preview(&operation_id)
-    };
-    let (stdout_preview, stderr_preview) = job_snapshot
-        .as_ref()
-        .map(|value| (value["stdout"].clone(), value["stderr"].clone()))
-        .unwrap_or((Value::Null, Value::Null));
-    let domain = json!({
-        "exitCode": exit_code,
-        "signal": signal,
-        "timedOut": timed_out,
-        "cancelled": cancelled,
-        "stdout": stdout_preview,
-        "stderr": stderr_preview,
-        "durationMs": started.elapsed().as_millis() as u64,
-        "outputOperationId": operation_id,
-        "executionContext": {"channel":"exec","inheritsPtyState":false,"sudo":sudo},
-    });
+    let mut domain = block.record().unwrap_or_else(|| json!({}));
+    domain["instanceId"] = json!(events.as_ref().map(|(instance, _)| instance));
+    domain["signal"] = json!(signal);
+    domain["timedOut"] = json!(timed_out);
+    domain["cancelled"] = json!(cancelled);
+    domain["durationMs"] = json!(started.elapsed().as_millis() as u64);
+    domain["outputOperationId"] = json!(operation_id);
+    domain["executionContext"] = json!({"channel":"exec","inheritsPtyState":false,"sudo":sudo});
     if cancelled {
         emit_job(&events, &connection_id, &operation_id, &command_text, true).await;
         return;
@@ -1914,7 +1769,7 @@ async fn run_exec(
 }
 
 /// Publishes the job list entry for an exec operation. It carries no output; the
-/// terminal reads output through `ssh.output` with cursors.
+/// terminal reads independent record snapshots through `ssh.output`.
 async fn emit_job(
     events: &Option<(String, mpsc::Sender<PluginNotification>)>,
     connection_id: &str,
@@ -2019,58 +1874,6 @@ mod tests {
         assert_eq!(page["gap"], true);
         assert!(serde_json::to_vec(&page)?.len() < 8192);
         assert!(buffer.read_terminal(buffer.sequence + 1).is_err());
-        Ok(())
-    }
-
-    #[test]
-    fn encoded_job_pages_advance_and_fit_the_host_record_budget() -> Result<()> {
-        let mut buffer = OutputBuffer::new(EXEC_OUTPUT_LIMIT);
-        let bytes = b"\x1b[0m".repeat(EXEC_RESULT_LIMIT / 2);
-        buffer.push(&bytes);
-        let first = buffer.read_encoded(0)?;
-        let cursor: u64 = first["cursor"].as_str().unwrap_or_default().parse()?;
-        assert!(cursor > 0);
-        assert_eq!(first["more"], true);
-        assert_eq!(
-            STANDARD.decode(first["data"].as_str().unwrap_or_default())?,
-            bytes[..EXEC_RESULT_LIMIT]
-        );
-        let next = buffer.read_encoded(cursor)?;
-        assert!(next["cursor"].as_str().unwrap_or_default().parse::<u64>()? > cursor);
-        let domain = json!({"exitCode":0,"stdout":first,"stderr":next});
-        assert!(serde_json::to_vec(&tool_result(&domain))?.len() <= 192 * 1024);
-        Ok(())
-    }
-
-    #[test]
-    fn full_exec_streams_fit_the_result_budget_for_text_and_binary() -> Result<()> {
-        for bytes in [
-            vec![b'x'; EXEC_RESULT_LIMIT],
-            "中\"\\\n".repeat(EXEC_RESULT_LIMIT / 6).into_bytes(),
-            vec![0xff; EXEC_RESULT_LIMIT],
-        ] {
-            let mut buffer = OutputBuffer::new(EXEC_OUTPUT_LIMIT);
-            buffer.push(&bytes);
-            let preview = buffer.preview(EXEC_RESULT_LIMIT);
-            assert_eq!(preview["bytes"], bytes.len());
-            assert_eq!(preview["truncated"], false);
-            let page = buffer.read_encoded(0)?;
-            assert_eq!(page["more"], false);
-            for stream in [preview, page] {
-                let decoded = if let Some(text) = stream["text"].as_str() {
-                    text.as_bytes().to_vec()
-                } else {
-                    STANDARD.decode(stream["data"].as_str().unwrap_or_default())?
-                };
-                assert_eq!(decoded, bytes);
-                let result = tool_result(&json!({"exitCode":0,"stdout":stream,"stderr":stream}));
-                assert!(serde_json::to_vec(&result)?.len() <= 192 * 1024);
-                if bytes.iter().all(|byte| *byte == b'x') {
-                    let summary = result["content"][0]["text"].as_str().unwrap_or_default();
-                    assert_eq!(summary.matches(&"x".repeat(EXEC_RESULT_LIMIT)).count(), 2);
-                }
-            }
-        }
         Ok(())
     }
 }

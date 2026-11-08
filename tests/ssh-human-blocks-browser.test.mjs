@@ -43,6 +43,7 @@ test("echoed human terminal commands create selectable blocks", async t => {
             return receipt(snapshot);
           }
           if (operation === 'ssh.select_blocks') { window.selected = args.ids; return receipt({selectedCount:selected.length}); }
+          if (operation === 'ssh.select_lines') return receipt({});
           if (operation === 'ssh.input') {
             const text = atob(args.data);
             if (observed) {

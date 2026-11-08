@@ -12,8 +12,6 @@ interface Job {
   timedOut: boolean;
   stdout: string;
   stderr: string;
-  stdoutCursor: string;
-  stderrCursor: string;
   reading: boolean;
 }
 const css = `
@@ -328,46 +326,30 @@ export function mountJobs(workbench: HTMLElement, terminalPane: HTMLElement, job
       return;
     job.reading = true;
     try {
-      for (let batch = 0; batch < 32; batch++) {
         const receipt = await api.invoke<{
-          done: boolean;
+          status: "running" | "completed" | "cancelled" | "timed_out" | "unknown";
           exitCode: number | null;
-          cancelled: boolean;
-          timedOut: boolean;
-          stdout: {
-            text?: string;
-            data?: string;
-            cursor: string;
-            more: boolean;
-            gap?: boolean;
-          };
-          stderr: {
-            text?: string;
-            data?: string;
-            cursor: string;
-            more: boolean;
-            gap?: boolean;
-          };
-        }>("ssh.output", { operationId: job.operationId, stdoutCursor: job.stdoutCursor, stderrCursor: job.stderrCursor });
+          stdout: string;
+          stderr: string;
+          stdoutEncoding: "utf-8" | "base64";
+          stderrEncoding: "utf-8" | "base64";
+          truncated: boolean;
+        }>("ssh.output", { operationId: job.operationId });
         if (disposed || jobs.get(job.operationId) !== job)
           return;
         if (receipt.error || receipt.status !== "completed" || !receipt.output)
           throw new Error(receipt.error?.message ?? "SSH output unavailable");
         const output = receipt.output;
         for (const name of ["stdout", "stderr"] as const) {
-          const stream = output[name];
-          const text = stream.text ?? (stream.data ? new TextDecoder().decode(Uint8Array.from(atob(stream.data), c => c.charCodeAt(0))) : "");
-          job[name] = (job[name] + (stream.gap ? "\n" + t("Output gap: older data expired.") + "\n" : "") + text).slice(-65536);
+          const value = output[name];
+          const encoding = name === "stdout" ? output.stdoutEncoding : output.stderrEncoding;
+          job[name] = encoding === "base64" ? new TextDecoder().decode(Uint8Array.from(atob(value), c => c.charCodeAt(0))) : value;
         }
-        job.stdoutCursor = output.stdout.cursor;
-        job.stderrCursor = output.stderr.cursor;
-        job.done = output.done;
+        job.done = output.status !== "running";
         job.exitCode = output.exitCode;
-        job.cancelled = output.cancelled;
-        job.timedOut = output.timedOut;
-        if (!output.stdout.more && !output.stderr.more)
-          break;
-      }
+        job.cancelled = output.status === "cancelled";
+        job.timedOut = output.status === "timed_out";
+        if (output.truncated) job.stdout += "\n" + t("Output gap: older data expired.");
       render();
       renderPanel();
     }
@@ -388,7 +370,7 @@ export function mountJobs(workbench: HTMLElement, terminalPane: HTMLElement, job
           break;
         jobs.delete(oldest);
       }
-      job = { operationId: id, text, done: false, exitCode: null, cancelled: false, timedOut: false, stdout: "", stderr: "", stdoutCursor: "0", stderrCursor: "0", reading: false };
+      job = { operationId: id, text, done: false, exitCode: null, cancelled: false, timedOut: false, stdout: "", stderr: "", reading: false };
       jobs.set(id, job);
       if (announce) {
         latest = id;

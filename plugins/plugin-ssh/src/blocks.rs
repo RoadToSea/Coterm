@@ -4,6 +4,7 @@ use std::{
     sync::{Arc, Mutex, MutexGuard},
 };
 
+use crate::output::{encode_output, text_prefix};
 use anyhow::{anyhow, bail, Result};
 use coterm_proto::runtime::{message::PluginNotification, operation::OperationSource};
 use serde::Serialize;
@@ -13,6 +14,10 @@ const MAX_BLOCKS: usize = 32;
 const COMMAND_BYTES: usize = 1024;
 const OUTPUT_BYTES: usize = 2048;
 const PAGE_BYTES: usize = 12 * 1024;
+const SOURCE_BYTES: usize = 64 * 1024;
+const STREAM_BYTES: usize = 64 * 1024;
+const RECORD_BYTES: usize = 96 * 1024;
+const STREAM_PREVIEW_BYTES: usize = 32 * 1024;
 
 #[derive(Clone)]
 pub(crate) struct BlockSpec {
@@ -57,20 +62,85 @@ struct Entry {
     stderr: Vec<u8>,
     command_truncated: bool,
     output_truncated: bool,
+    stdout_truncated: bool,
+    stderr_truncated: bool,
     observed: bool,
+    separated: bool,
+    error: Option<Value>,
+    started: std::time::Instant,
+    duration_ms: Option<u64>,
 }
 
 impl Entry {
     fn value(&self) -> Value {
+        let command = text_prefix(&self.command, COMMAND_BYTES);
+        let stdout = &self.stdout[..self.stdout.len().min(OUTPUT_BYTES)];
+        let stderr = &self.stderr[..self.stderr.len().min(OUTPUT_BYTES - stdout.len())];
         json!({
-            "id": self.id, "index": self.index, "command": self.command,
+            "id": self.id, "index": self.index, "command": command,
             "actor": self.actor, "channel": self.channel, "state": self.state,
-            "exitCode": self.exit_code, "output": plain_text(&self.stdout),
-            "stderr": plain_text(&self.stderr), "commandTruncated": self.command_truncated,
-            "outputTruncated": self.output_truncated,
+            "exitCode": self.exit_code, "output": plain_text(stdout),
+            "stderr": plain_text(stderr), "commandTruncated": self.command_truncated || command.len() < self.command.len(),
+            "outputTruncated": self.output_truncated || stdout.len() < self.stdout.len() || stderr.len() < self.stderr.len(),
             "boundary": if self.observed { "observed" } else { "verified" },
         })
     }
+
+    fn record(&self, budget: usize) -> Value {
+        let mut limit = STREAM_PREVIEW_BYTES;
+        loop {
+            let input = text_prefix(&self.command, limit);
+            let stdout = &self.stdout[..self.stdout.len().min(limit)];
+            let stderr = &self.stderr[..self.stderr.len().min(limit)];
+            let (out_encoding, _, out) = encode_output(stdout, false);
+            let (err_encoding, _, err) = encode_output(stderr, false);
+            let truncated = self.output_truncated
+                || self.command_truncated
+                || input.len() < self.command.len()
+                || stdout.len() < self.stdout.len()
+                || stderr.len() < self.stderr.len();
+            let value = json!({
+                "instanceId": null, "operationId": self.id, "index": self.index,
+                "mode": if self.channel == "exec" { "exec" } else { "terminal" },
+                "status": self.state, "stdin": input, "stdout": out, "stderr": err,
+                "stdoutEncoding": out_encoding, "stderrEncoding": err_encoding,
+                "streamMode": if self.separated { "separated" } else { "merged" },
+                "exitCode": self.exit_code, "truncated": truncated, "error": self.error,
+                "stdinTruncated": self.command_truncated || input.len() < self.command.len(),
+                "stdoutTruncated": self.stdout_truncated || stdout.len() < self.stdout.len(),
+                "stderrTruncated": self.stderr_truncated || stderr.len() < self.stderr.len(),
+                "actor": self.actor, "boundary": if self.observed { "observed" } else { "verified" },
+                "durationMs": self.duration_ms.unwrap_or_else(|| self.started.elapsed().as_millis() as u64),
+            });
+            if serde_json::to_vec(&value).is_ok_and(|bytes| bytes.len() <= budget) || limit == 0 {
+                return value;
+            }
+            limit /= 2;
+        }
+    }
+}
+
+/// Logical LF-delimited text, independent of xterm wrapping and cursor movement.
+pub(crate) fn line_snapshot(bytes: &[u8], count: usize) -> Value {
+    let text = plain_text(bytes);
+    let mut lines: Vec<_> = text.lines().rev().take(count).collect();
+    lines.reverse();
+    let mut truncated = false;
+    while serde_json::to_vec(&lines).is_ok_and(|value| value.len() > RECORD_BYTES / 2) {
+        truncated = true;
+        if lines.len() > 1 {
+            lines.remove(0);
+        } else if let Some(line) = lines.first_mut() {
+            let mut start = line.len() / 2;
+            while !line.is_char_boundary(start) {
+                start += 1;
+            }
+            *line = &line[start..];
+        } else {
+            break;
+        }
+    }
+    json!({"lines": lines, "truncated": truncated})
 }
 
 struct Inner {
@@ -131,7 +201,7 @@ impl BlockLog {
             }
             inner.dropped = inner.dropped.saturating_add(1);
         }
-        let mut end = spec.text.len().min(COMMAND_BYTES);
+        let mut end = spec.text.len().min(SOURCE_BYTES);
         while !spec.text.is_char_boundary(end) {
             end -= 1;
         }
@@ -151,7 +221,13 @@ impl BlockLog {
             stderr: Vec::new(),
             command_truncated: end < spec.text.len(),
             output_truncated: false,
+            stdout_truncated: false,
+            stderr_truncated: false,
             observed: spec.observed,
+            separated: channel == "exec",
+            error: None,
+            started: std::time::Instant::now(),
+            duration_ms: None,
         });
         inner.next_index = index;
         inner.revision = inner.revision.saturating_add(1);
@@ -169,6 +245,54 @@ impl BlockLog {
 
     pub fn selected_snapshot(&self, before: Option<u32>) -> Result<Value> {
         self.read_snapshot(before, true)
+    }
+
+    pub fn record(&self, operation_id: &str) -> Result<Value> {
+        self.lock()
+            .entries
+            .iter()
+            .find(|entry| entry.id == operation_id)
+            .map(|entry| entry.record(RECORD_BYTES))
+            .ok_or_else(|| anyhow!("SSH command record is unavailable or expired"))
+    }
+
+    pub fn dialogue_pairs(&self, count: usize) -> Value {
+        let count = count.clamp(1, MAX_BLOCKS);
+        let inner = self.lock();
+        let budget = (RECORD_BYTES - 8 * 1024) / count;
+        let records: Vec<_> = inner
+            .entries
+            .iter()
+            .rev()
+            .take(count)
+            .map(|entry| entry.record(budget))
+            .collect();
+        json!({"pairs": records, "dropped": inner.dropped,
+            "truncated": inner.dropped > 0 || records.iter().any(|record| record["truncated"] == true)})
+    }
+
+    pub fn read_lines(&self, operation_id: &str, count: usize) -> Result<Value> {
+        let inner = self.lock();
+        let entry = inner
+            .entries
+            .iter()
+            .find(|entry| entry.id == operation_id)
+            .ok_or_else(|| anyhow!("SSH command record is unavailable or expired"))?;
+        let mut value = line_snapshot(&entry.stdout, count);
+        let stderr = line_snapshot(&entry.stderr, count);
+        value["stderrLines"] = stderr["lines"].clone();
+        value["truncated"] = json!(
+            entry.output_truncated || value["truncated"] == true || stderr["truncated"] == true
+        );
+        value["operationId"] = json!(operation_id);
+        value["status"] = json!(entry.state);
+        value["streamMode"] = json!(if entry.separated {
+            "separated"
+        } else {
+            "merged"
+        });
+        value["exitCode"] = json!(entry.exit_code);
+        Ok(value)
     }
 
     /// Only the human frontend may call this through the backend's source gate.
@@ -264,20 +388,44 @@ impl BlockHandle {
         if entry.state != BlockState::Running {
             return;
         }
-        let take = bytes
-            .len()
-            .min(OUTPUT_BYTES.saturating_sub(entry.stdout.len() + entry.stderr.len()));
         let was_truncated = entry.output_truncated;
         if stderr {
-            entry.stderr.extend_from_slice(&bytes[..take]);
-        } else {
-            entry.stdout.extend_from_slice(&bytes[..take]);
+            entry.separated = true;
         }
-        entry.output_truncated |= take < bytes.len();
-        if take > 0 || was_truncated != entry.output_truncated {
+        let target = if stderr {
+            &mut entry.stderr
+        } else {
+            &mut entry.stdout
+        };
+        let keep = bytes.len().min(STREAM_BYTES);
+        let drop = target
+            .len()
+            .saturating_add(keep)
+            .saturating_sub(STREAM_BYTES);
+        target.drain(..drop);
+        target.extend_from_slice(&bytes[bytes.len() - keep..]);
+        entry.output_truncated |= drop > 0 || keep < bytes.len();
+        if stderr {
+            entry.stderr_truncated |= drop > 0 || keep < bytes.len();
+        } else {
+            entry.stdout_truncated |= drop > 0 || keep < bytes.len();
+        }
+        if keep > 0 || was_truncated != entry.output_truncated {
             inner.revision = inner.revision.saturating_add(1);
             inner.dirty = true;
         }
+    }
+
+    pub fn record(&self) -> Option<Value> {
+        self.log.record(&self.id).ok()
+    }
+
+    pub fn set_error(&self, code: &str, message: &str) {
+        let mut inner = self.log.lock();
+        if let Some(entry) = inner.entries.iter_mut().find(|entry| entry.id == self.id) {
+            entry.error = Some(json!({"code":code,"message":message}));
+        }
+        inner.dirty = true;
     }
 
     pub fn finish(&self, state: BlockState, exit_code: Option<i32>) {
@@ -290,6 +438,7 @@ impl BlockHandle {
         }
         entry.state = state;
         entry.exit_code = exit_code;
+        entry.duration_ms = Some(entry.started.elapsed().as_millis() as u64);
         inner.revision = inner.revision.saturating_add(1);
         inner.dirty = true;
     }
@@ -359,6 +508,125 @@ fn plain_text(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn command_records_keep_empty_keys_and_actual_input_in_both_modes() -> Result<()> {
+        let log = BlockLog::default();
+        for (id, channel, stream_mode) in [
+            ("terminal", "pty", "merged"),
+            ("background", "exec", "separated"),
+        ] {
+            let block = log.begin(
+                id,
+                BlockSpec::new("printf actual\nprintf input".into(), true),
+                channel,
+            )?;
+            let record = log.record(id)?;
+            assert_eq!(record["stdin"], "printf actual\nprintf input");
+            assert_eq!(record["stdout"], "");
+            assert_eq!(record["stderr"], "");
+            assert_eq!(record["streamMode"], stream_mode);
+            assert_eq!(record["status"], "running");
+            assert!(record["exitCode"].is_null());
+            assert!(record.get("error").is_some_and(Value::is_null));
+            block.append(b"ordinary\n", false);
+            block.append(b"diagnostic\n", true);
+            block.finish(BlockState::Completed, Some(1));
+            let record = log.record(id)?;
+            assert_eq!(record["stdout"], "ordinary\n");
+            assert_eq!(record["stderr"], "diagnostic\n");
+            assert_eq!(record["streamMode"], "separated");
+            assert_eq!(record["exitCode"], 1);
+        }
+        let snapshot = log.dialogue_pairs(2);
+        assert_eq!(snapshot["pairs"].as_array().map(Vec::len), Some(2));
+        assert_eq!(snapshot["pairs"][0]["operationId"], "background");
+        assert_eq!(snapshot, log.dialogue_pairs(2));
+        assert_eq!(BlockLog::default().dialogue_pairs(2)["pairs"], json!([]));
+        Ok(())
+    }
+
+    #[test]
+    fn recent_lines_include_running_output_and_the_tail_after_retention_loss() -> Result<()> {
+        let log = BlockLog::default();
+        let block = log.begin("live", BlockSpec::new("long-task".into(), true), "exec")?;
+        block.append(&vec![b'x'; STREAM_BYTES + 4096], false);
+        block.append(b"\nfirst\nsecond\nthird\n", false);
+        block.append(b"failure\n", true);
+        let lines = log.read_lines("live", 2)?;
+        assert_eq!(lines["lines"], json!(["second", "third"]));
+        assert_eq!(lines["stderrLines"], json!(["failure"]));
+        assert_eq!(lines["status"], "running");
+        assert_eq!(lines["truncated"], true);
+        assert_eq!(lines, log.read_lines("live", 2)?);
+        assert!(log.read_lines("missing", 2).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn record_snapshots_fit_json_budget_without_consuming_history() -> Result<()> {
+        let log = BlockLog::default();
+        for index in 0..MAX_BLOCKS {
+            let block = log.begin(
+                &index.to_string(),
+                BlockSpec::new("'\n中".repeat(10_000), true),
+                "exec",
+            )?;
+            block.append(&vec![0; STREAM_BYTES], false);
+            block.append(&vec![255; STREAM_BYTES], true);
+            block.finish(BlockState::Completed, Some(0));
+        }
+        let snapshot = log.dialogue_pairs(32);
+        assert!(serde_json::to_vec(&snapshot)?.len() <= RECORD_BYTES);
+        assert_eq!(snapshot["pairs"].as_array().map(Vec::len), Some(32));
+        assert_eq!(snapshot["truncated"], true);
+        assert_eq!(snapshot, log.dialogue_pairs(32));
+        assert!(serde_json::to_vec(&crate::result::tool_result(&snapshot))?.len() < 192 * 1024);
+        Ok(())
+    }
+
+    #[test]
+    fn logical_lines_strip_ansi_without_using_screen_wraps() {
+        assert_eq!(
+            line_snapshot("\x1b[31m设备\x1b[0m\r\nnext\nlast".as_bytes(), 2)["lines"],
+            json!(["next", "last"])
+        );
+        assert_eq!(line_snapshot(b"", 2)["lines"], json!([]));
+        let long = line_snapshot(&vec![b'"'; 256 * 1024], 1);
+        assert_eq!(long["truncated"], true);
+        assert!(serde_json::to_vec(&long).is_ok_and(|bytes| bytes.len() < RECORD_BYTES));
+    }
+
+    #[test]
+    fn record_streams_round_trip_text_and_binary_within_the_host_budget() -> Result<()> {
+        use base64::Engine;
+        for bytes in [
+            vec![b'x'; 32 * 1024],
+            "中\"\\\n".repeat(5000).into_bytes(),
+            vec![255; 32 * 1024],
+        ] {
+            let log = BlockLog::default();
+            let block = log.begin("op", BlockSpec::new("actual input".into(), true), "exec")?;
+            block.append(&bytes, false);
+            block.append(&bytes, true);
+            block.finish(BlockState::Completed, Some(0));
+            let record = log.record("op")?;
+            assert_eq!(record["truncated"], false);
+            for field in ["stdout", "stderr"] {
+                let value = record[field]
+                    .as_str()
+                    .ok_or_else(|| anyhow!("missing stream"))?;
+                let decoded = if record[format!("{field}Encoding")] == "base64" {
+                    base64::engine::general_purpose::STANDARD.decode(value)?
+                } else {
+                    value.as_bytes().to_vec()
+                };
+                assert_eq!(decoded, bytes);
+            }
+            assert!(serde_json::to_vec(&crate::result::tool_result(&record))?.len() < 192 * 1024);
+        }
+        Ok(())
+    }
 
     #[test]
     fn selection_is_epoch_bound_validated_paged_and_pruned_on_eviction() -> Result<()> {

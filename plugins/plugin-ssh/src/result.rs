@@ -9,10 +9,13 @@ const TEXT_PREVIEW: usize = 2048;
 const EXEC_TEXT_PREVIEW: usize = 68 * 1024;
 
 pub fn tool_result(domain: &Value) -> Value {
-    let is_error = domain
-        .get("exitCode")
-        .and_then(Value::as_i64)
-        .is_some_and(|code| code != 0);
+    let is_error = domain.get("error").is_some_and(|value| !value.is_null())
+        || domain.get("cancelled") == Some(&Value::Bool(true))
+        || domain.get("timedOut") == Some(&Value::Bool(true))
+        || domain
+            .get("exitCode")
+            .and_then(Value::as_i64)
+            .is_some_and(|code| code != 0);
     json!({
         "content": [{"type": "text", "text": digest(domain)}],
         "structuredContent": domain,
@@ -30,6 +33,68 @@ pub fn digest(domain: &Value) -> String {
 }
 
 fn digest_inner(domain: &Value) -> String {
+    if domain.get("stdout").is_some_and(Value::is_string) {
+        let mut text = format!(
+            "mode={} status={} streamMode={} exitCode={} truncated={}\n",
+            domain["mode"],
+            domain["status"],
+            domain["streamMode"],
+            domain["exitCode"],
+            domain["truncated"]
+        );
+        for field in ["stdout", "stderr"] {
+            if domain[format!("{field}Encoding")] == "base64" {
+                text.push_str(&format!("{field}: base64 data in structuredContent\n"));
+            } else if let Some(stream) = domain[field].as_str().filter(|text| !text.is_empty()) {
+                text.push_str(&format!("{field}:\n{}\n", preview_limit(stream, 34 * 1024)));
+            }
+        }
+        return text;
+    }
+    if let Some(pairs) = domain.get("pairs").and_then(Value::as_array) {
+        let mut text = format!(
+            "pairs={} dropped={} truncated={}\n",
+            pairs.len(),
+            domain["dropped"],
+            domain["truncated"]
+        );
+        for pair in pairs {
+            text.push_str(&format!(
+                "{}\n{}\n",
+                preview(pair["stdin"].as_str().unwrap_or("")),
+                preview(&digest_inner(pair))
+            ));
+            if text.len() > TEXT_PREVIEW {
+                break;
+            }
+        }
+        return text;
+    }
+    if let Some(lines) = domain.get("lines").and_then(Value::as_array) {
+        let mut text = lines
+            .iter()
+            .filter_map(Value::as_str)
+            .collect::<Vec<_>>()
+            .join("\n");
+        if let Some(stderr) = domain
+            .get("stderrLines")
+            .and_then(Value::as_array)
+            .filter(|lines| !lines.is_empty())
+        {
+            text.push_str("\nstderr:\n");
+            text.push_str(
+                &stderr
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            );
+        }
+        return preview(&text);
+    }
+    if let Some(text) = domain.get("text").and_then(Value::as_str) {
+        return preview(text);
+    }
     if let Some(blocks) = domain.get("blocks").and_then(Value::as_array) {
         let mut text = format!(
             "selectedCount={} more={} nextBefore={}\n",

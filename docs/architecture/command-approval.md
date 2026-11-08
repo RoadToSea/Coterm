@@ -19,7 +19,7 @@
 
 插件在 operation 的 `inputSchema` 顶层声明可选扩展 `x-coterm-approval-text`，值为指向实际命令文本或字符串数组的 JSON Pointer，例如 `/text`、`/commands`。声明来自注册目录，调用参数不能覆盖它。宿主在 schema 校验后读取该路径，使用已编译规则判断；不扫描其他参数、配置或秘密，不猜测具体协议。
 
-目前 SSH 内部 command/exec 声明 `/text`，MCP command/exec 声明 `/commands`；串口文本 command 及其 MCP 镜像声明 `/commands`。串口 HEX、底层 write、原始按键、文件写入、连接配置等不声明命令文本，继续使用原审批规则。新插件可以通过同一 schema 扩展接入，不需要新增宿主协议适配器。
+SSH 内部 command 声明 `/text`，MCP command 声明 `/commands`；terminal/exec 执行模式与命令同属审批参数快照；串口文本 command 及其 MCP 镜像声明 `/commands`。串口 HEX、底层 write、原始按键、文件写入、连接配置等不声明命令文本，继续使用原审批规则。新插件可以通过同一 schema 扩展接入，不需要新增宿主协议适配器。
 
 只有 Agent 来源的 `effect=commit` 受此门控；Human/System、read/draft 沿用已有行为。未声明、无效指针、缺失或类型错误的字段不能获得规则豁免。`sensitiveInput` 继续控制账本脱敏；例如串口文本命令同时声明命令路径和敏感标记，只在内存匹配，原文不进入普通日志或 MCP 账本。用户主动开启的 Bypass 仍跳过宿主审批；规则与 Bypass 均不跳过插件参数校验、来源限制、协议认证或秘密交互。已等待审批的提案不因修改规则自动执行；后续新提交才使用新规则。
 

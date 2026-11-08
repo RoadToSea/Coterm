@@ -51,10 +51,11 @@ test("SSH tasks collapse to one row and keep the selected task last while live e
           if (operation === 'ssh.resize') return receipt({});
           if (operation === 'ssh.blocks') return receipt({epoch:'conn',revision:'1',dropped:0,blocks:[],more:false,nextBefore:null});
           if (operation === 'ssh.select_blocks') return receipt({});
+          if (operation === 'ssh.select_lines') return receipt({});
           if (operation === 'ssh.output') return receipt({
-            done:window.states[args.operationId] ?? false,exitCode:window.states[args.operationId] ? (window.exits[args.operationId] ?? 0) : null,cancelled:false,timedOut:false,
-            stdout:{text:args.stdoutCursor === '0' ? 'output for ' + args.operationId : '',cursor:'1',more:false},
-            stderr:{text:args.stderrCursor === '0' ? window.stderr[args.operationId] ?? '' : '',cursor:'1',more:false},
+            status:window.states[args.operationId] ? 'completed' : 'running',exitCode:window.states[args.operationId] ? (window.exits[args.operationId] ?? 0) : null,
+            stdout:'output for ' + args.operationId, stderr:window.stderr[args.operationId] ?? '',
+            stdoutEncoding:'utf-8',stderrEncoding:'utf-8',truncated:false,
           });
           throw new Error('Unexpected operation: ' + operation);
         },

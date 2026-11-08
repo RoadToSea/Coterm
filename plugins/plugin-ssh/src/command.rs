@@ -5,6 +5,8 @@
 //! The remote shell echoes the wrapper line; that echo is dropped before it reaches the
 //! replay buffer so terminal recordings and model context stay free of protocol noise.
 use crate::blocks::{BlockHandle, BlockState};
+pub(crate) use crate::output::encode_output;
+#[cfg(test)]
 use base64::{engine::general_purpose::STANDARD, Engine};
 use serde_json::{json, Value};
 
@@ -21,8 +23,10 @@ const ECHO_HINTS: &[&[u8]] = &[b"__coterm", b"coterm_src", b"coterm;"];
 
 /// Result encoding. UTF-8 terminal output preserves ANSI and common terminal controls;
 /// binary data stays base64 so clients can recover the exact bytes.
-pub const ENCODING_TEXT: &str = "utf-8";
-pub const ENCODING_BASE64: &str = "base64";
+#[cfg(test)]
+const ENCODING_TEXT: &str = "utf-8";
+#[cfg(test)]
+const ENCODING_BASE64: &str = "base64";
 
 pub struct Command {
     pub operation_id: String,
@@ -32,14 +36,16 @@ pub struct Command {
     pending: Vec<u8>,
     started: bool,
     output: Vec<u8>,
+    stderr: Vec<u8>,
+    stdin: String,
+    separated: bool,
+    echo_screened: bool,
     original: usize,
     dropped: usize,
     truncated: bool,
     exit_code: Option<u8>,
     syntax_error: bool,
     started_at: tokio::time::Instant,
-    pub deadline: tokio::time::Instant,
-    pub timed_out: bool,
     pub cancelled: bool,
     block: Option<BlockHandle>,
     boundaries: Vec<(usize, &'static str)>,
@@ -63,14 +69,8 @@ impl Command {
              eval \"$__coterm_src\" && __coterm_rc=0 || __coterm_rc=$?; \
              else __coterm_rc=2; __coterm_flag=syntax; printf '%s\\n' \"$__coterm_err\"; fi; \
              printf '\\033]777;coterm;{token};end;%d;%s\\007' \"$__coterm_rc\" \"$__coterm_flag\"\r"
-        )
-        .into_bytes();
-        // The terminal driver echoes the whole line, converting the final CR to CRLF.
-        let mut echo_expected = wire.clone();
-        if echo_expected.last() == Some(&b'\r') {
-            echo_expected.pop();
-            echo_expected.extend_from_slice(b"\r\n");
-        }
+        );
+        let wire = terminal_wire(text, &quoted, wire).into_bytes();
         (
             Self {
                 operation_id,
@@ -80,14 +80,16 @@ impl Command {
                 pending: Vec::new(),
                 started: false,
                 output: Vec::new(),
+                stderr: Vec::new(),
+                stdin: text.to_owned(),
+                separated: false,
+                echo_screened: false,
                 original: 0,
                 dropped: 0,
                 truncated: false,
                 exit_code: None,
                 syntax_error: false,
                 started_at: tokio::time::Instant::now(),
-                deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(120),
-                timed_out: false,
                 cancelled: false,
                 block: None,
                 boundaries: Vec::new(),
@@ -138,15 +140,21 @@ impl Command {
                     .unwrap_or(0);
                 let flush = self.pending.len() - keep;
                 let bytes: Vec<_> = self.pending.drain(..flush).collect();
-                visible.extend_from_slice(&bytes);
+                self.echo_screened |= ECHO_HINTS
+                    .iter()
+                    .any(|hint| bytes.windows(hint.len()).any(|window| window == *hint));
+                if !self.echo_screened {
+                    visible.extend_from_slice(&bytes);
+                }
                 return true;
             }
             return false;
         };
         let before: Vec<_> = self.pending.drain(..index).collect();
-        let echoed = ECHO_HINTS
-            .iter()
-            .any(|hint| before.windows(hint.len()).any(|window| window == *hint));
+        let echoed = self.echo_screened
+            || ECHO_HINTS
+                .iter()
+                .any(|hint| before.windows(hint.len()).any(|window| window == *hint));
         if !echoed {
             visible.extend_from_slice(&before);
         }
@@ -211,15 +219,39 @@ impl Command {
     fn finish(&self) -> Value {
         let (encoding, field, value) = encode_output(&self.output, self.truncated);
         // Flat and explicit: no nested copies of the same payload.
-        let mut result = serde_json::Map::new();
+        let recorded = self.block.as_ref().and_then(BlockHandle::record);
+        let tracked = recorded.is_some();
+        let mut result = recorded
+            .and_then(|value| value.as_object().cloned())
+            .unwrap_or_else(|| {
+                let (out_encoding, _, out) = encode_output(&self.output, self.truncated);
+                let (err_encoding, _, err) = encode_output(&self.stderr, self.truncated);
+                let input = crate::output::text_prefix(&self.stdin, 8 * 1024);
+                serde_json::from_value(json!({"instanceId":null,"operationId":self.operation_id,
+                    "mode":"terminal","stdin":input,"stdout":out,"stderr":err,
+                    "stdoutEncoding":out_encoding,"stderrEncoding":err_encoding,
+                    "streamMode":if self.separated {"separated"} else {"merged"},
+                    "truncated":self.truncated || input.len() < self.stdin.len(),"error":null}))
+                .unwrap_or_default()
+            });
+        result.insert(
+            "status".into(),
+            json!(if self.cancelled {
+                "cancelled"
+            } else {
+                "completed"
+            }),
+        );
         result.insert(field.to_owned(), Value::String(value));
         result.insert("encoding".into(), Value::String(encoding.into()));
-        result.insert("exitCode".into(), json!(self.exit_code.unwrap_or(255)));
+        result.insert("exitCode".into(), json!(self.exit_code));
         result.insert("bytes".into(), json!(self.output.len()));
         result.insert("originalBytes".into(), json!(self.original));
         result.insert("droppedBytes".into(), json!(self.dropped));
         result.insert("limit".into(), json!(MAX_CAPTURE));
-        result.insert("truncated".into(), json!(self.truncated));
+        let truncated =
+            (!tracked && self.truncated) || result.get("truncated") == Some(&Value::Bool(true));
+        result.insert("truncated".into(), json!(truncated));
         result.insert("outputTruncated".into(), json!(self.truncated));
         result.insert("syntaxError".into(), json!(self.syntax_error));
         result.insert("cancelled".into(), json!(self.cancelled));
@@ -254,28 +286,163 @@ impl Command {
             block.finish(state, exit_code);
         }
     }
+
+    pub fn feed_stderr(&mut self, bytes: &[u8]) {
+        self.separated = true;
+        if let Some(block) = &self.block {
+            block.append(bytes, true);
+        }
+        let take = bytes
+            .len()
+            .min(MAX_CAPTURE.saturating_sub(self.stderr.len()));
+        self.stderr.extend_from_slice(&bytes[..take]);
+        self.truncated |= take < bytes.len();
+    }
+
+    pub fn record_error(&self, code: &str, message: &str) {
+        if let Some(block) = &self.block {
+            block.set_error(code, message);
+        }
+    }
 }
 
-/// Chooses a lossless representation. ANSI escape, bell and backspace are valid terminal
-/// text; NUL, other binary controls and invalid UTF-8 still require base64.
-pub fn encode_output(bytes: &[u8], _truncated: bool) -> (&'static str, &'static str, String) {
-    let readable = std::str::from_utf8(bytes).ok().filter(|text| {
-        !text
-            .chars()
-            .any(|c| c.is_control() && !matches!(c, '\n' | '\r' | '\t' | '\x1b' | '\x07' | '\x08'))
-            // JSON escapes can multiply a control-heavy capture by six. Keep the
-            // lossless binary fallback rather than overflowing the host result budget.
-            && serde_json::to_string(text).is_ok_and(|json| json.len() <= bytes.len().div_ceil(3) * 4 + 128)
-    });
-    match readable {
-        Some(text) => (ENCODING_TEXT, "text", text.to_owned()),
-        None => (ENCODING_BASE64, "data", STANDARD.encode(bytes)),
+// A brace group keeps cd/export in the login shell. Each assignment fits the
+// canonical PTY line limit, and no source executes until the entire group parses.
+fn terminal_wire(text: &str, quoted: &str, wire: String) -> String {
+    if wire.len() <= 4000 && !text.contains(['\n', '\r']) {
+        return wire;
     }
+    let assignment = format!("__coterm_src='{quoted}'; ");
+    let body = wire.replacen(&assignment, "", 1);
+    let mut result = String::from("{ __coterm_src=\r");
+    let mut chunk = String::new();
+    for c in text.chars() {
+        let escaped = if c == '\'' {
+            "'\\''".to_owned()
+        } else {
+            c.to_string()
+        };
+        if chunk.len() + escaped.len() > 1024 {
+            result.push_str(&format!("__coterm_src=\"$__coterm_src\"'{chunk}'\r"));
+            chunk.clear();
+        }
+        chunk.push_str(&escaped);
+    }
+    result.push_str(&format!("__coterm_src=\"$__coterm_src\"'{chunk}'\r"));
+    result.push_str(body.trim_end_matches('\r'));
+    result.push_str("\r}\r");
+    result
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn long_multiline_terminal_source_executes_once_and_preserves_shell_state(
+    ) -> anyhow::Result<()> {
+        use tokio::io::AsyncWriteExt;
+        let source = format!(
+            "export COTERM_LONG='{}'\nprintf '%s' \"$COTERM_LONG\"",
+            "'中".repeat(4000).replace('\'', "'\\''")
+        );
+        let (mut first, mut wire) = Command::new("long".into(), false, &source);
+        assert!(wire
+            .split(|byte| *byte == b'\r' || *byte == b'\n')
+            .all(|line| line.len() < 4000));
+        let (mut second, next) =
+            Command::new("next".into(), false, "printf '%s' \"${#COTERM_LONG}\"");
+        wire.extend(next);
+        for byte in &mut wire {
+            if *byte == b'\r' {
+                *byte = b'\n';
+            }
+        }
+        let mut child = match tokio::process::Command::new("sh")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+        {
+            Ok(child) => child,
+            Err(error) if cfg!(windows) && error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(())
+            }
+            Err(error) => return Err(error.into()),
+        };
+        let mut stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| anyhow::anyhow!("missing stdin"))?;
+        // Reading concurrently avoids filling a pipe while the shell echoes large output.
+        let sender = tokio::spawn(async move { stdin.write_all(&wire).await });
+        let output =
+            tokio::time::timeout(std::time::Duration::from_secs(5), child.wait_with_output())
+                .await??;
+        sender.await??;
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let mut results = Vec::new();
+        for byte in output.stdout {
+            let command = if results.is_empty() {
+                &mut first
+            } else {
+                &mut second
+            };
+            if let Some(result) = command.feed(&[byte]).1 {
+                results.push(result);
+            }
+        }
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0]["exitCode"], 0);
+        assert_eq!(results[1]["exitCode"], 0);
+        assert!(results[1]["text"]
+            .as_str()
+            .is_some_and(|text| text != "0" && !text.is_empty()));
+        Ok(())
+    }
+
+    #[test]
+    fn long_wrapper_echo_is_hidden_with_bounded_pending_bytes() {
+        let source = format!("printf done\n#{}", "'".repeat(65_000));
+        let (mut command, wire) = Command::new("long".into(), true, &source);
+        for part in wire.chunks(4096) {
+            let (visible, result) = command.feed(part);
+            assert!(visible.is_empty());
+            assert!(result.is_none());
+            assert!(command.pending.len() <= MAX_PRE_MARKER);
+        }
+        let mut output = command.begin.clone();
+        output.extend_from_slice(b"done");
+        output.extend_from_slice(&command.end);
+        output.extend_from_slice(b"0;\x07");
+        let (visible, result) = command.feed(&output);
+        assert_eq!(visible, b"done");
+        assert_eq!(
+            result.as_ref().map(|value| &value["stdout"]),
+            Some(&json!("done"))
+        );
+    }
+
+    #[test]
+    fn distinct_terminal_stderr_is_recorded_without_becoming_visible_stdout() {
+        let (mut command, _) = Command::new("op".into(), false, "true");
+        let begin = command.begin.clone();
+        command.feed(&begin);
+        command.feed_stderr(b"diagnostic");
+        let mut end = command.end.clone();
+        end.extend_from_slice(b"0;\x07");
+        let (visible, result) = command.feed(&end);
+        assert!(visible.is_empty());
+        let result = result.unwrap_or_default();
+        assert_eq!(result["stdout"], "");
+        assert_eq!(result["stderr"], "diagnostic");
+        assert_eq!(result["streamMode"], "separated");
+    }
 
     #[test]
     fn trusted_ui_annotations_survive_byte_splits_without_changing_output() -> anyhow::Result<()> {
@@ -342,7 +509,7 @@ mod tests {
             serde_json::to_vec(&crate::result::tool_result(&result))
                 .expect("JSON")
                 .len()
-                <= 16 * 1024
+                <= 192 * 1024
         );
         assert_eq!(
             STANDARD

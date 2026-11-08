@@ -236,6 +236,8 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
   let resizeTimer = 0;
   let queuedBytes = 0;
   let inputQueue = Promise.resolve();
+  let selectionQueue = Promise.resolve();
+  let selectionTimer = 0;
   const controller = new AbortController();
   const terminalBlocks = mountTerminalBlocks(gutter, terminalContainer, terminal, {
     cancelLabel: t("Clear selection"),
@@ -420,6 +422,21 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
       await invoke("ssh.input", { data: base64(data), connectionId: targetConnection, ...(observation ? { observation } : {}) });
     }).catch(showError).finally(() => { queuedBytes -= data.length; });
   });
+  const onSelection = terminal.onSelectionChange(() => {
+    window.clearTimeout(selectionTimer);
+    selectionTimer = window.setTimeout(() => {
+      if (disposed || !connected || !connectionId) return;
+      const targetConnection = connectionId;
+      const bytes = new TextEncoder().encode(terminal.getSelection());
+      let end = Math.min(bytes.length, 65536);
+      while (end < bytes.length && (bytes[end] & 0xc0) === 0x80) end--;
+      const text = new TextDecoder().decode(bytes.subarray(0, end));
+      selectionQueue = selectionQueue.then(async () => {
+        if (disposed || !connected || connectionId !== targetConnection) return;
+        await invoke("ssh.select_lines", { connectionId: targetConnection, text, truncated: end < bytes.length });
+      }).catch(showError);
+    }, 100);
+  });
   const observer = new ResizeObserver(() => {
     window.clearTimeout(resizeTimer);
     resizeTimer = window.setTimeout(resize, 100);
@@ -437,18 +454,24 @@ export function mount(container: HTMLElement, api: PluginAPI): PluginFrontend {
   void startEvents().catch(showError);
 
   return { unmount() {
+    if (connected && connectionId) {
+      const targetConnection = connectionId;
+      void api.invoke("ssh.select_lines", { connectionId: targetConnection, text: "" }).catch(() => {});
+    }
     disposed = true;
     controller.abort();
     blocksView.unmount();
     stopLocale?.();
     unsubscribe?.();
     window.clearTimeout(resizeTimer);
+    window.clearTimeout(selectionTimer);
     observer.disconnect();
     jobsView.unmount();
     terminalBlocks.unmount();
     observedBoundaries.dispose();
     humanCommands.dispose();
     onData.dispose();
+    onSelection.dispose();
     stopShortcuts();
     searchView.dispose();
     stopTheme(); stopPreferences();

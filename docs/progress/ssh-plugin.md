@@ -1,16 +1,27 @@
-# SSH 插件开发进度
+# SSH 驱动开发进度
 
 ## 当前能力
 
-- 多实例 SSH、共享 PTY、人机共用终端、独立 exec 作业、按游标读取输出。
+- 多实例 SSH、人机共用 PTY；统一 command 提交入口，默认前台 terminal，显式 exec 用于预计长期运行或用户要求的后台任务。
 - MCP 对外使用 `coterm_ssh_*`；以实例 `name` 路由，唯一确认已连接且无未知状态时可省略；文件读写作为显式实例工具发布。
-- `ssh.exec` 的 `commands` 接受多行脚本，总量 64 KiB UTF-8 字节，通过 stdin 交付，列表项共享目录/环境，首个非零状态停止。
-- `ssh.exec`、`ssh.read_file`、`ssh.write_file` 支持显式 `sudo: true`，审批后由桌面收集一次性秘密；不接受 Agent 传密码。
+- `ssh.command` 的两种模式均接受多行脚本，源文本合计 64 KiB UTF-8；列表项共享各自执行 Shell 的目录/环境，首个非零状态停止，exec 不继承交互 PTY 状态。
+- `ssh.command(mode=exec)`、`ssh.read_file`、`ssh.write_file` 支持显式 `sudo: true`，审批后由桌面收集一次性秘密；不接受 Agent 传密码。
 - ANSI 终端文本保留控制字符并直接返回 UTF-8，二进制、无效 UTF-8 或控制字符过密时无损返回 Base64；摘要同时呈现 stdout/stderr，限制 JSON 扩张。
 - 后台任务默认单行，从新到旧排列；可展开限高列表，选中后自动收起并将选中项定位到行末。
 - 主终端使用 SDK xterm Gutter 显示 PTY 命令块号和选中高亮；Human / Agent 标签在命令前，按钮仅有取消全选。人工直接在主终端输入，不另设底部命令栏。
 - Exec 胶囊有 LED 状态、右侧 / 底部停靠、可拖动尺寸；历史选择暂停跟随，关闭面板时新任务不自动展开。
-- 块选择通过 `ssh.select_blocks` 按当前 epoch 传入插件内存；MCP `mcp.ssh.selected_blocks` 只读取人工选中的有界上下文，Agent 来源不能更改选择。
+- Agent 使用 read_lines、read_selected_lines、read_dialogue_pairs 读取后端快照，无需维护游标。xterm 文本选区由仅 Human 可用的 select_lines 同步；块号选择仍用于前端高亮。
+
+## 2026-11-08：统一命令与后端快照
+
+- command 的 mode 默认为 terminal；显式 exec 复用独立后台通道和秘密交互。两种路径复用审批，mode 和命令一起保留在参数快照中。MCP 不再发布独立 exec、output、read 和 selected_blocks 工具。
+- PTY 支持分片交付长脚本和多行脚本，完整 brace group 解析后执行并保留 Shell 状态；删除运行 120 秒后自动重置终端的行为。等待超时不迁移、不重新执行命令。
+- 后端命令记录统一包含 stdin/stdout/stderr、mode、status、streamMode、exitCode、truncated 和 error；空流保留空字符串，未知值保留 null。ExtendedData 单独保存且不注入主 xterm，远端已合并的内容仍作为普通输出。
+- 每实例当前连接最多 32 条记录，源输入最多 64 KiB、每流保留最新 64 KiB；单记录及批量读取按实际 JSON 限制在 96 KiB。删除 JobRegistry 的重复输出缓冲，保留任务容量与取消管理。
+- read_lines 默认读取终端最近逻辑行，也可按 operationId 查询命令；read_dialogue_pairs 同时覆盖前台和后台，运行中数据可读。断线保留后端历史，成功重连清理。JSON 仅为内存记录及传输格式，没有新增落盘结构。
+- xterm 选区同步绑定物理连接，Agent 不能写选择；前端卸载、选区清除及断线清理。读取单次 16 KiB，截断可见。终端回放序号仍为前端内部恢复机制，不暴露给 Agent。
+- 验证：SSH 31 项库测试及 23 项集成测试通过，覆盖真实子进程、默认 PTY、显式 exec、审批及 sudo、32 KiB 结果、长脚本、分流、运行中读取、跨实例隔离、选区来源门禁和断线保留。仅将本次暂存源码独立导出后，54 项 Rust 测试再次通过。工作区 cargo check、SSH Clippy、SSH 前端及桌面构建通过；3 项真实浏览器回归通过、无跳过，覆盖 xterm 选区同步/清除、命令块及后台快照显示；文档链接、docs 根目录和保留 CRLF 的空白检查通过。
+- 下次入口：[SSH 操作入口](../../plugins/plugin-ssh/src/backend.rs)、[命令记录](../../plugins/plugin-ssh/src/blocks.rs)、[终端交付与边界](../../plugins/plugin-ssh/src/command.rs)、[架构契约](../architecture/ssh-plugin.md)。每实例审批对象/配置迁移和串口 Shell/stream 模式仍需单独实施；本次未改动全局审批存储或串口接口。
 
 ## 2026-11-03：现场块边界与 Exec 展示反馈
 
@@ -102,8 +113,8 @@
 
 ## 限制与下次入口
 
-- 消息块记录 API 操作和常见 Shell 下人工 Enter 的可见行观察；自定义提示符、复杂多行编辑、批量多行粘贴或超过 180ms 的回显延迟不能保证识别。人工观察不是可信完成边界，状态 / 退出码不能当作执行结果；需要可靠边界时使用 `ssh.command` / `ssh.exec`。MCP commands 批次显示一个块。Agent 必须显式调用 `mcp.ssh.selected_blocks` 读取人工选择的上下文；未经选择时不返回块。真实远程 SSH 交互仍需用户现场复测。
+- 消息块记录 API 操作和常见 Shell 下人工 Enter 的可见行观察；自定义提示符、复杂多行编辑、批量多行粘贴或超过 180ms 的回显延迟不能保证识别。人工观察不是可信完成边界，状态 / 退出码不能当作执行结果；需要可靠边界时使用 `ssh.command`。MCP commands 批次显示一个块。Agent 使用 `read_selected_lines` 读取人工选择的文本，无选择时返回空文本；`read_dialogue_pairs` 可读取最近命令记录。真实远程 SSH 交互仍需用户现场复测。
 - 尚未连接反馈中的真实远端复测；共享 PTY 的现场空输出问题保留在[反馈](../feedback/ssh_use_feedback.md)，需要原始回放与实际返回值才能进一步归因。
 - 独立通道不复制人工 PTY 的 `sudo`/`su`、目录和环境；需要显式 sudo 或在脚本内设置环境。
 - 目前仅支持 sudo 单次密码认证和 NOPASSWD；TTY/MFA/自定义交互、Windows 远端 Shell 不在当前提权实现范围。失败或结果未知均不自动重试。
-- 保留既有 8 KiB 文件读取、64 KiB 文件写入、120 秒 PTY、30 分钟 exec 和有界输出限制；后续大文件能力应单独设计分页/传输接口。
+- 保留既有 8 KiB 文件读取、64 KiB 文件写入、30 分钟 exec 和有界输出限制；PTY 不再因运行超过 120 秒自动终止。后续大文件能力应单独设计分页/传输接口。

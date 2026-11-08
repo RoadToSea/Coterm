@@ -497,6 +497,9 @@ path={target}
             let begin = format!("\x1b]777;coterm;{token};begin\x07");
             session.data(channel, begin.into_bytes())?;
             session.data(channel, format!("{text}\r\n").into_bytes())?;
+            if text.contains("separated-stderr") {
+                session.extended_data(channel, 1, b"separate diagnostic\n".to_vec())?;
+            }
             let (code, flag) = if text.trim() == "if" {
                 (2, "syntax")
             } else if text.contains("false") {
@@ -747,7 +750,7 @@ async fn message_blocks_follow_approved_commands_and_remain_instance_bound() -> 
     let exec = runtime
         .submit(
             caller(OperationSource::Human),
-            operation("ssh.exec", json!({"text":"echo isolated"})),
+            operation("ssh.command", json!({"text":"echo isolated","mode":"exec"})),
         )
         .await?;
     assert_eq!(exec.status, OperationStatus::Completed);
@@ -810,25 +813,14 @@ async fn message_blocks_follow_approved_commands_and_remain_instance_bound() -> 
     let selected = runtime
         .submit(
             caller(OperationSource::Agent),
-            operation(
-                "mcp.ssh.selected_blocks",
-                json!({"pluginInstanceId":instance.plugin_instance_id}),
-            ),
+            operation("ssh.selected_blocks", json!({})),
         )
         .await?;
     let selected = selected
         .output
         .ok_or_else(|| anyhow::anyhow!("missing selected context"))?;
-    assert_eq!(
-        selected["structuredContent"]["blocks"]
-            .as_array()
-            .map(Vec::len),
-        Some(1)
-    );
-    assert_eq!(
-        selected["structuredContent"]["blocks"][0]["id"],
-        approved.operation_id
-    );
+    assert_eq!(selected["blocks"].as_array().map(Vec::len), Some(1));
+    assert_eq!(selected["blocks"][0]["id"], approved.operation_id);
     let denied_selection = runtime
         .submit(
             caller(OperationSource::Agent),
@@ -1093,15 +1085,12 @@ async fn human_enter_observations_reach_selected_agent_context_without_recording
     let selected = runtime
         .submit(
             caller(OperationSource::Agent),
-            operation(
-                "mcp.ssh.selected_blocks",
-                json!({"pluginInstanceId":instance.plugin_instance_id}),
-            ),
+            operation("ssh.selected_blocks", json!({})),
         )
         .await?
         .output
         .ok_or_else(|| anyhow::anyhow!("missing selected context"))?;
-    let chosen = &selected["structuredContent"]["blocks"][0];
+    let chosen = &selected["blocks"][0];
     assert_eq!(chosen["command"], "ls");
     assert_eq!(chosen["state"], "unknown");
     assert!(chosen["output"]
@@ -1782,12 +1771,19 @@ async fn external_mcp_uses_shared_ssh_and_host_secret_and_approval_paths() -> Re
         loop {
             let output = client
                 .tool(
-                    "coterm_ssh_read",
-                    json!({"pluginInstanceId":instance.plugin_instance_id,"cursor":"0"}),
+                    "coterm_ssh_read_lines",
+                    json!({"pluginInstanceId":instance.plugin_instance_id,"lines":100}),
                 )
                 .await?;
             let domain = &output["structuredContent"];
-            let bytes = STANDARD.decode(domain["data"].as_str().unwrap_or_default())?;
+            let bytes = domain["lines"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .collect::<Vec<_>>()
+                .join("\n")
+                .into_bytes();
             if bytes.windows(20).any(|w| w == b"human-terminal-input") {
                 assert!(bytes.windows(19).any(|w| w == b"human-approved-edit"));
                 assert!(!bytes.windows(21).any(|w| w == b"not-approved-original"));
@@ -2009,6 +2005,289 @@ async fn connect_instance(
 }
 
 #[tokio::test]
+async fn unified_command_snapshots_are_instance_bound_and_survive_disconnect() -> Result<()> {
+    use coterm_core::plugin_runtime::{CallerContext, Operations, PluginRuntime, SubmitOperation};
+    use coterm_proto::runtime::{lifecycle::InstanceInfo, operation::OperationSource};
+    let ssh = server().await?;
+    let (runtime, instance) = load_runtime(&ssh, "command-snapshots").await?;
+    let other = runtime
+        .create_instance("coterm-plugin-ssh", serde_json::to_value(&ssh.config)?)
+        .await?;
+    connect_instance(&runtime, &instance, &ssh).await?;
+    let caller = |instance: &InstanceInfo| CallerContext {
+        source: OperationSource::Human,
+        session_id: instance.session_id.clone(),
+        plugin_id: Some(instance.plugin_id.clone()),
+    };
+    let request = |instance: &InstanceInfo, name: &str, args: Value| SubmitOperation {
+        plugin_id: instance.plugin_id.clone(),
+        plugin_instance_id: Some(instance.plugin_instance_id.clone()),
+        operation: name.to_owned(),
+        args,
+        wait_timeout_ms: Some(3000),
+    };
+    for (mode, text) in [
+        ("terminal", "echo separated-stderr"),
+        ("exec", "echo background"),
+    ] {
+        let args = if mode == "terminal" {
+            json!({"text":text})
+        } else {
+            json!({"text":text,"mode":mode})
+        };
+        let result = runtime
+            .submit(caller(&instance), request(&instance, "ssh.command", args))
+            .await?;
+        let output = result
+            .output
+            .ok_or_else(|| anyhow::anyhow!("missing command result"))?;
+        assert_eq!(output["mode"], mode);
+        assert_eq!(output["stdin"], text);
+        assert_eq!(output["instanceId"], instance.plugin_instance_id);
+        assert_eq!(output["status"], "completed");
+        assert!(output["stdout"]
+            .as_str()
+            .is_some_and(|value| value.contains(text)));
+        assert!(output.get("stderr").is_some_and(Value::is_string));
+        if mode == "terminal" {
+            assert_eq!(output["stderr"], "separate diagnostic\n");
+            assert_eq!(output["streamMode"], "separated");
+        }
+    }
+    let history = runtime
+        .submit(
+            caller(&instance),
+            request(&instance, "ssh.read_dialogue_pairs", json!({"count":2})),
+        )
+        .await?;
+    let history = history
+        .output
+        .ok_or_else(|| anyhow::anyhow!("missing history"))?;
+    assert_eq!(history["pairs"].as_array().map(Vec::len), Some(2));
+    assert_eq!(history["pairs"][0]["mode"], "exec");
+    let empty = runtime
+        .submit(
+            caller(&other),
+            request(&other, "ssh.read_dialogue_pairs", json!({"count":2})),
+        )
+        .await?;
+    assert_eq!(
+        empty.output.as_ref().map(|value| &value["pairs"]),
+        Some(&json!([]))
+    );
+    runtime
+        .submit(
+            caller(&instance),
+            request(&instance, "ssh.disconnect", json!({})),
+        )
+        .await?;
+    let lines = runtime
+        .submit(
+            caller(&instance),
+            request(&instance, "ssh.read_lines", json!({"lines":100})),
+        )
+        .await?;
+    let lines = lines
+        .output
+        .ok_or_else(|| anyhow::anyhow!("missing lines"))?;
+    assert_eq!(lines["closed"], true);
+    let text = lines["lines"].to_string();
+    assert!(text.contains("separated-stderr"));
+    assert!(!text.contains("separate diagnostic"));
+    let after = runtime
+        .submit(
+            caller(&instance),
+            request(&instance, "ssh.read_dialogue_pairs", json!({"count":2})),
+        )
+        .await?;
+    assert_eq!(after.output.as_ref(), Some(&history));
+    connect_instance(&runtime, &instance, &ssh).await?;
+    let cleared = runtime
+        .submit(
+            caller(&instance),
+            request(&instance, "ssh.read_dialogue_pairs", json!({"count":2})),
+        )
+        .await?;
+    assert_eq!(
+        cleared.output.as_ref().map(|value| &value["pairs"]),
+        Some(&json!([]))
+    );
+    runtime.stop("coterm-plugin-ssh").await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn selected_lines_are_exact_human_owned_and_connection_bound() -> Result<()> {
+    use coterm_core::plugin_runtime::{CallerContext, Operations, PluginRuntime, SubmitOperation};
+    use coterm_proto::runtime::{
+        lifecycle::InstanceInfo,
+        operation::{OperationSource, OperationStatus},
+    };
+    let ssh = server().await?;
+    let (runtime, instance) = load_runtime(&ssh, "selected-lines").await?;
+    let other = runtime
+        .create_instance("coterm-plugin-ssh", serde_json::to_value(&ssh.config)?)
+        .await?;
+    connect_instance(&runtime, &instance, &ssh).await?;
+    let caller = |instance: &InstanceInfo, source| CallerContext {
+        source,
+        session_id: instance.session_id.clone(),
+        plugin_id: Some(instance.plugin_id.clone()),
+    };
+    let request = |instance: &InstanceInfo, name: &str, args: Value| SubmitOperation {
+        plugin_id: instance.plugin_id.clone(),
+        plugin_instance_id: Some(instance.plugin_instance_id.clone()),
+        operation: name.to_owned(),
+        args,
+        wait_timeout_ms: Some(3000),
+    };
+    let status = runtime
+        .submit(
+            caller(&instance, OperationSource::Human),
+            request(&instance, "ssh.status", json!({})),
+        )
+        .await?;
+    let connection_id = status
+        .output
+        .ok_or_else(|| anyhow::anyhow!("missing status"))?["connectionId"]
+        .clone();
+    let selected = "selected partial line\n第二行";
+    runtime
+        .submit(
+            caller(&instance, OperationSource::Human),
+            request(
+                &instance,
+                "ssh.select_lines",
+                json!({"connectionId":connection_id,"text":selected}),
+            ),
+        )
+        .await?;
+    let read = runtime
+        .submit(
+            caller(&instance, OperationSource::Agent),
+            request(
+                &instance,
+                "mcp.ssh.read_selected_lines",
+                json!({"pluginInstanceId":instance.plugin_instance_id}),
+            ),
+        )
+        .await?;
+    assert_eq!(
+        read.output
+            .as_ref()
+            .map(|value| &value["structuredContent"]["text"]),
+        Some(&json!(selected))
+    );
+    for (source, connection) in [
+        (OperationSource::Agent, connection_id.clone()),
+        (OperationSource::Human, json!("stale")),
+    ] {
+        let result = runtime
+            .submit(
+                caller(&instance, source),
+                request(
+                    &instance,
+                    "ssh.select_lines",
+                    json!({"connectionId":connection,"text":"fabricated"}),
+                ),
+            )
+            .await;
+        assert!(
+            result.is_err()
+                || result
+                    .as_ref()
+                    .is_ok_and(|receipt| receipt.status != OperationStatus::Completed)
+        );
+    }
+    let empty = runtime
+        .submit(
+            caller(&other, OperationSource::Agent),
+            request(
+                &other,
+                "mcp.ssh.read_selected_lines",
+                json!({"pluginInstanceId":other.plugin_instance_id}),
+            ),
+        )
+        .await?;
+    assert_eq!(
+        empty
+            .output
+            .as_ref()
+            .map(|value| &value["structuredContent"]["text"]),
+        Some(&json!(""))
+    );
+    runtime
+        .submit(
+            caller(&instance, OperationSource::Human),
+            request(&instance, "ssh.disconnect", json!({})),
+        )
+        .await?;
+    let cleared = runtime
+        .submit(
+            caller(&instance, OperationSource::Agent),
+            request(
+                &instance,
+                "mcp.ssh.read_selected_lines",
+                json!({"pluginInstanceId":instance.plugin_instance_id}),
+            ),
+        )
+        .await?;
+    assert_eq!(
+        cleared
+            .output
+            .as_ref()
+            .map(|value| &value["structuredContent"]["text"]),
+        Some(&json!(""))
+    );
+    runtime.stop("coterm-plugin-ssh").await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn running_command_output_is_readable_without_cursors_or_resubmission() -> Result<()> {
+    use coterm_core::plugin_runtime::PluginRuntime;
+    let ssh = server().await?;
+    let (runtime, instance) = load_runtime(&ssh, "running-snapshot").await?;
+    connect_instance(&runtime, &instance, &ssh).await?;
+    runtime.set_bypass(true).await;
+    let submitted = coterm_mcp::server::call_tool(&runtime, &json!({
+        "name":"coterm_ssh_command", "arguments":{"name":instance.label,"commands":["never-completes"]},
+        "_meta":{"coterm/waitTimeoutMs":50}
+    })).await?;
+    let operation_id = submitted["_meta"]["coterm/operation"]["operationId"].clone();
+    assert!(operation_id.is_string());
+    timeout(Duration::from_secs(3), async {
+        loop {
+            let lines = coterm_mcp::server::call_tool(&runtime, &json!({
+                "name":"coterm_ssh_read_lines", "arguments":{"name":instance.label,"operationId":operation_id,"lines":2}
+            })).await?;
+            let domain = &lines["structuredContent"];
+            if domain["lines"].to_string().contains("never-completes") {
+                assert_eq!(domain["status"], "running");
+                assert!(domain["exitCode"].is_null());
+                break Ok::<(), anyhow::Error>(());
+            }
+            sleep(Duration::from_millis(10)).await;
+        }
+    }).await??;
+    let pairs = coterm_mcp::server::call_tool(
+        &runtime,
+        &json!({
+            "name":"coterm_ssh_read_dialogue_pairs", "arguments":{"name":instance.label,"count":2}
+        }),
+    )
+    .await?;
+    let pairs = &pairs["structuredContent"]["pairs"];
+    assert_eq!(pairs.as_array().map(Vec::len), Some(1));
+    assert_eq!(pairs[0]["operationId"], operation_id);
+    assert_eq!(pairs[0]["mode"], "terminal");
+    assert_eq!(pairs[0]["status"], "running");
+    assert_eq!(pairs[0]["stdin"], "never-completes");
+    runtime.stop("coterm-plugin-ssh").await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn syntax_errors_are_rejected_without_killing_the_shared_shell() -> Result<()> {
     use coterm_core::plugin_runtime::{CallerContext, Operations, PluginRuntime, SubmitOperation};
     use coterm_proto::runtime::operation::{OperationSource, OperationStatus};
@@ -2071,8 +2350,8 @@ async fn agent_feedback_approval_returns_without_waiting_for_the_human() -> Resu
         coterm_mcp::server::call_tool(
             &runtime,
             &json!({
-                "name":"coterm_ssh_exec",
-                "arguments":{"name":instance.label,"commands":["approval-feedback"]}
+                "name":"coterm_ssh_command",
+                "arguments":{"name":instance.label,"mode":"exec","commands":["approval-feedback"]}
             }),
         ),
     )
@@ -2103,8 +2382,8 @@ async fn agent_feedback_exec_keeps_32k_in_one_result() -> Result<()> {
             SubmitOperation {
                 plugin_id: instance.plugin_id.clone(),
                 plugin_instance_id: Some(instance.plugin_instance_id.clone()),
-                operation: "ssh.exec".into(),
-                args: json!({"text":source}),
+                operation: "ssh.command".into(),
+                args: json!({"text":source,"mode":"exec"}),
                 wait_timeout_ms: Some(3000),
             },
         )
@@ -2113,9 +2392,9 @@ async fn agent_feedback_exec_keeps_32k_in_one_result() -> Result<()> {
     let output = receipt
         .output
         .ok_or_else(|| anyhow::anyhow!("missing output"))?;
-    assert_eq!(output["stdout"]["bytes"], 32 * 1024);
-    assert_eq!(output["stdout"]["truncated"], false);
-    assert_eq!(output["stdout"]["text"].as_str(), Some(source.as_str()));
+    assert_eq!(output["stdout"].as_str().map(str::len), Some(32 * 1024));
+    assert_eq!(output["stdoutTruncated"], false);
+    assert_eq!(output["stdout"].as_str(), Some(source.as_str()));
     // Verify the complete Agent path too: native MCP result, readable text and
     // retained operation record must all survive the host's result budget.
     let ssh = server_mode(true).await?;
@@ -2130,14 +2409,14 @@ async fn agent_feedback_exec_keeps_32k_in_one_result() -> Result<()> {
     let result = client
         .rpc(
             "tools/call",
-            json!({"name":"coterm_ssh_exec","arguments":{"commands":["printf '%032768d' 0"]}}),
+            json!({"name":"coterm_ssh_command","arguments":{"mode":"exec","commands":["printf '%032768d' 0"]}}),
         )
         .await?;
     assert_eq!(
-        result["structuredContent"]["stdout"]["text"].as_str(),
+        result["structuredContent"]["stdout"].as_str(),
         Some(source.as_str())
     );
-    assert_eq!(result["structuredContent"]["stdout"]["truncated"], false);
+    assert_eq!(result["structuredContent"]["stdoutTruncated"], false);
     assert!(result["content"][0]["text"]
         .as_str()
         .is_some_and(|text| text.contains(&source)));
@@ -2149,7 +2428,7 @@ async fn agent_feedback_exec_keeps_32k_in_one_result() -> Result<()> {
         )
         .await?;
     assert_eq!(
-        queried["structuredContent"]["output"]["structuredContent"]["stdout"]["text"].as_str(),
+        queried["structuredContent"]["output"]["structuredContent"]["stdout"].as_str(),
         Some(source.as_str())
     );
     runtime.stop("coterm-plugin-ssh").await?;
@@ -2206,7 +2485,7 @@ async fn agent_feedback_health_default_routing_and_legacy_aliases() -> Result<()
         .ok_or_else(|| anyhow::anyhow!("missing tools"))?;
     let exec = tools
         .iter()
-        .find(|tool| tool["name"] == "coterm_ssh_exec")
+        .find(|tool| tool["name"] == "coterm_ssh_command")
         .ok_or_else(|| anyhow::anyhow!("missing exec"))?;
     assert_eq!(exec["_meta"]["coterm/returnOnApproval"], true);
     assert!(!exec["inputSchema"]["required"]
@@ -2238,7 +2517,7 @@ async fn agent_feedback_health_default_routing_and_legacy_aliases() -> Result<()
     connect_instance(&runtime, &other, &ssh).await?;
     let ambiguous = coterm_mcp::server::call_tool(
         &runtime,
-        &call("coterm_ssh_exec", json!({"commands":["must-not-run"]})),
+        &call("coterm_ssh_command", json!({"commands":["must-not-run"]})),
     )
     .await;
     assert!(ambiguous.is_err_and(|error| error.to_string().contains("Multiple connected")));
@@ -2262,8 +2541,8 @@ async fn exec_is_isolated_from_the_shared_pty_and_streams_output() -> Result<()>
     let exec = |text: &str| SubmitOperation {
         plugin_id: instance.plugin_id.clone(),
         plugin_instance_id: Some(instance.plugin_instance_id.clone()),
-        operation: "ssh.exec".to_owned(),
-        args: json!({"text": text}),
+        operation: "ssh.command".to_owned(),
+        args: json!({"text": text,"mode":"exec"}),
         wait_timeout_ms: Some(3_000),
     };
     // The jobs row is driven by an event emitted before the command finishes.
@@ -2297,7 +2576,7 @@ async fn exec_is_isolated_from_the_shared_pty_and_streams_output() -> Result<()>
     assert!(started && finished, "job lifecycle events missing");
     let output = receipt.output.ok_or_else(|| anyhow::anyhow!("no output"))?;
     assert_eq!(output["exitCode"], 0);
-    assert_eq!(output["stdout"]["text"], "echo isolated");
+    assert_eq!(output["stdout"], "echo isolated");
     // Exec output is not written into the interactive terminal replay.
     let read = runtime
         .submit(
@@ -2323,7 +2602,7 @@ async fn exec_is_isolated_from_the_shared_pty_and_streams_output() -> Result<()>
                 plugin_id: instance.plugin_id.clone(),
                 plugin_instance_id: Some(instance.plugin_instance_id.clone()),
                 operation: "ssh.output".to_owned(),
-                args: json!({"operationId": operation_id, "stdoutCursor":"0"}),
+                args: json!({"operationId": operation_id}),
                 wait_timeout_ms: None,
             },
         )
@@ -2331,8 +2610,8 @@ async fn exec_is_isolated_from_the_shared_pty_and_streams_output() -> Result<()>
     let view = output_view
         .output
         .ok_or_else(|| anyhow::anyhow!("no view"))?;
-    assert_eq!(view["done"], true);
-    assert_eq!(view["stdout"]["text"], "echo isolated");
+    assert_eq!(view["status"], "completed");
+    assert_eq!(view["stdout"], "echo isolated");
     assert_eq!(view["exitCode"], 0);
     runtime.stop("coterm-plugin-ssh").await?;
     Ok(())
@@ -2588,8 +2867,8 @@ async fn command_regex_rules_control_approval_without_changing_effect_or_checks(
     let exec = || SubmitOperation {
         plugin_id: instance.plugin_id.clone(),
         plugin_instance_id: Some(instance.plugin_instance_id.clone()),
-        operation: "mcp.ssh.exec".to_owned(),
-        args: json!({"pluginInstanceId":instance.plugin_instance_id,"commands":["echo allowed"]}),
+        operation: "mcp.ssh.command".to_owned(),
+        args: json!({"pluginInstanceId":instance.plugin_instance_id,"mode":"exec","commands":["echo allowed"]}),
         wait_timeout_ms: Some(3_000),
     };
     // Without command rules an Agent commit still becomes a proposal.
@@ -2765,8 +3044,8 @@ async fn real_mcp_file_tools_and_multiline_exec_preserve_content_and_stop_on_fai
         .rpc(
             "tools/call",
             json!({
-                "name":"coterm_ssh_exec",
-                "arguments":{"name":instance.label,"commands":[
+                "name":"coterm_ssh_command",
+                "arguments":{"name":instance.label,"mode":"exec","commands":[
                     format!("cd '{}'\nexport COTERM_VALUE='a b'", remote.replace('\'', "'\\''")),
                     format!("cat <<'EOF' > composed.conf\n{content}EOF"),
                     "printf '\\033[32m%s\\033[0m\\n' \"$COTERM_VALUE\"; printf 'stderr-ok' >&2",
@@ -2778,10 +3057,10 @@ async fn real_mcp_file_tools_and_multiline_exec_preserve_content_and_stop_on_fai
     assert_eq!(result["structuredContent"]["exitCode"], 1, "{result}");
     assert_eq!(result["isError"], true);
     assert_eq!(
-        result["structuredContent"]["stdout"]["text"],
+        result["structuredContent"]["stdout"],
         "\x1b[32ma b\x1b[0m\n"
     );
-    assert_eq!(result["structuredContent"]["stderr"]["text"], "stderr-ok");
+    assert_eq!(result["structuredContent"]["stderr"], "stderr-ok");
     assert!(result["content"][0]["text"]
         .as_str()
         .is_some_and(|text| text.contains("a b") && text.contains("stderr-ok")));
@@ -2797,17 +3076,14 @@ async fn real_mcp_file_tools_and_multiline_exec_preserve_content_and_stop_on_fai
         .rpc(
             "tools/call",
             json!({
-                "name":"coterm_ssh_exec",
-                "arguments":{"name":instance.label,"commands":[script]},
+                "name":"coterm_ssh_command",
+                "arguments":{"name":instance.label,"mode":"exec","commands":[script]},
                 "_meta":{"coterm/waitTimeoutMs":5000}
             }),
         )
         .await?;
     assert_eq!(boundary["structuredContent"]["exitCode"], 0, "{boundary}");
-    assert_eq!(
-        boundary["structuredContent"]["stdout"]["text"],
-        "boundary-64k"
-    );
+    assert_eq!(boundary["structuredContent"]["stdout"], "boundary-64k");
     runtime.stop("coterm-plugin-ssh").await?;
     std::fs::remove_dir_all(&directory)?;
     Ok(())
@@ -2915,14 +3191,14 @@ async fn sudo_uses_one_desktop_secret_after_approval_without_leaking_or_replayin
             OperationStatus::Completed,
         ),
         (
-            "mcp.ssh.exec",
-            json!({"pluginInstanceId":instance.plugin_instance_id,"commands":["printf elevated"],"sudo":true}),
+            "mcp.ssh.command",
+            json!({"pluginInstanceId":instance.plugin_instance_id,"commands":["printf elevated"],"mode":"exec","sudo":true}),
             Some("local-sudo-password"),
             OperationStatus::Completed,
         ),
         (
-            "mcp.ssh.exec",
-            json!({"pluginInstanceId":instance.plugin_instance_id,"commands":[format!("printf changed >> '{}'", path.replace('\'', "'\\''"))],"sudo":true}),
+            "mcp.ssh.command",
+            json!({"pluginInstanceId":instance.plugin_instance_id,"commands":[format!("printf changed >> '{}'", path.replace('\'', "'\\''"))],"mode":"exec","sudo":true}),
             Some("wrong-sudo-password"),
             OperationStatus::Unknown,
         ),
@@ -2959,7 +3235,7 @@ async fn sudo_uses_one_desktop_secret_after_approval_without_leaking_or_replayin
             !serialized.contains("local-sudo-password")
                 && !serialized.contains("wrong-sudo-password")
         );
-        if operation == "mcp.ssh.exec" && expected == OperationStatus::Completed {
+        if operation == "mcp.ssh.command" && expected == OperationStatus::Completed {
             let output = record
                 .output
                 .ok_or_else(|| anyhow::anyhow!("no exec result"))?;

@@ -50,7 +50,8 @@ test("SSH integrates command blocks into the real terminal and publishes only hu
       "const matches=backend.filter(b=>args.before===undefined||b.index<args.before).sort((a,b)=>b.index-a.index);const page=matches.slice(0,1);"+
       "return receipt({epoch,revision:String(version),dropped:window.dropped??0,blocks:page,more:matches.length>1,nextBefore:matches.length>1?page[0].index:null});}"+
       "if(operation==='ssh.select_blocks'){if(window.missingSelect)throw new Error('operation_not_found: operation not found');window.context=args.ids;return receipt({selectedCount:context.length});}"+
-      "if(operation==='ssh.output')return receipt({done:false,exitCode:null,cancelled:false,timedOut:false,stdout:{text:args.stdoutCursor==='0'?'streaming exec output\\n':'',cursor:'1',more:false},stderr:{text:'',cursor:'0',more:false}});"+
+      "if(operation==='ssh.select_lines')return receipt({});"+
+      "if(operation==='ssh.output')return receipt({status:'running',exitCode:null,stdout:'streaming exec output\\n',stderr:'',stdoutEncoding:'utf-8',stderrEncoding:'utf-8',truncated:false});"+
       "throw new Error('Unexpected operation '+operation);},"+
       "async subscribeEvents(fn){window.event=fn;return()=>window.stopped=true},async cancelOperation(){throw new Error('selection must never cancel');}};"+
       "window.frontend=(await import("+JSON.stringify(moduleURL)+")).mount(document.body,api);"+
@@ -63,6 +64,14 @@ test("SSH integrates command blocks into the real terminal and publishes only hu
     assert.equal(await run("root.querySelector('.xterm-screen')!==null"),true);
     assert.equal(await run("frames.filter(frame=>frame.annotation).every(frame=>!('command' in frame.annotation)&&!('output' in frame.annotation))"),true,"boundary events do not carry command or output data");
     assert.deepEqual(await run("gutters().map(b=>b.textContent)"),["1","2"]);
+    await run("root.querySelector('.xterm-helper-textarea').focus()");
+    await client.send("Input.dispatchKeyEvent",{type:"keyDown",key:"A",code:"KeyA",windowsVirtualKeyCode:65,modifiers:10});
+    await client.send("Input.dispatchKeyEvent",{type:"keyUp",key:"A",code:"KeyA",windowsVirtualKeyCode:65,modifiers:10});
+    await waitForValue(client,"calls.some(c=>c.operation==='ssh.select_lines'&&c.args.text.includes('reply one'))");
+    assert.equal(await run("calls.filter(c=>c.operation==='ssh.select_lines').at(-1).args.connectionId"),"transport-one");
+    await client.send("Input.dispatchKeyEvent",{type:"keyDown",key:"Escape",code:"Escape",windowsVirtualKeyCode:27});
+    await client.send("Input.dispatchKeyEvent",{type:"keyUp",key:"Escape",code:"Escape",windowsVirtualKeyCode:27});
+    await waitForValue(client,"calls.filter(c=>c.operation==='ssh.select_lines').at(-1)?.args.text===''");
     assert.equal(await run("root.querySelectorAll('.coterm-terminal-gutter > button:not(.coterm-terminal-number)').length"),1);
     assert.equal(await run("root.querySelector('.coterm-terminal-clear').disabled"),true);
     assert.deepEqual(await run("(()=>{const b=root.querySelector('.coterm-terminal-clear');const r=b.getBoundingClientRect();const s=getComputedStyle(b);return [b.textContent,b.getAttribute('aria-label'),Math.round(r.width),Math.round(r.height),s.borderRadius,s.backgroundColor,s.opacity]})()"),["×","Clear selection",16,16,"50%","rgb(255, 95, 87)","1"]);
