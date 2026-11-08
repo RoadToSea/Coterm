@@ -52,11 +52,11 @@ const stopTheme = attachTerminalTheme(container, (theme) => {
 
 `readTerminalTheme` 读取继承的 `--terminal-*` 颜色，覆盖背景、前景、光标、选区和 ANSI 调色板。`attachTerminalTheme` 观察所属文档根节点的 `class/data-theme/style`，只有调色板变化才更新渲染器；卸载时必须注销。没有新颜色变量的旧宿主回退至深色。此模块不依赖 xterm 包，不改变 `DriverAPI` 或后端协议。
 
-SSH、串口 Shell 和宿主终端组件均原地设置 xterm `options.theme`，不重建终端、实例、订阅或连接。搜索高亮同步主题；串口 UART 接收区、发送框与配置表单通过 `--coterm-*` 自动继承。人工 Shell 按键直发、UART 发送框、MCP 命令列表的边界保持原样。
+SSH、串口 Shell 前端原地设置 xterm `options.theme`，不重建终端、实例、订阅或连接。搜索高亮同步主题；串口 UART 接收区、发送框与配置表单通过 `--coterm-*` 自动继承。人工 Shell 按键直发、UART 发送框、MCP 命令列表的边界保持原样。
 
 新增显示变量 `--coterm-ui-font-size`、`--coterm-terminal-font-size`（px）、`--coterm-terminal-line-height`（倍数）、`--coterm-terminal-cursor-blink`（true / false）。界面根字号通过 `--coterm-root-font-size` 保持 14 px 逻辑字号对应原有 16 px rem 基准。驱动 Shadow DOM 可继承显示变量；命令块和 UART 接收区按终端字号渲染。
 
-SDK 同一模块导出 `readTerminalPreferences(element)` 与 `attachTerminalPreferences(element, apply)`，返回 `fontSize / lineHeight / cursorBlink`。SSH、串口与宿主终端初始化时读取，之后原地更新选项并 fit，卸载注销观察器。无变量的旧宿主回退 13 px、1.0 行高与光标闪烁；驱动自行选择接入。字体调整允许按既有接口同步 SSH PTY 尺寸，不连接 / 断开或发送命令，不改 `DriverAPI` 或跨进程协议。
+SDK 同一模块导出 `readTerminalPreferences(element)` 与 `attachTerminalPreferences(element, apply)`，返回 `fontSize / lineHeight / cursorBlink`。SSH、串口前端初始化时读取，之后原地更新选项并 fit，卸载注销观察器。无变量的旧宿主回退 13 px、1.0 行高与光标闪烁；驱动自行选择接入。字体调整允许按既有接口同步 SSH PTY 尺寸，不连接 / 断开或发送命令，不改 `DriverAPI` 或跨进程协议。
 
 ## 验证
 

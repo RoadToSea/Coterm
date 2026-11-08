@@ -2,6 +2,17 @@
 
 SSH、Serial、Local 位于 `drivers/driver-*`，随应用一起构建与分发。每个驱动有一个独立 Worker 进程，同一进程管理多个相互隔离的实例。基座只负责路由、审批、操作记录和公共交互，不解释领域命令或字节流。
 
+## 共享 Rust 模块
+
+| 包 | 职责 |
+|---|---|
+| `coterm-proto` | 控制协议、共享数据类型、JSON-RPC 信封与编解码 |
+| `coterm-core` | 驱动进程、实例路由、每实例审批、秘密交互与操作记录 |
+| `coterm-mcp` | MCP 工具发现与调用、本机 Bridge 和 Stdio 适配 |
+| `coterm-term` | Local 使用的有界输出缓存、UTF-8 解码与结果编码 |
+
+桌面通过 core 管理实例，MCP 通过同一运行时派发操作；具体终端渲染和命令边界由驱动负责。SSH、Serial 使用各自的领域缓冲，不要求迁移到 term。
+
 ## 后端
 
 实现 `coterm_proto::runtime::backend::DriverBackend`，由共享 `serve` 入口处理 stdio JSON-RPC。stdout 只输出协议，日志写 stderr。控制协议为 v2.0，先握手再创建实例；manifest ID、版本和运行时目录必须一致。字段、边界和错误契约见[运行时通信](runtime-communication.md)。

@@ -741,7 +741,6 @@ dependencies = [
 name = "coterm-core"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "chrono",
  "coterm-proto",
  "jsonschema",
@@ -750,7 +749,6 @@ dependencies = [
  "serde_json",
  "thiserror 1.0.69",
  "tokio",
- "tracing",
  "uuid",
 ]
 
@@ -840,12 +838,10 @@ dependencies = [
 name = "coterm-proto"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "chrono",
  "serde",
  "serde_json",
  "tokio",
- "uuid",
  "zeroize",
 ]
 

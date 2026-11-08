@@ -1,6 +1,5 @@
-//! 基座与驱动的 v1.0 JSON 控制契约。wire 是唯一线缆编解码入口。
-//! stream 与 DriverEvent 的扩展事件为预留类型，不属于 v1.0 线缆契约。
-//! 旧版根模块中的终端类型仍供原型使用，不属于本组接口。
+//! 基座与驱动的 v2.0 JSON 控制契约。wire 是唯一线缆编解码入口。
+//! stream 与 DriverEvent 的扩展事件为预留类型，不属于 v2.0 线缆契约。
 
 pub mod backend;
 pub mod interaction;

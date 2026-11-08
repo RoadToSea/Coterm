@@ -14,7 +14,6 @@ use std::{
 use coterm_core::{
     driver_manager::{DiscoveredPackage, PackageOrigin, DriverLoadIssue, ProcessDriverRuntime},
     driver_runtime::{CallerContext, Operations, DriverRuntime, SubmitOperation},
-    SessionManager,
 };
 use coterm_proto::runtime::{
     lifecycle::{InstanceInfo, RuntimeLimits},
@@ -56,7 +55,6 @@ struct AppState {
     workspace_path: PathBuf,
     exiting: std::sync::atomic::AtomicBool,
     event_subscriptions: EventSubscriptions,
-    _session_mgr: Arc<SessionManager>,
     driver_runtime: Arc<ProcessDriverRuntime>,
     drivers_root: PathBuf,
     stdio_bridge: mcp_commands::StdioBridge,
@@ -840,7 +838,6 @@ fn main() {
                 event_subscriptions: Arc::new(tokio::sync::Mutex::new(
                     std::collections::HashMap::new(),
                 )),
-                _session_mgr: Arc::new(SessionManager::new()),
                 driver_runtime,
                 stdio_bridge,
                 drivers_root,
