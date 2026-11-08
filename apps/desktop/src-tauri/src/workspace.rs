@@ -47,6 +47,8 @@ pub struct SavedInstance {
     pub label: String,
     pub instance_id: Option<String>,
     pub workspace_id: String,
+    #[serde(default)]
+    pub approval_policy: ApprovalPolicy,
     #[serde(skip_serializing)]
     pub config: Value,
 }
@@ -61,6 +63,8 @@ struct Entry {
     config: Value,
     #[serde(default = "default_workspace_id")]
     workspace_id: String,
+    #[serde(default)]
+    approval_policy: Option<ApprovalPolicy>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -91,8 +95,8 @@ struct Document {
     /// Legacy interface allowlist is accepted but never restored as command rules.
     #[serde(default, skip_serializing)]
     allowed_operations: Vec<String>,
-    #[serde(default)]
-    approval_policy: ApprovalPolicy,
+    #[serde(default, skip_serializing)]
+    approval_policy: Option<ApprovalPolicy>,
     #[serde(default = "default_groups")]
     groups: Vec<WorkspaceGroup>,
 }
@@ -103,7 +107,6 @@ pub struct Snapshot {
     pub entries: Vec<SavedInstance>,
     pub layout: Layout,
     pub groups: Vec<WorkspaceGroup>,
-    pub approval_policy: ApprovalPolicy,
     pub history_policy: &'static str,
     pub persistence: &'static str,
 }
@@ -113,7 +116,6 @@ pub struct WorkspaceStore {
     path: PathBuf,
     entries: Vec<SavedInstance>,
     layout: Layout,
-    approval_policy: ApprovalPolicy,
     groups: Vec<WorkspaceGroup>,
     // Keep the previous session available for recovery in memory, but once this
     // session has instances, only this session is written to the next snapshot.
@@ -129,7 +131,6 @@ impl WorkspaceStore {
             path,
             entries: Vec::new(),
             layout: Layout::default(),
-            approval_policy: ApprovalPolicy::default(),
             groups: default_groups(),
             session_started: false,
         }
@@ -150,7 +151,7 @@ impl WorkspaceStore {
         let parsed = serde_json::from_slice::<Document>(&bytes);
         bytes.fill(0);
         let doc = parsed.map_err(|_| error("workspace_invalid"))?;
-        if doc.version != 1 || doc.entries.len() > MAX_ENTRIES {
+        if !matches!(doc.version, 1 | 2) || doc.entries.len() > MAX_ENTRIES {
             return Err(error("workspace_version_unsupported"));
         }
         let mut group_ids = std::collections::HashSet::new();
@@ -188,11 +189,21 @@ impl WorkspaceStore {
         {
             return Err(error("workspace_invalid"));
         }
-        doc.approval_policy.compile()?;
+        let legacy_policy = if doc.version == 1 {
+            doc.approval_policy.unwrap_or_default()
+        } else {
+            ApprovalPolicy::default()
+        };
+        for entry in &doc.entries {
+            entry
+                .approval_policy
+                .as_ref()
+                .unwrap_or(&legacy_policy)
+                .compile()?;
+        }
         Ok(Self {
             #[cfg(windows)]
             path,
-            approval_policy: doc.approval_policy,
             layout: doc.layout,
             groups: doc.groups,
             session_started: false,
@@ -206,6 +217,9 @@ impl WorkspaceStore {
                     config: entry.config,
                     instance_id: None,
                     workspace_id: entry.workspace_id,
+                    approval_policy: entry
+                        .approval_policy
+                        .unwrap_or_else(|| legacy_policy.clone()),
                 })
                 .collect(),
         })
@@ -216,7 +230,6 @@ impl WorkspaceStore {
             entries: self.entries.clone(),
             layout: self.layout.clone(),
             groups: self.groups.clone(),
-            approval_policy: self.approval_policy.clone(),
             history_policy: "session_only",
             persistence: if cfg!(windows) {
                 "windows_dpapi"
@@ -260,6 +273,7 @@ impl WorkspaceStore {
             config,
             instance_id: Some(instance_id),
             workspace_id,
+            approval_policy: ApprovalPolicy::default(),
         });
         self.commit(entries, self.layout.clone())
     }
@@ -357,7 +371,7 @@ impl WorkspaceStore {
             saved_layout.active_config_ref = None;
         }
         let doc = Document {
-            version: 1,
+            version: 2,
             entries: entries
                 .iter()
                 .filter(|entry| !session_started || entry.instance_id.is_some())
@@ -367,11 +381,12 @@ impl WorkspaceStore {
                     label: entry.label.clone(),
                     config: entry.config.clone(),
                     workspace_id: entry.workspace_id.clone(),
+                    approval_policy: Some(entry.approval_policy.clone()),
                 })
                 .collect(),
             layout: saved_layout,
             allowed_operations: Vec::new(),
-            approval_policy: self.approval_policy.clone(),
+            approval_policy: None,
             groups: groups.clone(),
         };
         let mut bytes = serde_json::to_vec(&doc).map_err(|_| error("workspace_invalid"))?;
@@ -463,15 +478,21 @@ impl WorkspaceStore {
         self.commit(entries, self.layout.clone())
     }
 
-    /// Commit disk state before publishing the new runtime policy.
-    pub fn save_approval_policy(&mut self, policy: ApprovalPolicy) -> Result<(), RuntimeError> {
+    /// Saves rules on the bound instance's configRef. Unknown instances and failed writes
+    /// leave all entries unchanged; invalid rules return approval_rule_invalid.
+    pub fn save_approval_policy(
+        &mut self,
+        instance_id: &str,
+        policy: ApprovalPolicy,
+    ) -> Result<(), RuntimeError> {
         policy.compile()?;
-        let previous = std::mem::replace(&mut self.approval_policy, policy);
-        if let Err(error) = self.commit(self.entries.clone(), self.layout.clone()) {
-            self.approval_policy = previous;
-            return Err(error);
-        }
-        Ok(())
+        let mut entries = self.entries.clone();
+        let entry = entries
+            .iter_mut()
+            .find(|entry| entry.instance_id.as_deref() == Some(instance_id))
+            .ok_or_else(|| error("workspace_entry_not_found"))?;
+        entry.approval_policy = policy;
+        self.commit(entries, self.layout.clone())
     }
 }
 

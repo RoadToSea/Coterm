@@ -21,7 +21,7 @@
 - read_lines 默认读取终端最近逻辑行，也可按 operationId 查询命令；read_dialogue_pairs 同时覆盖前台和后台，运行中数据可读。断线保留后端历史，成功重连清理。JSON 仅为内存记录及传输格式，没有新增落盘结构。
 - xterm 选区同步绑定物理连接，Agent 不能写选择；前端卸载、选区清除及断线清理。读取单次 16 KiB，截断可见。终端回放序号仍为前端内部恢复机制，不暴露给 Agent。
 - 验证：SSH 31 项库测试及 23 项集成测试通过，覆盖真实子进程、默认 PTY、显式 exec、审批及 sudo、32 KiB 结果、长脚本、分流、运行中读取、跨实例隔离、选区来源门禁和断线保留。仅将本次暂存源码独立导出后，54 项 Rust 测试再次通过。工作区 cargo check、SSH Clippy、SSH 前端及桌面构建通过；3 项真实浏览器回归通过、无跳过，覆盖 xterm 选区同步/清除、命令块及后台快照显示；文档链接、docs 根目录和保留 CRLF 的空白检查通过。
-- 下次入口：[SSH 操作入口](../../plugins/plugin-ssh/src/backend.rs)、[命令记录](../../plugins/plugin-ssh/src/blocks.rs)、[终端交付与边界](../../plugins/plugin-ssh/src/command.rs)、[架构契约](../architecture/ssh-plugin.md)。每实例审批对象/配置迁移和串口 Shell/stream 模式仍需单独实施；本次未改动全局审批存储或串口接口。
+- 下次入口：[SSH 操作入口](../../plugins/plugin-ssh/src/backend.rs)、[命令记录](../../plugins/plugin-ssh/src/blocks.rs)、[终端交付与边界](../../plugins/plugin-ssh/src/command.rs)、[架构契约](../architecture/ssh-plugin.md)。本次 SSH 命令阶段未改动审批存储或串口接口。每实例审批对象/配置迁移已由后续宿主阶段接入，见 [MCP 进度](mcp.md#2026-11-08每实例审批对象与独立配置)；串口 Shell/stream 模式仍是下一阶段。
 
 ## 2026-11-03：现场块边界与 Exec 展示反馈
 

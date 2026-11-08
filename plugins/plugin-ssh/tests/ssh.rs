@@ -1012,7 +1012,9 @@ async fn human_enter_observations_reach_selected_agent_context_without_recording
     }
     let input = json!({"data":STANDARD.encode(b"\r"),"connectionId":connection_id,"observation":{"text":"ls","lineOffset":-1}});
     // The raw-input gate applies even when Agent bypass is on.
-    runtime.set_bypass(true).await;
+    runtime
+        .set_bypass(&instance.plugin_instance_id, true)
+        .await?;
     let denied = runtime
         .submit(
             caller(OperationSource::Agent),
@@ -1794,7 +1796,8 @@ async fn external_mcp_uses_shared_ssh_and_host_secret_and_approval_paths() -> Re
     })
     .await??;
     // Bypass skips approval but still requires the human authentication prompt.
-    runtime.set_bypass(true).await;
+    runtime.set_bypass(&other.plugin_instance_id, true).await?;
+    assert!(!runtime.bypass_enabled(&instance.plugin_instance_id).await?);
     let waiting = client
         .tool(
             "coterm_ssh_connect",
@@ -1848,6 +1851,9 @@ async fn external_mcp_uses_shared_ssh_and_host_secret_and_approval_paths() -> Re
     assert!(!serde_json::to_string(&records)?.contains("local-test-password"));
     // A running command accepts a cancellation request but remains UNKNOWN until the
     // remote shell confirms its completion boundary.
+    runtime
+        .set_bypass(&instance.plugin_instance_id, true)
+        .await?;
     client.next_id += 1;
     let interrupted_id = client.next_id;
     coterm_mcp::transport::write_frame(&mut client.writer, &json!({"jsonrpc":"2.0","id":interrupted_id,"method":"tools/call","params":{
@@ -2249,7 +2255,9 @@ async fn running_command_output_is_readable_without_cursors_or_resubmission() ->
     let ssh = server().await?;
     let (runtime, instance) = load_runtime(&ssh, "running-snapshot").await?;
     connect_instance(&runtime, &instance, &ssh).await?;
-    runtime.set_bypass(true).await;
+    runtime
+        .set_bypass(&instance.plugin_instance_id, true)
+        .await?;
     let submitted = coterm_mcp::server::call_tool(&runtime, &json!({
         "name":"coterm_ssh_command", "arguments":{"name":instance.label,"commands":["never-completes"]},
         "_meta":{"coterm/waitTimeoutMs":50}
@@ -2400,7 +2408,9 @@ async fn agent_feedback_exec_keeps_32k_in_one_result() -> Result<()> {
     let ssh = server_mode(true).await?;
     let (runtime, instance) = load_runtime(&ssh, "agent-mcp-output").await?;
     connect_instance(&runtime, &instance, &ssh).await?;
-    runtime.set_bypass(true).await;
+    runtime
+        .set_bypass(&instance.plugin_instance_id, true)
+        .await?;
     let bridge =
         coterm_mcp::server::BridgeServer::bind_at(runtime.clone(), "127.0.0.1:0".parse()?).await?;
     let mut client =
@@ -2898,10 +2908,13 @@ async fn command_regex_rules_control_approval_without_changing_effect_or_checks(
         .await?;
     // Command text is matched independently of the operation name.
     runtime
-        .set_approval_policy(coterm_core::approval_policy::ApprovalPolicy {
-            mode: coterm_core::approval_policy::ApprovalMode::AllowMatches,
-            patterns: vec![r"^echo allowed$".to_owned()],
-        })
+        .set_approval_policy(
+            &instance.plugin_instance_id,
+            coterm_core::approval_policy::ApprovalPolicy {
+                mode: coterm_core::approval_policy::ApprovalMode::AllowMatches,
+                patterns: vec![r"^echo allowed$".to_owned()],
+            },
+        )
         .await?;
     let receipt = runtime.submit(agent.clone(), exec()).await?;
     assert_eq!(receipt.status, OperationStatus::Completed, "{receipt:?}");
@@ -2913,29 +2926,38 @@ async fn command_regex_rules_control_approval_without_changing_effect_or_checks(
     ));
     // A command not matched by the new rule still needs approval.
     runtime
-        .set_approval_policy(coterm_core::approval_policy::ApprovalPolicy {
-            mode: coterm_core::approval_policy::ApprovalMode::AllowMatches,
-            patterns: vec![r"^ls$".to_owned()],
-        })
+        .set_approval_policy(
+            &instance.plugin_instance_id,
+            coterm_core::approval_policy::ApprovalPolicy {
+                mode: coterm_core::approval_policy::ApprovalMode::AllowMatches,
+                patterns: vec![r"^ls$".to_owned()],
+            },
+        )
         .await?;
     let proposal = runtime.submit(agent.clone(), exec()).await?;
     assert_eq!(proposal.status, OperationStatus::AwaitingApproval);
     // Reverse mode intercepts matching text and allows the other commands.
     runtime
-        .set_approval_policy(coterm_core::approval_policy::ApprovalPolicy {
-            mode: coterm_core::approval_policy::ApprovalMode::ApproveMatches,
-            patterns: vec![r"^echo allowed$".to_owned()],
-        })
+        .set_approval_policy(
+            &instance.plugin_instance_id,
+            coterm_core::approval_policy::ApprovalPolicy {
+                mode: coterm_core::approval_policy::ApprovalMode::ApproveMatches,
+                patterns: vec![r"^echo allowed$".to_owned()],
+            },
+        )
         .await?;
     assert_eq!(
         runtime.submit(agent.clone(), exec()).await?.status,
         OperationStatus::AwaitingApproval
     );
     runtime
-        .set_approval_policy(coterm_core::approval_policy::ApprovalPolicy {
-            mode: coterm_core::approval_policy::ApprovalMode::ApproveMatches,
-            patterns: vec![r"^rm".to_owned()],
-        })
+        .set_approval_policy(
+            &instance.plugin_instance_id,
+            coterm_core::approval_policy::ApprovalPolicy {
+                mode: coterm_core::approval_policy::ApprovalMode::ApproveMatches,
+                patterns: vec![r"^rm".to_owned()],
+            },
+        )
         .await?;
     assert_eq!(
         runtime.submit(agent.clone(), exec()).await?.status,
@@ -3035,10 +3057,13 @@ async fn real_mcp_file_tools_and_multiline_exec_preserve_content_and_stop_on_fai
         .await?;
     assert_eq!(read["structuredContent"]["text"], content, "{read}");
     runtime
-        .set_approval_policy(coterm_core::approval_policy::ApprovalPolicy {
-            mode: coterm_core::approval_policy::ApprovalMode::AllowMatches,
-            patterns: vec![r"(?s).*".to_owned()],
-        })
+        .set_approval_policy(
+            &instance.plugin_instance_id,
+            coterm_core::approval_policy::ApprovalPolicy {
+                mode: coterm_core::approval_policy::ApprovalMode::AllowMatches,
+                patterns: vec![r"(?s).*".to_owned()],
+            },
+        )
         .await?;
     let result = client
         .rpc(
@@ -3182,7 +3207,9 @@ async fn sudo_uses_one_desktop_secret_after_approval_without_leaking_or_replayin
         .await
         .is_err());
     // Bypass skips the operation approval, never the separate sudo secret interaction.
-    runtime.set_bypass(true).await;
+    runtime
+        .set_bypass(&instance.plugin_instance_id, true)
+        .await?;
     for (operation, args, secret, expected) in [
         (
             "mcp.ssh.read_file",

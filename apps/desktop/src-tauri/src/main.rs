@@ -765,37 +765,59 @@ async fn cancel_operation(
 }
 
 #[tauri::command]
-async fn set_bypass(enabled: bool, state: tauri::State<'_, AppState>) -> Result<(), String> {
-    state.plugin_runtime.set_bypass(enabled).await;
-    Ok(())
+async fn set_bypass(
+    plugin_instance_id: String,
+    enabled: bool,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), coterm_proto::runtime::RuntimeError> {
+    state
+        .plugin_runtime
+        .set_bypass(&plugin_instance_id, enabled)
+        .await
 }
 
 #[tauri::command]
-async fn get_bypass(state: tauri::State<'_, AppState>) -> Result<bool, String> {
-    Ok(state.plugin_runtime.bypass_enabled().await)
+async fn get_bypass(
+    plugin_instance_id: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<bool, coterm_proto::runtime::RuntimeError> {
+    state
+        .plugin_runtime
+        .bypass_enabled(&plugin_instance_id)
+        .await
 }
 
-/// Only the host settings UI can change the command approval policy.
+/// Only the trusted desktop settings UI can change a specific instance's rules.
 #[tauri::command]
 async fn set_approval_policy(
+    plugin_instance_id: String,
     policy: coterm_core::approval_policy::ApprovalPolicy,
     state: tauri::State<'_, AppState>,
 ) -> Result<coterm_core::approval_policy::ApprovalPolicy, coterm_proto::runtime::RuntimeError> {
     let _guard = state.workspace_actions.lock().await;
     policy.compile()?;
-    workspace_commands::store_approval_policy(&state, policy.clone()).await?;
     state
         .plugin_runtime
-        .set_approval_policy(policy.clone())
+        .approval_policy(&plugin_instance_id)
+        .await?;
+    workspace_commands::store_approval_policy(&state, plugin_instance_id.clone(), policy.clone())
+        .await?;
+    state
+        .plugin_runtime
+        .set_approval_policy(&plugin_instance_id, policy.clone())
         .await?;
     Ok(policy)
 }
 
 #[tauri::command]
 async fn get_approval_policy(
+    plugin_instance_id: String,
     state: tauri::State<'_, AppState>,
-) -> Result<coterm_core::approval_policy::ApprovalPolicy, String> {
-    Ok(state.plugin_runtime.approval_policy().await)
+) -> Result<coterm_core::approval_policy::ApprovalPolicy, coterm_proto::runtime::RuntimeError> {
+    state
+        .plugin_runtime
+        .approval_policy(&plugin_instance_id)
+        .await
 }
 
 #[tauri::command]
@@ -872,13 +894,7 @@ fn main() {
                 current_platform(),
                 runtime_limits,
             ));
-            // Restore command rules before any client can submit work; legacy interface grants are discarded.
-            if let Ok(store) = &workspace {
-                tauri::async_runtime::block_on(
-                    plugin_runtime.set_approval_policy(store.snapshot().approval_policy),
-                )
-                .ok();
-            }
+
             // 适配器就是本可执行文件的 `mcp stdio` 子命令：不搜索 PATH，也不依赖旁路文件。
             let stdio_bridge = mcp_commands::StdioBridge::new(
                 plugin_runtime.clone(),
@@ -903,7 +919,8 @@ fn main() {
                     let version = expiry_runtime.attention_version();
                     if version != published {
                         published = version;
-                        let _ = app_handle.emit(ATTENTION_CHANGED_EVENT, AttentionChanged { version });
+                        let _ =
+                            app_handle.emit(ATTENTION_CHANGED_EVENT, AttentionChanged { version });
                     }
                 }
             });

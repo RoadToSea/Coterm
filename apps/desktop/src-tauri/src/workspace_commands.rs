@@ -117,6 +117,17 @@ pub async fn restore_saved_instance(
         .plugin_runtime
         .create_instance_with_name(&entry.plugin_id, entry.config, Some(entry.label))
         .await?;
+    if let Err(error) = state
+        .plugin_runtime
+        .set_approval_policy(&instance.plugin_instance_id, entry.approval_policy)
+        .await
+    {
+        let _ = state
+            .plugin_runtime
+            .destroy_instance(&instance.plugin_instance_id)
+            .await;
+        return Err(error);
+    }
     let id = instance.plugin_instance_id.clone();
     let label = instance.label.clone();
     if let Err(error) = access(&state, move |store| store.bind(&config_ref, id, label)).await {
@@ -166,10 +177,14 @@ pub async fn reset_saved_workspace(state: tauri::State<'_, AppState>) -> Result<
     .map_err(|_| workspace::error("workspace_task_failed"))?
 }
 
-/// Persists command approval settings without touching instance entries.
+/// Persists rules only on the live instance's saved entry; errors leave runtime rules unchanged.
 pub async fn store_approval_policy(
     state: &tauri::State<'_, AppState>,
+    instance_id: String,
     policy: coterm_core::approval_policy::ApprovalPolicy,
 ) -> Result<(), coterm_proto::runtime::RuntimeError> {
-    access(state, move |store| store.save_approval_policy(policy)).await
+    access(state, move |store| {
+        store.save_approval_policy(&instance_id, policy)
+    })
+    .await
 }

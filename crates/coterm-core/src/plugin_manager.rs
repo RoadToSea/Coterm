@@ -20,8 +20,7 @@ use coterm_proto::runtime::{
     message::{DeferredOperation, HostCommand, PluginNotification},
     operation::{
         ApproveProposal, CancellationOutcome, DispatchMode, InvokeRequest, OperationDescriptor,
-        OperationEffect, OperationReceipt, OperationRecord, OperationScope, OperationSource,
-        OperationStatus,
+        OperationReceipt, OperationRecord, OperationScope, OperationSource, OperationStatus,
     },
     ErrorCategory, RuntimeError, RuntimeFuture,
 };
@@ -30,7 +29,7 @@ use serde_json::Value;
 use tokio::sync::Mutex;
 
 use crate::{
-    approval_policy::{ApprovalPolicy, CompiledApprovalPolicy},
+    approval_policy::{ApprovalContext, ApprovalPolicy, InstanceApproval},
     operation_history::{OperationHistory, OperationHistoryError},
     plugin_process::{
         resolve_backend_entry, resolve_package_file, validate_manifest, JsonRpcPluginProcess,
@@ -47,6 +46,7 @@ struct State {
     packages: HashMap<String, super::plugin_process::PluginPackage>,
     processes: HashMap<String, Arc<JsonRpcPluginProcess>>,
     instances: HashMap<String, InstanceInfo>,
+    instance_approvals: HashMap<String, InstanceApproval>,
     operation_catalog: HashMap<String, HashMap<String, OperationDescriptor>>,
     /// (plugin_id, plugin_instance_id, proposal_id, operation)
     pending_approvals: HashMap<String, (String, Option<String>, String, String)>,
@@ -302,9 +302,6 @@ pub struct ProcessPluginRuntime {
     limits: RuntimeLimits,
     state: Arc<Mutex<State>>,
     history: Arc<OperationHistory>,
-    bypass: Arc<tokio::sync::RwLock<bool>>,
-    /// User-owned compiled command rules. None retains approval for every commit.
-    approval_policy: Arc<tokio::sync::RwLock<Option<CompiledApprovalPolicy>>>,
     /// 仅承载版本号；快照内容以 `state` 为准，二者在同一把锁内推进。
     attention: Arc<std::sync::Mutex<u64>>,
     children: Arc<std::sync::Mutex<HashMap<String, std::sync::Weak<JsonRpcPluginProcess>>>>,
@@ -318,8 +315,6 @@ impl ProcessPluginRuntime {
             limits,
             state: Arc::new(Mutex::new(State::default())),
             history: Arc::new(OperationHistory::new(100, 16 * 1024).with_output_limit(192 * 1024)),
-            bypass: Arc::new(tokio::sync::RwLock::new(false)),
-            approval_policy: Arc::new(tokio::sync::RwLock::new(None)),
             attention: Arc::new(std::sync::Mutex::new(0)),
             children: Arc::new(std::sync::Mutex::new(HashMap::new())),
             shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -397,6 +392,9 @@ impl ProcessPluginRuntime {
             status: InstanceStatus::Ready,
             ..instance
         };
+        state
+            .instance_approvals
+            .insert(instance_id.clone(), InstanceApproval::default());
         state.instances.insert(instance_id, ready.clone());
         Ok(ready)
     }
@@ -656,27 +654,51 @@ impl ProcessPluginRuntime {
         PluginList { plugins, issues }
     }
 
-    pub async fn set_bypass(&self, enabled: bool) {
-        *self.bypass.write().await = enabled;
-    }
-
-    pub async fn bypass_enabled(&self) -> bool {
-        *self.bypass.read().await
-    }
-
-    pub async fn set_approval_policy(&self, policy: ApprovalPolicy) -> Result<(), RuntimeError> {
-        let compiled = policy.compile()?;
-        *self.approval_policy.write().await = Some(compiled);
+    /// Changes one live instance's bypass; unknown IDs return plugin_instance_not_found.
+    pub async fn set_bypass(&self, instance_id: &str, enabled: bool) -> Result<(), RuntimeError> {
+        let mut state = self.state.lock().await;
+        let approval = state
+            .instance_approvals
+            .get_mut(instance_id)
+            .ok_or_else(|| runtime_error(ErrorCategory::NotFound, "plugin_instance_not_found"))?;
+        approval.set_bypass(enabled);
         Ok(())
     }
 
-    pub async fn approval_policy(&self) -> ApprovalPolicy {
-        self.approval_policy
-            .read()
+    /// Reads session-only bypass for one live instance; unknown IDs return NotFound.
+    pub async fn bypass_enabled(&self, instance_id: &str) -> Result<bool, RuntimeError> {
+        self.state
+            .lock()
             .await
-            .as_ref()
-            .map(CompiledApprovalPolicy::policy)
-            .unwrap_or_default()
+            .instance_approvals
+            .get(instance_id)
+            .map(InstanceApproval::bypass_enabled)
+            .ok_or_else(|| runtime_error(ErrorCategory::NotFound, "plugin_instance_not_found"))
+    }
+
+    /// Replaces one live instance's rules; invalid rules and unknown IDs leave all rules intact.
+    pub async fn set_approval_policy(
+        &self,
+        instance_id: &str,
+        policy: ApprovalPolicy,
+    ) -> Result<(), RuntimeError> {
+        let mut state = self.state.lock().await;
+        let approval = state
+            .instance_approvals
+            .get_mut(instance_id)
+            .ok_or_else(|| runtime_error(ErrorCategory::NotFound, "plugin_instance_not_found"))?;
+        approval.set_policy(policy)
+    }
+
+    /// Returns this instance's rules; unknown IDs cannot fall back to another instance.
+    pub async fn approval_policy(&self, instance_id: &str) -> Result<ApprovalPolicy, RuntimeError> {
+        self.state
+            .lock()
+            .await
+            .instance_approvals
+            .get(instance_id)
+            .map(InstanceApproval::policy)
+            .ok_or_else(|| runtime_error(ErrorCategory::NotFound, "plugin_instance_not_found"))
     }
 
     pub async fn operation_catalog(&self, plugin_id: &str) -> Vec<OperationDescriptor> {
@@ -1540,6 +1562,7 @@ impl PluginRuntime for ProcessPluginRuntime {
             settle_closed_plugin(&mut state, &self.history, plugin_id).await;
             for instance_id in instance_ids {
                 state.instances.remove(&instance_id);
+                state.instance_approvals.remove(&instance_id);
             }
             result
         })
@@ -1571,6 +1594,7 @@ impl PluginRuntime for ProcessPluginRuntime {
             self.cancel_instance_interactions(&mut state, &[instance_id.to_owned()])
                 .await;
             state.instances.remove(instance_id);
+            state.instance_approvals.remove(instance_id);
             Ok(())
         })
     }
@@ -1615,7 +1639,6 @@ impl ProcessPluginRuntime {
         return_on_approval: bool,
     ) -> RuntimeFuture<'a, OperationReceipt> {
         Box::pin(async move {
-            let bypass = *self.bypass.read().await;
             let state = self.state.lock().await;
             self.ensure_accepting()?;
             let descriptor = state
@@ -1658,15 +1681,20 @@ impl ProcessPluginRuntime {
                 return Err(runtime_error(ErrorCategory::Conflict, "plugin_not_started"));
             }
             let operation_id = uuid::Uuid::new_v4().to_string();
-            let explicitly_allowed = self
-                .approval_policy
-                .read()
-                .await
-                .as_ref()
-                .is_some_and(|policy| policy.allows(&descriptor, &request.args));
-            let proposal_id =
-                requires_proposal(caller.source, &descriptor, bypass, explicitly_allowed)
-                    .then(|| uuid::Uuid::new_v4().to_string());
+            let context = ApprovalContext {
+                source: caller.source,
+                descriptor: &descriptor,
+                args: &request.args,
+            };
+            let default_approval = InstanceApproval::default();
+            let approval = request
+                .plugin_instance_id
+                .as_deref()
+                .and_then(|id| state.instance_approvals.get(id))
+                .unwrap_or(&default_approval);
+            let proposal_id = approval
+                .requires_approval(&context)
+                .then(|| uuid::Uuid::new_v4().to_string());
             let now = Utc::now();
             let record = OperationRecord {
                 operation_id: operation_id.clone(),
@@ -2302,24 +2330,6 @@ fn validate_schema(schema: &Value, value: &Value) -> Result<(), ()> {
     validator.validate(value).map_err(|_| ())
 }
 
-/// Approval policy for Agent-submitted operations.
-///
-/// A read-only operation with no sensitive input only observes state, so it does not
-/// need a proposal. Everything else still does, unless the user enabled Bypass or
-/// matched the user command approval policy. Neither path can change `effect`, bypass
-/// plugin-side checks, or let an Agent approve its own proposal.
-fn requires_proposal(
-    source: OperationSource,
-    descriptor: &OperationDescriptor,
-    bypass: bool,
-    explicitly_allowed: bool,
-) -> bool {
-    source == OperationSource::Agent
-        && descriptor.effect == OperationEffect::Commit
-        && !bypass
-        && !explicitly_allowed
-}
-
 fn failure_status(error: &RuntimeError) -> OperationStatus {
     if error.category == ErrorCategory::Transport {
         OperationStatus::Unknown
@@ -2371,10 +2381,10 @@ mod tests {
     };
 
     use super::{
-        failure_status, operation_args_error, requires_proposal, schema_is_valid,
-        unique_instance_label, validate_plugin_authority, validate_scope_target,
-        ProcessPluginRuntime,
+        failure_status, operation_args_error, schema_is_valid, unique_instance_label,
+        validate_plugin_authority, validate_scope_target, ProcessPluginRuntime,
     };
+    use crate::approval_policy::{ApprovalContext, InstanceApproval};
     use coterm_proto::runtime::interaction::{InteractionKind, InteractionRequest};
     use coterm_proto::runtime::lifecycle::{InstanceInfo, InstanceStatus, RuntimeLimits};
     use serde_json::json;
@@ -2673,54 +2683,38 @@ mod tests {
     }
 
     #[test]
-    fn agent_commit_requires_approval_unless_bypass_or_command_rules_allow() {
-        let commit = descriptor(OperationEffect::Commit, false);
-        let draft = descriptor(OperationEffect::Draft, false);
-        let read = descriptor(OperationEffect::Read, false);
-        assert!(requires_proposal(
-            OperationSource::Agent,
-            &commit,
-            false,
-            false
-        ));
-        assert!(!requires_proposal(
-            OperationSource::Agent,
-            &commit,
-            true,
-            false
-        ));
-        assert!(!requires_proposal(
-            OperationSource::Agent,
-            &commit,
-            false,
-            true
-        ));
-        assert!(!requires_proposal(
+    fn instance_approval_checks_source_and_effect() {
+        let mut approval = InstanceApproval::default();
+        let args = serde_json::json!({});
+        for source in [
             OperationSource::Human,
-            &commit,
-            false,
-            false
-        ));
-        assert!(!requires_proposal(
+            OperationSource::System,
             OperationSource::Agent,
-            &draft,
-            false,
-            false
-        ));
-        assert!(!requires_proposal(
-            OperationSource::Agent,
-            &read,
-            false,
-            false
-        ));
-        // A command rule must never be able to weaken a human-only path:
-        // the caller source is checked first.
-        assert!(!requires_proposal(
-            OperationSource::Human,
-            &commit,
-            false,
-            true
-        ));
+        ] {
+            for effect in [
+                OperationEffect::Read,
+                OperationEffect::Draft,
+                OperationEffect::Commit,
+            ] {
+                let descriptor = descriptor(effect, true);
+                let context = ApprovalContext {
+                    source,
+                    descriptor: &descriptor,
+                    args: &args,
+                };
+                assert_eq!(
+                    approval.requires_approval(&context),
+                    source == OperationSource::Agent && effect == OperationEffect::Commit
+                );
+            }
+        }
+        approval.set_bypass(true);
+        let descriptor = descriptor(OperationEffect::Commit, true);
+        assert!(!approval.requires_approval(&ApprovalContext {
+            source: OperationSource::Agent,
+            descriptor: &descriptor,
+            args: &args
+        }));
     }
 
     #[test]

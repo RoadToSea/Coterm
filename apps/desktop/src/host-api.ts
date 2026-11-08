@@ -97,11 +97,9 @@ export interface InstanceInfo {
 export interface WorkspaceGroup { id: string; name: string }
 
 export interface SavedWorkspace {
-  entries: { configRef: string; pluginId: string; label: string; instanceId: string | null; workspaceId: string }[];
+  entries: { configRef: string; pluginId: string; label: string; instanceId: string | null; workspaceId: string; approvalPolicy: ApprovalPolicy }[];
   groups: WorkspaceGroup[];
   layout: { activeConfigRef: string | null; instancesCollapsed: boolean; activeWorkspaceId: string };
-  /** Agent 审批放行的操作名；持久化在加密工作区内。 */
-  approvalPolicy: ApprovalPolicy;
   historyPolicy: "session_only";
   persistence: "windows_dpapi" | "memory_only";
 }
@@ -180,11 +178,11 @@ export interface HostAPI {
   ): Promise<OperationReceipt<T>>;
   rejectProposal(pluginInstanceId: string, proposalId: string): Promise<void>;
   cancelOperation(pluginInstanceId: string, operationId: string): Promise<OperationReceipt>;
-  setBypass(enabled: boolean): Promise<void>;
-  getBypass(): Promise<boolean>;
+  setBypass(pluginInstanceId: string, enabled: boolean): Promise<void>;
+  getBypass(pluginInstanceId: string): Promise<boolean>;
   /** 放行列表只跳过 Agent 审批；不改变 effect、不绕过插件校验。 */
-  setApprovalPolicy(policy: ApprovalPolicy): Promise<ApprovalPolicy>;
-  getApprovalPolicy(): Promise<ApprovalPolicy>;
+  setApprovalPolicy(pluginInstanceId: string, policy: ApprovalPolicy): Promise<ApprovalPolicy>;
+  getApprovalPolicy(pluginInstanceId: string): Promise<ApprovalPolicy>;
   previewApprovalPolicy(policy: ApprovalPolicy, text: string): Promise<boolean>;
   frontendSource(pluginId: string): Promise<string | null>;
   provideSecret(pluginInstanceId: string, purpose: string, value: string): Promise<SecretHandle>;
@@ -428,10 +426,10 @@ export const hostAPI: HostAPI = {
     invoke<void>("reject_proposal", { pluginInstanceId, proposalId }),
   cancelOperation: (pluginInstanceId, operationId) =>
     invoke<OperationReceipt>("cancel_operation", { pluginInstanceId, operationId }),
-  setBypass: (enabled) => invoke<void>("set_bypass", { enabled }),
-  getBypass: () => invoke<boolean>("get_bypass"),
-  setApprovalPolicy: (policy) => invoke<ApprovalPolicy>("set_approval_policy", { policy }),
-  getApprovalPolicy: () => invoke<ApprovalPolicy>("get_approval_policy"),
+  setBypass: (pluginInstanceId, enabled) => invoke<void>("set_bypass", { pluginInstanceId, enabled }),
+  getBypass: (pluginInstanceId) => invoke<boolean>("get_bypass", { pluginInstanceId }),
+  setApprovalPolicy: (pluginInstanceId, policy) => invoke<ApprovalPolicy>("set_approval_policy", { pluginInstanceId, policy }),
+  getApprovalPolicy: (pluginInstanceId) => invoke<ApprovalPolicy>("get_approval_policy", { pluginInstanceId }),
   previewApprovalPolicy: (policy, text) => invoke<boolean>("preview_approval_policy", { policy, text }),
 };
 

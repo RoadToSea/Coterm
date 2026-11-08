@@ -1,6 +1,6 @@
 import { t } from "./i18n";
 import { useI18n } from "./use-i18n";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useInstanceViews } from "./use-instance-views";
 import { InstanceTabs, instanceTabId, instancePanelId } from "./components/InstanceTabs";
 import { PanelLeftClose, PanelLeftOpen, Plus, PlugZap, Settings2, ShieldAlert, ShieldCheck, SlidersHorizontal, TerminalSquare, Trash2 } from "lucide-react";
@@ -34,7 +34,7 @@ import { promptForConfirmation, promptForText } from "./secret-input";
 const EMPTY_WORKSPACE: SavedWorkspace = {
   entries: [], groups: [{ id: "default", name: "Default workspace" }],
   layout: { activeConfigRef: null, instancesCollapsed: false, activeWorkspaceId: "default" },
-  approvalPolicy: { mode: "allow_matches", patterns: [] }, historyPolicy: "session_only", persistence: "memory_only",
+  historyPolicy: "session_only", persistence: "memory_only",
 };
 
 export default function App() {
@@ -62,7 +62,7 @@ export default function App() {
     }
   }, []);
 
-  const [approvalOpen, setApprovalOpen] = useState(false);
+  const [approvalTarget, setApprovalTarget] = useState<InstanceInfo | null>(null);
   const [installerOpen, setInstallerOpen] = useState(false);
   const [plugins, setPlugins] = useState<PluginSummary[]>([]);
   const [pluginIssues, setPluginIssues] = useState<PluginLoadIssue[]>([]);
@@ -71,13 +71,30 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [bypass, setBypass] = useState(false);
+  const [bypassState, setBypassState] = useState<{ instanceId: string; enabled: boolean } | null>(null);
+  const [bypassBusy, setBypassBusy] = useState(false);
+  const bypassAction = useRef(false);
   const [workspace, setWorkspace] = useState<SavedWorkspace | null>(null);
   const [activeWorkspaceId, setActiveWorkspaceId] = useState("default");
   const [workspaceError, setWorkspaceError] = useState<string | null>(null);
   const views = useInstanceViews(instances, loading);
   const activeInstanceId = views.activeId;
   const selectedPluginId = views.pluginId;
+  const approvalInstance = !selectedPluginId ? instances.find(instance => instance.pluginInstanceId === activeInstanceId) ?? null : null;
+  const approvalInstanceId = approvalInstance?.pluginInstanceId ?? null;
+  const bypass = bypassState?.instanceId === approvalInstanceId && bypassState?.enabled === true;
+  const bypassReady = !!approvalInstanceId && bypassState?.instanceId === approvalInstanceId;
+
+  useEffect(() => {
+    let disposed = false;
+    setBypassState(null);
+    if (approvalInstanceId) {
+      void hostAPI.getBypass(approvalInstanceId).then(enabled => {
+        if (!disposed) setBypassState({ instanceId: approvalInstanceId, enabled });
+      }).catch(reason => { if (!disposed) setError(String(reason)); });
+    }
+    return () => { disposed = true; };
+  }, [approvalInstanceId]);
   const managedInstance = instances.find(instance => instance.pluginInstanceId === managedInstanceId) ?? null;
   const openInstances = views.ids.flatMap(id => instances.find(instance => instance.pluginInstanceId === id) ?? []);
   const formatError = (reason: unknown) => typeof reason === "object" && reason !== null && "code" in reason
@@ -128,16 +145,14 @@ export default function App() {
     setLoading(true);
     setError(null);
     try {
-      const [catalog, nextInstances, nextBypass] = await Promise.all([
+      const [catalog, nextInstances] = await Promise.all([
         hostAPI.listPlugins(),
         hostAPI.listInstances(),
-        hostAPI.getBypass(),
       ]);
       // 坏包只进诊断列表，有效插件照常列出。
       setPlugins(catalog.plugins);
       setPluginIssues(catalog.issues);
       setInstances(nextInstances);
-      setBypass(nextBypass);
     } catch (reason) {
       setError(String(reason));
     } finally {
@@ -239,14 +254,20 @@ export default function App() {
   };
 
   const toggleBypass = async () => {
-    if (!bypass && !window.confirm(
-      t("Enable Bypass? Agent commit operations will skip Coterm approval. You assume the risk."),
-    )) return;
+    if (!approvalInstance || !bypassReady || bypassAction.current) return;
+    const instanceId = approvalInstance.pluginInstanceId;
+    const enabled = !bypass;
+    if (enabled && !window.confirm(t("Enable Bypass for {name}? Only this instance will skip Coterm approval until it is closed.", { name: approvalInstance.label }))) return;
+    bypassAction.current = true;
+    setBypassBusy(true);
     try {
-      await hostAPI.setBypass(!bypass);
-      setBypass(!bypass);
+      await hostAPI.setBypass(instanceId, enabled);
+      setBypassState(current => current?.instanceId === instanceId ? { instanceId, enabled } : current);
     } catch (reason) {
       setError(String(reason));
+    } finally {
+      bypassAction.current = false;
+      setBypassBusy(false);
     }
   };
 
@@ -354,7 +375,7 @@ export default function App() {
         }}>{t("Reset saved workspace")}</button>}
       </div>}
       {pluginIssueNotice}
-      {approvalOpen && <ApprovalSettings onClose={() => setApprovalOpen(false)} />}
+      {approvalTarget && <ApprovalSettings key={approvalTarget.pluginInstanceId} instance={approvalTarget} onClose={() => setApprovalTarget(null)} />}
       {installerOpen && <PluginInstaller onClose={() => setInstallerOpen(false)} onInstalled={refresh} />}
 
       <div className="flex min-h-0 flex-1">
@@ -399,6 +420,7 @@ export default function App() {
               title={t(bypass ? "Bypass on — click to require approval" : "Agent approval on — click to enable bypass")}
               aria-label={t(bypass ? "Disable approval bypass" : "Enable approval bypass")}
               aria-pressed={bypass}
+              disabled={!bypassReady || bypassBusy}
               onClick={() => void toggleBypass()}
             >
               {bypass ? <ShieldAlert data-icon="inline-start" className="text-warning" /> : <ShieldCheck data-icon="inline-start" />}
@@ -407,7 +429,8 @@ export default function App() {
               type="button"
               title={t("Configure command approval rules")}
               aria-label={t("Open approval settings")}
-              onClick={() => setApprovalOpen(true)}
+              disabled={!approvalInstance}
+              onClick={() => setApprovalTarget(approvalInstance)}
             >
               <SlidersHorizontal data-icon="inline-start" />
             </Button>
@@ -516,7 +539,7 @@ export default function App() {
           <span className="hidden sm:inline" title={t("Bounded operation history is cleared on application exit")}>{t("History: this session")}</span>
           {busyId && <span role="status">{t("Updating…")}</span>}
         </div>
-        <span className={bypass ? "text-warning" : ""}>{bypass ? t("Bypass on") : t("Agent approval on")}</span>
+        <span title={approvalInstance?.label} className={bypass ? "text-warning" : ""}>{bypass ? t("Bypass on") : t("Agent approval on")}</span>
       </footer>
 
       {managedInstance && (

@@ -5,27 +5,107 @@ use super::*;
 fn approval_rules_roundtrip_and_failed_writes_preserve_the_saved_policy() -> anyhow::Result<()> {
     use coterm_core::approval_policy::{ApprovalMode, ApprovalPolicy};
     let fixture = Fixture::new()?;
-    let legacy = serde_json::json!({"version":1,"entries":[],"layout":{"activeConfigRef":null,"instancesCollapsed":false},"allowedOperations":["ssh.exec"]});
+    let mut store = fixture.store()?;
+    for id in ["one", "two"] {
+        store.insert("ssh".into(), id.into(), id.into(), Value::Null, None)?;
+    }
+    let reference = store.snapshot().entries[0].config_ref.clone();
+    let other = store.snapshot().entries[1].config_ref.clone();
+    let policy = ApprovalPolicy {
+        mode: ApprovalMode::ApproveMatches,
+        patterns: vec![r"\brm\b".into()],
+    };
+    store.save_approval_policy("one", policy.clone())?;
+    assert_eq!(fixture.store()?.find(&reference)?.approval_policy, policy);
+    assert_eq!(
+        fixture.store()?.find(&other)?.approval_policy,
+        ApprovalPolicy::default()
+    );
+    assert!(store
+        .save_approval_policy("missing", policy.clone())
+        .is_err());
+    let serialized = serde_json::to_value(store.snapshot())?;
+    assert!(serialized.get("allowedOperations").is_none());
+    assert!(serialized.get("approvalPolicy").is_none());
+    let disk: Value = serde_json::from_slice(&protect(&fs::read(fixture.path())?, false)?)?;
+    assert_eq!(disk["version"], 2);
+    assert!(disk.get("approvalPolicy").is_none());
+    store.path = fixture.0.join("missing").join("workspace.bin");
+    assert!(store
+        .save_approval_policy("one", ApprovalPolicy::default())
+        .is_err());
+    assert_eq!(store.find(&reference)?.approval_policy, policy);
+    assert_eq!(fixture.store()?.find(&reference)?.approval_policy, policy);
+    assert_eq!(
+        store.find(&other)?.approval_policy,
+        ApprovalPolicy::default()
+    );
+    Ok(())
+}
+
+#[cfg(windows)]
+#[test]
+fn legacy_rules_are_copied_to_saved_instances_but_not_to_new_instances() -> anyhow::Result<()> {
+    use coterm_core::approval_policy::{ApprovalMode, ApprovalPolicy};
+    let fixture = Fixture::new()?;
+    let policy = ApprovalPolicy {
+        mode: ApprovalMode::AllowMatches,
+        patterns: vec!["^ls$".into()],
+    };
+    let legacy = serde_json::json!({"version":1,"entries":[
+        {"configRef":"first","pluginId":"ssh","label":"Same driver A","config":{}},
+        {"configRef":"second","pluginId":"ssh","label":"Same driver B","config":{}}
+    ],"layout":{"activeConfigRef":null,"instancesCollapsed":false},"approvalPolicy":policy});
     fs::write(
         fixture.path(),
         protect(&serde_json::to_vec(&legacy)?, true)?,
     )?;
     let mut store = fixture.store()?;
-    assert_eq!(store.snapshot().approval_policy, ApprovalPolicy::default());
-    let policy = ApprovalPolicy {
-        mode: ApprovalMode::ApproveMatches,
-        patterns: vec![r"\brm\b".into()],
-    };
-    store.save_approval_policy(policy.clone())?;
-    assert_eq!(fixture.store()?.snapshot().approval_policy, policy);
-    let serialized = serde_json::to_value(store.snapshot())?;
-    assert!(serialized.get("allowedOperations").is_none());
-    store.path = fixture.0.join("missing").join("workspace.bin");
-    assert!(store
-        .save_approval_policy(ApprovalPolicy::default())
-        .is_err());
-    assert_eq!(store.snapshot().approval_policy, policy);
-    assert_eq!(fixture.store()?.snapshot().approval_policy, policy);
+    assert_eq!(store.find("first")?.approval_policy, policy);
+    assert_eq!(store.find("second")?.approval_policy, policy);
+    store.bind("first", "new-first".into(), "Same driver A".into())?;
+    store.bind("second", "new-second".into(), "Same driver B".into())?;
+    store.save_approval_policy("new-first", ApprovalPolicy::default())?;
+    store.insert(
+        "ssh".into(),
+        "third".into(),
+        "New instance".into(),
+        Value::Null,
+        None,
+    )?;
+    let reopened = fixture.store()?;
+    assert_eq!(
+        reopened.find("first")?.approval_policy,
+        ApprovalPolicy::default()
+    );
+    assert_eq!(reopened.find("second")?.approval_policy, policy);
+    assert_eq!(
+        reopened.snapshot().entries[2].approval_policy,
+        ApprovalPolicy::default()
+    );
+    assert!(reopened
+        .snapshot()
+        .entries
+        .iter()
+        .all(|entry| entry.instance_id.is_none()));
+    Ok(())
+}
+
+#[cfg(windows)]
+#[test]
+fn legacy_interface_grants_never_become_instance_command_rules() -> anyhow::Result<()> {
+    let fixture = Fixture::new()?;
+    let legacy = serde_json::json!({"version":1,"entries":[
+        {"configRef":"first","pluginId":"ssh","label":"Server","config":{}}
+    ],"layout":{"activeConfigRef":null,"instancesCollapsed":false},"allowedOperations":["ssh.command"]});
+    fs::write(
+        fixture.path(),
+        protect(&serde_json::to_vec(&legacy)?, true)?,
+    )?;
+    assert_eq!(
+        fixture.store()?.find("first")?.approval_policy,
+        coterm_core::approval_policy::ApprovalPolicy::default()
+    );
     Ok(())
 }
 

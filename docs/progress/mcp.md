@@ -6,7 +6,17 @@
 - 对外目录使用扁平 `coterm_<plugin>_<tool>`；`coterm.status` 提供有界健康 / 连接快照，实例工具在唯一确认已连接且无未知状态时可省略 `name`。
 - 插件可声明工具 descriptor 的 `_meta["coterm/returnOnApproval"]`，复用运行时状态订阅，在人工审批就绪时返回；未声明的工具和普通运行时提交保持原有等待行为。
 - 串口命令可在一次调用中发送文本并收集提示符前的回显，结果同时提供可读文本与结构化字段；近期输出另有无状态快照接口。
+- 每个运行实例独立管理命令规则及会话内 Bypass，同一驱动不同实例可配置不同规则，保存项恢复时只加载自身规则。
 - Agent 命令审批支持用户自定义正则：正向放行匹配命令，反向拦截匹配命令；编辑器支持追加/删除、试匹配和显式保存。规则作用于实际命令文本，旧接口级放行不再生效。
+
+## 2026-11-08：每实例审批对象与独立配置
+
+- 新建实例创建 `InstanceApproval`，集中接收已验证的 `ApprovalContext {source, descriptor, args}`；销毁/停止释放对象。删除运行时全局规则及全局 Bypass，插件级 Agent commit 仍要求审批，不借用实例的放行配置。
+- 桌面规则与 Bypass 命令显式绑定 `pluginInstanceId`，弹窗显示固定实例标签，无活动实例时禁用。切换标签后的迟到查询和保存响应不能覆盖当前实例状态；等待中的提案不会因规则或 Bypass 修改自动执行。
+- 规则写入已有工作区保存项，按 `configRef` 归属，文档版本升至 2；版本 1 的全局规则逐项复制到已有保存项，新实例保持正向空规则。继续使用已有 DPAPI、512 KiB 文件上限及原子替换，失败不发布新运行时规则。Bypass 不落盘、不跨实例或实例重建继承。
+- 验证通过：当前工作区的 80 项相关 Rust 测试、21 项前端测试及构建通过。隔离本次提交后，`cargo check --locked --workspace`、Core / SSH / Runtime fixture / Desktop 全目标 Clippy（`-D warnings`）、75 项相关 Rust 测试、22 项前端测试、桌面及 SSH / Serial 前端构建、格式与差异检查通过；Serial 测试目标编译通过，未连接真实远端或串口设备，未实测非 Windows 平台。
+- 当前工作区另有安装管理改动，使原有标签页测试仍查找已移除的安装按钮；该用例在隔离提交源码中通过，本阶段未混入安装管理修订。无新增依赖、权限或跨进程协议。
+- 继续入口：[审批对象](../../crates/coterm-core/src/approval_policy.rs)、[实例生命周期与派发](../../crates/coterm-core/src/plugin_manager.rs)、[配置保存](../../apps/desktop/src-tauri/src/workspace.rs)、[稳定契约](../architecture/command-approval.md)。下一阶段为串口 Shell/stream 读取能力分离及提示符边界，不更改当前原始字节传输语义。
 
 ## 2026-11-04：MCP 连接、启动方式与状态
 

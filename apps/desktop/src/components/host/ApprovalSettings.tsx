@@ -2,7 +2,7 @@ import { t } from "../../i18n";
 import { useI18n } from "../../use-i18n";
 import { useEffect, useRef, useState } from "react";
 import { Plus, Trash2 } from "lucide-react";
-import { hostAPI, type ApprovalPolicy } from "../../host-api";
+import { hostAPI, type ApprovalPolicy, type InstanceInfo } from "../../host-api";
 import { Modal } from "../ui/Modal";
 import { Button } from "../ui/button";
 import { ToggleGroup, ToggleGroupItem } from "../ui/toggle-group";
@@ -16,7 +16,7 @@ function errorText(reason: unknown): string {
     ? String(reason.message) : String(reason);
 }
 
-export function ApprovalSettings({ onClose }: { onClose: () => void }) {
+export function ApprovalSettings({ instance, onClose }: { instance: InstanceInfo; onClose: () => void }) {
   useI18n();
   const [policy, setPolicy] = useState<ApprovalPolicy>(DEFAULT_POLICY);
   const [saved, setSaved] = useState<ApprovalPolicy | null>(null);
@@ -32,12 +32,12 @@ export function ApprovalSettings({ onClose }: { onClose: () => void }) {
   useEffect(() => {
     let disposed = false;
     setBusy(true);
-    void hostAPI.getApprovalPolicy().then(current => {
+    void hostAPI.getApprovalPolicy(instance.pluginInstanceId).then(current => {
       if (!disposed) { setPolicy(current); setSaved(current); setError(""); }
     }).catch(reason => { if (!disposed) setError(errorText(reason)); })
       .finally(() => { if (!disposed) setBusy(false); });
     return () => { disposed = true; };
-  }, [retry]);
+  }, [retry, instance.pluginInstanceId]);
 
   const update = (next: ApprovalPolicy) => { setPolicy(next); setPreview(null); setError(""); };
   const add = (pattern: string) => {
@@ -55,6 +55,7 @@ export function ApprovalSettings({ onClose }: { onClose: () => void }) {
   };
 
   return <Modal id="approval-settings-dialog" title={t("Agent approval")} onClose={onClose}>
+    <p className="mb-4 break-all text-sm font-medium" data-approval-instance={instance.pluginInstanceId}>{instance.label}</p>
     {error && <Alert variant="destructive" className="mb-4"><AlertDescription>{error}</AlertDescription></Alert>}
     {!saved ? <Button variant="outline" disabled={busy} onClick={() => setRetry(value => value + 1)}>{t(busy ? "Loading…" : "Retry")}</Button> :
     <fieldset disabled={busy} aria-busy={busy} className="m-0 flex min-w-0 flex-col gap-5 border-0 p-0">
@@ -98,7 +99,7 @@ export function ApprovalSettings({ onClose }: { onClose: () => void }) {
       <div className="flex items-center justify-between gap-3">
         <p role="status" className="text-xs text-muted-foreground">{t(custom.trim() ? "Add the typed rule before saving." : dirty ? "Unsaved changes" : "Saved")}</p>
         <Button type="button" disabled={!dirty || !!custom.trim()} title={custom.trim() ? t("Add the typed rule before saving.") : undefined}
-          onClick={() => void perform(async () => { const stored = await hostAPI.setApprovalPolicy(policy); setPolicy(stored); setSaved(stored); })}>{t("Save rules")}</Button>
+          onClick={() => void perform(async () => { const stored = await hostAPI.setApprovalPolicy(instance.pluginInstanceId, policy); setPolicy(stored); setSaved(stored); })}>{t("Save rules")}</Button>
       </div>
     </fieldset>}
   </Modal>;

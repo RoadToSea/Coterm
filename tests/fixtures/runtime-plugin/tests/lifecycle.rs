@@ -130,7 +130,9 @@ async fn command_rules_control_real_agent_dispatch_and_preserve_pending_approval
         mode: ApprovalMode::AllowMatches,
         patterns: vec![r"^ls$".into(), r"^cd /tmp$".into()],
     };
-    runtime.set_approval_policy(allow.clone()).await?;
+    runtime
+        .set_approval_policy(&instance.plugin_instance_id, allow.clone())
+        .await?;
     for (mode, commands, expected) in [
         (
             ApprovalMode::AllowMatches,
@@ -159,10 +161,13 @@ async fn command_rules_control_real_agent_dispatch_and_preserve_pending_approval
         ),
     ] {
         runtime
-            .set_approval_policy(ApprovalPolicy {
-                mode,
-                ..allow.clone()
-            })
+            .set_approval_policy(
+                &instance.plugin_instance_id,
+                ApprovalPolicy {
+                    mode,
+                    ..allow.clone()
+                },
+            )
             .await?;
         let receipt = runtime
             .submit_until_approval(
@@ -183,15 +188,25 @@ async fn command_rules_control_real_agent_dispatch_and_preserve_pending_approval
         assert_eq!(receipt.status, expected);
     }
     // An invalid replacement cannot weaken the last valid configuration.
-    let before = runtime.approval_policy().await;
+    let before = runtime
+        .approval_policy(&instance.plugin_instance_id)
+        .await?;
     assert!(runtime
-        .set_approval_policy(ApprovalPolicy {
-            mode: ApprovalMode::AllowMatches,
-            patterns: vec!["[".into()]
-        })
+        .set_approval_policy(
+            &instance.plugin_instance_id,
+            ApprovalPolicy {
+                mode: ApprovalMode::AllowMatches,
+                patterns: vec!["[".into()]
+            }
+        )
         .await
         .is_err());
-    assert_eq!(runtime.approval_policy().await, before);
+    assert_eq!(
+        runtime
+            .approval_policy(&instance.plugin_instance_id)
+            .await?,
+        before
+    );
     assert_eq!(runtime.attention_snapshot().await.approvals.len(), 3);
     runtime.stop(ID).await?;
     Ok(())
@@ -346,5 +361,98 @@ async fn shutdown_reaps_a_child_even_when_control_holds_the_routing_lock() -> Re
         "runtime_shutting_down"
     );
     std::fs::remove_dir_all(root)?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn instance_approvals_isolate_rules_bypass_and_lifetime() -> Result<()> {
+    use coterm_core::approval_policy::{ApprovalMode, ApprovalPolicy};
+    let root = package()?;
+    let runtime = runtime();
+    runtime.load(&root).await?;
+    runtime.start(ID).await?;
+    let first = runtime.create_instance(ID, json!({})).await?;
+    let second = runtime.create_instance(ID, json!({})).await?;
+    let caller = |instance: &InstanceInfo| CallerContext {
+        source: OperationSource::Agent,
+        session_id: instance.session_id.clone(),
+        plugin_id: Some(ID.into()),
+    };
+    let request = |instance: &InstanceInfo, command: &str| SubmitOperation {
+        plugin_id: ID.into(),
+        plugin_instance_id: Some(instance.plugin_instance_id.clone()),
+        operation: "fixture.commit".into(),
+        args: json!({"commands":[command]}),
+        wait_timeout_ms: Some(1000),
+    };
+    runtime
+        .set_approval_policy(
+            &first.plugin_instance_id,
+            ApprovalPolicy {
+                mode: ApprovalMode::AllowMatches,
+                patterns: vec!["^ls$".into()],
+            },
+        )
+        .await?;
+    assert_eq!(
+        runtime
+            .submit_until_approval(caller(&first), request(&first, "ls"))
+            .await?
+            .status,
+        OperationStatus::Completed
+    );
+    let pending = runtime
+        .submit_until_approval(caller(&second), request(&second, "ls"))
+        .await?;
+    assert_eq!(pending.status, OperationStatus::AwaitingApproval);
+    runtime.set_bypass(&second.plugin_instance_id, true).await?;
+    assert!(!runtime.bypass_enabled(&first.plugin_instance_id).await?);
+    assert!(runtime.bypass_enabled(&second.plugin_instance_id).await?);
+    assert_eq!(
+        runtime
+            .get(caller(&second), &pending.operation_id)
+            .await?
+            .status,
+        OperationStatus::AwaitingApproval
+    );
+    assert_eq!(
+        runtime
+            .submit_until_approval(caller(&first), request(&first, "pwd"))
+            .await?
+            .status,
+        OperationStatus::AwaitingApproval
+    );
+    assert_eq!(
+        runtime
+            .submit_until_approval(caller(&second), request(&second, "pwd"))
+            .await?
+            .status,
+        OperationStatus::Completed
+    );
+    assert!(runtime
+        .submit_until_approval(caller(&first), request(&second, "ls"))
+        .await
+        .is_err());
+    assert!(runtime.set_bypass("missing", true).await.is_err());
+    assert!(runtime.approval_policy("missing").await.is_err());
+    runtime.destroy_instance(&second.plugin_instance_id).await?;
+    assert!(runtime
+        .bypass_enabled(&second.plugin_instance_id)
+        .await
+        .is_err());
+    let third = runtime.create_instance(ID, json!({})).await?;
+    assert!(!runtime.bypass_enabled(&third.plugin_instance_id).await?);
+    assert_eq!(
+        runtime
+            .submit_until_approval(caller(&third), request(&third, "ls"))
+            .await?
+            .status,
+        OperationStatus::AwaitingApproval
+    );
+    runtime.stop(ID).await?;
+    assert!(runtime
+        .approval_policy(&first.plugin_instance_id)
+        .await
+        .is_err());
     Ok(())
 }

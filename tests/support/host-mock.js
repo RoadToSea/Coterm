@@ -42,13 +42,14 @@ export function makeHostMockSource(initial) {
     const scenario = ${JSON.stringify(initial)};
     const defaultLayout = { activeConfigRef:null, instancesCollapsed:innerWidth < 900, activeWorkspaceId:"default" };
     scenario.workspace = {
-      groups:[{id:"default",name:"Default workspace"}], approvalPolicy:{mode:"allow_matches",patterns:[]}, historyPolicy:"session_only", persistence:"windows_dpapi",
+      groups:[{id:"default",name:"Default workspace"}], historyPolicy:"session_only", persistence:"windows_dpapi",
       ...scenario.workspace,
       entries:(scenario.workspace?.entries ?? scenario.instances.map(instance => ({
         configRef:"ref-" + instance.pluginInstanceId, pluginId:instance.pluginId,label:instance.label,instanceId:instance.pluginInstanceId,
-      }))).map(entry => ({workspaceId:"default",...entry})),
+      }))).map(entry => ({workspaceId:"default",approvalPolicy:{mode:"allow_matches",patterns:[]},...entry})),
       layout:{...defaultLayout,...scenario.workspace?.layout},
     };
+    const bypasses = new Map(Object.entries(scenario.bypasses ?? {}));
     let nextInstance = 0;
     let nextSubscription = 0;
     if (!localStorage.getItem("coterm.locale")) localStorage.setItem("coterm.locale", "en");
@@ -277,7 +278,7 @@ export function makeHostMockSource(initial) {
           label:name?.trim() || (config.host ? config.username + "@" + config.host : config.port ?? plugin.name),status:"ready"};
         scenario.instances = [...scenario.instances,instance];
         scenario.workspace.entries = [...scenario.workspace.entries,{configRef:"created-ref-" + nextInstance,
-          pluginId,instanceId:instance.pluginInstanceId,label:instance.label,workspaceId:workspaceId ?? "default"}];
+          pluginId,instanceId:instance.pluginInstanceId,label:instance.label,workspaceId:workspaceId ?? "default",approvalPolicy:{mode:"allow_matches",patterns:[]}}];
         return instance;
       },
       start_plugin: ({pluginId}) => {
@@ -286,10 +287,16 @@ export function makeHostMockSource(initial) {
       },
       provide_secret: ({ pluginInstanceId, purpose }) => ({ id: "secret-test", pluginInstanceId, purpose, expiresAt: "2099-01-01T00:00:00Z" }),
       list_plugins: () => scenario.catalog,
-      get_approval_policy: () => scenario.workspace.approvalPolicy,
-      set_approval_policy: ({policy}) => {
-        scenario.workspace.approvalPolicy = structuredClone(policy);
-        return scenario.workspace.approvalPolicy;
+      get_approval_policy: ({pluginInstanceId}) => {
+        const entry = scenario.workspace.entries.find(item=>item.instanceId===pluginInstanceId);
+        if (!entry) throw new Error("plugin_instance_not_found");
+        return structuredClone(entry.approvalPolicy);
+      },
+      set_approval_policy: ({pluginInstanceId,policy}) => {
+        const entry = scenario.workspace.entries.find(item=>item.instanceId===pluginInstanceId);
+        if (!entry) throw new Error("plugin_instance_not_found");
+        entry.approvalPolicy = structuredClone(policy);
+        return structuredClone(entry.approvalPolicy);
       },
       // Matching semantics are tested against the Rust matcher, not a JS reimplementation.
       preview_approval_policy: ({text}) => scenario.approvalPreview?.[text] ?? true,
@@ -304,7 +311,15 @@ export function makeHostMockSource(initial) {
       },
       discard_plugin_install: () => null,
       list_instances: () => scenario.instances,
-      get_bypass: () => scenario.bypass,
+      get_bypass: ({pluginInstanceId}) => {
+        if (!scenario.instances.some(item=>item.pluginInstanceId===pluginInstanceId)) throw new Error("plugin_instance_not_found");
+        return bypasses.get(pluginInstanceId) ?? false;
+      },
+      set_bypass: ({pluginInstanceId,enabled}) => {
+        if (!scenario.instances.some(item=>item.pluginInstanceId===pluginInstanceId)) throw new Error("plugin_instance_not_found");
+        bypasses.set(pluginInstanceId,enabled);
+        return null;
+      },
       list_operations: () => scenario.operations ?? [],
       recent_operations: () => scenario.history ?? [],
       recent_plugin_operations: () => scenario.history ?? [],

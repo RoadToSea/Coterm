@@ -36,8 +36,6 @@ pub struct RuntimeConfig {
     pub recent_operations_per_instance: usize,
     pub max_record_bytes: usize,
     pub default_wait_timeout_ms: u64,
-    /// 用户主动开启后不再执行基座的 Agent 提交审批。
-    pub bypass: bool,
 }
 
 /// 负责加载/握手/停止进程以及实例索引。卸载前端不调用 destroy_instance。

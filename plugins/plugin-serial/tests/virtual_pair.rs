@@ -233,7 +233,9 @@ async fn exercise(runtime: &ProcessPluginRuntime, a: &str, b: &str, baud: u32) -
     let mut sender = endpoints.pop().ok_or_else(|| anyhow!("missing sender"))?;
 
     // The user-controlled Bypass still passes through source attribution and validation.
-    runtime.set_bypass(true).await;
+    runtime
+        .set_bypass(&sender.instance.plugin_instance_id, true)
+        .await?;
     let controls = "\u{3}\t\u{1b}[A\u{7f}\r\n中文\0";
     for (tool, commands, expected) in [
         (
@@ -258,7 +260,9 @@ async fn exercise(runtime: &ProcessPluginRuntime, a: &str, b: &str, baud: u32) -
         ensure!(result["isError"] == false, "{result}");
         peer.expect_bytes(runtime, &expected).await?;
     }
-    runtime.set_bypass(false).await;
+    runtime
+        .set_bypass(&sender.instance.plugin_instance_id, false)
+        .await?;
     println!("PASS public MCP name routing, exact Shell controls, HEX lists, and Bypass");
 
     // A -> B 的每条命令分别写入；shell 符号和 UTF-8 按字节保留。

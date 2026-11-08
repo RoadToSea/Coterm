@@ -1,5 +1,8 @@
 //! User-owned command approval rules. Plugins declare the text field in their schema.
-use coterm_proto::runtime::{operation::OperationDescriptor, ErrorCategory, RuntimeError};
+use coterm_proto::runtime::{
+    operation::{OperationDescriptor, OperationEffect, OperationSource},
+    ErrorCategory, RuntimeError,
+};
 use regex::{RegexSet, RegexSetBuilder};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -24,6 +27,59 @@ pub struct ApprovalPolicy {
 pub struct CompiledApprovalPolicy {
     policy: ApprovalPolicy,
     patterns: RegexSet,
+}
+
+/// Trusted submission data after instance routing and schema validation.
+/// The descriptor comes from the driver catalog, never from submitted arguments.
+pub struct ApprovalContext<'a> {
+    pub source: OperationSource,
+    pub descriptor: &'a OperationDescriptor,
+    pub args: &'a Value,
+}
+
+/// One live instance's rules and explicitly enabled, session-only bypass.
+/// Default instances require approval for every Agent commit.
+#[derive(Default)]
+pub struct InstanceApproval {
+    policy: Option<CompiledApprovalPolicy>,
+    bypass: bool,
+}
+
+impl InstanceApproval {
+    /// Returns whether this validated submission needs a proposal; never dispatches it.
+    pub fn requires_approval(&self, context: &ApprovalContext<'_>) -> bool {
+        context.source == OperationSource::Agent
+            && context.descriptor.effect == OperationEffect::Commit
+            && !self.bypass
+            && !self
+                .policy
+                .as_ref()
+                .is_some_and(|policy| policy.allows(context.descriptor, context.args))
+    }
+
+    /// Replaces this instance's rules; invalid/oversized rules leave them unchanged.
+    pub fn set_policy(&mut self, policy: ApprovalPolicy) -> Result<(), RuntimeError> {
+        self.policy = Some(policy.compile()?);
+        Ok(())
+    }
+
+    /// Returns this instance's configured rules, or the approval-required default.
+    pub fn policy(&self) -> ApprovalPolicy {
+        self.policy
+            .as_ref()
+            .map(CompiledApprovalPolicy::policy)
+            .unwrap_or_default()
+    }
+
+    /// Changes only this instance; callers must be trusted human settings handlers.
+    pub fn set_bypass(&mut self, enabled: bool) {
+        self.bypass = enabled;
+    }
+
+    /// Returns the current instance's session-only bypass state.
+    pub fn bypass_enabled(&self) -> bool {
+        self.bypass
+    }
 }
 
 impl ApprovalPolicy {
