@@ -1,6 +1,6 @@
 # Coterm
 
-面向人类与 Agent 协同的终端交互基座。专注 SSH、串口（Serial）与本地终端，以内置轻量驱动提供开箱即用的秒级连接与 Agent 写操作审批治理。底层连续信号采集、波形分析与数学计算划归专用的虚拟仪器上位机（如 Lissio）。
+面向人类与 Agent 协同的终端交互基座。专注 SSH、串口（Serial）与本地终端，以内置驱动提供终端连接与 Agent 写操作审批。底层连续信号采集、波形分析与数学计算划归专用的虚拟仪器上位机（如 Lissio）。
 
 当前目标为 Windows 上运行可信本地驱动的基座首版；SSH、串口与跨平台发布独立迭代。完成情况和已知缺口统一维护在 [项目进度](docs/progress/project.md)。
 
@@ -16,7 +16,7 @@ pnpm tauri:dev
 
 Windows 安装包：`pnpm tauri:build --bundles nsis`。核心终端驱动随应用直接分发，打开应用即可直接创建 SSH 或串口会话，开箱即用。开发版读取仓库 `target/bundled-drivers/{ssh,serial,local}`。
 
-顶部 **语言 / Language** 支持简体中文、English，首次跟随系统语言，选择后自动保存；切换语言保留已打开的实例与 SSH 连接。
+**设置 → 通用 → 语言 / Language** 支持简体中文、English，首次跟随系统语言，选择后自动保存；切换语言保留已打开的实例与 SSH 连接。
 
 Windows 工作区自动加密保存；下次启动点击 **Restore workspace** 重建实例，再主动连接。历史仅保留本次启动，Bypass 每次重置为关闭。
 
@@ -44,11 +44,10 @@ Windows CI 执行检查、浏览器与真实安装验收，并上传 NSIS 安装
 | 文档 | 用途 |
 |---|---|
 | [SPEC](docs/SPEC.md) | 架构原则与模块边界 |
-| [终端架构](docs/design/terminal-focus-and-in-tree-architecture.md) | 终端聚焦与内置驱动架构设计 |
+| [终端架构](docs/design/terminal-focus-and-in-tree-architecture.md) | 终端聚焦与内置驱动架构决策 |
 | [项目进度](docs/progress/project.md) | 已完成、待办与最近验证 |
 | [Design](docs/design/README.md) | 复杂业务实现前的方案与验收条件 |
 | [Feedback](docs/feedback/README.md) | 外部使用反馈与现场观察 |
-| [Progress](docs/progress/project.md) | 按模块持续记录状态、限制和续作入口 |
 | [Release](docs/release/README.md) | 构建、发行与发布前验收 |
 | [运行时通信](docs/architecture/runtime-communication.md) | 操作、审批、交互与事件契约 |
 | [MCP](docs/architecture/mcp-integration.md) | 客户端连接、工具和调用语义 |

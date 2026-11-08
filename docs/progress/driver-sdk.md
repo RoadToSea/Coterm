@@ -15,7 +15,7 @@
 
 - `DriverAPI` 增加可选只读 `instanceConfigRef`，由桌面从工作区固定 `configRef` 取得；恢复实例或移动分组不改变它。旧宿主 / 未保存实例可缺省，驱动不得按设备地址或名称猜测替代值。
 - `driverInstanceId` / `sessionId` 继续表示本次运行，操作路由保持原绑定；固定标识只用于驱动自有显示偏好的归属，不新增 Tauri 或驱动进程消息、权限或依赖。
-- 串口显示偏好首先应用；宿主契约和真实桌面回归覆盖同 COM 多保存项、运行 ID 重建及名称变化，详见[驱动开发契约](../architecture/driver-development.md#运行身份与保存身份)与[串口验收记录](../../drivers/driver-serial/docs/progress.md#2026-11-04显示偏好跨启动恢复与串口退格)。
+- 串口显示偏好首先应用；宿主契约和真实桌面回归覆盖同 COM 多保存项、运行 ID 重建及名称变化，详见[驱动开发契约](../architecture/driver-development.md#前端)与[串口验收记录](../../drivers/driver-serial/docs/progress.md#2026-11-04显示偏好跨启动恢复与串口退格)。
 
 ## 2026-11-03：终端块边框与纯数字块号
 
@@ -66,7 +66,7 @@
 - 新增可选 `@coterm/driver-sdk/components/terminal-blocks`，结构化适配 xterm marker / decoration，不让 SDK 依赖终端包。驱动提供可信块边界并同步当前有界块 ID；组件绘制 Gutter、选中行背景、边框与「取消全选」，调用回调同步实例上下文。
 - 支持 buffer 视口滚动 / resize / render、Alternate Screen 隐藏、32 块上限、marker 淘汰清理和区域局部 Esc。SSH 已应用于同一主终端，没有互斥 Terminal / Command blocks Tab。
 - 示例 SDK browser bundle 加入 terminal-blocks；接口说明见 [组件文档](../../packages/driver-sdk/docs/command-blocks.md#终端行号栏)，真实集成测试为 `tests/ssh-blocks-browser.test.mjs`。
-- SSH 终端来源标签与 Agent 上下文选择见 [SSH 交互设计](../design/ssh-terminal-interaction.md) 及 [SSH 进度](ssh-driver.md)。
+- SSH 终端来源标签与 Agent 上下文选择见 [SSH 交互设计](../architecture/ssh-driver.md#命令消息块) 及 [SSH 进度](ssh-driver.md)。
 
 验收入口：`pnpm build`，`pnpm --filter coterm-driver-ssh-ui build`，`pnpm test:build`，以及 SSH blocks / jobs / terminal shortcuts 浏览器用例。
 

@@ -60,7 +60,7 @@
 - 目录发布 `coterm_ssh_exec` / `coterm_serial_command` 等扁平名，旧 `<driverId>__<native>` 仍可调用但不重复列出；归一化碰撞明确拒绝。驱动内部操作和进程协议不变。
 - SSH 与 Serial 一样，进入人工审批立即返回 `pending_approval`，批准后查询原操作；原有审批、Bypass、密码 / sudo、取消和断线不重放规则保持。
 - 宿主每条输入继续限 16 KiB，输出独立限 192 KiB；适配 SSH 两流各 32 KiB 和可读摘要，超限 / 脱敏保护仍有效。Serial 自身预览不扩容。
-- 决策与使用：[MCP Agent 调用体验](../design/mcp-agent-experience.md)；稳定契约：[MCP 接入](../architecture/mcp-integration.md)。已解决反馈从原反馈文件移除。
+- 决策与使用：[MCP Agent 调用体验](../architecture/mcp-integration.md)；稳定契约：[MCP 接入](../architecture/mcp-integration.md)。已解决反馈从原反馈文件移除。
 
 本轮 Windows 验证：
 

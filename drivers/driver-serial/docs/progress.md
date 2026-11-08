@@ -27,7 +27,7 @@
 - 桌面与串口前端构建通过；定向浏览器覆盖运行 ID 重建、名称变化、同 COM 多实例、端口变化、慢状态、全部显示选项恢复、BS / DEL 单次发送、设备回显删除、粘贴控制字节、UART 本地退格和不自动发送。宿主契约验证固定标识不会替代运行 ID 进行操作路由；原始保存和换行转换回归通过。未读写物理串口。
 - 完整前端回归 88 项通过、0 失败、0 跳过；补充首次工作区慢响应保护后，构建及 11 项定向回归通过。桌面等待元数据读取完成后再挂载驱动，避免先用临时身份挂载、后因固定身份到达而重建界面。已复核常规与 360px 配置截图。
 - 本次暂存源码单独导出后，桌面 / 串口构建及 21 项回归通过，确认提交不依赖工作区其他改动；新增相对链接、`docs/` 根目录和暂存区空白检查通过。原有未提交修改未纳入提交。
-- 继续入口：[偏好存储](../frontend/src/display-preferences.ts)、[驱动集成](../frontend/src/index.ts)、[保存身份契约](../../../docs/architecture/driver-development.md#运行身份与保存身份)、[端到端恢复回归](../../../tests/serial-saved-identity-browser.test.mjs)、[退格与偏好回归](../../../tests/serial-display-preferences-browser.test.mjs)。
+- 继续入口：[偏好存储](../frontend/src/display-preferences.ts)、[驱动集成](../frontend/src/index.ts)、[保存身份契约](../../../docs/architecture/driver-development.md#前端)、[端到端恢复回归](../../../tests/serial-saved-identity-browser.test.mjs)、[退格与偏好回归](../../../tests/serial-display-preferences-browser.test.mjs)。
 
 ## 2026-11-04：接收换行补全
 
@@ -115,3 +115,9 @@
 
 - 路径统一为 drivers/driver-serial，实例协议字段为 driverId/driverInstanceId；运行时 v2.0，保存项旧 ID 自动迁移。
 - 重命名后以 COM6、115200、提示符 `# ` 再次通过真实 WebView2 → MCP Stdio → 桌面审批 → Worker → 开发板收发与后端读取，恢复已保存 Shell 配置不自动连接。测试结束释放串口。
+
+## 2026-10-30：串口配对与硬件验收摘要
+
+- Windows HHD 虚拟串口配对双向收发通过，覆盖命令顺序、UTF-8 / CRLF、二进制字节、取消、审批、队列容量与重连。HHD 不支持 flush 时，在既有超时内查询发送队列排空；其他错误不重发。
+- COM6 / 115200 / 8-N-1 Linux 开发板验证登录、`uname -a` 往返、HEX 显示、RX/TX 计数、DTR/RTS 和 12 轮连接 / 断开，销毁后端口可重开。
+- 该验收不覆盖硬件流控、自动重连、热插拔、Unix 真实设备节点或二进制文件传输。可选复测入口见 [使用说明](usage.md) 与 [虚拟配对测试](../tests/virtual_pair.rs)。

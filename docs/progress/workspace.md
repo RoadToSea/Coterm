@@ -34,7 +34,7 @@
 - 本轮验证不连接真实 SSH 或物理串口，也不修改用户的实际工作区文件。
 - 标签的打开/关闭状态只保留在当前应用会话，重启仍从真实运行实例初始化；关闭视图会释放该视图的临时状态，重新打开依赖驱动的状态/输出回放。尚未提供配置前端的驱动不能从普通 UI 使用原始 JSON 创建实例。
 - 实现入口：[前端](../../apps/desktop/src/components/WorkspaceInstances.tsx)、[应用编排](../../apps/desktop/src/App.tsx)、[宿主 API](../../apps/desktop/src/host-api.ts)、[加密存储](../../apps/desktop/src-tauri/src/workspace.rs)、[桌面命令](../../apps/desktop/src-tauri/src/workspace_commands.rs)。
-- 验收入口：[浏览器](../../tests/workspace-browser.test.mjs)、[存储测试](../../apps/desktop/src-tauri/src/workspace_tests.rs)；方案见[工作区分组设计](../design/workspace-groups.md)。
+- 验收入口：[浏览器](../../tests/workspace-browser.test.mjs)、[存储测试](../../apps/desktop/src-tauri/src/workspace_tests.rs)；方案见[工作区分组设计](../architecture/runtime-communication.md#工作区与生命周期)。
 
 ## 2026-10-30：内联配置与实例标签页
 
@@ -44,7 +44,7 @@
 - 创建失败保留表单及输入值；提交期间禁用交互、抑制重复请求。实例“更多”不切换当前终端，也不暴露内部 UUID、会话 ID 或参数 JSON；审批入口仍保留原有职责。
 - `pnpm build`、两个驱动前端构建及 `pnpm test` 通过：55 项、无跳过。新增浏览器验收覆盖实际 SSH/串口配置、驱动启动、失败重试、重复提交、多标签终端身份/输出/输入保留、订阅回收、关闭/重新打开/删除、异常状态、刷新不复活标签、中英文、520px 横向滚动；原有工作区、任务、快捷键与审批回归通过。
 - 已目视核对浅色标签页/SSH 配置与深色串口配置。截图仅保存在忽略的 `target/instance-tabs-light.png`、`target/inline-ssh-light.png`、`target/inline-serial-dark.png`。此次无 Rust/IPC/权限/依赖修改，不代替原生 WebView 与实际通信测试。
-- 继续入口：[标签视图状态](../../apps/desktop/src/use-instance-views.ts)、[标签 UI](../../apps/desktop/src/components/InstanceTabs.tsx)、[新增浏览器验收](../../tests/instance-tabs-browser.test.mjs)、[方案](../design/instance-tabs.md)。稳定规则已同步到桌面外观与驱动开发架构文档。
+- 继续入口：[标签视图状态](../../apps/desktop/src/use-instance-views.ts)、[标签 UI](../../apps/desktop/src/components/InstanceTabs.tsx)、[新增浏览器验收](../../tests/instance-tabs-browser.test.mjs)、[方案](../architecture/desktop-appearance.md#界面约定)。稳定规则已同步到桌面外观与驱动开发架构文档。
 
 ## 2026-11-01：分类设置与显示偏好
 
@@ -58,7 +58,7 @@
 
 另从 Git 暂存区提取宿主、SDK 与 SSH / 串口源码独立构建，设置、偏好和宿主布局 / 语言 / 安装 / 审批定向用例共 9 项通过，确认提交不依赖工作区其他未提交修改。
 
-继续入口：[设置界面](../../apps/desktop/src/components/settings/AppSettings.tsx)、[显示偏好](../../apps/desktop/src/preferences.ts)、[浏览器验收](../../tests/settings-browser.test.mjs)；方案见 [应用设置](../design/app-settings.md)，稳定规则见 [桌面外观](../architecture/desktop-appearance.md)。
+继续入口：[设置界面](../../apps/desktop/src/components/settings/AppSettings.tsx)、[显示偏好](../../apps/desktop/src/preferences.ts)、[浏览器验收](../../tests/settings-browser.test.mjs)；方案见 [应用设置](../architecture/desktop-appearance.md#用户选择与启动)，稳定规则见 [桌面外观](../architecture/desktop-appearance.md)。
 
 ## 2026-11-02：创建时自定义实例名称
 

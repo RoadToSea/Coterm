@@ -56,7 +56,7 @@ MCP 显式注册 status、probe、connect、disconnect、reset、command、read_
 
 `ssh.command(mode=exec)`、`ssh.read_file`、`ssh.write_file` 支持可选 `sudo: true`；`mode=terminal` 拒绝该选项，不支持在 MCP 参数传密码。用户完成基座审批后，桌面通过 `ssh.sudo` 秘密交互收集本次密码；Bypass 只跳过操作审批，不跳过该秘密交互。交互最长 60 秒，绑定实例、操作和物理连接，密码只使用一次，取消、过期或重连后不恢复。
 
-驱动通过远端 sudo 提示和子进程就绪标记区分密码认证与 NOPASSWD，只在真正收到密码提示后通过 stdin 发送密码；免密时不发送密码行，文件内容和脚本保持原样。远端拒绝密码、要求 TTY 或额外认证时停止，不自动重试。秘密不进入普通事件、命令字符串、MCP 返回值或持久化。exec / 文件结果的 `executionContext` 明示 `channel=exec`、`inheritsPtyState=false` 和 `sudo`；共享 PTY 明示 `channel=pty`、`inheritsPtyState=true`。方案与验收边界见 [显式提权设计](../design/ssh-explicit-sudo.md)。
+驱动通过远端 sudo 提示和子进程就绪标记区分密码认证与 NOPASSWD，只在真正收到密码提示后通过 stdin 发送密码；免密时不发送密码行，文件内容和脚本保持原样。远端拒绝密码、要求 TTY 或额外认证时停止，不自动重试。秘密不进入普通事件、命令字符串、MCP 返回值或持久化。exec / 文件结果的 `executionContext` 明示 `channel=exec`、`inheritsPtyState=false` 和 `sudo`；共享 PTY 明示 `channel=pty`、`inheritsPtyState=true`。本地测试与远端待复测范围见 [SSH 进度](../progress/ssh-driver.md#限制与下次入口)。
 
 ## 命令与取消
 
@@ -121,7 +121,7 @@ Exec 工具栏只保留名称、必要的运行 / 失败状态、停靠及关闭
 
 块数据、来源、编号及区间由 SSH 后端生成，前端使用 SDK [`mountTerminalBlocks`](../../packages/driver-sdk/docs/command-blocks.md#终端行号栏) 为同一 xterm 显示 Gutter 与高亮。选择限于当前实例 / 连接，页面卸载、淘汰和重连时清理。
 
-人工直接在主终端输入，通过既有 `ssh.input` 进入共享 PTY；前端不再提供额外的「共享终端命令」输入栏。行号栏按当前有效 PTY 块号的最大字符数自适应宽度，最小 28px；顶部为红色圆形取消全选图标，保留本地化 tooltip、可访问名称与键盘焦点样式。该按钮只清除上下文选择，不终止命令或关闭会话。
+人工直接在主终端输入，通过既有 `ssh.input` 进入共享 PTY；前端不再提供额外的「共享终端命令」输入栏。行号栏按当前有效 PTY 块号的最大字符数自适应宽度，最小 28px；顶部为取消全选图标，保留本地化 tooltip、可访问名称与键盘焦点样式。该按钮只清除上下文选择，不终止命令或关闭会话。
 
 块号显示纯数字，不加 `#`。块边框使用单个 DOM 叠层，不再与 xterm decoration 重复描边；外框按终端网格的 border-box 尺寸绘制。相邻块的显示范围不能跨越下一块首行；滚动、列宽和字号改变后，两侧边框仍对齐网格。
 

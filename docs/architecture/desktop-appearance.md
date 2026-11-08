@@ -1,7 +1,5 @@
 # 桌面界面与主题
 
-更新：2026-11-01。
-
 ## 界面约定
 
 桌面基座继续使用「驱动栏 → 实例栏 → 驱动工作区」布局，窄于 900px 时默认收起实例栏。顶部只保留应用标识、外观快捷切换和设置入口，语言选择移入设置；不重复显示当前实例名称，也不提供 MCP 按钮。实例栏标题提供收起按钮；收起后在驱动栏出现展开按钮，任何时刻只有一个可见的面板切换入口。驱动栏不再显示「已安装驱动」文字标题，保留导航的可访问名称。底栏展示真实的驱动、实例数量及审批状态。
@@ -14,17 +12,17 @@
 
 主区域上方的实例标签页负责切换已打开实例。左侧工作区保留分组、恢复、移动和销毁等配置/生命周期管理入口；“更多”仅显示名称、驱动、状态、分组移动和删除，不显示内部 UUID、会话 ID 或操作调试器。新建、恢复和从侧栏打开实例会选择相应标签。首次加载打开现有运行实例，后续轮询不自动打开后台新增或已关闭视图。
 
-切换标签或进入配置页只隐藏实例面板，保留终端输出、任务状态、前端及订阅。关闭标签仅卸载视图、回收订阅，不关闭连接或删除保存项；侧栏可再次打开。销毁仍需确认，实例失败/移除同步清理挂载。标签支持方向键、Home/End、Delete 和关闭按钮；关闭当前项选中相邻项，关闭最后一个进入空状态。窄屏横向滚动且选中项随窗口/实例栏尺寸变化保持可见。标签打开状态暂不跨启动保存；原有活跃实例与分组布局持久化不变。实施方案见[实例标签页设计](../design/instance-tabs.md)。
+切换标签或进入配置页只隐藏实例面板，保留终端输出、任务状态、前端及订阅。关闭标签仅卸载视图、回收订阅，不关闭连接或删除保存项；侧栏可再次打开。销毁仍需确认，实例失败/移除同步清理挂载。标签支持方向键、Home/End、Delete 和关闭按钮；关闭当前项选中相邻项，关闭最后一个进入空状态。窄屏横向滚动且选中项随窗口/实例栏尺寸变化保持可见。标签打开状态暂不跨启动保存；原有活跃实例与分组布局持久化不变。
 
-主窗口配置 `dragDropEnabled: false`，允许 Windows WebView2 使用 HTML5 内部拖放；此前没有依赖原生文件拖放的产品入口。外部文件拖入窗口只阻止默认导航，驱动安装仍由专用文件选择器完成。该配置适用于 Windows/macOS/Linux；本次浏览器拖放验证不代替其他平台原生 WebView 验收。
+主窗口配置 `dragDropEnabled: false`，允许 Windows WebView2 使用 HTML5 内部拖放；外部文件拖入窗口只阻止默认导航。其他平台原生 WebView 的拖放验收范围见[工作区进度](../progress/workspace.md)。
 
-宿主引入 shadcn/ui 源码组件（Radix primitives、`new-york` 样式），配置位于 `apps/desktop/components.json`。沿用 React 18、Vite 5 与 Tailwind CSS 3，不升级框架、不新增 Tauri capability 或 IPC 协议。新增的 Radix、`class-variance-authority` 依赖仅用于浏览器 UI，平台无关；Windows 浏览器验证通过，macOS/Linux 原生外观仍需真机验证。
+宿主引入 shadcn/ui 源码组件（Radix primitives、`new-york` 样式），配置位于 `apps/desktop/components.json`。沿用 React 18、Vite 5 与 Tailwind CSS 3，不升级框架、不新增 Tauri capability 或 IPC 协议。Radix、`class-variance-authority` 依赖仅用于浏览器 UI；各平台验证范围见[工作区进度](../progress/workspace.md)。
 
 工具栏、操作按钮、计数、加载占位、空工作区和提示使用 Button、ToggleGroup、Badge、Skeleton、Empty、Alert、Separator。现有原生 `<dialog>` 保留焦点约束、Escape 关闭和关闭后焦点恢复，避免改变认证与审批的生命周期。状态刷新、异步操作和订阅仍经宿主 API，主题切换不调用驱动后端。
 
 ## 用户选择与启动
 
-设置界面按通用、外观、终端分类，同时提供全部设置；搜索跨分类匹配中英文名称、说明和别名，显示分组结果、数量和空状态。分类与搜索本身不持久化。原生 dialog 打开聚焦搜索，关闭恢复入口焦点；窄屏分类横向滚动、正文独立滚动。详见 [应用设置](../design/app-settings.md)。
+设置界面按通用、外观、终端、MCP 分类，同时提供全部设置；搜索跨分类匹配中英文名称、说明和别名，显示分组结果、数量和空状态。分类与搜索本身不持久化。原生 dialog 打开聚焦搜索，关闭恢复入口焦点；窄屏分类横向滚动、正文独立滚动。搜索按空白拆分关键词，所有词均须命中；点击分类清除搜索。显示偏好修改即时生效，MCP 端口显式保存，连接方式及状态见 [MCP 设置](mcp-integration.md#端口设置与宿主接口)。
 
 通用设置语言；外观设置主题和界面字号（12–20 px，默认 14）；终端设置字号（10–28 px，默认 13）、行高（1–2，默认 1）和光标闪烁（默认开启）。修改即时生效，字号预览随之更新。语言 / 主题沿用原存储键，新增 `coterm.preferences.v1` 仅保存显示偏好；启动验证范围和类型，损坏记录回退默认，禁用存储时保留会话选择，`storage` 事件同步其他窗口。字体与光标可单独恢复默认，不重置语言或主题。
 
@@ -58,13 +56,13 @@ SSH、串口 Shell 和宿主终端组件均原地设置 xterm `options.theme`，
 
 新增显示变量 `--coterm-ui-font-size`、`--coterm-terminal-font-size`（px）、`--coterm-terminal-line-height`（倍数）、`--coterm-terminal-cursor-blink`（true / false）。界面根字号通过 `--coterm-root-font-size` 保持 14 px 逻辑字号对应原有 16 px rem 基准。驱动 Shadow DOM 可继承显示变量；命令块和 UART 接收区按终端字号渲染。
 
-SDK 同一模块导出 `readTerminalPreferences(element)` 与 `attachTerminalPreferences(element, apply)`，返回 `fontSize / lineHeight / cursorBlink`。SSH、串口与宿主终端初始化时读取，之后原地更新选项并 fit，卸载注销观察器。无变量的旧宿主回退 13 px、1.0 行高与光标闪烁；第三方驱动须自行选择接入。字体调整允许按既有接口同步 SSH PTY 尺寸，不连接 / 断开或发送命令，不改 `DriverAPI` 或跨进程协议。
+SDK 同一模块导出 `readTerminalPreferences(element)` 与 `attachTerminalPreferences(element, apply)`，返回 `fontSize / lineHeight / cursorBlink`。SSH、串口与宿主终端初始化时读取，之后原地更新选项并 fit，卸载注销观察器。无变量的旧宿主回退 13 px、1.0 行高与光标闪烁；驱动自行选择接入。字体调整允许按既有接口同步 SSH PTY 尺寸，不连接 / 断开或发送命令，不改 `DriverAPI` 或跨进程协议。
 
 ## 验证
 
 - `pnpm build`：宿主 TypeScript 与生产构建。
 - `pnpm --filter coterm-driver-ssh-ui build`、`pnpm --filter coterm-driver-serial-ui build`：实际驱动前端 bundle。
-- `pnpm test`：主题偏好解析、持久化、不可用存储、实际浏览器渲染、系统主题变化、1280/1024/768 布局，以及语言、安装、审批、串口发送与终端快捷键回归。
+- `pnpm test`：主题偏好解析、持久化、不可用存储、实际浏览器渲染、系统主题变化、1280/1024/768 布局，以及语言、审批、串口发送与终端快捷键回归。
 - 主题浏览器用例使用实际 SSH/串口前端和宿主契约替身，验证画布颜色、终端身份、订阅次数、输出保留及无额外连接/发送。它不代替真实串口、远程 SSH 或各操作系统原生 WebView 验收。
 
 浏览器截图写入忽略的 `target/desktop-theme-*.png`，用于人工核对两种配色和窄屏布局。

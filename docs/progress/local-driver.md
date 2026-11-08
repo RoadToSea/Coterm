@@ -28,22 +28,11 @@
 - `catalog()` 追加 `mcp.*` 别名（基座按目录解析工具作用域，缺了会整驱动被拒 `driver_mcp_catalog_invalid`）；manifest 的 `requires` 扩到含 `async-operations`、`native-mcp-tools`。
 - 取消：2 秒内确认结束回 `stopped`，否则 `unknown`；未登记的作业回 `not_submitted`。
 
-## 验证状态
+## 验证入口
 
-- `cargo test -p coterm-driver-local` 全绿，共 18 项：11 单元（配置、家族、参数、MCP 目录）+ 2 进程级（控制契约、取消作业）+ 5 集成（真实驱动进程、PTY 读写、resize、重启、实例隔离、exec 退出码/两条流/超时、传输信封、握手时限）。
-- `cargo clippy -p coterm-driver-local -p coterm-term --all-targets -- -D warnings` 通过。
-- `cargo test -p coterm-term` 11 项通过；前端 `tsc --noEmit` 与 `vite build` 通过（单文件 434 KB）。
-- 开发包已组装并更新：`dist/backend/coterm-driver-local.exe`、`dist/frontend/index.js`、`dist/manifest.json`。
-- 未执行：桌面内真实点击验收（本机环境见下），`cargo clippy --workspace` 全量。
+当前全量验证结果见 [项目进度](project.md)。定向回归：`cargo test -p coterm-driver-local`、`cargo test -p coterm-term`；前端入口为 [Local 浏览器回归](../../tests/local-terminal-browser.test.mjs)，原生链路运行 `pnpm test:native`。
 
-## 本轮遇到的现场问题
-
-排查中确认了两件事，都已写进架构文档：
-
-- ConPTY 启动时会先发 `ESC[6n` 光标位置查询，客户端不回应就只有初始化序列。xterm 会自动回，测试客户端必须自己回 `ESC[<row>;<col>R`。
-- PowerShell 在本机冷启动超过 20 秒（profile + 模块）。端到端测试固定用 `cmd.exe`/`/bin/sh`，避免断言依赖机器状态。
-
-工具链方面，仓库内 `target/**/.cargo-*-lock` 被安全策略拒绝打开，`cargo build/test` 直接 `os error 5`。可行绕法：把已有 `target` 硬链接复制到仓库外（跳过 `.cargo-*-lock`），再把 `CARGO_TARGET_DIR` 指过去，缓存可复用。本轮所有 Rust 验证都在这种外置目录完成。
+ConPTY 初始化可能请求光标位置，测试客户端需响应终端查询；真实 PowerShell 冷启动耗时与 profile 相关，测试应等待可交互状态。
 
 ## 限制与下次入口
 
@@ -57,4 +46,4 @@
 - 后端：[backend.rs](../../drivers/driver-local/src/backend.rs)、[session.rs](../../drivers/driver-local/src/session.rs)、[exec.rs](../../drivers/driver-local/src/exec.rs)、[shell.rs](../../drivers/driver-local/src/shell.rs)、[result.rs](../../drivers/driver-local/src/result.rs)
 - 共享 crate：[coterm-term](../../crates/coterm-term/src/buffer.rs)
 - 前端：[index.ts](../../drivers/driver-local/frontend/src/index.ts)
-- 契约与方案：[本地驱动](../architecture/local-driver.md)、[设计方案](../design/local-terminal.md)
+- 稳定契约：[本地驱动](../architecture/local-driver.md)

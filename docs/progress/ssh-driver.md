@@ -31,7 +31,7 @@
 - 定向浏览器回归 8 项通过、0 失败、0 跳过，覆盖分包提示符、无回复命令、选择 / 回放、重排对齐、双输出流、双语主题、大字号窄屏、关闭 / 跟随、快捷键与审批界面。桌面和 SSH 前端构建通过；截图在忽略目录 `target/ssh-feedback-20261103/` 完成人工复核。
 - 完整 `pnpm driver:ssh:build` 的 Rust 编译与前端构建通过，但复制后端 exe 时遇到运行中驱动占用（EBUSY），未停止用户会话；前端产物已更新。退出旧桌面后可重新完整打包，本次无需后端改动。
 - 另将暂存源码独立导出，单独通过桌面 / SSH 的 TypeScript 与 Vite 构建，以及审批 / SSH 块 / 人工块 / Exec 共 4 项浏览器回归，确认本次提交不依赖工作区其他未提交修改。
-- 本次未修改 Rust、协议、依赖或权限，尚未连接用户真实远端。入口：[视觉边界观察](../../drivers/driver-ssh/frontend/src/observed-boundaries.ts)、[SDK 边框](../../packages/driver-sdk/src/components/terminal-blocks.ts)、[Exec UI](../../drivers/driver-ssh/frontend/src/jobs.ts)、[交互约束](../design/ssh-terminal-interaction.md)。
+- 本次未修改 Rust、协议、依赖或权限，尚未连接用户真实远端。入口：[视觉边界观察](../../drivers/driver-ssh/frontend/src/observed-boundaries.ts)、[SDK 边框](../../packages/driver-sdk/src/components/terminal-blocks.ts)、[Exec UI](../../drivers/driver-ssh/frontend/src/jobs.ts)、[交互约束](../architecture/ssh-driver.md#命令消息块)。
 
 ## 2026-11-03：人工终端 Enter 生成可选命令块
 
@@ -59,7 +59,7 @@
 - 对外工具名扁平化为 `coterm_ssh_exec` 等，旧名保留兼容；驱动内部 `ssh.*` / `mcp.ssh.*` 不变。
 - 回归先复现旧 4 KiB 截断和审批不在 500ms 内返回，再验证修复。本地真实 POSIX Shell + MCP 连接验证 32 KiB 输出完整出现在首次结果、可读文本和操作查询；另测 ANSI、UTF-8 / 二进制两流预算、默认目标、多连接拒绝和旧名称。
 - 本轮 SSH Rust 42 项通过（23 单元 + 19 进程集成），工作区 check、相关 all-targets Clippy 和 SSH / Serial 开发包构建通过。Core 存在与当前 Local manifest 对应的 5 项安装 fixture 失败，完整说明见 [MCP 进度](mcp.md#2026-11-02agent-健康检查默认路由与扁平工具名)。尚未连接用户实际远端或运行 macOS / Linux 实机验收。
-- 决策：[Agent 调用体验](../design/mcp-agent-experience.md)；稳定接口：[MCP](../architecture/mcp-integration.md)、[exec 输出](../architecture/ssh-driver.md#exec-输出与进度)。重启桌面及 MCP 连接后使用新实现。
+- 决策：[Agent 调用体验](../architecture/mcp-integration.md)；稳定接口：[MCP](../architecture/mcp-integration.md)、[exec 输出](../architecture/ssh-driver.md#后端-json-记录与读取)。重启桌面及 MCP 连接后使用新实现。
 
 ## 2026-11-02：主终端块选择与 Exec 面板
 
@@ -68,7 +68,7 @@
 - 命令起止通过后端可信边界转换为有界 PTY 帧元数据（仅 ID、编号、来源，不带命令或输出），SDK 使用 xterm marker 和 decoration 定位块号；命令显示文字按需从人工块快照读取。UI 标签只写入本地终端显示，不改变 SSH 输入字节。备用屏幕隐藏 PTY 标记，scrollback 淘汰时清理 ID 与选择。
 - 块选择只通过实例 / epoch 绑定的 `ssh.select_blocks` 更新；Human MCP Tool `mcp.ssh.selected_blocks` 只读所选不可信数据、明确截断状态和分页信息。重连及卸载清空选择；历史淘汰自动修剪选择。
 - Exec 新任务只在详情面板打开且跟随最新时切换；已关闭面板不被自动展开。历史提示、局部 Esc、方向停靠、Splitter 拖动和按实例尺寸保存已接通。
-- 文档：[产品约束与验收](../design/ssh-terminal-interaction.md)、[SSH 架构契约](../architecture/ssh-driver.md)、[SDK 终端行号栏](../../packages/driver-sdk/docs/command-blocks.md#终端行号栏)。
+- 文档：[产品约束与验收](../architecture/ssh-driver.md#命令消息块)、[SSH 架构契约](../architecture/ssh-driver.md)、[SDK 终端行号栏](../../packages/driver-sdk/docs/command-blocks.md#终端行号栏)。
 - 验收：SSH 前端真实浏览器覆盖边界、Human/Agent 标签、实例选择上下文、按键焦点、备用屏幕、scrollback 淘汰、主题、320px 布局；Exec 浏览器覆盖关闭面板、跟随/锁定/恢复、方向停靠、拖动与卸载。真实 SSH 测试覆盖 Human 写选择、Agent 只读、stale epoch 拒绝和原始按键不入上下文。
 
 ## 2026-11-01：消息块首次接入
@@ -109,7 +109,7 @@
 - 驱动构建：`pnpm driver:ssh:build`；更新后重启驱动/桌面并让 MCP 客户端刷新工具列表。
 - 关键实现：[Backend](../../drivers/driver-ssh/src/backend.rs)、[PTY 边界](../../drivers/driver-ssh/src/command.rs)、[Session](../../drivers/driver-ssh/src/session.rs)、[MCP 摘要](../../drivers/driver-ssh/src/result.rs)。
 - 关键验收：[真实驱动进程与本地 SSH 服务](../../drivers/driver-ssh/tests/ssh.rs)、[Stdio 进程](../../crates/coterm-mcp/tests/stdio.rs)。sudo 测试使用真实 POSIX Shell 与测试认证策略，不修改本机管理员权限。
-- 契约见 [SSH 架构](../architecture/ssh-driver.md) 和 [显式提权设计](../design/ssh-explicit-sudo.md)。
+- 契约见 [SSH 架构](../architecture/ssh-driver.md) 和 [显式提权设计](../architecture/ssh-driver.md#显式-sudo)。
 
 ## 限制与下次入口
 
@@ -118,3 +118,7 @@
 - 独立通道不复制人工 PTY 的 `sudo`/`su`、目录和环境；需要显式 sudo 或在脚本内设置环境。
 - 目前仅支持 sudo 单次密码认证和 NOPASSWD；TTY/MFA/自定义交互、Windows 远端 Shell 不在当前提权实现范围。失败或结果未知均不自动重试。
 - 保留既有 8 KiB 文件读取、64 KiB 文件写入、30 分钟 exec 和有界输出限制；PTY 不再因运行超过 120 秒自动终止。后续大文件能力应单独设计分页/传输接口。
+
+## 2026-10-27：早期现场回归摘要
+
+真实 Tauri / MCP / 已认证远端验证过语法错误后连接可用、非零退出码、输出截断元数据、结构化结果、取消后恢复和包装标记过滤。该结果对应当时版本，不代表当前重构已在原远端复测；远端网络中断、真实指纹 / 密码失败、跨公网长连接与 exec 并发仍需现场验证。剩余空输出问题保留于 [SSH 反馈](../feedback/ssh_use_feedback.md)。
