@@ -357,8 +357,11 @@ impl Drop for Connection {
 }
 
 impl Connection {
+    /// Returns whether this connection has stopped or its actor has exited.
+    /// Reader/write failures stop the connection before final events finish sending.
     pub fn is_closed(&self) -> bool {
-        self.task.as_ref().is_none_or(JoinHandle::is_finished)
+        self.stop.load(Ordering::SeqCst)
+            || self.task.as_ref().is_none_or(JoinHandle::is_finished)
     }
 
     pub async fn connect(config: &Config) -> Result<Self> {
@@ -588,7 +591,7 @@ impl Connection {
     ) -> Result<()> {
         self.commands
             .retain(|_, handle| !handle.progress.borrow().finished);
-        if self.is_closed() || self.stop.load(Ordering::SeqCst) {
+        if self.is_closed() {
             bail!("Serial port is not open");
         }
         if self.commands.len() >= 16 || self.commands.contains_key(operation_id) {
@@ -855,6 +858,32 @@ mod tests {
             },
             receiver,
         )
+    }
+
+    #[tokio::test]
+    async fn reader_failure_reports_closed_before_actor_finishes() -> Result<()> {
+        struct RemovedPort;
+        impl Read for RemovedPort {
+            fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+                Err(std::io::ErrorKind::BrokenPipe.into())
+            }
+        }
+        let (connection, _receiver) = queued_connection();
+        assert!(!connection.is_closed());
+        let source = ReaderSource {
+            port: RemovedPort,
+            output: connection.output.clone(),
+            stop: connection.stop.clone(),
+            events: None,
+            connection_id: connection.id.clone(),
+            rx_bytes: connection.rx_bytes.clone(),
+        };
+        tokio::task::spawn_blocking(move || read_until_stopped(source)).await?;
+        assert!(
+            connection.is_closed(),
+            "a removed port must not remain connected while the actor is still finishing"
+        );
+        Ok(())
     }
 
     #[tokio::test]
