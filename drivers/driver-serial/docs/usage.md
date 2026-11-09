@@ -174,6 +174,19 @@ cargo test --locked -p coterm-driver-serial --test shell_live -- --ignored --noc
 
 验证两个对话互不串输出、stderr 合并、退出码未知、无游标行读取、断开后的后端快照，以及 stream 明确拒绝对话读取。默认忽略，避免普通回归向硬件发送数据。
 
+### 真实 Shell 串口吞吐
+
+先在设备上完成登录并释放端口。设备须提供 Python 3、POSIX tty 和 `# ` 提示符；脚本不接收或保存密码。指定实际端口和当前波特率后执行：
+
+```bash
+cargo build --locked -p coterm-driver-serial
+node scripts/benchmark-serial.mjs --port <实际端口> --baud 115200 --rates 115200,230400,460800,921600 --bytes 65536 --repeats 3 --output target/serial-throughput.json
+```
+
+测速以 stream 模式通过真实 Worker 的 JSON 控制协议、`serial.output` 事件和 `serial.write`，不包含桌面渲染、MCP 或审批耗时。每档双向发送由块序号 SHA-256 文本拼成的定长 ASCII 数据，接收逐字节校验，设备接收用 SHA-256 校验；事件游标缺口、校验失败或握手超时均不能算通过。发送按每块 16 KiB 调用接口，报告字节/秒与耗时；8N1 理论上限为波特率除以 10，不能把配置接受的波特率当成实测吞吐。
+
+临时 Python 程序只驻留设备内存，调速前保存 tty 属性；30 秒内无后续命令时退出并恢复属性，正常结束同样恢复。主机切回原波特率后确认 Shell 提示符并释放端口。失败恢复会额外等待 32 秒；测试期间不要通过其他串口工具发送数据。结果中的 `restored` 表示所有恢复确认完成，`verified` 表示该档收发及恢复均通过；高档位握手失败只表示当前组合未验证通过，不证明是软件吞吐瓶颈。
+
 ### 虚拟串口配对
 
 先创建一对互联且未被占用的虚拟串口，再显式选择两端；测试会向两端发送数据，默认 ignored：
