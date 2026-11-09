@@ -1,6 +1,7 @@
 // Prevents additional console window on Windows in release
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod approval_commands;
 mod mcp_commands;
 mod mcp_settings;
 mod workspace;
@@ -701,39 +702,6 @@ async fn get_bypass(
         .await
 }
 
-/// Only the trusted desktop settings UI can change a specific instance's rules.
-#[tauri::command]
-async fn set_approval_policy(
-    driver_instance_id: String,
-    policy: coterm_core::approval_policy::ApprovalPolicy,
-    state: tauri::State<'_, AppState>,
-) -> Result<coterm_core::approval_policy::ApprovalPolicy, coterm_proto::runtime::RuntimeError> {
-    let _guard = state.workspace_actions.lock().await;
-    policy.compile()?;
-    state
-        .driver_runtime
-        .approval_policy(&driver_instance_id)
-        .await?;
-    workspace_commands::store_approval_policy(&state, driver_instance_id.clone(), policy.clone())
-        .await?;
-    state
-        .driver_runtime
-        .set_approval_policy(&driver_instance_id, policy.clone())
-        .await?;
-    Ok(policy)
-}
-
-#[tauri::command]
-async fn get_approval_policy(
-    driver_instance_id: String,
-    state: tauri::State<'_, AppState>,
-) -> Result<coterm_core::approval_policy::ApprovalPolicy, coterm_proto::runtime::RuntimeError> {
-    state
-        .driver_runtime
-        .approval_policy(&driver_instance_id)
-        .await
-}
-
 #[tauri::command]
 fn preview_approval_policy(
     policy: coterm_core::approval_policy::ApprovalPolicy,
@@ -897,8 +865,10 @@ fn main() {
             cancel_operation,
             set_bypass,
             get_bypass,
-            set_approval_policy,
-            get_approval_policy,
+            approval_commands::approval_snapshot,
+            approval_commands::save_approval_group,
+            approval_commands::assign_approval_group,
+            approval_commands::delete_approval_group,
             preview_approval_policy
         ])
         .build(tauri::generate_context!());

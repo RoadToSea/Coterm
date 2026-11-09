@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
-import { Globe2, Palette, Plug, RotateCcw, Search, Settings2, TerminalSquare, X } from "lucide-react";
+import { Globe2, Palette, Plug, RotateCcw, Search, Settings2, ShieldCheck, TerminalSquare, X } from "lucide-react";
 import { useI18n } from "../../use-i18n";
 import { DEFAULT_PREFERENCES, getPreferences, setPreferences, subscribePreferences } from "../../preferences";
 import { ThemeSwitcher } from "../ThemeSwitcher";
@@ -12,14 +12,16 @@ import { McpClientConfigurationSetting, McpConnectionSetting } from "./McpConnec
 import { useMcpSettings } from "./use-mcp-settings";
 import { Badge } from "../ui/badge";
 import { Alert, AlertDescription } from "../ui/alert";
+import { ApprovalRuleGroups } from "../host/ApprovalRuleGroups";
 
-type Category = "general" | "appearance" | "terminal" | "mcp";
+type Category = "general" | "appearance" | "terminal" | "mcp" | "approval";
 const categories = [
   { id: "all", label: "All settings", icon: Settings2 },
   { id: "general", label: "General", icon: Globe2 },
   { id: "appearance", label: "Appearance", icon: Palette },
   { id: "terminal", label: "Terminal", icon: TerminalSquare },
   { id: "mcp", label: "MCP", icon: Plug },
+  { id: "approval", label: "Approval", icon: ShieldCheck },
 ] as const;
 
 const controlClass = "h-9 w-full min-w-0 rounded-md border border-input bg-background px-3 text-sm text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring sm:w-44";
@@ -30,10 +32,13 @@ export function AppSettings({ onClose }: { onClose: () => void }) {
   const preferences = useSyncExternalStore(subscribePreferences, getPreferences, getPreferences);
   const [category, setCategory] = useState<Category | "all">("all");
   const [query, setQuery] = useState("");
+  const [approvalGroups, setApprovalGroups] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
   useEffect(() => { searchRef.current?.focus(); }, []);
   const clearSearch = () => { setQuery(""); searchRef.current?.focus(); };
   const definitions: { id: string; category: Category; title: string; description?: string; keywords: string; control: ReactNode }[] = [
+    { id: "approval-rule-groups", category: "approval", title: "Approval rule groups", description: "Create reusable rules and assign one group to each instance.", keywords: "approval rules groups intercept allow 审批 规则组 拦截 放行",
+      control: <Button id="approval-rule-groups" type="button" variant="outline" onClick={() => setApprovalGroups(true)}>{t("Manage rule groups")}</Button> },
     { id: "language", category: "general", title: "Language", description: "Choose the language used by the app and supported drivers.", keywords: "locale translation 中文 简体中文 English en zh-CN",
       control: <select id="locale-select" className={controlClass} aria-label={t("Language")} value={locale} onChange={event => {
         if (event.target.value === "en" || event.target.value === "zh-CN") setLocale(event.target.value);
@@ -69,6 +74,7 @@ export function AppSettings({ onClose }: { onClose: () => void }) {
     const text = [setting.title, t(setting.title), setting.description, setting.description ? t(setting.description) : "", categoryLabel, t(categoryLabel), setting.keywords].join(" ").toLocaleLowerCase();
     return words.every(word => text.includes(word));
   });
+  if (approvalGroups) return <ApprovalRuleGroups onClose={() => setApprovalGroups(false)} />;
   return <Modal id="app-settings-dialog" title={t("Settings")} onClose={onClose} className="w-[840px] max-h-[90dvh]" bodyClassName="p-0">
     <div className="settings-content">
       <div className="settings-search">

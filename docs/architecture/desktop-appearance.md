@@ -14,6 +14,8 @@
 
 切换标签或进入配置页只隐藏实例面板，保留终端输出、任务状态、前端及订阅。关闭标签仅卸载视图、回收订阅，不关闭连接或删除保存项；侧栏可再次打开。销毁仍需确认，实例失败/移除同步清理挂载。标签支持方向键、Home/End、Delete 和关闭按钮；关闭当前项选中相邻项，关闭最后一个进入空状态。窄屏横向滚动且选中项随窗口/实例栏尺寸变化保持可见。标签打开状态暂不跨启动保存；原有活跃实例与分组布局持久化不变。
 
+设置的「审批」进入独立规则组管理，宽窗口显示组列表及编辑器，窄窗口使用列表与详情切换；没有实例也能创建与保存未分配组。当前实例审批入口用于分配一个组、只读查看规则及显示 Bypass，待恢复实例在侧栏提供审批配置按钮。具体交互与共享保存语义见 [审批规则组](command-approval.md)。
+
 主窗口配置 `dragDropEnabled: false`，允许 Windows WebView2 使用 HTML5 内部拖放；外部文件拖入窗口只阻止默认导航。其他平台原生 WebView 的拖放验收范围见[工作区进度](../progress/workspace.md)。
 
 宿主引入 shadcn/ui 源码组件（Radix primitives、`new-york` 样式），配置位于 `apps/desktop/components.json`。沿用 React 18、Vite 5 与 Tailwind CSS 3，不升级框架、不新增 Tauri capability 或 IPC 协议。Radix、`class-variance-authority` 依赖仅用于浏览器 UI；各平台验证范围见[工作区进度](../progress/workspace.md)。

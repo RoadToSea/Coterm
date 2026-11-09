@@ -1,5 +1,5 @@
 import { useState, type DragEvent } from "react";
-import { ChevronDown, ChevronRight, MoreHorizontal, PlugZap, RotateCcw, Trash2 } from "lucide-react";
+import { ChevronDown, ChevronRight, MoreHorizontal, PlugZap, ShieldCheck, RotateCcw, Trash2 } from "lucide-react";
 import { t } from "../i18n";
 import type { InstanceInfo, SavedWorkspace, WorkspaceGroup } from "../host-api";
 import { cn } from "../lib/utils";
@@ -24,6 +24,7 @@ interface Props {
   onRestore(configRef: string): void;
   onRestoreWorkspace(workspaceId: string): void;
   onForget(configRef: string): void;
+  onApproval(configRef: string, label: string): void;
 }
 
 /** Workspace membership is host metadata; dragging never reconnects a driver. */
@@ -114,6 +115,10 @@ export function WorkspaceInstances(props: Props) {
             <PlugZap size={15} strokeWidth={1.5} className="shrink-0 text-muted-foreground" data-driver-icon />
             <span className="min-w-0"><span className="block truncate">{entry.label}</span><span className="block text-[10px] text-muted-foreground">{t("Restore instance")}</span></span>
           </button>
+          <Button type="button" variant="ghost" size="icon" disabled={busy}
+            className="size-6 shrink-0 opacity-0 group-hover/instance:opacity-100 group-focus-within/instance:opacity-100"
+            aria-label={t("Configure approval for {name}", { name: entry.label })} title={t("Instance approval")}
+            onClick={() => props.onApproval(entry.configRef, entry.label)}><ShieldCheck data-icon="inline-start" /></Button>
           <Button type="button" variant="ghost" size="icon" disabled={busy}
             className="mr-1 size-6 shrink-0 opacity-0 group-hover/instance:opacity-100 group-focus-within/instance:opacity-100"
             aria-label={t("Forget {name}", { name: entry.label })} title={t("Forget")} onClick={() => props.onForget(entry.configRef)}><Trash2 data-icon="inline-start" /></Button>

@@ -1,8 +1,10 @@
-# 每实例 Agent 命令审批规则
+# Agent 审批规则组与实例绑定
 
-每个开启的实例创建独立 `InstanceApproval` 对象，包含编译后的命令规则和当前 Bypass 状态。同一驱动的不同实例互不共享审批配置；实例销毁或驱动停止时释放对象。
+规则组由宿主独立保存，不依赖实例存活，可在没有任何实例时创建，也可同时被不同驱动的实例引用。每个实例最多绑定一个组；未分配组且 Bypass 关闭时，所有 Agent commit 需要审批。删除实例不删除组，未绑定组是有效配置。
 
-规则由用户在桌面当前实例的「Agent 审批」中管理，针对实际提交的命令文本，不按接口名放行。可追加、删除规则，保存后生效；未保存的修改不影响运行时。规则最多 128 条，单条最多 2048 个 UTF-8 字节，总量最多 16 KiB。使用 Rust `regex` 语法，不支持环视、反向引用；编译结果和匹配缓存有内存上限，无效规则拒绝保存。
+规则组字段为 `{id, name, mode, patterns}`：id 是稳定标识，改名不改变引用；名称去除首尾空格后非空、最多 64 个字符、不含控制字符且不重名（忽略大小写）。实例保存 `approvalRuleGroupId: string|null`，不保存规则正文副本。最多 128 个组；每组最多 128 条规则，单条最多 2048 个 UTF-8 字节，总量最多 16 KiB。使用 Rust `regex` 语法，不支持环视、反向引用；编译结果和匹配缓存有内存上限，无效规则拒绝保存。
+
+每个运行实例创建独立 `InstanceApproval`，拥有当前编译策略及 Bypass；共享组更新时批量替换编译策略，不共享可变的实例开关。Bypass 仍只属于实例，与组的复制、编辑或改绑无关。
 
 | 模式 | 命中任一规则 | 未命中规则 |
 |---|---|---|
@@ -11,7 +13,11 @@
 
 “拦截”表示暂停并等待人工批准或拒绝。新建实例默认正向模式、空规则，因此所有 Agent commit 仍需审批。反向模式的空规则会放行所有参与匹配的命令；模式选择在保存前始终可见。
 
-桌面面板保留匹配模式、规则追加 / 删除、宿主试匹配及保存状态；不展示示例规则按钮、规则数量计数或重复的实现说明。规则上限和语法校验仍由宿主执行，完整匹配语义以本文为准。
+应用设置的「审批」提供规则组管理入口：搜索、创建、复制、改名、正反向模式、规则编辑 / 追加 / 删除、宿主试匹配和显式保存。宽窗口采用列表与编辑器两列，窄窗口在列表与详情间切换。组列表显示已分配 / 未分配；保存前展示受影响实例名称。复制创建独立组，不复制绑定。已绑定组禁止删除，须先改绑或取消所有实例分配。
+
+实例审批面板选择一个组或「未分配」，只读查看组规则；编辑通过同一对话框切换至规则组管理页。待恢复实例也可通过侧栏审批入口改绑，无需启动驱动或建立连接。面板单独展示 Bypass；开启时明确说明当前跳过审批，不能把选中组的摘要当成实际审批结果。
+
+规则及绑定编辑均显式保存，失败保留草稿。离开脏组或关闭有未保存分配的面板时提供保存、放弃、继续编辑。命令测试使用草稿中的 mode/patterns，不执行命令，也不把组规则匹配结果当作 Bypass 开启时的实际审批结论。
 
 正则默认匹配任意位置；用 `^`、`$` 限制整条单行命令，或 `\A`、`\z` 限制整个原始文本。`^ls$` 仅匹配 `ls`，`\brm\b` 可用于反向模式匹配含 `rm` 的命令。需要简单参数时可以使用 `\Als(?:[ \t]+[^;&|\x60$<>\r\n]+)?\z`。正则只匹配文本，不解析 Shell 语法、别名或被调用脚本的内容；用户决定规则覆盖范围。
 
@@ -31,17 +37,24 @@ SSH 内部 command 声明 `/text`，MCP command 声明 `/commands`；terminal/ex
 
 | 命令 | 请求 | 响应 |
 |---|---|---|
-| `get_approval_policy` | `{driverInstanceId}` | `{mode, patterns}` |
-| `set_approval_policy` | `{driverInstanceId, policy: {mode, patterns}}` | 保存后的策略；无效正则返回 `approval_rule_invalid` |
-| `get_bypass` | `{driverInstanceId}` | 当前实例的布尔状态 |
-| `set_bypass` | `{driverInstanceId, enabled}` | 无返回数据；未知实例或保存失败时报错 |
-| `preview_approval_policy` | `{policy, text}` | `true` 需审批，`false` 免审批；使用同一 Rust matcher，不执行任何驱动操作 |
+| `approval_snapshot` | `{}` | `{groups:[{id,name,mode,patterns}], instances:[{configRef,label,driverId,instanceId,ruleGroupId,bypass}]}`，含离线保存项，不含连接配置 |
+| `save_approval_group` | `{group:{id:string|null,name,mode,patterns}}` | 保存后的规则组；null id 新建，其余更新已有组 |
+| `assign_approval_group` | `{configRef,groupId:string|null}` | 无返回数据；null 取消分配，支持离线实例 |
+| `delete_approval_group` | `{groupId}` | 无返回数据；组正在使用时返回 `approval_group_in_use` |
+| `get_bypass` | `{driverInstanceId}` | 当前运行实例的布尔状态 |
+| `set_bypass` | `{driverInstanceId,enabled}` | 无返回数据；未知实例或保存失败时报错 |
+| `preview_approval_policy` | `{policy:{mode,patterns},text}` | `true` 需审批，`false` 免审批；使用同一 Rust matcher，不执行任何操作 |
 
-这些命令不导出给驱动前端或 MCP。读取和保存必须显式指定运行实例 ID，未知实例返回 `driver_instance_not_found`，不能回退到其他实例。审批弹窗显示固定目标名称；切换标签不改变已打开弹窗的目标。Bypass 按当前可见实例显示和切换，无活动实例时禁用；过期查询与保存响应不能覆盖其他实例的状态。
+这些命令只由可信桌面使用，不导出给驱动前端或 MCP。组名称重复、格式无效、容量限制、引用丢失分别返回 `approval_group_name_exists`、`approval_group_name_invalid` / `approval_group_invalid`、`approval_group_capacity`、`approval_group_not_found`。无效正则返回 `approval_rule_invalid`。所有失败保持旧组、绑定和已生效策略。未知 configRef 返回 `workspace_entry_not_found`，不能回退到别的实例。
 
-规则保存在该实例工作区保存项的 `approvalPolicy` 字段，跨启动身份为已有的 `configRef`，不使用驱动 ID、标签或每次重建都会变化的运行实例 ID。Windows 沿用 DPAPI 加密及原子替换；非 Windows 仍仅会话内保存。保存先校验并原子持久化，再更新当前实例运行时；写盘失败保留旧策略和编辑内容。Bypass 保存在同一实例保存项的 `bypass` 布尔字段，保存成功后才更新当前审批对象；失败保留旧开关。恢复保存项时，新审批对象在绑定前加载该项规则和 Bypass，不执行任何旧操作。没有工作区保存项的临时实例仅在内存保留 Bypass，销毁后丢弃；断线不清除保存值。
+配置变更与实例生命周期共用宿主工作区锁。保存组先校验并编译、原子持久化，再在运行时单次加锁发布到所有仍存活的绑定实例；保存成功后，后续新提交统一使用新规则。发布跳过已停止实例，保存项下次恢复时解析当前组。分配一个组也先编译和落盘，再更新目标运行实例；没有运行实例时只保存绑定。明确编辑的离线恢复项会被保留到下次会话快照，组集合始终独立保存，不受实例会话过滤影响。
 
-工作区文档写入版本 4，保持既有文件位置；兼容读取版本 1、2、3，缺少 `bypass` 字段时默认为 false；读取版本 1 时，将旧全局 `approvalPolicy` 分别复制到已有保存项，之后各自独立修改。没有规则的旧项及新建实例使用正向空规则。旧 `allowedOperations` 仅兼容读取，不产生放行效果，也不转换成正则。当前格式不写入顶层全局规则或全局 Bypass。
+工作区文档写入版本 5，沿用 `workspace.v1.dpapi`、Windows 当前用户 DPAPI 和原子替换；兼容读取 v1–v4。组保存在顶层 `approvalRuleGroups`；实例引用通过 configRef 关联，Bypass 仍保存在实例 `bypass` 字段。恢复新实例时在绑定前加载引用组和自身 Bypass，不重放任何操作。非 Windows 工作区仍仅内存保存，无明文回退。
+
+旧独立策略迁移成逐实例独立组，不因内容相同自动合并。迁移组使用旧 configRef 作为组命名空间中的稳定 ID，保证首次写 v5 前重复读取一致；名称从实例名派生并消歧。默认正向空规则迁移为未分配；反向空规则保留其放行语义。v1 全局策略先分别复制至旧实例再迁移，旧 allowedOperations 仅兼容读取、不产生豁免。v5 不再写每项 approvalPolicy 或顶层全局策略。旧数据缺少 Bypass 时默认 false。
+
+Bypass 由用户通过当前实例入口主动开启，保存成功再更新运行时；临时实例没有保存项时仅保留内存开关，销毁后丢弃。组更新、分配、解除绑定均不改变 Bypass。已等待审批的提案不因任何规则或开关修改而自动执行。未知运行实例返回 `driver_instance_not_found`，过期查询或保存响应不能覆盖另一个实例。
+
 接口没有新增依赖、系统权限或进程启动方式；schema 扩展可被旧宿主忽略，新宿主对未声明的旧驱动继续要求正常审批。
 
 ## 验证入口

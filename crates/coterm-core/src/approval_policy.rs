@@ -24,6 +24,28 @@ pub struct ApprovalPolicy {
     pub patterns: Vec<String>,
 }
 
+/// Independently saved rules referenced by stable ID; host storage validates names
+/// and references, and `policy().compile()` validates matcher limits and syntax.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ApprovalRuleGroup {
+    pub id: String,
+    pub name: String,
+    pub mode: ApprovalMode,
+    pub patterns: Vec<String>,
+}
+
+impl ApprovalRuleGroup {
+    /// Returns this group's matcher input; validation is performed by `compile`.
+    pub fn policy(&self) -> ApprovalPolicy {
+        ApprovalPolicy {
+            mode: self.mode,
+            patterns: self.patterns.clone(),
+        }
+    }
+}
+
+#[derive(Clone)]
 pub struct CompiledApprovalPolicy {
     policy: ApprovalPolicy,
     patterns: RegexSet,
@@ -61,6 +83,10 @@ impl InstanceApproval {
     pub fn set_policy(&mut self, policy: ApprovalPolicy) -> Result<(), RuntimeError> {
         self.policy = Some(policy.compile()?);
         Ok(())
+    }
+
+    pub(crate) fn set_compiled_policy(&mut self, policy: CompiledApprovalPolicy) {
+        self.policy = Some(policy);
     }
 
     /// Returns this instance's configured rules, or the approval-required default.

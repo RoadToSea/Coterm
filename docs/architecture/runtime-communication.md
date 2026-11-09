@@ -96,9 +96,9 @@
 
 ## 工作区与生命周期
 
-每个运行实例拥有独立命令审批对象；规则和 Bypass 按保存项 configRef 独立持久化并在恢复实例时加载；无保存项的临时实例仅内存保留 Bypass。不再按 operation 名称或驱动 ID 批量放行。规则契约、正反向模式、跨平台保存和旧数据迁移见 [命令审批规则](command-approval.md)。
+每个运行实例拥有独立命令审批对象；规则组独立持久化，每个实例按 configRef 保存一个组引用和自己的 Bypass，恢复时解析组并加载开关；无保存项的临时实例仅内存保留 Bypass。不再按 operation 名称或驱动 ID 批量放行。规则契约、正反向模式、跨平台保存和旧数据迁移见 [命令审批规则](command-approval.md)。
 
-Windows 首版将版本化工作区、初始配置及配置引用整体用当前用户 DPAPI 加密，原子替换 `workspace.v1.dpapi`；文档版本为 4，兼容读取版本 1、2、3；旧 `pluginId` 与 `coterm-plugin-*` 标识迁移到 `driverId` 与 `coterm-driver-*`，保留 configRef、分组、配置、旧 retained 标记、各项审批规则及 Bypass。版本 1 的已有全局规则逐项复制。UI 可读配置引用、标签和每项规则，不能读取连接配置。最多 128 项、明文编码上限 512 KiB，不保存操作账本或运行期秘密句柄；旧记录缺少 Bypass 时默认关闭；配置中出现宿主秘密句柄结构时拒绝保存。损坏/不兼容文件显示错误，须用户显式重置；非 Windows 暂保留会话内工作区并明确提示，不回退明文存盘。
+Windows 首版将版本化工作区、初始配置及配置引用整体用当前用户 DPAPI 加密，原子替换 `workspace.v1.dpapi`；文档版本为 5，兼容读取版本 1–4；旧 `pluginId` 与 `coterm-plugin-*` 标识迁移到 `driverId` 与 `coterm-driver-*`，保留 configRef、分组、配置、旧 retained 标记、规则组引用及实例 Bypass。旧独立规则迁移为逐实例独立组，默认正向空规则迁移为未分配；相同内容不隐式合并。UI 可读配置引用、标签、规则组目录和绑定，不能读取连接配置。最多 128 项、明文编码上限 512 KiB，不保存操作账本或运行期秘密句柄；旧记录缺少 Bypass 时默认关闭；配置中出现宿主秘密句柄结构时拒绝保存。损坏/不兼容文件显示错误，须用户显式重置；非 Windows 暂保留会话内工作区并明确提示，不回退明文存盘。
 
 启动只读取保存项；用户可逐项或整体恢复。恢复分配新的实例/会话 ID，只调用创建，不重放历史操作、不自动连接。保存项保留顺序、选中引用与侧栏折叠状态；销毁实例移除保存项，停止驱动保留恢复入口。驱动领域数据仍由驱动管理。
 
@@ -119,4 +119,4 @@ Windows 首版将版本化工作区、初始配置及配置引用整体用当前
 
 运行时字段统一使用 `driverId/driverInstanceId`、操作作用域为 `driver|instance`、事件能力为 `driver-events`；旧 v1 Worker 不兼容，握手直接拒绝。前端契约为 `@coterm/driver-sdk` v2.0，MCP 的 `coterm_ssh_command` 等终端工具名保持稳定，实例列表字段使用 driver 命名。
 
-前端通过绑定当前实例的 `saveConfiguration(config)` 保存驱动已验证的完整配置。桌面 `save_instance_configuration({driverInstanceId,config})` 与生命周期变更共用工作区锁，仅替换对应保存项配置，保留 configRef、名称、分组及审批规则。拒绝失效实例、秘密句柄、超限配置与写盘失败；失败不覆盖原保存值。串口配置保存成功后才连接，恢复不自动连接。
+前端通过绑定当前实例的 `saveConfiguration(config)` 保存驱动已验证的完整配置。桌面 `save_instance_configuration({driverInstanceId,config})` 与生命周期变更共用工作区锁，仅替换对应保存项配置，保留 configRef、名称、分组及审批组引用。拒绝失效实例、秘密句柄、超限配置与写盘失败；失败不覆盖原保存值。串口配置保存成功后才连接，恢复不自动连接。

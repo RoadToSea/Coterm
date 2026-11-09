@@ -42,11 +42,11 @@ export function makeHostMockSource(initial) {
     const scenario = ${JSON.stringify(initial)};
     const defaultLayout = { activeConfigRef:null, instancesCollapsed:innerWidth < 900, activeWorkspaceId:"default" };
     scenario.workspace = {
-      groups:[{id:"default",name:"Default workspace"}], historyPolicy:"session_only", persistence:"windows_dpapi",
+      groups:[{id:"default",name:"Default workspace"}], approvalRuleGroups:[], historyPolicy:"session_only", persistence:"windows_dpapi",
       ...scenario.workspace,
       entries:(scenario.workspace?.entries ?? scenario.instances.map(instance => ({
         configRef:"ref-" + instance.driverInstanceId, driverId:instance.driverId,label:instance.label,instanceId:instance.driverInstanceId,
-      }))).map(entry => ({workspaceId:"default",approvalPolicy:{mode:"allow_matches",patterns:[]},...entry})),
+      }))).map(entry => ({workspaceId:"default",approvalRuleGroupId:null,...entry})),
       layout:{...defaultLayout,...scenario.workspace?.layout},
     };
     const bypasses = new Map(Object.entries(scenario.bypasses ?? {}));
@@ -263,6 +263,7 @@ export function makeHostMockSource(initial) {
         if (!entry) throw new Error("workspace_entry_not_found");
         const instance = {driverId:entry.driverId,driverInstanceId:"restored-" + ++nextInstance,sessionId:"session-" + nextInstance,label:entry.label,status:"ready"};
         scenario.instances = [...scenario.instances,instance];
+        bypasses.set(instance.driverInstanceId, entry.bypass ?? false);
         scenario.workspace.entries = scenario.workspace.entries.map(item => item.configRef === configRef ? {...item,instanceId:instance.driverInstanceId} : item);
         return instance;
       },
@@ -278,7 +279,7 @@ export function makeHostMockSource(initial) {
           label:name?.trim() || (config.host ? config.username + "@" + config.host : config.port ?? driver.name),status:"ready"};
         scenario.instances = [...scenario.instances,instance];
         scenario.workspace.entries = [...scenario.workspace.entries,{configRef:"created-ref-" + nextInstance,
-          driverId,instanceId:instance.driverInstanceId,label:instance.label,workspaceId:workspaceId ?? "default",approvalPolicy:{mode:"allow_matches",patterns:[]}}];
+          driverId,instanceId:instance.driverInstanceId,label:instance.label,workspaceId:workspaceId ?? "default",approvalRuleGroupId:null}];
         return instance;
       },
       start_driver: ({driverId}) => {
@@ -287,16 +288,28 @@ export function makeHostMockSource(initial) {
       },
       provide_secret: ({ driverInstanceId, purpose }) => ({ id: "secret-test", driverInstanceId, purpose, expiresAt: "2099-01-01T00:00:00Z" }),
       list_drivers: () => scenario.catalog,
-      get_approval_policy: ({driverInstanceId}) => {
-        const entry = scenario.workspace.entries.find(item=>item.instanceId===driverInstanceId);
-        if (!entry) throw new Error("driver_instance_not_found");
-        return structuredClone(entry.approvalPolicy);
+      approval_snapshot: () => ({groups:structuredClone(scenario.workspace.approvalRuleGroups),
+        instances:scenario.workspace.entries.map(entry=>({configRef:entry.configRef,label:entry.label,driverId:entry.driverId,
+          instanceId:entry.instanceId ?? null,ruleGroupId:entry.approvalRuleGroupId ?? null,bypass:entry.bypass ?? false}))}),
+      save_approval_group: ({group}) => {
+        if (!group.name.trim()) throw new Error("approval_group_name_invalid");
+        if (scenario.workspace.approvalRuleGroups.some(item=>item.id!==group.id && item.name.toLowerCase()===group.name.trim().toLowerCase())) throw new Error("approval_group_name_exists");
+        const saved = {...structuredClone(group),name:group.name.trim(),id:group.id ?? "approval-" + ++nextInstance};
+        if (group.id && !scenario.workspace.approvalRuleGroups.some(item=>item.id===group.id)) throw new Error("approval_group_not_found");
+        scenario.workspace.approvalRuleGroups = scenario.workspace.approvalRuleGroups.filter(item=>item.id!==saved.id).concat(saved);
+        return structuredClone(saved);
       },
-      set_approval_policy: ({driverInstanceId,policy}) => {
-        const entry = scenario.workspace.entries.find(item=>item.instanceId===driverInstanceId);
-        if (!entry) throw new Error("driver_instance_not_found");
-        entry.approvalPolicy = structuredClone(policy);
-        return structuredClone(entry.approvalPolicy);
+      assign_approval_group: ({configRef,groupId}) => {
+        const entry = scenario.workspace.entries.find(item=>item.configRef===configRef);
+        if (!entry) throw new Error("workspace_entry_not_found");
+        if (groupId && !scenario.workspace.approvalRuleGroups.some(group=>group.id===groupId)) throw new Error("approval_group_not_found");
+        entry.approvalRuleGroupId = groupId;
+        return null;
+      },
+      delete_approval_group: ({groupId}) => {
+        if (scenario.workspace.entries.some(entry=>entry.approvalRuleGroupId===groupId)) throw new Error("approval_group_in_use");
+        scenario.workspace.approvalRuleGroups = scenario.workspace.approvalRuleGroups.filter(group=>group.id!==groupId);
+        return null;
       },
       // Matching semantics are tested against the Rust matcher, not a JS reimplementation.
       preview_approval_policy: ({text}) => scenario.approvalPreview?.[text] ?? true,
@@ -308,6 +321,8 @@ export function makeHostMockSource(initial) {
       set_bypass: ({driverInstanceId,enabled}) => {
         if (!scenario.instances.some(item=>item.driverInstanceId===driverInstanceId)) throw new Error("driver_instance_not_found");
         bypasses.set(driverInstanceId,enabled);
+        const entry = scenario.workspace.entries.find(item=>item.instanceId===driverInstanceId);
+        if (entry) entry.bypass = enabled;
         return null;
       },
       list_operations: () => scenario.operations ?? [],

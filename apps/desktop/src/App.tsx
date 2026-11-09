@@ -16,7 +16,7 @@ import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "./
 import { cn } from "./lib/utils";
 import { HostInteractions } from "./components/host/HostInteractions";
 import { HostApprovals } from "./components/host/HostApprovals";
-import { ApprovalSettings } from "./components/host/ApprovalSettings";
+import { ApprovalSettings, type ApprovalTarget } from "./components/host/ApprovalSettings";
 import { Modal } from "./components/ui/Modal";
 import { DriverWorkspace } from "./components/drivers/DriverWorkspace";
 import { DriverConfiguration } from "./components/drivers/DriverConfiguration";
@@ -30,7 +30,7 @@ import {
 } from "./host-api";
 import { promptForConfirmation, promptForText } from "./secret-input";
 
-const EMPTY_WORKSPACE: SavedWorkspace = {
+const EMPTY_WORKSPACE: SavedWorkspace = { approvalRuleGroups: [],
   entries: [], groups: [{ id: "default", name: "Default workspace" }],
   layout: { activeConfigRef: null, instancesCollapsed: false, activeWorkspaceId: "default" },
   historyPolicy: "session_only", persistence: "memory_only",
@@ -61,7 +61,7 @@ export default function App() {
     }
   }, []);
 
-  const [approvalTarget, setApprovalTarget] = useState<InstanceInfo | null>(null);
+  const [approvalTarget, setApprovalTarget] = useState<ApprovalTarget | null>(null);
   const [drivers, setDrivers] = useState<DriverSummary[]>([]);
   const [driverIssues, setDriverIssues] = useState<DriverLoadIssue[]>([]);
   const [instances, setInstances] = useState<InstanceInfo[]>([]);
@@ -364,7 +364,7 @@ export default function App() {
       {workspaceError && <div role="alert" className="px-3 py-2 text-xs text-destructive">
         {t("Workspace:")} {workspaceError}{t(". Saved state is preserved.")}
         {instances.length === 0 && <button className="ml-3 underline" onClick={() => {
-          void promptForConfirmation("workspace-reset", { title: t("Reset saved workspace?"), prompt: t("This removes saved configuration references and layout. Driver data is unaffected.") })
+          void promptForConfirmation("workspace-reset", { title: t("Reset saved workspace?"), prompt: t("This removes saved configurations, approval rule groups and layout. Driver data is unaffected.") })
             .then(async (result) => {
               if (result.outcome !== "submitted") return;
               await hostAPI.resetWorkspace();
@@ -373,7 +373,7 @@ export default function App() {
         }}>{t("Reset saved workspace")}</button>}
       </div>}
       {driverIssueNotice}
-      {approvalTarget && <ApprovalSettings key={approvalTarget.driverInstanceId} instance={approvalTarget} onClose={() => setApprovalTarget(null)} />}
+      {approvalTarget && <ApprovalSettings key={approvalTarget.configRef ?? approvalTarget.driverInstanceId} instance={approvalTarget} onClose={() => setApprovalTarget(null)} />}
 
       <div className="flex min-h-0 flex-1">
         <aside aria-label={t("Installed drivers")} className="flex w-[64px] shrink-0 flex-col border-r border-coterm-border bg-coterm-surface-sidebar sm:w-[72px]">
@@ -465,6 +465,7 @@ export default function App() {
               onDestroy={instance => void destroyInstance(instance)} onDeleteWorkspace={group => void deleteWorkspace(group)}
               onMove={(ref, groupId) => void moveWorkspaceEntry(ref, groupId)} onRestore={ref => void restoreSavedInstance(ref)}
               onRestoreWorkspace={groupId => void restoreWorkspace(groupId)}
+              onApproval={(configRef, label) => setApprovalTarget({ configRef, label })}
               onForget={ref => { void runDriverAction(ref, () => hostAPI.forgetInstance(ref)); }} />}
             {!loading && instances.length === 0 && (workspace?.entries.length ?? 0) === 0 && (
               <div className="px-5 py-5 text-xs leading-5 text-coterm-text-muted">

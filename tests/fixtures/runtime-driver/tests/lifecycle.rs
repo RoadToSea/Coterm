@@ -549,3 +549,95 @@ async fn instance_approvals_isolate_rules_bypass_and_lifetime() -> Result<()> {
         .is_err());
     Ok(())
 }
+
+#[tokio::test]
+async fn shared_group_publication_updates_new_submissions_and_preserves_bypass_and_proposals(
+) -> Result<()> {
+    use coterm_core::approval_policy::ApprovalPolicy;
+    let root = package()?;
+    let runtime = runtime();
+    runtime.load(&root).await?;
+    runtime.start(ID).await?;
+    let one = runtime.create_instance(ID, json!({})).await?;
+    let two = runtime.create_instance(ID, json!({})).await?;
+    let caller = |instance: &InstanceInfo| CallerContext {
+        source: OperationSource::Agent,
+        session_id: instance.session_id.clone(),
+        driver_id: Some(ID.into()),
+    };
+    let request = |instance: &InstanceInfo| SubmitOperation {
+        driver_id: ID.into(),
+        driver_instance_id: Some(instance.driver_instance_id.clone()),
+        operation: "fixture.commit".into(),
+        args: json!({"commands":["pwd"]}),
+        wait_timeout_ms: Some(1000),
+    };
+    let pending = runtime
+        .submit_until_approval(caller(&one), request(&one))
+        .await?;
+    assert_eq!(pending.status, OperationStatus::AwaitingApproval);
+    runtime.set_bypass(&two.driver_instance_id, true).await?;
+    let allow = ApprovalPolicy {
+        patterns: vec!["^pwd$".into()],
+        ..ApprovalPolicy::default()
+    };
+    runtime
+        .apply_approval_policy(
+            vec![
+                one.driver_instance_id.clone(),
+                two.driver_instance_id.clone(),
+                "already-stopped".into(),
+            ],
+            allow.compile()?,
+        )
+        .await;
+    assert_eq!(
+        runtime.approval_policy(&one.driver_instance_id).await?,
+        allow
+    );
+    assert_eq!(
+        runtime.approval_policy(&two.driver_instance_id).await?,
+        allow
+    );
+    assert!(runtime.bypass_enabled(&two.driver_instance_id).await?);
+    assert_eq!(
+        runtime
+            .get(caller(&one), &pending.operation_id)
+            .await?
+            .status,
+        OperationStatus::AwaitingApproval
+    );
+    assert_eq!(
+        runtime
+            .submit_until_approval(caller(&one), request(&one))
+            .await?
+            .status,
+        OperationStatus::Completed
+    );
+    runtime
+        .apply_approval_policy(
+            vec![
+                one.driver_instance_id.clone(),
+                two.driver_instance_id.clone(),
+            ],
+            ApprovalPolicy::default().compile()?,
+        )
+        .await;
+    assert_eq!(
+        runtime
+            .submit_until_approval(caller(&one), request(&one))
+            .await?
+            .status,
+        OperationStatus::AwaitingApproval
+    );
+    assert_eq!(
+        runtime
+            .submit_until_approval(caller(&two), request(&two))
+            .await?
+            .status,
+        OperationStatus::Completed
+    );
+    runtime.stop(ID).await?;
+    std::fs::remove_dir_all(root)?;
+    Ok(())
+}

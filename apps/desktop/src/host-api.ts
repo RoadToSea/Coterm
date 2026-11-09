@@ -89,8 +89,9 @@ export interface InstanceInfo {
 export interface WorkspaceGroup { id: string; name: string }
 
 export interface SavedWorkspace {
-  entries: { configRef: string; driverId: string; label: string; instanceId: string | null; workspaceId: string; approvalPolicy: ApprovalPolicy }[];
+  entries: { configRef: string; driverId: string; label: string; instanceId: string | null; workspaceId: string; approvalRuleGroupId: string | null }[];
   groups: WorkspaceGroup[];
+  approvalRuleGroups: ApprovalRuleGroup[];
   layout: { activeConfigRef: string | null; instancesCollapsed: boolean; activeWorkspaceId: string };
   historyPolicy: "session_only";
   persistence: "windows_dpapi" | "memory_only";
@@ -123,6 +124,13 @@ export interface McpStdioStatus {
 export interface ApprovalPolicy {
   mode: "allow_matches" | "approve_matches";
   patterns: string[];
+}
+
+export interface ApprovalRuleGroup extends ApprovalPolicy { id: string; name: string }
+export type ApprovalGroupDraft = Omit<ApprovalRuleGroup, "id"> & { id: string | null };
+export interface ApprovalSnapshot {
+  groups: ApprovalRuleGroup[];
+  instances: { configRef: string; label: string; driverId: string; instanceId: string | null; ruleGroupId: string | null; bypass: boolean }[];
 }
 
 export interface HostAPI {
@@ -170,9 +178,11 @@ export interface HostAPI {
   cancelOperation(driverInstanceId: string, operationId: string): Promise<OperationReceipt>;
   setBypass(driverInstanceId: string, enabled: boolean): Promise<void>;
   getBypass(driverInstanceId: string): Promise<boolean>;
-  /** 放行列表只跳过 Agent 审批；不改变 effect、不绕过驱动校验。 */
-  setApprovalPolicy(driverInstanceId: string, policy: ApprovalPolicy): Promise<ApprovalPolicy>;
-  getApprovalPolicy(driverInstanceId: string): Promise<ApprovalPolicy>;
+  /** Host-only configuration: rejects invalid rules, dangling references and failed writes. */
+  approvalSnapshot(): Promise<ApprovalSnapshot>;
+  saveApprovalGroup(group: ApprovalGroupDraft): Promise<ApprovalRuleGroup>;
+  assignApprovalGroup(configRef: string, groupId: string | null): Promise<void>;
+  deleteApprovalGroup(groupId: string): Promise<void>;
   previewApprovalPolicy(policy: ApprovalPolicy, text: string): Promise<boolean>;
   frontendSource(driverId: string): Promise<string | null>;
   provideSecret(driverInstanceId: string, purpose: string, value: string): Promise<SecretHandle>;
@@ -416,8 +426,10 @@ export const hostAPI: HostAPI = {
     invoke<OperationReceipt>("cancel_operation", { driverInstanceId, operationId }),
   setBypass: (driverInstanceId, enabled) => invoke<void>("set_bypass", { driverInstanceId, enabled }),
   getBypass: (driverInstanceId) => invoke<boolean>("get_bypass", { driverInstanceId }),
-  setApprovalPolicy: (driverInstanceId, policy) => invoke<ApprovalPolicy>("set_approval_policy", { driverInstanceId, policy }),
-  getApprovalPolicy: (driverInstanceId) => invoke<ApprovalPolicy>("get_approval_policy", { driverInstanceId }),
+  approvalSnapshot: () => invoke<ApprovalSnapshot>("approval_snapshot"),
+  saveApprovalGroup: (group) => invoke<ApprovalRuleGroup>("save_approval_group", { group }),
+  assignApprovalGroup: (configRef, groupId) => invoke<void>("assign_approval_group", { configRef, groupId }),
+  deleteApprovalGroup: (groupId) => invoke<void>("delete_approval_group", { groupId }),
   previewApprovalPolicy: (policy, text) => invoke<boolean>("preview_approval_policy", { policy, text }),
 };
 

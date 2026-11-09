@@ -123,7 +123,10 @@ pub async fn restore_saved_instance(
 ) -> Result<InstanceInfo, RuntimeError> {
     let _guard = state.workspace_actions.lock().await;
     let reference = config_ref.clone();
-    let entry = access(&state, move |store| store.find(&reference)).await?;
+    let (entry, policy) = access(&state, move |store| {
+        Ok((store.find(&reference)?, store.approval_policy(&reference)?))
+    })
+    .await?;
     if let Some(old_id) = &entry.instance_id {
         if let Some(old) = state.driver_runtime.get_instance(old_id).await {
             if old.status != InstanceStatus::Failed {
@@ -143,7 +146,7 @@ pub async fn restore_saved_instance(
     if let Err(error) = async {
         state
             .driver_runtime
-            .set_approval_policy(&instance.driver_instance_id, entry.approval_policy)
+            .set_approval_policy(&instance.driver_instance_id, policy)
             .await?;
         state
             .driver_runtime
@@ -205,16 +208,4 @@ pub async fn reset_saved_workspace(state: tauri::State<'_, AppState>) -> Result<
     })
     .await
     .map_err(|_| workspace::error("workspace_task_failed"))?
-}
-
-/// Persists rules only on the live instance's saved entry; errors leave runtime rules unchanged.
-pub async fn store_approval_policy(
-    state: &tauri::State<'_, AppState>,
-    instance_id: String,
-    policy: coterm_core::approval_policy::ApprovalPolicy,
-) -> Result<(), coterm_proto::runtime::RuntimeError> {
-    access(state, move |store| {
-        store.save_approval_policy(&instance_id, policy)
-    })
-    .await
 }

@@ -62,7 +62,7 @@ fn bypass_failed_writes_preserve_state_and_temporary_instances_never_write() -> 
 #[cfg(windows)]
 #[test]
 fn older_workspace_versions_default_bypass_to_disabled() -> anyhow::Result<()> {
-    for version in 1..=3 {
+    for version in 1..=4 {
         let fixture = Fixture::new()?;
         let legacy = serde_json::json!({"version":version,"entries":[
             {"configRef":"one","driverId":"ssh","label":"one","config":{}}
@@ -96,9 +96,9 @@ fn approval_rules_roundtrip_and_failed_writes_preserve_the_saved_policy() -> any
         patterns: vec![r"\brm\b".into()],
     };
     store.save_approval_policy("one", policy.clone())?;
-    assert_eq!(fixture.store()?.find(&reference)?.approval_policy, policy);
+    assert_eq!(fixture.store()?.approval_policy(&reference)?, policy);
     assert_eq!(
-        fixture.store()?.find(&other)?.approval_policy,
+        fixture.store()?.approval_policy(&other)?,
         ApprovalPolicy::default()
     );
     assert!(store
@@ -108,16 +108,16 @@ fn approval_rules_roundtrip_and_failed_writes_preserve_the_saved_policy() -> any
     assert!(serialized.get("allowedOperations").is_none());
     assert!(serialized.get("approvalPolicy").is_none());
     let disk: Value = serde_json::from_slice(&protect(&fs::read(fixture.path())?, false)?)?;
-    assert_eq!(disk["version"], 4);
+    assert_eq!(disk["version"], 5);
     assert!(disk.get("approvalPolicy").is_none());
     store.path = fixture.0.join("missing").join("workspace.bin");
     assert!(store
         .save_approval_policy("one", ApprovalPolicy::default())
         .is_err());
-    assert_eq!(store.find(&reference)?.approval_policy, policy);
-    assert_eq!(fixture.store()?.find(&reference)?.approval_policy, policy);
+    assert_eq!(store.approval_policy(&reference)?, policy);
+    assert_eq!(fixture.store()?.approval_policy(&reference)?, policy);
     assert_eq!(
-        store.find(&other)?.approval_policy,
+        store.approval_policy(&other)?,
         ApprovalPolicy::default()
     );
     Ok(())
@@ -141,8 +141,8 @@ fn legacy_rules_are_copied_to_saved_instances_but_not_to_new_instances() -> anyh
         protect(&serde_json::to_vec(&legacy)?, true)?,
     )?;
     let mut store = fixture.store()?;
-    assert_eq!(store.find("first")?.approval_policy, policy);
-    assert_eq!(store.find("second")?.approval_policy, policy);
+    assert_eq!(store.approval_policy("first")?, policy);
+    assert_eq!(store.approval_policy("second")?, policy);
     store.bind("first", "new-first".into(), "Same driver A".into())?;
     store.bind("second", "new-second".into(), "Same driver B".into())?;
     store.save_approval_policy("new-first", ApprovalPolicy::default())?;
@@ -155,12 +155,12 @@ fn legacy_rules_are_copied_to_saved_instances_but_not_to_new_instances() -> anyh
     )?;
     let reopened = fixture.store()?;
     assert_eq!(
-        reopened.find("first")?.approval_policy,
+        reopened.approval_policy("first")?,
         ApprovalPolicy::default()
     );
-    assert_eq!(reopened.find("second")?.approval_policy, policy);
+    assert_eq!(reopened.approval_policy("second")?, policy);
     assert_eq!(
-        reopened.snapshot().entries[2].approval_policy,
+        reopened.approval_policy(&reopened.snapshot().entries[2].config_ref)?,
         ApprovalPolicy::default()
     );
     assert!(reopened
@@ -183,7 +183,7 @@ fn legacy_interface_grants_never_become_instance_command_rules() -> anyhow::Resu
         protect(&serde_json::to_vec(&legacy)?, true)?,
     )?;
     assert_eq!(
-        fixture.store()?.find("first")?.approval_policy,
+        fixture.store()?.approval_policy("first")?,
         coterm_core::approval_policy::ApprovalPolicy::default()
     );
     Ok(())
@@ -464,8 +464,8 @@ fn configuration_updates_are_bound_and_preserve_identity_and_rules() -> anyhow::
     assert_eq!(store.snapshot().entries[1].config, before[1].config);
     assert_eq!(store.find(&reference)?.label, before[0].label);
     assert_eq!(
-        store.find(&reference)?.approval_policy,
-        before[0].approval_policy
+        store.find(&reference)?.approval_rule_group_id,
+        before[0].approval_rule_group_id
     );
     assert!(store.save_configuration("stale", Value::Null).is_err());
     assert!(store.save_configuration("one", serde_json::json!({"id":"secret","driverInstanceId":"one","purpose":"auth","expiresAt":"later"})).is_err());
@@ -509,17 +509,17 @@ fn legacy_driver_names_migrate_without_changing_saved_identity_or_policies() -> 
             assert_eq!(entry.driver_id, format!("coterm-driver-{name}"));
             assert_eq!(entry.config_ref, name);
             assert!(entry.retained);
-            assert_eq!(entry.approval_policy, policy);
+            assert_eq!(store.approval_policy(name)?, policy);
             assert_eq!(entry.config["private"], "kept");
             assert!(entry.instance_id.is_none());
         }
         store.save_layout(None, true, vec![], None)?;
         let plaintext = protect(&fs::read(fixture.path())?, false)?;
         let migrated: Value = serde_json::from_slice(&plaintext)?;
-        assert_eq!(migrated["version"], 4);
+        assert_eq!(migrated["version"], 5);
         assert!(migrated["entries"][0].get("pluginId").is_none());
         assert_eq!(migrated["entries"][0]["driverId"], "coterm-driver-ssh");
-        assert_eq!(fixture.store()?.find("serial")?.approval_policy, policy);
+        assert_eq!(fixture.store()?.approval_policy("serial")?, policy);
         assert_eq!(
             fixture
                 .store()?
@@ -530,6 +530,210 @@ fn legacy_driver_names_migrate_without_changing_saved_identity_or_policies() -> 
             Some("serial")
         );
         assert!(!String::from_utf8_lossy(&fs::read(fixture.path())?).contains("kept"));
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+trait PolicyFixture {
+    fn save_approval_policy(
+        &mut self,
+        instance_id: &str,
+        policy: ApprovalPolicy,
+    ) -> Result<(), RuntimeError>;
+}
+#[cfg(windows)]
+impl PolicyFixture for WorkspaceStore {
+    fn save_approval_policy(
+        &mut self,
+        instance_id: &str,
+        policy: ApprovalPolicy,
+    ) -> Result<(), RuntimeError> {
+        let entry = self
+            .snapshot()
+            .entries
+            .into_iter()
+            .find(|entry| entry.instance_id.as_deref() == Some(instance_id))
+            .ok_or_else(|| error("workspace_entry_not_found"))?;
+        if policy == ApprovalPolicy::default() {
+            return self.assign_approval_group(&entry.config_ref, None);
+        }
+        let group = self.save_approval_group(
+            entry.approval_rule_group_id.clone(),
+            format!("rules-{instance_id}"),
+            policy,
+        )?;
+        self.assign_approval_group(&entry.config_ref, Some(group.id))
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn approval_groups_survive_without_instances_and_share_one_saved_policy() -> anyhow::Result<()> {
+    let fixture = Fixture::new()?;
+    let mut store = fixture.store()?;
+    let policy = ApprovalPolicy {
+        mode: coterm_core::approval_policy::ApprovalMode::AllowMatches,
+        patterns: vec!["^pwd$".into()],
+    };
+    let group = store.save_approval_group(None, "Board rules".into(), policy.clone())?;
+    assert_eq!(
+        fixture.store()?.snapshot().approval_rule_groups,
+        vec![group.clone()]
+    );
+    for id in ["one", "two"] {
+        store.insert("ssh".into(), id.into(), id.into(), Value::Null, None)?;
+    }
+    let refs: Vec<_> = store
+        .snapshot()
+        .entries
+        .iter()
+        .map(|entry| entry.config_ref.clone())
+        .collect();
+    for reference in &refs {
+        store.assign_approval_group(reference, Some(group.id.clone()))?;
+    }
+    store.save_bypass("two", true)?;
+    let changed = ApprovalPolicy {
+        patterns: vec!["^uname$".into()],
+        ..policy.clone()
+    };
+    store.save_approval_group(
+        Some(group.id.clone()),
+        "Renamed rules".into(),
+        changed.clone(),
+    )?;
+    let reopened = fixture.store()?;
+    for reference in &refs {
+        assert_eq!(reopened.approval_policy(reference)?, changed);
+    }
+    assert!(reopened.find(&refs[1])?.bypass);
+    assert!(store.delete_approval_group(&group.id).is_err());
+    store.remove(&refs[0])?;
+    store.remove(&refs[1])?;
+    assert_eq!(fixture.store()?.snapshot().approval_rule_groups.len(), 1);
+    let disk: Value = serde_json::from_slice(&protect(&fs::read(fixture.path())?, false)?)?;
+    assert!(disk["entries"].as_array().is_some_and(Vec::is_empty));
+    assert!(disk.get("approvalRuleGroups").is_some());
+    store.delete_approval_group(&group.id)?;
+    assert!(fixture.store()?.snapshot().approval_rule_groups.is_empty());
+    Ok(())
+}
+
+#[cfg(windows)]
+#[test]
+fn approval_group_failed_writes_and_invalid_rules_preserve_catalog_and_bindings(
+) -> anyhow::Result<()> {
+    let fixture = Fixture::new()?;
+    let mut store = fixture.store()?;
+    store.insert("ssh".into(), "one".into(), "one".into(), Value::Null, None)?;
+    let reference = store.snapshot().entries[0].config_ref.clone();
+    let group = store.save_approval_group(None, "Rules".into(), ApprovalPolicy::default())?;
+    assert!(store
+        .save_approval_group(None, "rules".into(), ApprovalPolicy::default())
+        .is_err());
+    let invalid = ApprovalPolicy {
+        patterns: vec!["[".into()],
+        ..ApprovalPolicy::default()
+    };
+    assert!(store
+        .save_approval_group(Some(group.id.clone()), "Rules".into(), invalid)
+        .is_err());
+    assert!(store
+        .assign_approval_group(&reference, Some("missing".into()))
+        .is_err());
+    let previous = fs::read(fixture.path())?;
+    store.path = fixture.0.join("missing").join("workspace.bin");
+    assert!(store
+        .assign_approval_group(&reference, Some(group.id.clone()))
+        .is_err());
+    assert!(store.delete_approval_group(&group.id).is_err());
+    assert!(store
+        .save_approval_group(
+            Some(group.id.clone()),
+            "Changed".into(),
+            ApprovalPolicy::default()
+        )
+        .is_err());
+    assert!(store.find(&reference)?.approval_rule_group_id.is_none());
+    assert_eq!(store.snapshot().approval_rule_groups, vec![group]);
+    assert_eq!(fs::read(fixture.path())?, previous);
+    Ok(())
+}
+
+#[cfg(windows)]
+#[test]
+fn legacy_equal_policies_migrate_to_separate_groups_and_keep_empty_reverse_semantics(
+) -> anyhow::Result<()> {
+    let fixture = Fixture::new()?;
+    let policy = serde_json::json!({"mode":"approve_matches","patterns":[]});
+    let entries: Vec<_> = ["one", "two"].into_iter().map(|id| serde_json::json!({
+        "configRef":id,"driverId":"ssh","label":"Same name","config":{},"approvalPolicy":policy,"bypass":true
+    })).collect();
+    let legacy = serde_json::json!({"version":4,"entries":entries,"layout":{"activeConfigRef":null,"instancesCollapsed":false}});
+    fs::write(
+        fixture.path(),
+        protect(&serde_json::to_vec(&legacy)?, true)?,
+    )?;
+    let mut store = fixture.store()?;
+    let one = store.find("one")?;
+    let two = store.find("two")?;
+    assert_eq!(
+        fixture.store()?.find("one")?.approval_rule_group_id,
+        one.approval_rule_group_id
+    );
+    assert_ne!(one.approval_rule_group_id, two.approval_rule_group_id);
+    assert!(one.bypass && two.bypass);
+    assert!(!store
+        .approval_policy("one")?
+        .compile()?
+        .requires_approval(&["pwd"]));
+    store.assign_approval_group("one", None)?;
+    assert!(fixture
+        .store()?
+        .find("one")?
+        .approval_rule_group_id
+        .is_none());
+    assert!(fixture
+        .store()?
+        .find("two")?
+        .approval_rule_group_id
+        .is_some());
+    assert_eq!(store.snapshot().approval_rule_groups.len(), 2);
+    let disk: Value = serde_json::from_slice(&protect(&fs::read(fixture.path())?, false)?)?;
+    assert!(disk["entries"][0].get("approvalPolicy").is_none());
+    Ok(())
+}
+
+#[cfg(windows)]
+#[test]
+fn assigning_offline_recovery_entries_keeps_their_binding_at_the_next_checkpoint(
+) -> anyhow::Result<()> {
+    let fixture = Fixture::new()?;
+    let mut store = fixture.store()?;
+    store.insert("ssh".into(), "old".into(), "old".into(), Value::Null, None)?;
+    let reference = store.snapshot().entries[0].config_ref.clone();
+    let group = store.save_approval_group(None, "Shared".into(), ApprovalPolicy::default())?;
+    let mut reopened = fixture.store()?;
+    reopened.insert("ssh".into(), "new".into(), "new".into(), Value::Null, None)?;
+    reopened.assign_approval_group(&reference, Some(group.id.clone()))?;
+    assert_eq!(
+        fixture.store()?.find(&reference)?.approval_rule_group_id,
+        Some(group.id)
+    );
+    Ok(())
+}
+
+#[cfg(windows)]
+#[test]
+fn damaged_group_catalogs_cannot_restore_dangling_or_ambiguous_bindings() -> anyhow::Result<()> {
+    let fixture = Fixture::new()?;
+    let group = serde_json::json!({"id":"group","name":"Rules","mode":"allow_matches","patterns":[]});
+    for groups in [vec![], vec![group.clone(), group.clone()]] {
+        let document = serde_json::json!({"version":5,"entries":[{"configRef":"one","driverId":"ssh","label":"one","config":{},"approvalRuleGroupId":"group"}],
+            "approvalRuleGroups":groups,"layout":{"activeConfigRef":null,"instancesCollapsed":false}});
+        fs::write(fixture.path(), protect(&serde_json::to_vec(&document)?, true)?)?;
+        assert!(fixture.store().is_err());
     }
     Ok(())
 }

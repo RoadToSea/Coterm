@@ -23,7 +23,7 @@ SSH / Serial / Local Worker → 远端、设备或本地 Shell
 ```
 
 - 基座负责实例、路由、审批、公共交互、操作记录与 MCP Bridge；驱动负责通信、命令边界和领域数据。前端只呈现数据，不是 Agent 查询的唯一数据源。
-- 每个运行实例创建独立审批对象，外部传入已验证的 context。配置随保存项独立保存，同一驱动的不同实例可以采用不同规则；已保存实例同时记住 Bypass，恢复时加载；临时实例的 Bypass 仅内存有效。见 [命令审批](../architecture/command-approval.md)。
+- 每个运行实例创建独立审批对象，外部传入已验证的 context。规则组独立保存，每个实例绑定一个组；组保存后对所有绑定实例的新提交生效；已保存实例同时记住 Bypass，恢复时加载；临时实例的 Bypass 仅内存有效。见 [命令审批](../architecture/command-approval.md)。
 - SSH、Local 使用统一 `command`，默认在前台 PTY 执行；预计长期运行或用户明确要求时显式选择 `mode=exec`。等待超时不迁移执行通道、不自动重发。
 - 后端 JSON 记录保留 `stdin/stdout/stderr`，空流也保留键。能分流时分别保存，PTY 已合并时在 stdout 保存合并输出，不从文本猜测 stderr；未知退出码保留 null。
 - Agent 使用 `read_lines`、`read_selected_lines`、`read_dialogue_pairs` 非消费快照，不维护游标。Serial stream 只提供 `read_lines`；Shell 模式通过配置的完整字面提示符观察对话边界，不把提示符当成功证明。

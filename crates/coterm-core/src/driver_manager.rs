@@ -705,6 +705,21 @@ impl ProcessDriverRuntime {
             .ok_or_else(|| runtime_error(ErrorCategory::NotFound, "driver_instance_not_found"))
     }
 
+    /// Publishes one prevalidated group to all still-live bindings under one lock.
+    /// Missing instances have already stopped and are skipped; bypass is preserved.
+    pub async fn apply_approval_policy(
+        &self,
+        instance_ids: Vec<String>,
+        policy: crate::approval_policy::CompiledApprovalPolicy,
+    ) {
+        let mut state = self.state.lock().await;
+        for id in instance_ids {
+            if let Some(approval) = state.instance_approvals.get_mut(&id) {
+                approval.set_compiled_policy(policy.clone());
+            }
+        }
+    }
+
     pub async fn operation_catalog(&self, driver_id: &str) -> Vec<OperationDescriptor> {
         let state = self.state.lock().await;
         state

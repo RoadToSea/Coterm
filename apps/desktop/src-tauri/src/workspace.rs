@@ -1,6 +1,8 @@
 //! Versioned workspace metadata and configuration references. The entire file is
 //! protected by the current Windows user's DPAPI key; no plaintext fallback.
-use coterm_core::approval_policy::ApprovalPolicy;
+use coterm_core::approval_policy::{ApprovalPolicy, ApprovalRuleGroup};
+#[path = "workspace_approval.rs"]
+mod approval;
 use coterm_proto::runtime::{ErrorCategory, RuntimeError};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -32,9 +34,22 @@ fn default_groups() -> Vec<WorkspaceGroup> {
 
 pub fn error(code: &str) -> RuntimeError {
     RuntimeError {
-        category: ErrorCategory::Internal,
+        category: match code {
+            "approval_group_not_found" => ErrorCategory::NotFound,
+            "approval_group_in_use" | "approval_group_name_exists" => ErrorCategory::Conflict,
+            "approval_group_name_invalid" | "approval_group_capacity" | "approval_group_invalid" => ErrorCategory::InvalidRequest,
+            _ => ErrorCategory::Internal,
+        },
         code: code.into(),
-        message: "Workspace could not be saved or restored. No operations were replayed.".into(),
+        message: match code {
+            "approval_group_not_found" => "This approval rule group no longer exists. Refresh before saving.",
+            "approval_group_in_use" => "Reassign or unassign all instances before deleting this group.",
+            "approval_group_name_invalid" => "Use a nonempty group name of up to 64 characters without control characters.",
+            "approval_group_name_exists" => "Another approval rule group already uses this name.",
+            "approval_group_capacity" => "The limit of 128 approval rule groups has been reached.",
+            "approval_group_invalid" => "The saved approval rule group catalog is invalid.",
+            _ => "Workspace could not be saved or restored. No operations were replayed.",
+        }.into(),
         details: None,
     }
 }
@@ -50,7 +65,7 @@ pub struct SavedInstance {
     #[serde(default)]
     pub retained: bool,
     #[serde(default)]
-    pub approval_policy: ApprovalPolicy,
+    pub approval_rule_group_id: Option<String>,
     #[serde(default, skip_serializing)]
     pub bypass: bool,
     #[serde(skip_serializing)]
@@ -71,6 +86,8 @@ struct Entry {
     #[serde(default)]
     retained: bool,
     #[serde(default)]
+    approval_rule_group_id: Option<String>,
+    #[serde(default, skip_serializing)]
     approval_policy: Option<ApprovalPolicy>,
     #[serde(default)]
     bypass: bool,
@@ -108,6 +125,8 @@ struct Document {
     approval_policy: Option<ApprovalPolicy>,
     #[serde(default = "default_groups")]
     groups: Vec<WorkspaceGroup>,
+    #[serde(default)]
+    approval_rule_groups: Vec<ApprovalRuleGroup>,
 }
 
 #[derive(Serialize)]
@@ -116,6 +135,7 @@ pub struct Snapshot {
     pub entries: Vec<SavedInstance>,
     pub layout: Layout,
     pub groups: Vec<WorkspaceGroup>,
+    pub approval_rule_groups: Vec<ApprovalRuleGroup>,
     pub history_policy: &'static str,
     pub persistence: &'static str,
 }
@@ -127,6 +147,7 @@ pub struct WorkspaceStore {
     entries: Vec<SavedInstance>,
     layout: Layout,
     groups: Vec<WorkspaceGroup>,
+    approval_rule_groups: Vec<ApprovalRuleGroup>,
     // Keep the previous session available for recovery in memory, but once this
     // session has instances, only this session is written to the next snapshot.
     session_started: bool,
@@ -142,6 +163,7 @@ impl WorkspaceStore {
             entries: Vec::new(),
             layout: Layout::default(),
             groups: default_groups(),
+            approval_rule_groups: Vec::new(),
             session_started: false,
         }
     }
@@ -160,8 +182,8 @@ impl WorkspaceStore {
         let mut bytes = protect(&encrypted, false)?;
         let parsed = serde_json::from_slice::<Document>(&bytes);
         bytes.fill(0);
-        let doc = parsed.map_err(|_| error("workspace_invalid"))?;
-        if !matches!(doc.version, 1..=4) || doc.entries.len() > MAX_ENTRIES {
+        let mut doc = parsed.map_err(|_| error("workspace_invalid"))?;
+        if !matches!(doc.version, 1..=5) || doc.entries.len() > MAX_ENTRIES {
             return Err(error("workspace_version_unsupported"));
         }
         let mut group_ids = std::collections::HashSet::new();
@@ -199,23 +221,14 @@ impl WorkspaceStore {
         {
             return Err(error("workspace_invalid"));
         }
-        let legacy_policy = if doc.version == 1 {
-            doc.approval_policy.unwrap_or_default()
-        } else {
-            ApprovalPolicy::default()
-        };
-        for entry in &doc.entries {
-            entry
-                .approval_policy
-                .as_ref()
-                .unwrap_or(&legacy_policy)
-                .compile()?;
-        }
+        approval::migrate(&mut doc)?;
+        approval::validate(&doc)?;
         Ok(Self {
             #[cfg(windows)]
             path,
             layout: doc.layout,
             groups: doc.groups,
+            approval_rule_groups: doc.approval_rule_groups,
             session_started: false,
             entries: doc
                 .entries
@@ -234,9 +247,7 @@ impl WorkspaceStore {
                     workspace_id: entry.workspace_id,
                     retained: entry.retained,
                     bypass: entry.bypass,
-                    approval_policy: entry
-                        .approval_policy
-                        .unwrap_or_else(|| legacy_policy.clone()),
+                    approval_rule_group_id: entry.approval_rule_group_id,
                 })
                 .collect(),
         })
@@ -247,6 +258,7 @@ impl WorkspaceStore {
             entries: self.entries.clone(),
             layout: self.layout.clone(),
             groups: self.groups.clone(),
+            approval_rule_groups: self.approval_rule_groups.clone(),
             history_policy: "session_only",
             persistence: if cfg!(windows) {
                 "windows_dpapi"
@@ -294,7 +306,7 @@ impl WorkspaceStore {
             instance_id: Some(instance_id),
             workspace_id,
             retained: false,
-            approval_policy: ApprovalPolicy::default(),
+            approval_rule_group_id: None,
             bypass: false,
         });
         self.commit(entries, self.layout.clone())
@@ -373,7 +385,7 @@ impl WorkspaceStore {
         )
     }
     fn commit(&mut self, entries: Vec<SavedInstance>, layout: Layout) -> Result<(), RuntimeError> {
-        self.commit_state(entries, layout, self.groups.clone())
+        self.commit_state(entries, layout, self.groups.clone(), self.approval_rule_groups.clone())
     }
 
     fn commit_state(
@@ -381,6 +393,7 @@ impl WorkspaceStore {
         entries: Vec<SavedInstance>,
         layout: Layout,
         groups: Vec<WorkspaceGroup>,
+        approval_rule_groups: Vec<ApprovalRuleGroup>,
     ) -> Result<(), RuntimeError> {
         let session_started =
             self.session_started || entries.iter().any(|entry| entry.instance_id.is_some());
@@ -394,7 +407,7 @@ impl WorkspaceStore {
             saved_layout.active_config_ref = None;
         }
         let doc = Document {
-            version: 4,
+            version: 5,
             entries: entries
                 .iter()
                 .filter(|entry| !session_started || entry.instance_id.is_some() || entry.retained)
@@ -405,7 +418,8 @@ impl WorkspaceStore {
                     config: entry.config.clone(),
                     workspace_id: entry.workspace_id.clone(),
                     retained: entry.retained,
-                    approval_policy: Some(entry.approval_policy.clone()),
+                    approval_rule_group_id: entry.approval_rule_group_id.clone(),
+                    approval_policy: None,
                     bypass: entry.bypass,
                 })
                 .collect(),
@@ -413,6 +427,7 @@ impl WorkspaceStore {
             allowed_operations: Vec::new(),
             approval_policy: None,
             groups: groups.clone(),
+            approval_rule_groups: approval_rule_groups.clone(),
         };
         let mut bytes = serde_json::to_vec(&doc).map_err(|_| error("workspace_invalid"))?;
         if bytes.len() > MAX_BYTES {
@@ -427,6 +442,7 @@ impl WorkspaceStore {
         self.entries = entries;
         self.layout = layout;
         self.groups = groups;
+        self.approval_rule_groups = approval_rule_groups;
         self.session_started = session_started;
         Ok(())
     }
@@ -462,7 +478,7 @@ impl WorkspaceStore {
         groups.push(group.clone());
         let mut layout = self.layout.clone();
         layout.active_workspace_id = group.id.clone();
-        self.commit_state(self.entries.clone(), layout, groups)?;
+        self.commit_state(self.entries.clone(), layout, groups, self.approval_rule_groups.clone())?;
         Ok(group)
     }
 
@@ -489,7 +505,7 @@ impl WorkspaceStore {
         if layout.active_workspace_id == id {
             layout.active_workspace_id = target;
         }
-        self.commit_state(entries, layout, groups)
+        self.commit_state(entries, layout, groups, self.approval_rule_groups.clone())
     }
 
     pub fn move_entry(&mut self, config_ref: &str, workspace_id: &str) -> Result<(), RuntimeError> {
@@ -520,23 +536,6 @@ impl WorkspaceStore {
             .find(|entry| entry.instance_id.as_deref() == Some(instance_id))
             .ok_or_else(|| error("workspace_entry_not_found"))?;
         entry.config = config;
-        self.commit(entries, self.layout.clone())
-    }
-
-    /// Saves rules on the bound instance's configRef. Unknown instances and failed writes
-    /// leave all entries unchanged; invalid rules return approval_rule_invalid.
-    pub fn save_approval_policy(
-        &mut self,
-        instance_id: &str,
-        policy: ApprovalPolicy,
-    ) -> Result<(), RuntimeError> {
-        policy.compile()?;
-        let mut entries = self.entries.clone();
-        let entry = entries
-            .iter_mut()
-            .find(|entry| entry.instance_id.as_deref() == Some(instance_id))
-            .ok_or_else(|| error("workspace_entry_not_found"))?;
-        entry.approval_policy = policy;
         self.commit(entries, self.layout.clone())
     }
 
