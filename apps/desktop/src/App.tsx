@@ -255,7 +255,7 @@ export default function App() {
     if (!approvalInstance || !bypassReady || bypassAction.current) return;
     const instanceId = approvalInstance.driverInstanceId;
     const enabled = !bypass;
-    if (enabled && !window.confirm(t("Enable Bypass for {name}? Only this instance will skip Coterm approval until it is closed.", { name: approvalInstance.label }))) return;
+    if (enabled && !window.confirm(t("Enable Bypass for {name}? This instance will skip Coterm approval. Saved instances remember this setting after restart.", { name: approvalInstance.label }))) return;
     bypassAction.current = true;
     setBypassBusy(true);
     try {

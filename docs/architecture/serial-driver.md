@@ -34,6 +34,8 @@ UART 接收 ASCII / HEX、暂停、清空和保存放在快捷栏。配置右侧
 
 串口终端的普通 Backspace 默认通过 `serial.write` 原样发送一个 BS（`0x08`），配置可切换为 DEL（`0x7F`），不追加行结束符，由设备负责回显 / 编辑。仅拦截终端输入区无修饰键、非输入法组合的物理 Backspace；粘贴、API 控制字符及 UART / 配置输入框保持原有语义，不在本地伪造删除。
 
+UART 发送行尾 `none/cr/lf/crlf` 随实例 `configRef` 保存，挂载时恢复，旧偏好缺少该字段时默认 CRLF；不改变终端原始按键或 MCP 命令的默认行尾。发送 ASCII / HEX、定时发送间隔和运行开关不持久化，恢复偏好不触发发送。
+
 文件导入使用用户选择的浏览器 File，只导入草稿，确认后发送；ASCII 按 UTF-8 读取，HEX 导入原始字节。接收保存是有界缓冲的快照下载，不开放任意路径文件代理。发送历史只驻留当前挂载内存，最近 50 项且总计最多 64 KiB，失败不录入。定时发送默认 100 ms、范围 20–60000 ms，等待上次完成再计时；改稿、切换视图、断线、失败或卸载后停止，不恢复旧队列。实现进度与限制见 [Serial 进度](../../drivers/driver-serial/docs/progress.md)。
 
 通用契约见 [驱动开发](driver-development.md)、[运行时通信](runtime-communication.md) 和 [MCP 接入](mcp-integration.md)。终端公共快捷键见 [终端快捷键](terminal-shortcuts.md)。

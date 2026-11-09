@@ -674,6 +674,16 @@ async fn set_bypass(
     enabled: bool,
     state: tauri::State<'_, AppState>,
 ) -> Result<(), coterm_proto::runtime::RuntimeError> {
+    let _guard = state.workspace_actions.lock().await;
+    state
+        .driver_runtime
+        .bypass_enabled(&driver_instance_id)
+        .await?;
+    let instance_id = driver_instance_id.clone();
+    workspace_commands::access(&state, move |store| {
+        store.save_bypass(&instance_id, enabled)
+    })
+    .await?;
     state
         .driver_runtime
         .set_bypass(&driver_instance_id, enabled)

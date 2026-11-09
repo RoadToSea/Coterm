@@ -765,7 +765,7 @@ export function mount(container: HTMLElement, api: DriverAPI): DriverFrontend {
   const uartEnding = document.createElement("select");
   uartEnding.className = "line-ending";
   uartEnding.append(option("none", "None"), option("cr", "CR"), option("lf", "LF"), option("crlf", "CRLF"));
-  uartEnding.value = "crlf";
+  uartEnding.value = displayPreferences.sendLineEnding;
   uartEndingLabel.append(uartEnding);
   communication.element.append(uartEndingLabel, receiveFilenameLabel);
   const repeatRow = document.createElement("div");
@@ -834,6 +834,7 @@ export function mount(container: HTMLElement, api: DriverAPI): DriverFrontend {
     saveSerialDisplayPreferences(api.instanceConfigRef, {
       view: mode, receiveFormat: uartView, timestamps: timestamps.checked, autoScroll: autoscroll.checked,
       receiveNewlines: receiveNewlineMode, backspace: backspaceKey.value === "del" ? "del" : "bs",
+      sendLineEnding: uartEnding.value as "none" | "cr" | "lf" | "crlf",
     }, api.driverInstanceId);
   };
   let paused = false;
@@ -1337,7 +1338,7 @@ export function mount(container: HTMLElement, api: DriverAPI): DriverFrontend {
     if (await uartInput()?.() && !disposed) remember(text, format, ending);
   };
   sendFormat.element.addEventListener("change", () => { stopRepeat(); uartEnding.disabled = sendFormat.value === "hex"; }, { signal: controller.signal });
-  uartEnding.addEventListener("change", () => stopRepeat(), { signal: controller.signal });
+  uartEnding.addEventListener("change", () => { stopRepeat(); saveDisplayPreferences(); }, { signal: controller.signal });
   uartText.addEventListener("input", () => {
     stopRepeat();
     if (sendFormat.value === "hex" && /[^0-9a-f\s]/i.test(uartText.value.replace(/^0x/i, ""))) {

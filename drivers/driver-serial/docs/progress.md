@@ -4,6 +4,12 @@
 
 领域接口与容量限制见 [接口设计](interfaces.md)，交互和运行方式见 [使用说明](usage.md)。驱动独立管理配置、连接、收发、输出缓冲、命令队列及前端界面。
 
+## 2026-11-09：UART 发送行尾恢复
+
+- 发送行尾并入现有 configRef 偏好，支持 none/cr/lf/crlf；旧偏好默认 CRLF。恢复不发送数据，终端按键和 MCP command 默认参数保持各自语义。
+- 发送 ASCII / HEX、定时发送间隔和运行开关不持久化。浏览器验证重建运行 ID、同 COM 不同实例隔离和恢复后实际写入 CR；旧偏好与非法值回退由存储测试覆盖。桌面与串口前端构建通过，未操作真实串口。
+- 继续入口：[偏好存储](../frontend/src/display-preferences.ts)、[界面接入](../frontend/src/index.ts)、[浏览器回归](../../../tests/serial-display-preferences-browser.test.mjs)。
+
 ## 2026-11-08：配置保存与原生全链路
 
 - 桌面把驱动确认的完整配置交给绑定实例的保存入口，复用 DPAPI、固定 configRef、审批规则和原子替换；不修改工作区结构。失败不连接，下一次显式连接先重试保存；不会串用其他实例配置。

@@ -1,6 +1,6 @@
 /** Source phrases are keys, so diagnostics and third-party text fall back to English. */
 export const zhCN: Readonly<Record<string, string>> = {
-  "Enable Bypass for {name}? Only this instance will skip Coterm approval until it is closed.": "为 {name} 开启 Bypass？仅此实例在关闭前跳过 Coterm 审批。",
+  "Enable Bypass for {name}? This instance will skip Coterm approval. Saved instances remember this setting after restart.": "为 {name} 开启 Bypass？此实例将跳过 Coterm 审批，已保存实例会在重启后恢复此设置。",
   "Settings": "设置",
   "All settings": "全部设置",
   "General": "通用",

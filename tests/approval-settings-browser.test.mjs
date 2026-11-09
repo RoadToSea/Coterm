@@ -74,6 +74,10 @@ test("command approval settings edit both modes, preserve failed saves and previ
     await run(`document.querySelector('#approval-settings-dialog button[aria-label="Close dialog"]').click()`);
     await run(`document.getElementById('instance-tab-inst-1').click();window.confirm=()=>true`);
     await wait(`document.querySelector('button[aria-label="Enable approval bypass"]')?.disabled===false`);
+    await run(`window.failedBypassSave=__cotermTest.gate('set_bypass');document.querySelector('button[aria-label="Enable approval bypass"]').click()`);
+    await wait(`failedBypassSave.size()===1`);
+    await run(`failedBypassSave.fail('disk unavailable')`);
+    await wait(`document.querySelector('button[aria-label="Enable approval bypass"]')?.disabled===false`);
     await run(`document.querySelector('button[aria-label="Enable approval bypass"]').click()`);
     await wait(`document.querySelector('button[aria-label="Disable approval bypass"]')?.getAttribute('aria-pressed')==='true'`);
     await run(`document.getElementById('instance-tab-inst-2').click()`);

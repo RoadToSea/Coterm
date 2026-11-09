@@ -37,7 +37,7 @@ pub struct ApprovalContext<'a> {
     pub args: &'a Value,
 }
 
-/// One live instance's rules and explicitly enabled, session-only bypass.
+/// One live instance's rules and user-controlled bypass, restored by the host when saved.
 /// Default instances require approval for every Agent commit.
 #[derive(Default)]
 pub struct InstanceApproval {
@@ -76,7 +76,7 @@ impl InstanceApproval {
         self.bypass = enabled;
     }
 
-    /// Returns the current instance's session-only bypass state.
+    /// Returns the current instance's bypass state.
     pub fn bypass_enabled(&self) -> bool {
         self.bypass
     }

@@ -7,11 +7,12 @@ export interface SerialDisplayPreferences {
   autoScroll: boolean;
   receiveNewlines: ReceiveNewlineMode;
   backspace: "bs" | "del";
+  sendLineEnding: "none" | "cr" | "lf" | "crlf";
 }
 
 export const DEFAULT_SERIAL_DISPLAY_PREFERENCES: Readonly<SerialDisplayPreferences> = Object.freeze({
   view: "terminal", receiveFormat: "text", timestamps: false, autoScroll: true,
-  receiveNewlines: "none", backspace: "bs",
+  receiveNewlines: "none", backspace: "bs", sendLineEnding: "crlf",
 });
 const PREFIX = "coterm.serial.display.v1:";
 const MAX_CHARS = 2048;
@@ -33,6 +34,8 @@ function normalize(value: Record<string, unknown>): SerialDisplayPreferences {
     autoScroll: typeof value.autoScroll === "boolean" ? value.autoScroll : true,
     receiveNewlines: RECEIVE_NEWLINE_MODES.find(mode => mode === value.receiveNewlines) ?? "none",
     backspace: value.backspace === "del" ? "del" : "bs",
+    sendLineEnding: value.sendLineEnding === "none" || value.sendLineEnding === "cr" || value.sendLineEnding === "lf"
+      ? value.sendLineEnding : "crlf",
   };
 }
 

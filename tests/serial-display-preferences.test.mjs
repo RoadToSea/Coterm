@@ -18,7 +18,7 @@ function withStorage(run) {
 }
 
 const preferences = { view: "uart", receiveFormat: "hex", timestamps: true, autoScroll: false,
-  receiveNewlines: "both", backspace: "del" };
+  receiveNewlines: "both", backspace: "del", sendLineEnding: "cr" };
 
 test("display choices belong to a saved reference across recreated runtime IDs", () => withStorage(() => {
   save("ref-one", preferences, "old-runtime");
@@ -39,7 +39,7 @@ test("older hosts without saved identity keep runtime-local choices without gues
 }));
 
 test("display storage is bounded, validates fields and excludes output and executable state", () => withStorage(values => {
-  save("ref-one", { ...preferences, command: "secret", repeat: true, output: "private" });
+  save("ref-one", { ...preferences, command: "secret", repeat: true, output: "private", sendFormat: "hex", repeatMs: 250 });
   const key = "coterm.serial.display.v1:config:ref-one";
   assert.deepEqual(JSON.parse(values.get(key)), { version: 1, ...preferences });
   values.set(key, JSON.stringify({ version: 1, view: "invalid", timestamps: "true", autoScroll: 0,
@@ -64,6 +64,19 @@ test("legacy newline preference migrates only from the known current runtime ins
   assert.deepEqual(read("ref-one", "new-runtime"), { ...defaults, receiveNewlines: "both" });
   save("ref-one", preferences);
   assert.deepEqual(read("ref-one", "old-runtime"), preferences, "new format takes precedence");
+}));
+
+test("send line endings restore independently and older preferences keep the CRLF default", () => withStorage(values => {
+  const key = "coterm.serial.display.v1:config:ref-one";
+  values.set(key, JSON.stringify({ version: 1, view: "uart" }));
+  assert.equal(read("ref-one").sendLineEnding, "crlf");
+  for (const sendLineEnding of ["none", "cr", "lf", "crlf"]) {
+    save("ref-one", { ...preferences, sendLineEnding }, "old-runtime");
+    assert.equal(read("ref-one", "new-runtime").sendLineEnding, sendLineEnding);
+    assert.equal(read("ref-two").sendLineEnding, "crlf");
+  }
+  values.set(key, JSON.stringify({ version: 1, sendLineEnding: "invalid" }));
+  assert.equal(read("ref-one").sendLineEnding, "crlf");
 }));
 
 test("unavailable or full storage does not break display controls", () => withStorage(() => {

@@ -669,7 +669,7 @@ impl ProcessDriverRuntime {
         Ok(())
     }
 
-    /// Reads session-only bypass for one live instance; unknown IDs return NotFound.
+    /// Reads bypass for one live instance; unknown IDs return NotFound.
     pub async fn bypass_enabled(&self, instance_id: &str) -> Result<bool, RuntimeError> {
         self.state
             .lock()

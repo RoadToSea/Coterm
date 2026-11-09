@@ -140,10 +140,17 @@ pub async fn restore_saved_instance(
         .driver_runtime
         .create_instance_with_name(&entry.driver_id, entry.config, Some(entry.label))
         .await?;
-    if let Err(error) = state
-        .driver_runtime
-        .set_approval_policy(&instance.driver_instance_id, entry.approval_policy)
-        .await
+    if let Err(error) = async {
+        state
+            .driver_runtime
+            .set_approval_policy(&instance.driver_instance_id, entry.approval_policy)
+            .await?;
+        state
+            .driver_runtime
+            .set_bypass(&instance.driver_instance_id, entry.bypass)
+            .await
+    }
+    .await
     {
         let _ = state
             .driver_runtime

@@ -72,6 +72,9 @@ test("Serial display preferences survive an application reload with a new runtim
       root.querySelector('[data-control=timestamps] input').click();
       root.querySelector('[data-control=autoscroll] input').click();
       root.querySelector('[name=backspaceKey]').value='del';root.querySelector('[name=backspaceKey]').dispatchEvent(new Event('change'));
+      root.querySelector('.line-ending').value='cr';root.querySelector('.line-ending').dispatchEvent(new Event('change'));
+      root.querySelector('.send-mode button[data-value=hex]').click();
+      root.querySelector('.uart-send input[type=number]').value='250';
       root.querySelector('.uart-send textarea').value='do not restore or send this';`);
     assert.deepEqual(await run(`Array.from(root.querySelectorAll('.receive-newlines input'),input=>input.checked)`), [true, true]);
     await client.send("Page.reload");
@@ -86,16 +89,25 @@ test("Serial display preferences survive an application reload with a new runtim
       backspace:root.querySelector('[name=backspaceKey]').value})`),
       { view: true, hex: 'true', timestamps: true, autoScroll: false, backspace: 'del' });
     assert.equal(await run(`root.querySelector('.uart-send textarea').value`), '');
+    assert.equal(await run(`root.querySelector('.line-ending').value`), 'cr');
+    assert.equal(await run(`root.querySelector('.send-mode button[data-value=text]').getAttribute('aria-pressed')`), 'true');
+    assert.equal(await run(`root.querySelector('.uart-send input[type=number]').value`), '100');
     assert.equal(await run(`calls.some(c=>c.operation==='serial.write'||c.operation==='serial.write_hex')`), false,
       "restoring UI choices must never send anything");
+    await run(`root.querySelector('.uart-send textarea').value='probe';
+      root.querySelector('.uart-send textarea').dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}));`);
+    await wait(`calls.some(c=>c.operation==='serial.write')`);
+    assert.deepEqual(await run(`calls.find(c=>c.operation==='serial.write').args`), { text: 'probe', lineEnding: 'cr' });
     await client.send('Page.navigate', { url: url + '?config=saved-serial-two&port=COM6' });
     await wait(`window.root?.querySelector('.connect-button').dataset.connected==='true'`);
     assert.deepEqual(await run(`Array.from(root.querySelectorAll('.receive-newlines input'),input=>input.checked)`), [false, false]);
     assert.equal(await run(`root.querySelector('[name=backspaceKey]').value`), 'bs');
+    assert.equal(await run(`root.querySelector('.line-ending').value`), 'crlf');
     await client.send('Page.navigate', { url: url + '?config=saved-serial-one&port=COM9' });
     await wait(`window.root?.querySelector('.connect-button').dataset.connected==='true'`);
     assert.deepEqual(await run(`Array.from(root.querySelectorAll('.receive-newlines input'),input=>input.checked)`), [true, true],
       "preferences belong to the saved instance, independent of its COM assignment");
+    assert.equal(await run(`root.querySelector('.line-ending').value`), 'cr');
   } finally { await close(); }
 });
 

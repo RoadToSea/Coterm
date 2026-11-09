@@ -2,6 +2,86 @@ use super::*;
 
 #[cfg(windows)]
 #[test]
+fn bypass_survives_rebinding_but_does_not_follow_other_instances() -> anyhow::Result<()> {
+    let fixture = Fixture::new()?;
+    let mut store = fixture.store()?;
+    for id in ["one", "two"] {
+        store.insert("ssh".into(), id.into(), id.into(), Value::Null, None)?;
+    }
+    let reference = store.snapshot().entries[0].config_ref.clone();
+    let other = store.snapshot().entries[1].config_ref.clone();
+    store.save_bypass("one", true)?;
+    let mut reopened = fixture.store()?;
+    assert!(reopened.find(&reference)?.bypass);
+    assert!(!reopened.find(&other)?.bypass);
+    reopened.bind(&reference, "recreated".into(), "renamed".into())?;
+    reopened.bind(&other, "other".into(), "other".into())?;
+    reopened.save_bypass("one", false)?;
+    assert!(
+        fixture.store()?.find(&reference)?.bypass,
+        "stale IDs cannot change saved state"
+    );
+    reopened.save_bypass("recreated", false)?;
+    assert!(!fixture.store()?.find(&reference)?.bypass);
+    reopened.remove(&reference)?;
+    reopened.insert(
+        "ssh".into(),
+        "new".into(),
+        "renamed".into(),
+        Value::Null,
+        None,
+    )?;
+    assert!(fixture
+        .store()?
+        .snapshot()
+        .entries
+        .iter()
+        .all(|entry| !entry.bypass));
+    Ok(())
+}
+
+#[cfg(windows)]
+#[test]
+fn bypass_failed_writes_preserve_state_and_temporary_instances_never_write() -> anyhow::Result<()> {
+    let fixture = Fixture::new()?;
+    let mut store = fixture.store()?;
+    store.save_bypass("temporary", true)?;
+    assert!(!fixture.path().exists());
+    store.insert("ssh".into(), "one".into(), "one".into(), Value::Null, None)?;
+    let reference = store.snapshot().entries[0].config_ref.clone();
+    store.save_bypass("one", true)?;
+    let previous = fs::read(fixture.path())?;
+    store.path = fixture.0.join("missing").join("workspace.bin");
+    assert!(store.save_bypass("one", false).is_err());
+    assert!(store.find(&reference)?.bypass);
+    assert!(fixture.store()?.find(&reference)?.bypass);
+    assert_eq!(fs::read(fixture.path())?, previous);
+    Ok(())
+}
+
+#[cfg(windows)]
+#[test]
+fn older_workspace_versions_default_bypass_to_disabled() -> anyhow::Result<()> {
+    for version in 1..=3 {
+        let fixture = Fixture::new()?;
+        let legacy = serde_json::json!({"version":version,"entries":[
+            {"configRef":"one","driverId":"ssh","label":"one","config":{}}
+        ],"layout":{"activeConfigRef":null,"instancesCollapsed":false}});
+        fs::write(
+            fixture.path(),
+            protect(&serde_json::to_vec(&legacy)?, true)?,
+        )?;
+        let mut store = fixture.store()?;
+        assert!(!store.find("one")?.bypass);
+        store.bind("one", "new".into(), "one".into())?;
+        store.save_bypass("new", true)?;
+        assert!(fixture.store()?.find("one")?.bypass);
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+#[test]
 fn approval_rules_roundtrip_and_failed_writes_preserve_the_saved_policy() -> anyhow::Result<()> {
     use coterm_core::approval_policy::{ApprovalMode, ApprovalPolicy};
     let fixture = Fixture::new()?;
@@ -28,7 +108,7 @@ fn approval_rules_roundtrip_and_failed_writes_preserve_the_saved_policy() -> any
     assert!(serialized.get("allowedOperations").is_none());
     assert!(serialized.get("approvalPolicy").is_none());
     let disk: Value = serde_json::from_slice(&protect(&fs::read(fixture.path())?, false)?)?;
-    assert_eq!(disk["version"], 3);
+    assert_eq!(disk["version"], 4);
     assert!(disk.get("approvalPolicy").is_none());
     store.path = fixture.0.join("missing").join("workspace.bin");
     assert!(store
@@ -436,7 +516,7 @@ fn legacy_driver_names_migrate_without_changing_saved_identity_or_policies() -> 
         store.save_layout(None, true, vec![], None)?;
         let plaintext = protect(&fs::read(fixture.path())?, false)?;
         let migrated: Value = serde_json::from_slice(&plaintext)?;
-        assert_eq!(migrated["version"], 3);
+        assert_eq!(migrated["version"], 4);
         assert!(migrated["entries"][0].get("pluginId").is_none());
         assert_eq!(migrated["entries"][0]["driverId"], "coterm-driver-ssh");
         assert_eq!(fixture.store()?.find("serial")?.approval_policy, policy);

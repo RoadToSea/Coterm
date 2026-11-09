@@ -51,6 +51,8 @@ pub struct SavedInstance {
     pub retained: bool,
     #[serde(default)]
     pub approval_policy: ApprovalPolicy,
+    #[serde(default, skip_serializing)]
+    pub bypass: bool,
     #[serde(skip_serializing)]
     pub config: Value,
 }
@@ -70,6 +72,8 @@ struct Entry {
     retained: bool,
     #[serde(default)]
     approval_policy: Option<ApprovalPolicy>,
+    #[serde(default)]
+    bypass: bool,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -157,7 +161,7 @@ impl WorkspaceStore {
         let parsed = serde_json::from_slice::<Document>(&bytes);
         bytes.fill(0);
         let doc = parsed.map_err(|_| error("workspace_invalid"))?;
-        if !matches!(doc.version, 1..=3) || doc.entries.len() > MAX_ENTRIES {
+        if !matches!(doc.version, 1..=4) || doc.entries.len() > MAX_ENTRIES {
             return Err(error("workspace_version_unsupported"));
         }
         let mut group_ids = std::collections::HashSet::new();
@@ -229,6 +233,7 @@ impl WorkspaceStore {
                     instance_id: None,
                     workspace_id: entry.workspace_id,
                     retained: entry.retained,
+                    bypass: entry.bypass,
                     approval_policy: entry
                         .approval_policy
                         .unwrap_or_else(|| legacy_policy.clone()),
@@ -290,6 +295,7 @@ impl WorkspaceStore {
             workspace_id,
             retained: false,
             approval_policy: ApprovalPolicy::default(),
+            bypass: false,
         });
         self.commit(entries, self.layout.clone())
     }
@@ -388,7 +394,7 @@ impl WorkspaceStore {
             saved_layout.active_config_ref = None;
         }
         let doc = Document {
-            version: 3,
+            version: 4,
             entries: entries
                 .iter()
                 .filter(|entry| !session_started || entry.instance_id.is_some() || entry.retained)
@@ -400,6 +406,7 @@ impl WorkspaceStore {
                     workspace_id: entry.workspace_id.clone(),
                     retained: entry.retained,
                     approval_policy: Some(entry.approval_policy.clone()),
+                    bypass: entry.bypass,
                 })
                 .collect(),
             layout: saved_layout,
@@ -530,6 +537,20 @@ impl WorkspaceStore {
             .find(|entry| entry.instance_id.as_deref() == Some(instance_id))
             .ok_or_else(|| error("workspace_entry_not_found"))?;
         entry.approval_policy = policy;
+        self.commit(entries, self.layout.clone())
+    }
+
+    /// Saves a bound instance's bypass. Unbound temporary instances are not saved;
+    /// persistence errors leave the previous value and all other entries unchanged.
+    pub fn save_bypass(&mut self, instance_id: &str, enabled: bool) -> Result<(), RuntimeError> {
+        let mut entries = self.entries.clone();
+        let Some(entry) = entries
+            .iter_mut()
+            .find(|entry| entry.instance_id.as_deref() == Some(instance_id))
+        else {
+            return Ok(());
+        };
+        entry.bypass = enabled;
         self.commit(entries, self.layout.clone())
     }
 }
