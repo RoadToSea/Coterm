@@ -99,7 +99,7 @@ function selectedBlocks() {
 
 ### 终端行号栏
 
-`@coterm/driver-sdk/components/terminal-blocks` 导出 `mountTerminalBlocks(gutter, overlay, terminal, options)`，用于已有 xterm.js 终端，不替代终端输出或协议实现。驱动通过实例绑定的数据通知 `begin(block, lineOffset = 0)` / `end(id, lineOffset?)`；`lineOffset` 是相对当前光标行的 marker 偏移，可将已回显并软折行的人工命令锚定至首行，也可把显示结束位置放在下一条提示符前。省略 end 偏移时，默认当前行（光标在第 0 列时为前一行）；重复 end 保留首次确认的结束 marker。组件不识别提示符或判断执行边界，驱动须区分可靠执行边界与前端观察。组件使用 xterm marker 定位块号，使用单层 DOM 绘制 border-box 边框，不重复叠加 decoration；相邻块自动以后一块首行作为前一块显示上限。调用 `update(blocks)` 后仅允许当前快照中的稳定 ID 被选择。`toggle(id)` 可连接未内嵌在 PTY 网格中的任务胶囊。`onSelectionChange(ids)` 供驱动把选择交给自己的后端上下文接口。按钮与高亮随可见 buffer 行呈现，响应滚动、渲染、尺寸和 buffer 清理；备用屏幕隐藏 PTY 标记。卸载注销终端监听、ResizeObserver 和键盘事件。
+`@coterm/driver-sdk/components/terminal-blocks` 导出 `mountTerminalBlocks(gutter, overlay, terminal, options)`，用于已有 xterm.js 终端，不替代终端输出或协议实现。驱动通过实例绑定的数据通知 `begin(block, lineOffset = 0)` / `end(id, lineOffset?)`；`lineOffset` 是相对当前光标行的 marker 偏移，可将已回显并软折行的人工命令锚定至首行，也可把显示结束位置放在下一条提示符前。省略 end 偏移时，默认当前行（光标在第 0 列时为前一行）；重复 end 保留首次确认的结束 marker。组件不识别提示符或判断执行边界，驱动须区分可靠执行边界与前端观察。组件使用 xterm marker 定位块号，使用单层 DOM 绘制上下横向分割线，不绘制左右竖线，行号栏也不绘制竖向边线；分割线按 border-box 定位，不重复叠加 decoration；相邻块自动以后一块首行作为前一块显示上限。调用 `update(blocks)` 后仅允许当前快照中的稳定 ID 被选择。`toggle(id)` 可连接未内嵌在 PTY 网格中的任务胶囊。`onSelectionChange(ids)` 供驱动把选择交给自己的后端上下文接口。按钮与高亮随可见 buffer 行呈现，响应滚动、渲染、尺寸和 buffer 清理；备用屏幕隐藏 PTY 标记。卸载注销终端监听、ResizeObserver 和键盘事件。
 
 行号栏宽度按当前有效 PTY 块号最大字符数伸缩，最小 28px；仅显示数字，不加 `#` 前缀。使用行号栏自身的等宽字体计算，淘汰、更新及重置时同步收缩。顶部的红色圆形叉号用于取消全选（16px），`cancelLabel` / `refreshLocale(label)` 更新 tooltip 与可访问名称；空选择时禁用并保留红色，按钮具有键盘焦点样式。
 

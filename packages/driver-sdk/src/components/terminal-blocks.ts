@@ -40,7 +40,7 @@ export interface TerminalBlockOptions {
 export function mountTerminalBlocks(gutter: HTMLElement, container: HTMLElement, terminal: BlockTerminal, options: TerminalBlockOptions) {
   const style = document.createElement("style");
   style.textContent = `
-  .coterm-terminal-gutter { position:relative; flex:none; box-sizing:border-box; width:max(28px,calc(var(--coterm-terminal-number-chars,2) * 1ch + 12px)); min-width:28px; border-right:1px solid var(--coterm-border,#333); font:11px var(--coterm-font-mono,Consolas,monospace); }
+  .coterm-terminal-gutter { position:relative; flex:none; box-sizing:border-box; width:max(28px,calc(var(--coterm-terminal-number-chars,2) * 1ch + 12px)); min-width:28px; font:11px var(--coterm-font-mono,Consolas,monospace); }
   .coterm-terminal-clear { position:absolute; top:5px; left:50%; transform:translateX(-50%); display:grid; place-items:center; box-sizing:border-box; width:16px; height:16px; padding:0; border:1px solid #df4740; border-radius:50%; background:#ff5f57; color:#711c17; box-shadow:inset 0 1px 0 rgba(255,255,255,.3); font:14px/1 sans-serif; cursor:pointer; z-index:2; }
   .coterm-terminal-clear:hover:not(:disabled) { background:#ff746d; color:#47110e; }
   .coterm-terminal-clear:active:not(:disabled) { transform:translateX(-50%) scale(.92); }
@@ -49,7 +49,7 @@ export function mountTerminalBlocks(gutter: HTMLElement, container: HTMLElement,
   .coterm-terminal-number { position:absolute; left:2px; box-sizing:border-box; width:calc(100% - 4px); padding:0 2px; border:0; background:transparent; text-align:right; font:inherit; color:var(--coterm-text-muted,#969696); }
   .coterm-terminal-number[aria-pressed="true"] { color:var(--coterm-focus,#38bdf8); background:var(--coterm-selection,rgba(56,189,248,.15)); }
   .coterm-terminal-frames { position:absolute; inset:0; pointer-events:none; overflow:hidden; }
-  .coterm-terminal-frame { position:absolute; box-sizing:border-box; border:1px solid var(--coterm-border-subtle,#454545); border-radius:3px; pointer-events:none; }
+  .coterm-terminal-frame { position:absolute; box-sizing:border-box; border-block:1px solid var(--coterm-border-subtle,#454545); pointer-events:none; }
   .coterm-terminal-frame[data-selected="true"] { border-color:var(--coterm-focus,#38bdf8); background:color-mix(in srgb,var(--coterm-focus,#38bdf8) 10%,transparent); }
   `;
   gutter.classList.add("coterm-terminal-gutter");
