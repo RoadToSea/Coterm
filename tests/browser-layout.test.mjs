@@ -283,7 +283,7 @@ test("Browser layout, catalog diagnostics, and keyboard collapse on the current 
 
       const takeScreenshot = async (name) => {
         const { data } = await page.send("Page.captureScreenshot", { format: "png" });
-        const filePath = path.join(rootDir, "attachments", name);
+        const filePath = path.join(rootDir, "tests", "artifacts", "layout", name);
         fs.mkdirSync(path.dirname(filePath), { recursive: true });
         fs.writeFileSync(filePath, Buffer.from(data, "base64"));
       };

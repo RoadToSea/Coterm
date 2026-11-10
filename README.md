@@ -40,6 +40,9 @@ Windows CI 执行检查、浏览器与真实安装验收，并上传 NSIS 安装
 - `crates`：共享协议、运行时和 MCP Bridge。
 - `packages/driver-sdk`：驱动前端契约与通用组件。
 - `drivers`：SSH、串口和本地终端驱动。
+- `scripts`：构建、打包和本机验收脚本。
+- `tests`：跨模块测试、测试夹具与浏览器验收；布局截图输出到忽略目录 `tests/artifacts/layout/`。
+- `docs`：技术规范、架构、方案、反馈、进度与发布文档。
 
 | 文档 | 用途 |
 |---|---|

@@ -4,6 +4,7 @@ target/
 
 # Node / pnpm
 node_modules/
+.pnpm-store/
 .pnpm-debug.log*
 
 # Tauri
@@ -12,6 +13,9 @@ apps/desktop/dist/
 drivers/*/dist/
 # 测试用的 SDK 浏览器模块与交互挂载入口，由 pnpm test:build 生成
 packages/driver-sdk/dist/
+
+# Browser test artifacts
+tests/artifacts/
 
 # IDE / Editor
 .vscode/
