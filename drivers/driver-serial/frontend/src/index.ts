@@ -361,14 +361,6 @@ export function configure(container: HTMLElement, api: DriverConfigurationAPI): 
   framing.className = "triple";
   framing.append(dataBitsLabel, stopBitsLabel, parityLabel);
 
-  const dataMode = document.createElement("select"); dataMode.name = "mode";
-  dataMode.append(option("stream", t("Byte stream")), option("shell", t("Shell")));
-  const modeLabel = caption(t("Data mode")); modeLabel.append(dataMode);
-  const prompt = document.createElement("input"); prompt.name = "prompt"; prompt.value = "# "; prompt.maxLength = 256; prompt.disabled = true;
-  const promptLabel = caption(t("Shell prompt")); promptLabel.append(prompt);
-  const shellFields = document.createElement("div"); shellFields.className = "pair"; shellFields.append(modeLabel, promptLabel);
-  dataMode.addEventListener("change", () => { prompt.disabled = dataMode.value !== "shell"; });
-
   const dtrLabel = document.createElement("label");
   const dtr = document.createElement("input");
   dtr.type = "checkbox";
@@ -400,7 +392,7 @@ export function configure(container: HTMLElement, api: DriverConfigurationAPI): 
   submit.type = "submit";
   submit.className = "primary";
   submit.textContent = t("Open serial port");
-  form.append(portRow, framing, shellFields, checks, hint, lineHint, error, submit);
+  form.append(portRow, framing, checks, hint, lineHint, error, submit);
   root.append(form);
 
   const stopLocale = api.i18n?.subscribe(() => {
@@ -410,8 +402,6 @@ export function configure(container: HTMLElement, api: DriverConfigurationAPI): 
     retitle(dataBitsLabel, next("Data bits"));
     retitle(stopBitsLabel, next("Stop bits"));
     retitle(parityLabel, next("Parity"));
-    retitle(modeLabel, next("Data mode")); retitle(promptLabel, next("Shell prompt"));
-    dataMode.options[0].textContent = next("Byte stream"); dataMode.options[1].textContent = next("Shell");
     parity.options[0].textContent = next("None");
     parity.options[1].textContent = next("Odd");
     parity.options[2].textContent = next("Even");
@@ -502,9 +492,6 @@ export function configure(container: HTMLElement, api: DriverConfigurationAPI): 
     if (busy || loading || disposed) return;
     const name = port.value.trim();
     if (!name) { error.textContent = t("A serial port name is required."); return; }
-    if (dataMode.value === "shell" && (!prompt.value.trim() || /[\x00-\x1f\x7f]/.test(prompt.value) || new TextEncoder().encode(prompt.value).length > 256)) {
-      error.textContent = t("Enter a literal Shell prompt of 1–256 UTF-8 bytes."); return;
-    }
     busy = true;
     syncActions();
     try {
@@ -516,8 +503,8 @@ export function configure(container: HTMLElement, api: DriverConfigurationAPI): 
         parity: parity.value,
         dtr: dtr.checked,
         rts: rts.checked,
-        mode: dataMode.value,
-        prompt: dataMode.value === "shell" ? prompt.value : null,
+        mode: "shell",
+        prompt: "# ",
       });
     } catch (reason) {
       if (!disposed) error.textContent = String(reason);
@@ -872,14 +859,14 @@ export function mount(container: HTMLElement, api: DriverAPI): DriverFrontend {
   const onSelection = terminal.onSelectionChange(() => {
     window.clearTimeout(selectionTimer);
     selectionTimer = window.setTimeout(() => {
-      if (disposed || !connected || !connectionId || currentConfig?.mode !== "shell") return;
+      if (disposed || working || mode !== "terminal" || !connected || !connectionId || currentConfig?.mode !== "shell") return;
       const targetConnection = connectionId;
       const bytes = new TextEncoder().encode(terminal.getSelection());
       let end = Math.min(bytes.length, 16384);
       while (end < bytes.length && (bytes[end] & 0xc0) === 0x80) end--;
       const text = new TextDecoder().decode(bytes.subarray(0, end));
       selectionQueue = selectionQueue.then(async () => {
-        if (disposed || !connected || connectionId !== targetConnection || currentConfig?.mode !== "shell") return;
+        if (disposed || working || mode !== "terminal" || !connected || connectionId !== targetConnection || currentConfig?.mode !== "shell") return;
         await invoke("serial.set_selection", {connectionId:targetConnection, text, truncated:end < bytes.length});
       }).catch(showError);
     }, 100);
@@ -891,6 +878,8 @@ export function mount(container: HTMLElement, api: DriverAPI): DriverFrontend {
     connect.setAttribute("aria-label", connect.title);
     connect.setAttribute("aria-pressed", String(connected));
     connect.disabled = working;
+    terminalMode.disabled = working || !currentConfig;
+    uartMode.disabled = working || !currentConfig;
   };
   const renderPause = () => {
     pause.className = "icon-button";
@@ -1121,6 +1110,8 @@ export function mount(container: HTMLElement, api: DriverAPI): DriverFrontend {
     const status = await invoke<Status>("serial.status", {});
     if (disposed) return;
     currentConfig = status.config;
+    const view = status.config.mode === undefined ? displayPreferences.view : status.config.mode === "shell" ? "terminal" : "uart";
+    if (mode !== view) renderMode(view, false);
     if (connectionId !== status.connectionId) {
       connectionId = status.connectionId;
       cursor = 0;
@@ -1284,8 +1275,8 @@ export function mount(container: HTMLElement, api: DriverAPI): DriverFrontend {
     await enqueue(refreshSnapshot);
   };
 
-  const setMode = (next: "terminal" | "uart", remember = true) => {
-    if (mode !== next) { stopRepeat(); inputGeneration++; closeHistory(); }
+  const renderMode = (next: "terminal" | "uart", remember = true) => {
+    if (mode !== next) { stopRepeat(); inputGeneration++; closeHistory(); terminal.clearSelection(); }
     mode = next;
     if (remember) saveDisplayPreferences();
     terminalMode.setAttribute("aria-pressed", String(next === "terminal"));
@@ -1308,8 +1299,39 @@ export function mount(container: HTMLElement, api: DriverAPI): DriverFrontend {
     }
   };
 
-  terminalMode.addEventListener("click", () => setMode("terminal"), { signal: controller.signal });
-  uartMode.addEventListener("click", () => setMode("uart"), { signal: controller.signal });
+  const switchMode = async (next: "terminal" | "uart") => {
+    if (disposed || working || !currentConfig) return;
+    const interpretation = next === "terminal" ? "shell" : "stream";
+    if (mode === next && currentConfig.mode === interpretation && !pendingConfiguration) return;
+    if (commandQueue > 0) {
+      notify(t("Wait for the command queue to finish before switching views."), "warning"); return;
+    }
+    working = true; renderConnection(); communication.setBusy(true);
+    stopRepeat(); inputGeneration++;
+    try {
+      await Promise.all([inputQueue, selectionQueue]);
+      if (disposed) return;
+      if (currentConfig.mode !== interpretation) {
+        const result = await invoke<Status>("serial.configure", {mode:interpretation, prompt:currentConfig.prompt ?? "# "});
+        if (disposed) return;
+        currentConfig = result.config;
+        pendingConfiguration = result.config;
+        renderMode(next);
+        await refreshSnapshot();
+      }
+      if (pendingConfiguration && api.saveConfiguration) {
+        try {
+          await api.saveConfiguration(pendingConfiguration);
+          pendingConfiguration = null;
+        } catch (reason) {
+          notify(t("View changed, but configuration could not be saved: {reason}", {reason:String(reason)}), "error");
+        }
+      }
+    } catch (reason) { showError(reason); }
+    finally { if (!disposed) { working = false; setConnected(connected); } }
+  };
+  terminalMode.addEventListener("click", () => { void enqueue(() => switchMode("terminal")); }, { signal: controller.signal });
+  uartMode.addEventListener("click", () => { void enqueue(() => switchMode("uart")); }, { signal: controller.signal });
 
   connect.addEventListener("click", doConnect, { signal: controller.signal });
 
@@ -1510,7 +1532,7 @@ export function mount(container: HTMLElement, api: DriverAPI): DriverFrontend {
   const stopLocale = api.i18n?.subscribe(() => applyLocale());
   const downloads = new Map<string, number>();
   applyLocale();
-  setMode(displayPreferences.view, false);
+  renderMode(displayPreferences.view, false);
   void startEvents().catch(showError);
 
   return { unmount() {

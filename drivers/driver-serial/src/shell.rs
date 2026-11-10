@@ -87,6 +87,20 @@ impl ShellHistory {
         }
     }
 
+    /// Changes interpretation without replaying old bytes or discarding completed pairs.
+    /// An unfinished observed command becomes unknown; selection and prompt readiness expire.
+    pub fn configure(&mut self, mode: Mode, prompt: Option<&str>) {
+        let prompt = (mode == Mode::Shell).then(|| prompt.unwrap_or("").trim_end().to_owned());
+        if self.prompt == prompt {
+            return;
+        }
+        self.interrupt("unknown");
+        self.escape = Escape::Plain;
+        self.selected.clear();
+        self.selection_truncated = false;
+        self.prompt = prompt;
+    }
+
     pub fn enabled(&self) -> bool {
         self.prompt.is_some()
     }
@@ -367,6 +381,31 @@ impl ShellHistory {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn switching_views_retains_pairs_but_expires_selection_and_readiness() -> Result<()> {
+        let mut history = ShellHistory::new(Mode::Shell, Some("root# "));
+        history.feed("root# ");
+        history.begin("one", 0, "pwd", "root# ")?;
+        history.feed("pwd\r\n/root\r\nroot# ");
+        assert!(history.completed("one", 0));
+        history.set_selection("/root", false)?;
+        history.configure(Mode::Stream, Some("root# "));
+        assert!(history.pairs(1).is_err());
+        assert!(history.selection().is_err());
+        history.feed("UART data\r\nroot# ");
+        history.configure(Mode::Shell, Some("root# "));
+        assert!(!history.ready());
+        assert_eq!(history.selection()?["text"], "");
+        assert_eq!(history.pairs(2)?["pairs"].as_array().map(Vec::len), Some(1));
+        assert!(history.begin("two", 0, "ls", "root# ").is_err());
+        history.feed("root# ");
+        history.begin("two", 0, "ls", "root# ")?;
+        history.configure(Mode::Stream, None);
+        history.configure(Mode::Shell, Some("root# "));
+        assert_eq!(history.pairs(1)?["pairs"][0]["status"], "unknown");
+        Ok(())
+    }
 
     fn history() -> ShellHistory {
         ShellHistory::new(Mode::Shell, Some("root# "))

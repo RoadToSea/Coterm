@@ -22,9 +22,10 @@ async function serialSession(browserPath, { delayStatus = false } = {}) {
       window.api={driverInstanceId:window.id,instanceConfigRef:window.configRef,
         async invoke(operation,args){
           calls.push({operation,args});
+          if(operation==='serial.configure'){window.interpretation={...(window.interpretation??{}),...args};return receipt({config:{port,baudRate:115200,dataBits:8,stopBits:1,parity:'none',dtr:false,rts:false,...window.interpretation}});}
           if(operation==='serial.status'){
             if(new URL(location.href).searchParams.has('delay'))await new Promise(resolve=>{window.releaseStatus=resolve;});
-            return receipt({config:{port,baudRate:115200,dataBits:8,stopBits:1,parity:'none',dtr:false,rts:false},
+            return receipt({config:{port,baudRate:115200,dataBits:8,stopBits:1,parity:'none',dtr:false,rts:false,...(window.interpretation??{})},
               connected:true,connectionId:'connection',signals:{dtr:false,rts:false},rxBytes:0,txBytes:0,commandQueue:0});
           }
           if(operation==='serial.read')return receipt({text:'',bytes:0,cursor:0,gap:false,closed:false,more:false,connectionId:'connection'});

@@ -91,7 +91,7 @@ test("inline protocol configuration and instance tabs preserve live frontends an
     await wait(`__cotermTest.countCalls('subscribe_driver_events')===3`, "serial frontend mounted");
     assert.equal(await run(`__cotermTest.countCalls('start_driver')`), 2, "configuration lookup starts the driver; creation safely repeats the idempotent start");
     assert.deepEqual(await run(`__cotermTest.invocations.filter(x=>x.command==='create_instance').at(-1).args.config`),
-      {port:"COM2",baudRate:115200,dataBits:8,stopBits:1,parity:"none",dtr:true,rts:true,mode:"stream",prompt:null});
+      {port:"COM2",baudRate:115200,dataBits:8,stopBits:1,parity:"none",dtr:true,rts:true,mode:"shell",prompt:"# "});
 
     await run(`document.querySelector('button[aria-label="Manage Local"]').click()`);
     await wait(`document.getElementById('driver-configuration')?.textContent.includes('does not provide a connection configuration screen')`, "headless driver explains missing config UI");

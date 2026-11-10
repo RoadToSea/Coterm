@@ -98,7 +98,7 @@ test("human Shell uses terminal keys, UART uses its sender, and MCP queues stay 
           if (operation === 'serial.signals') { Object.assign(window.levels,args); return window.receipt(window.levels); }
           if (operation === 'serial.disconnect') { window.connected = false; return window.receipt({}); }
           if (operation === 'serial.connect') { window.connected = true; return window.receipt({}); }
-          if (operation === 'serial.configure') { Object.assign(window.config, args); return window.receipt({}); }
+          if (operation === 'serial.configure') { Object.assign(window.config, args); return window.receipt({config:{...window.config}}); }
           throw new Error('Unexpected human operation: ' + operation);
         },
         async subscribeEvents(fn) { window.event = fn; return () => { window.unsubscribed = true; }; },
@@ -136,8 +136,9 @@ test("human Shell uses terminal keys, UART uses its sender, and MCP queues stay 
     await waitForValue(client, `root.querySelector('.xterm-screen').textContent.includes('device echo')`);
 
     // UART 发送框按原样发送文本或 HEX，不拆成命令列表。
+    await run(`root.querySelectorAll('.modes button')[1].click()`);
+    await waitForValue(client, `!root.querySelector('.uart').hidden&&!root.querySelector('.connect-button').disabled`);
     await run(`(() => {
-      root.querySelectorAll('.modes button')[1].click();
       root.querySelector('.uart-send textarea').value = ${JSON.stringify("first\nsecond")};
       window.sendUart();
     })()`);
@@ -284,14 +285,16 @@ test("human Shell uses terminal keys, UART uses its sender, and MCP queues stay 
     await waitForValue(client, `root.querySelector('.coterm-toasts').textContent.includes('MCP command queue is busy')`);
     assert.match(await run(`root.querySelector('.stats').textContent`), /TX 99 B/);
     await run(`root.querySelectorAll('.modes button')[0].click()`);
-    await waitForValue(client, `root.activeElement?.classList.contains('xterm-helper-textarea')`);
-    await client.send("Input.insertText", { text: "blocked" });
-    assert.equal(await run(`window.writes().length`), count, "MCP queue blocks both human send paths");
+    await waitForValue(client, `root.querySelector('.coterm-toasts').textContent.includes('Wait for the command queue')`);
+    assert.equal(await run(`root.querySelector('.uart').hidden`), false, "busy commands prevent changing interpretation");
+    assert.equal(await run(`window.writes().length`), count, "MCP queue blocks human writes");
 
     await run(`(async () => {
       window.commandQueue = 0; window.txBytes = 99;
       await window.event({name:'serial.command',payload:{connectionId:'conn',txBytes:99,finished:true}});
     })()`);
+    await run(`root.querySelectorAll('.modes button')[0].click()`);
+    await waitForValue(client, `root.querySelector('.uart').hidden&&!root.querySelector('.connect-button').disabled&&root.activeElement?.classList.contains('xterm-helper-textarea')`);
     await client.send("Input.insertText", { text: "ok" });
     await waitForValue(client, `window.writes().length > ${count}`);
     assert.equal(await run(`window.writes().at(-1).args.text`), "ok", "human input resumes after MCP finishes");
@@ -329,9 +332,10 @@ test("human Shell uses terminal keys, UART uses its sender, and MCP queues stay 
       root.querySelector('.settings-toggle').click(); root.querySelector('.connect-button').click()`);
     await waitForValue(client, `root.querySelector('.connect-button').dataset.connected === 'true'`);
     assert.equal(await run(`window.config.baudRate`), 9600);
-    assert.deepEqual(await run(`window.calls.filter(c=>['serial.configure','serial.connect'].includes(c.operation)).map(c=>c.operation)`),
+    assert.deepEqual(await run(`window.calls.filter(c=>['serial.configure','serial.connect'].includes(c.operation)).slice(${beforeConfigure}).map(c=>c.operation)`),
       ['serial.configure','serial.connect']);
     await run(`root.querySelectorAll('.modes button')[1].click()`);
+    await waitForValue(client, `!root.querySelector('.uart').hidden&&!root.querySelector('.connect-button').disabled`);
 
     // 文件导入只填输入框，HEX 保留原始字节，错误不覆盖已有草稿。
     const importFile = (bytes, name) => run(`(() => {

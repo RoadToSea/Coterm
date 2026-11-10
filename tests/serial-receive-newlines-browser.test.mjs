@@ -60,7 +60,8 @@ test("receive newline settings update xterm, preserve raw bytes and persist per 
           i18n:{get locale(){return window.locale;},subscribe(fn){window.translate=fn;return ()=>{};}},
           async invoke(operation,args){
             window.calls.push({operation,args});
-            if(operation==='serial.status')return receipt({config:{port:'COM1',baudRate:115200,dataBits:8,stopBits:1,parity:'none',dtr:false,rts:false},
+            if(operation==='serial.configure'){window.interpretation={...(window.interpretation??{}),...args};return receipt({config:{port:'COM1',baudRate:115200,dataBits:8,stopBits:1,parity:'none',dtr:false,rts:false,...window.interpretation}});}
+            if(operation==='serial.status')return receipt({config:{port:'COM1',baudRate:115200,dataBits:8,stopBits:1,parity:'none',dtr:false,rts:false,...(window.interpretation??{})},
               connected:true,connectionId:window.connection,signals:{dtr:false,rts:false},rxBytes:window.rx,txBytes:0,commandQueue:0});
             if(operation==='serial.read')return receipt({text:window.replay??'',bytes:window.replay?.length??0,cursor:window.cursor,
               gap:window.gap??false,closed:false,more:false,connectionId:window.connection});
@@ -108,7 +109,7 @@ test("receive newline settings update xterm, preserve raw bytes and persist per 
     assert.equal(await run(`root.querySelector('.stats').textContent`), await run(`'接收 '+window.rx+' B · 发送 0 B'`));
     await run(`root.querySelector('[data-control=format] button[data-value=hex]').click()`);
     await waitForValue(client, `root.querySelector('.uart-output').textContent.includes('41 0a 42 0d 0a 43 0d 44')`);
-    assert.equal(await run(`window.calls.some(c=>!['serial.status','serial.read','serial.read_hex'].includes(c.operation))`), false);
+    assert.equal(await run(`window.calls.some(c=>!['serial.status','serial.read','serial.read_hex','serial.configure'].includes(c.operation))`), false);
 
     // Settings remain available while connected; selecting them never changes UART parameters.
     await run(`root.querySelector('.settings-toggle').click()`);

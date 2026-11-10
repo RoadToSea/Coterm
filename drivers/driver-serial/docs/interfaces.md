@@ -35,7 +35,7 @@
 | `serial.write` | 否 | commit | `text: string`、`lineEnding?`，默认 `none` | 人工单次文本写入，返回 `submitted / bytes` |
 | `serial.write_hex` | 否 | commit | `hex: string` | 人工单次 HEX 写入，返回 `submitted / bytes` |
 | `serial.signals` | 否 | commit | `dtr?: boolean`、`rts?: boolean`，至少一个 | 仅修改给定信号，返回修改后的 `dtr / rts` |
-| `serial.configure` | 否 | commit | `baudRate? / dataBits? / stopBits? / parity? / dtr? / rts? / mode? / prompt?`，至少一个 | 断开后更新通信及解释参数；返回完整状态，不打开端口 |
+| `serial.configure` | 否 | commit | `baudRate? / dataBits? / stopBits? / parity? / dtr? / rts? / mode? / prompt?`，至少一个 | 通信参数需断开；仅 mode / prompt 可在线更新；返回完整状态，不打开端口 |
 
 `read` 操作不触发写入审批。Agent 来源的 `commit` 操作默认经过宿主审批；用户主动开启 Bypass 或明确放行后可跳过提交审批，协议自身的认证与人工交互仍保留。`write/write_hex/signals/configure` 未注册 MCP descriptor，人工界面通过基座调用。
 
@@ -61,9 +61,9 @@ HEX 接受偶数位十六进制字符，可包含 ASCII 空白和一个开头 `0
 
 `serial.status.connected` 表示本机串口连接仍处于打开且未停止的状态；读写故障或显式关闭一旦标记停止，立即报告 false，不等待异步任务发送最终事件或完成收尾。页面通过同一状态字段更新连接开关。此字段不证明远端开发板在线：USB 转串口仍插着、仅断开另一端接线时，端口仍可能正常打开；不通过无数据、DTR / RTS 电平或未识别到提示符推断断线。
 
-`serial.configure` 只在断开状态接受非空参数补丁，字段约束同下表（波特率上限为 u32 最大值）；未知字段、空补丁和类型错误均拒绝。端口身份固定，不能通过该接口更换 `port`。成功后清理该实例的旧提案，并发布 `serial.status`；下一次连接使用新参数。它只更新当前驱动进程内的实例配置，不改宿主的初始配置快照或已有实例名称，重建 / 恢复实例仍使用宿主保存的初始参数。
+`serial.configure` 接受非空参数补丁，字段约束同下表；未知字段、空补丁和类型错误均拒绝，不能更换 `port`。仅含 `mode` / `prompt` 的补丁允许在线应用，不重连、不重置字节缓冲、计数或回放位置；相同值无副作用。有待执行或运行中的命令列表时拒绝解释方式变更。实际变更后清理旧提案和选区，保留既有对话，未完成的人工观察记录标为 unknown；重新启用 Shell 必须重新观察提示符，UART 期间的数据不追溯生成对话。包含通信参数的补丁仍要求断开，并按新配置重建缓存。成功返回完整状态并发布 `serial.status`。
 
-人工界面只在断开时维护参数草稿，用户点击连接后按 `serial.configure` → `serial.connect` 顺序执行；编辑本身不触发后端调用，配置失败不会继续连接。连接中的 DTR / RTS 修改仍调用 `serial.signals`，不可变参数的提示使用共享前端组件 公共前端组件，后端接口不变。
+人工界面只在断开时维护参数草稿，用户点击连接后按 `serial.configure` → `serial.connect` 顺序执行；编辑本身不触发后端调用，配置失败不会继续连接。连接中的 DTR / RTS 修改仍调用 `serial.signals`，不可变参数的提示使用共享前端组件，后端接口不变。
 
 「LF 补 CR」「CR 补 LF」是可同时勾选的前端接收显示偏好，默认均不选，按宿主提供的 `instanceConfigRef` 固定保存项标识保存在本地，不能用 COM、名称或运行 ID 替代；它们不属于下表的实例通信配置，不通过 `serial.configure` 发送。仅在显示时将选中的单独换行符补为 CRLF，已有 CRLF 不重复补全（含跨事件拆包）。`serial.read`、`serial.read_hex`、命令回显捕获、事件载荷、接收快照保存及字节计数始终保留原始内容。
 
@@ -81,7 +81,7 @@ HEX 接受偶数位十六进制字符，可包含 ASCII 空白和一个开头 `0
 | `mode` | string | 默认 `stream`，支持 `stream/shell`；旧保存配置不猜测设备类型 |
 | `prompt` | string 或 null | Shell 必填，1–256 UTF-8 字节，无控制字符；填写完整可见提示符，如 `root@board:~# `。stream 可为 null |
 
-数据模式与终端 / UART 显示视图独立。在创建页或断开后的配置中显式选择；切换显示视图不修改数据模式。新建实例的模式和提示符进入宿主已有的初始配置保存流程，运行中 `serial.configure` 仍只修改当前实例，不更新宿主保存的初始配置。
+界面仅提供终端 / UART 调试切换：终端映射 `shell`，UART 映射 `stream`。新建界面默认终端，使用 `# ` 作为初始提示符；设备使用其他提示符时，断开后在终端配置中填写完整可见文本。后端省略 mode 时仍默认 stream；恢复界面以实际实例配置为准，不用前端视图偏好覆盖它。模式切换保留配置中的提示符，并通过宿主既有 `saveConfiguration` 保存完整配置。写盘失败时当前运行模式继续生效，旧保存值不变，界面提示失败并允许点击当前模式重试。没有新增持久化字段或跨进程消息类型。
 
 每个实例的 `capabilities` 明确返回 `readLines / readSelectedLines / readDialoguePairs`。stream 仅支持第一项读取能力，后两项调用返回不支持错误；它仍可使用已有的审批文本 / HEX 写入工具，不把字节流强行解释为 Shell。MCP 工具目录按驱动共享，是支持能力的并集；Shell 专用工具描述及目标实例能力共同约束调用，不为此新增跨进程消息或宿主筛选协议。
 

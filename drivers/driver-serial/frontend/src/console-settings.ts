@@ -20,6 +20,7 @@ export function createCommunicationSettings(translate: Translator, warn: (messag
   const field = (name: string, control: HTMLElement) => {
     const label = document.createElement("label"), text = document.createElement("span");
     labels.push([text, name]); label.append(text, control); form.append(label);
+    return label;
   };
   const select = (name: string, values: string[]) => {
     const input = document.createElement("select"); input.name = name;
@@ -31,22 +32,21 @@ export function createCommunicationSettings(translate: Translator, warn: (messag
   const data = select("dataBits", ["5", "6", "7", "8"]);
   const stop = select("stopBits", ["1", "2"]);
   const parity = select("parity", ["none", "odd", "even"]);
-  const mode = select("mode", ["stream", "shell"]);
   const prompt = document.createElement("input"); prompt.name = "prompt"; prompt.maxLength = 256; prompt.value = "# ";
   field("Baud rate", baud); field("Data bits", data); field("Stop bits", stop); field("Parity", parity);
-  field("Data mode", mode); field("Shell prompt", prompt);
+  const promptLabel = field("Shell prompt", prompt);
   const dtr = document.createElement("input"); dtr.type = "checkbox"; dtr.name = "dtr";
   const rts = document.createElement("input"); rts.type = "checkbox"; rts.name = "rts";
   for (const [control, name] of [[dtr, "DTR"], [rts, "RTS"]] as const) {
     const label = document.createElement("label"), text = document.createElement("span");
     label.className = "signal-check"; labels.push([text, name]); label.append(control, text); form.append(label);
   }
-  const framing = [baud, data, stop, parity, mode, prompt];
+  const framing = [baud, data, stop, parity, prompt];
   const refresh = () => {
     for (const [text, name] of labels) text.textContent = t(name);
     for (const [index, name] of ["None", "Odd", "Even"].entries()) parity.options[index].textContent = t(name);
-    mode.options[0].textContent = t("Byte stream"); mode.options[1].textContent = t("Shell");
-    prompt.disabled = mode.value !== "shell"; prompt.readOnly = connected || busy;
+    promptLabel.hidden = initial?.mode !== "shell";
+    prompt.disabled = initial?.mode !== "shell"; prompt.readOnly = connected || busy;
     for (const control of framing) control.setAttribute("aria-disabled", String(connected || busy));
     baud.readOnly = connected || busy;
     dtr.disabled = busy || signalBusy; rts.disabled = busy || signalBusy;
@@ -65,7 +65,6 @@ export function createCommunicationSettings(translate: Translator, warn: (messag
     control.addEventListener("input", () => { if (!connected && !busy) dirty = true; });
     control.addEventListener("change", () => { if (!connected && !busy) dirty = true; });
   }
-  mode.addEventListener("change", refresh);
   for (const [control, name] of [[dtr, "dtr"], [rts, "rts"]] as const) {
     control.addEventListener("change", async () => {
       if (!connected) { dirty = true; return; }
@@ -79,7 +78,7 @@ export function createCommunicationSettings(translate: Translator, warn: (messag
     baud.value = String(config.baudRate); data.value = String(config.dataBits);
     stop.value = String(config.stopBits); parity.value = config.parity;
     dtr.checked = config.dtr; rts.checked = config.rts;
-    mode.value = config.mode ?? "stream"; prompt.value = config.prompt ?? "# ";
+    prompt.value = config.prompt ?? "# ";
   };
   refresh();
   return {
@@ -91,6 +90,7 @@ export function createCommunicationSettings(translate: Translator, warn: (messag
       if (!initial || applied || isConnected || (wasConnected && !isConnected)) {
         initial = parameters; dirty = false; write(parameters);
       } else if (!dirty) { initial = parameters; write(parameters); }
+      if (initial) initial = {...initial, mode:parameters.mode, prompt:parameters.prompt};
       if (connected) { dtr.checked = levels.dtr; rts.checked = levels.rts; }
       refresh();
     },
@@ -101,12 +101,12 @@ export function createCommunicationSettings(translate: Translator, warn: (messag
         || !["none", "odd", "even"].includes(parity.value)) {
         throw new Error(t("Check the communication parameters before connecting."));
       }
-      if (mode.value === "shell" && (!prompt.value.trim() || /[\x00-\x1f\x7f]/.test(prompt.value) || new TextEncoder().encode(prompt.value).length > 256)) {
+      if (initial.mode === "shell" && (!prompt.value.trim() || /[\x00-\x1f\x7f]/.test(prompt.value) || new TextEncoder().encode(prompt.value).length > 256)) {
         throw new Error(t("Enter a literal Shell prompt of 1–256 UTF-8 bytes."));
       }
       return { baudRate: Number(baud.value), dataBits: Number(data.value), stopBits: Number(stop.value),
         parity: parity.value as SerialConfig["parity"], dtr: dtr.checked, rts: rts.checked,
-        mode: mode.value === "shell" ? "shell" : "stream", prompt: mode.value === "shell" ? prompt.value : null };
+        mode: initial.mode ?? "stream", prompt: initial.mode === "shell" ? prompt.value : initial.prompt ?? null };
     },
     signals(next: { dtr: boolean; rts: boolean }) {
       levels = next;

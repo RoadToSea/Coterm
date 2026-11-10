@@ -43,9 +43,12 @@ for (const protocol of ["serial", "ssh"]) {
           i18n:{get locale() { return window.locale; },subscribe(fn) { window.translate = fn; return () => {}; }},
           async invoke(operation,args) {
             window.calls.push({operation,args});
+            if(operation==='serial.configure'){window.interpretation={...args};return receipt({config:{port:'COM1',baudRate:115200,dtr:true,rts:true,...args}});}
+            if(operation==='serial.read_hex')return receipt({hex:'',bytes:0,cursor:1,gap:false,closed:false,more:false,connectionId:'conn'});
+            if(operation==='serial.set_selection')return receipt({ok:true});
             if (operation.endsWith('.status')) return receipt({
               connected:true, connectionId:'conn', config:{port:'COM1',baudRate:115200,dtr:true,rts:true,
-                username:'user',host:'localhost'},signals:{dtr:true,rts:true},rxBytes:0,txBytes:0,commandQueue:0,
+                username:'user',host:'localhost',...(window.interpretation??{})},signals:{dtr:true,rts:true},rxBytes:0,txBytes:0,commandQueue:0,
             });
             if (operation === 'serial.read') return receipt({text:args.cursor === 0 ? ${JSON.stringify("selected terminal output 中文\r\n")} : '',bytes:33,
               cursor:1,gap:false,closed:false,more:false,connectionId:'conn'});
@@ -157,8 +160,9 @@ for (const protocol of ["serial", "ssh"]) {
         assert.equal(await run(`root.querySelector('.terminal-find input').maxLength`), 512);
         if (protocol === "serial") {
           await run(`root.querySelectorAll('.modes button')[1].click()`);
-          assert.equal(await run(`root.querySelector('.terminal-find').hidden`), true, "UART mode hides Shell search");
+          await waitForValue(client, `root.querySelector('.terminal-find').hidden&&!root.querySelector('.connect-button').disabled`);
           await run(`root.querySelectorAll('.modes button')[0].click()`);
+          await waitForValue(client, `root.querySelector('.uart').hidden&&!root.querySelector('.connect-button').disabled`);
         } else {
           await run(`root.querySelectorAll('.terminal-find button')[2].click()`);
         }

@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use anyhow::{anyhow, bail, Result};
 use coterm_proto::runtime::{
     lifecycle::{CreateInstance, HelloResult, McpToolRegistration, RuntimeHello},
-    message::{CancelTarget, DeferredOperation, HostCommand, DriverNotification},
+    message::{CancelTarget, DeferredOperation, DriverNotification, HostCommand},
     operation::{
         ApproveProposal, DispatchMode, InvokeRequest, OperationDescriptor, OperationEffect,
         OperationScope, OperationSource,
@@ -325,7 +325,7 @@ fn parse_commands(operation: &str, args: &Value) -> Result<CommandList> {
     }
 }
 
-/// Only framing and initial line levels may change; the instance keeps its port identity.
+/// Applies framing or terminal interpretation settings while retaining the port identity.
 fn configured(current: &Config, args: &Value) -> Result<Config> {
     let patch = args
         .as_object()
@@ -680,19 +680,45 @@ impl Backend {
                 Ok(status)
             }
             "serial.configure" => {
-                if instance
-                    .connection
-                    .as_ref()
-                    .is_some_and(|connection| !connection.is_closed())
-                {
-                    bail!("Disconnect the serial port before changing communication parameters");
-                }
                 let next = configured(&instance.config, &args)?;
+                let interpretation_only = args.as_object().is_some_and(|patch| {
+                    patch
+                        .keys()
+                        .all(|key| matches!(key.as_str(), "mode" | "prompt"))
+                });
+                if interpretation_only {
+                    if next.mode == instance.config.mode && next.prompt == instance.config.prompt {
+                        return Ok(status_of(instance).await);
+                    }
+                    if instance
+                        .connection
+                        .as_ref()
+                        .is_some_and(|connection| connection.pending_commands() > 0)
+                    {
+                        bail!("Serial command queue is busy; wait or cancel it before switching terminal mode");
+                    }
+                    instance
+                        .output
+                        .lock()
+                        .await
+                        .shell
+                        .configure(next.mode, next.prompt.as_deref());
+                } else {
+                    if instance
+                        .connection
+                        .as_ref()
+                        .is_some_and(|connection| !connection.is_closed())
+                    {
+                        bail!(
+                            "Disconnect the serial port before changing communication parameters"
+                        );
+                    }
+                    instance.connection = None;
+                    instance.output = std::sync::Arc::new(tokio::sync::Mutex::new(
+                        crate::session::OutputBuffer::configured(&next),
+                    ));
+                }
                 instance.config = next;
-                instance.connection = None;
-                instance.output = std::sync::Arc::new(tokio::sync::Mutex::new(
-                    crate::session::OutputBuffer::configured(&instance.config),
-                ));
                 // Prepared writes belong to the previous communication settings.
                 self.proposals
                     .retain(|_, proposal| proposal.instance_id != id);
@@ -702,7 +728,7 @@ impl Backend {
                     .send(DriverNotification::Event {
                         driver_instance_id: id.to_owned(),
                         name: "serial.status".into(),
-                        payload: json!({"connected":false}),
+                        payload: json!({"connected":status["connected"]}),
                     })
                     .await;
                 Ok(status)
@@ -941,6 +967,68 @@ mod tests {
     }
 
     use super::*;
+
+    #[tokio::test]
+    async fn interpretation_changes_preserve_received_bytes_and_invalidate_proposals() -> Result<()>
+    {
+        let mut backend = Backend::default();
+        backend.request("create_instance", json!({
+            "instance":{"driverId":DRIVER_ID,"driverInstanceId":"console","sessionId":"s","label":"console","status":"ready"},
+            "config":{"port":"COM6","baudRate":115200,"mode":"shell","prompt":"# "}
+        })).await?;
+        let output = backend.instances["console"].output.clone();
+        output.lock().await.push(b"kept bytes\r\n# ");
+        let before = output.lock().await.read(0)?;
+        backend.proposals.insert(
+            "old".into(),
+            Proposal {
+                instance_id: "console".into(),
+                operation_id: "old".into(),
+                operation: "serial.command".into(),
+            },
+        );
+        let status = backend
+            .execute_domain(
+                "console",
+                "serial.configure",
+                json!({"mode":"stream"}),
+                "switch",
+            )
+            .await?;
+        assert_eq!(status["capabilities"]["readDialoguePairs"], false);
+        assert_eq!(status["config"]["prompt"], "# ");
+        assert_eq!(output.lock().await.read(0)?, before);
+        assert!(std::sync::Arc::ptr_eq(
+            &output,
+            &backend.instances["console"].output
+        ));
+        assert!(backend.proposals.is_empty());
+        let status = backend
+            .execute_domain(
+                "console",
+                "serial.configure",
+                json!({"mode":"shell"}),
+                "switch-back",
+            )
+            .await?;
+        assert_eq!(status["capabilities"]["readSelectedLines"], true);
+        assert_eq!(status["shellReady"], false);
+        assert_eq!(output.lock().await.read(0)?, before);
+        assert!(backend
+            .execute_domain(
+                "console",
+                "serial.configure",
+                json!({"prompt":""}),
+                "invalid"
+            )
+            .await
+            .is_err());
+        assert_eq!(
+            backend.instances["console"].config.prompt.as_deref(),
+            Some("# ")
+        );
+        Ok(())
+    }
 
     fn payload(data: &[u8], ending: Option<&str>) -> Result<Vec<u8>> {
         let mut args = json!({"text": std::str::from_utf8(data)?});
