@@ -21,8 +21,8 @@ test("categorized settings search, apply live fonts, persist and preserve mounte
   const category=async id=>{await run(`document.querySelector('[data-category=${id}]').click()`);};
   const shot=async name=>{
     const result=await client.send("Page.captureScreenshot",{format:"png"});
-    fs.mkdirSync(path.join(rootDir,"target"),{recursive:true});
-    fs.writeFileSync(path.join(rootDir,"target",name),Buffer.from(result.data,"base64"));
+    fs.mkdirSync(path.join(rootDir,".agent-debug","settings"),{recursive:true});
+    fs.writeFileSync(path.join(rootDir,".agent-debug","settings",name),Buffer.from(result.data,"base64"));
   };
   try {
     await client.send("Page.enable"); await client.send("Runtime.enable");

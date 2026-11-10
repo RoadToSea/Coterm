@@ -34,6 +34,8 @@ Windows CI 执行检查、浏览器与真实安装验收，并上传 NSIS 安装
 
 浏览器测试前需构建桌面与三个驱动前端，并安装 Chrome/Edge/Chromium；可用 `CHROME_BIN` 或 `EDGE_BIN` 指定。串口硬件测试默认 ignored，启用方式见串口说明。
 
+临时调试内容统一放在本地忽略目录 `.agent-debug/<任务名>/`。`pnpm debug:clean --dry-run` 预览待清理内容，`pnpm debug:clean` 清空内容并保留目录；执行前停止调试进程，确认其他任务未使用该目录。脚本不接受其他目录参数。
+
 ## 目录与文档
 
 - `apps/desktop`：Tauri + React 桌面基座。
@@ -41,7 +43,7 @@ Windows CI 执行检查、浏览器与真实安装验收，并上传 NSIS 安装
 - `packages/driver-sdk`：驱动前端契约与通用组件。
 - `drivers`：SSH、串口和本地终端驱动。
 - `scripts`：构建、打包和本机验收脚本。
-- `tests`：跨模块测试、测试夹具与浏览器验收；布局截图输出到忽略目录 `tests/artifacts/layout/`。
+- `tests`：跨模块测试、测试夹具与浏览器验收；布局截图输出到忽略目录 `.agent-debug/layout/`。
 - `docs`：技术规范、架构、方案、反馈、进度与发布文档。
 
 | 文档 | 用途 |

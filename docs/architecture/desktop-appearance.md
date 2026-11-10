@@ -67,4 +67,4 @@ SDK 同一模块导出 `readTerminalPreferences(element)` 与 `attachTerminalPre
 - `pnpm test`：主题偏好解析、持久化、不可用存储、实际浏览器渲染、系统主题变化、1280/1024/768 布局，以及语言、审批、串口发送与终端快捷键回归。
 - 主题浏览器用例使用实际 SSH/串口前端和宿主契约替身，验证画布颜色、终端身份、订阅次数、输出保留及无额外连接/发送。它不代替真实串口、远程 SSH 或各操作系统原生 WebView 验收。
 
-浏览器截图写入忽略的 `target/desktop-theme-*.png`，用于人工核对两种配色和窄屏布局。
+浏览器截图写入忽略的 `.agent-debug/layout/desktop-theme-*.png`，用于人工核对两种配色和窄屏布局。

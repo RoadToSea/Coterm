@@ -67,15 +67,15 @@ test("independent rule groups work without instances and preserve failed saves a
     await setAppLocale(client,'zh-CN');
     await run(`document.getElementById('open-settings').click()`);await click('管理规则组');
     await wait(`document.getElementById('approval-rule-groups-dialog')?.textContent.includes('审批规则组') && !!document.getElementById('approval-group-name')`);
-    fs.mkdirSync(new URL('../target/',import.meta.url),{recursive:true});
+    fs.mkdirSync(new URL('../.agent-debug/approval/',import.meta.url),{recursive:true});
     await client.send('Emulation.setDeviceMetricsOverride',{width:1280,height:900,deviceScaleFactor:1,mobile:false});
     const desktop=await client.send('Page.captureScreenshot',{format:'png'});
-    fs.writeFileSync(new URL('../target/approval-groups-desktop.png',import.meta.url),Buffer.from(desktop.data,'base64'));
+    fs.writeFileSync(new URL('../.agent-debug/approval/approval-groups-desktop.png',import.meta.url),Buffer.from(desktop.data,'base64'));
     await client.send('Emulation.setDeviceMetricsOverride',{width:360,height:800,deviceScaleFactor:1,mobile:false});
     await run(`document.querySelector('[data-approval-group]').click()`);
     assert.equal(await run(`document.getElementById('approval-rule-groups-dialog').scrollWidth<=document.getElementById('approval-rule-groups-dialog').clientWidth`),true);
     const narrow=await client.send('Page.captureScreenshot',{format:'png'});
-    fs.writeFileSync(new URL('../target/approval-groups-narrow.png',import.meta.url),Buffer.from(narrow.data,'base64'));
+    fs.writeFileSync(new URL('../.agent-debug/approval/approval-groups-narrow.png',import.meta.url),Buffer.from(narrow.data,'base64'));
     assert.equal(await run(`__cotermTest.invocations.some(call=>['invoke_operation','approve_proposal'].includes(call.command))`),false);
   } finally {await session.close();}
 });

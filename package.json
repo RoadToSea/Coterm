@@ -9,6 +9,7 @@
     "test": "pnpm test:build && node --import ./scripts/test-ts-loader.mjs --test tests/*.test.mjs",
     "test:build": "node scripts/build-sdk-browser.mjs && node scripts/build-host-interactions-entry.mjs",
     "test:native": "node scripts/test-native.mjs",
+    "debug:clean": "node scripts/clean-agent-debug.mjs",
     "driver:ssh:build": "node scripts/build-ssh.mjs",
     "driver:serial:build": "node scripts/build-serial.mjs",
     "dev": "pnpm --filter coterm-desktop dev",

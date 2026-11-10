@@ -17,6 +17,9 @@ packages/driver-sdk/dist/
 # Browser test artifacts
 tests/artifacts/
 
+# Agent debug artifacts
+.agent-debug/
+
 # IDE / Editor
 .vscode/
 .idea/

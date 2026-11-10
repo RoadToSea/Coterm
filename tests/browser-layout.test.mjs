@@ -101,8 +101,8 @@ test("SSH terminal bottom row stays inside the workspace above the host footer",
         };
       })()`);
       const shot = await page.send("Page.captureScreenshot", { format: "png" });
-      fs.mkdirSync(path.join(rootDir, "target"), { recursive: true });
-      fs.writeFileSync(path.join(rootDir, "target", `ssh-bottom-layout-${width}x${height}.png`), Buffer.from(shot.data, "base64"));
+      fs.mkdirSync(path.join(rootDir, ".agent-debug", "layout"), { recursive: true });
+      fs.writeFileSync(path.join(rootDir, ".agent-debug", "layout", `ssh-bottom-layout-${width}x${height}.png`), Buffer.from(shot.data, "base64"));
       assert.ok(geometry.screen.height > 0, "real terminal rows are rendered");
       assert.equal(await page.evaluate(`sshRoot.querySelector('.xterm-rows').lastElementChild.textContent.includes('BOTTOM ROW VISIBLE')`), true,
         "the prompt is rendered on the final terminal row after scrolling");
@@ -144,8 +144,8 @@ test("appearance switches live SSH and serial renderers, persists, and follows s
     const screenshot = async (name) => {
       await page.evaluate(`Promise.allSettled(document.getAnimations().filter(animation => animation.effect?.getTiming().iterations !== Infinity).map(animation => animation.finished))`);
       const result = await page.send("Page.captureScreenshot", { format: "png" });
-      fs.mkdirSync(path.join(rootDir, "target"), { recursive: true });
-      fs.writeFileSync(path.join(rootDir, "target", name), Buffer.from(result.data, "base64"));
+      fs.mkdirSync(path.join(rootDir, ".agent-debug", "layout"), { recursive: true });
+      fs.writeFileSync(path.join(rootDir, ".agent-debug", "layout", name), Buffer.from(result.data, "base64"));
     };
     const terminalBackground = (host) => page.evaluate(`getComputedStyle(${host}.shadowRoot.querySelector('.xterm-viewport')).backgroundColor`);
     await choose("dark");
@@ -283,7 +283,7 @@ test("Browser layout, catalog diagnostics, and keyboard collapse on the current 
 
       const takeScreenshot = async (name) => {
         const { data } = await page.send("Page.captureScreenshot", { format: "png" });
-        const filePath = path.join(rootDir, "tests", "artifacts", "layout", name);
+        const filePath = path.join(rootDir, ".agent-debug", "layout", name);
         fs.mkdirSync(path.dirname(filePath), { recursive: true });
         fs.writeFileSync(filePath, Buffer.from(data, "base64"));
       };
