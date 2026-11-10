@@ -1,7 +1,7 @@
-import { attachTerminalTheme, readTerminalTheme } from "@coterm/driver-sdk/components/terminal-theme";
-import { attachTerminalShortcuts } from "@coterm/driver-sdk/components/terminal-shortcuts";
-import { mountTerminalSearch, TERMINAL_SEARCH_HIGHLIGHT_LIMIT } from "@coterm/driver-sdk/components/terminal-search";
-import type { OperationReceipt, DriverAPI, DriverConfigurationAPI, DriverFrontend } from "@coterm/driver-sdk";
+import { attachTerminalTheme, readTerminalTheme } from "../../../../apps/shared/components/terminal-theme";
+import { attachTerminalShortcuts } from "../../../../apps/shared/components/terminal-shortcuts";
+import { mountTerminalSearch, TERMINAL_SEARCH_HIGHLIGHT_LIMIT } from "../../../../apps/shared/components/terminal-search";
+import type { OperationReceipt, DriverAPI, DriverConfigurationAPI, DriverFrontend } from "../../../../apps/shared/index";
 import { FitAddon } from "@xterm/addon-fit";
 import { SearchAddon } from "@xterm/addon-search";
 import { Terminal } from "@xterm/xterm";

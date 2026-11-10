@@ -8,6 +8,12 @@
 - Serial 按 stream/Shell 分离读取能力，Shell 支持字面提示符配置与识别，配置修改先保存再连接。
 - Agent 三类读取不使用游标；原始 stream 仅支持 read_lines。
 
+## 2026-11-10：共享前端源码归入 apps
+
+- 共享类型、终端组件及其文档和示例归入 apps/shared，作为普通应用源码供桌面和三个内置驱动直接引用；根 packages 与独立 SDK 包已移除。
+- workspace、锁文件、构建脚本和测试路径同步调整，无新增依赖或运行时接口变化；详细入口见[共享前端](frontend-shared.md)。
+- 验证：冻结锁文件离线安装、桌面及三个驱动前端构建、101 项前端测试通过；最终路径调整后 17 项相关浏览器回归通过。独立导出的暂存源码四个前端构建通过，290 处本地文档链接有效。原有 24 个文件的未提交改动未纳入迁移提交。
+
 ## 2026-11-10：Agent 调试目录与清理入口
 
 - AGENTS.md 约定临时脚本、日志、截图、测速结果和源码备份统一进入忽略目录 .agent-debug/，按任务分目录；调试结束先归档必要结论、停止进程，确认目录未被其他任务使用后调用 pnpm debug:clean。
@@ -57,4 +63,4 @@
 
 - 非 Windows 的实机与发行安装验收尚未完成；NSIS 资源与干净环境安装需发行前验证。
 - Local 原始人工按键不生成对话块；后台取消不能保证回收完整进程树。
-- 各模块入口：[Local](local-driver.md)、[SSH](ssh-driver.md)、[Serial](../../drivers/driver-serial/docs/progress.md)、[MCP](mcp.md)、[SDK](driver-sdk.md)、[工作区与桌面](workspace.md)。
+- 各模块入口：[Local](local-driver.md)、[SSH](ssh-driver.md)、[Serial](../../drivers/driver-serial/docs/progress.md)、[MCP](mcp.md)、[共享前端](frontend-shared.md)、[工作区与桌面](workspace.md)。

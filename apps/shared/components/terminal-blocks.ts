@@ -6,7 +6,7 @@ interface Marker extends Disposable {
   readonly line: number;
   readonly isDisposed: boolean;
 }
-/** Structural adapter: the SDK does not depend on a terminal implementation at runtime. */
+/** Structural adapter: the shared frontend does not depend on a terminal implementation at runtime. */
 export interface BlockTerminal {
   readonly cols: number;
   readonly rows: number;
@@ -36,7 +36,7 @@ export interface TerminalBlockOptions {
   onSelectionChange(ids: string[]): void;
   cancelLabel: string;
 }
-/** Driver-supplied boundaries anchor to real buffer markers; the SDK never parses prompts. */
+/** Driver-supplied boundaries anchor to real buffer markers; the shared frontend never parses prompts. */
 export function mountTerminalBlocks(gutter: HTMLElement, container: HTMLElement, terminal: BlockTerminal, options: TerminalBlockOptions) {
   const style = document.createElement("style");
   style.textContent = `

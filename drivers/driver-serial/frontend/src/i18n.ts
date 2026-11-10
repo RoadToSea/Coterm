@@ -1,4 +1,4 @@
-import type { DriverI18n } from "@coterm/driver-sdk";
+import type { DriverI18n } from "../../../../apps/shared/index";
 
 const zhCN: Readonly<Record<string, string>> = {
   "Find in terminal": "在终端中查找",

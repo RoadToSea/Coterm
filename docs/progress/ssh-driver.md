@@ -31,7 +31,7 @@
 - 定向浏览器回归 8 项通过、0 失败、0 跳过，覆盖分包提示符、无回复命令、选择 / 回放、重排对齐、双输出流、双语主题、大字号窄屏、关闭 / 跟随、快捷键与审批界面。桌面和 SSH 前端构建通过；截图在忽略目录 `target/ssh-feedback-20261103/` 完成人工复核。
 - 完整 `pnpm driver:ssh:build` 的 Rust 编译与前端构建通过，但复制后端 exe 时遇到运行中驱动占用（EBUSY），未停止用户会话；前端产物已更新。退出旧桌面后可重新完整打包，本次无需后端改动。
 - 另将暂存源码独立导出，单独通过桌面 / SSH 的 TypeScript 与 Vite 构建，以及审批 / SSH 块 / 人工块 / Exec 共 4 项浏览器回归，确认本次提交不依赖工作区其他未提交修改。
-- 本次未修改 Rust、协议、依赖或权限，尚未连接用户真实远端。入口：[视觉边界观察](../../drivers/driver-ssh/frontend/src/observed-boundaries.ts)、[SDK 边框](../../packages/driver-sdk/src/components/terminal-blocks.ts)、[Exec UI](../../drivers/driver-ssh/frontend/src/jobs.ts)、[交互约束](../architecture/ssh-driver.md#命令消息块)。
+- 本次未修改 Rust、协议、依赖或权限，尚未连接用户真实远端。入口：[视觉边界观察](../../drivers/driver-ssh/frontend/src/observed-boundaries.ts)、[SDK 边框](../../apps/shared/components/terminal-blocks.ts)、[Exec UI](../../drivers/driver-ssh/frontend/src/jobs.ts)、[交互约束](../architecture/ssh-driver.md#命令消息块)。
 
 ## 2026-11-03：人工终端 Enter 生成可选命令块
 
@@ -68,7 +68,7 @@
 - 命令起止通过后端可信边界转换为有界 PTY 帧元数据（仅 ID、编号、来源，不带命令或输出），SDK 使用 xterm marker 和 decoration 定位块号；命令显示文字按需从人工块快照读取。UI 标签只写入本地终端显示，不改变 SSH 输入字节。备用屏幕隐藏 PTY 标记，scrollback 淘汰时清理 ID 与选择。
 - 块选择只通过实例 / epoch 绑定的 `ssh.select_blocks` 更新；Human MCP Tool `mcp.ssh.selected_blocks` 只读所选不可信数据、明确截断状态和分页信息。重连及卸载清空选择；历史淘汰自动修剪选择。
 - Exec 新任务只在详情面板打开且跟随最新时切换；已关闭面板不被自动展开。历史提示、局部 Esc、方向停靠、Splitter 拖动和按实例尺寸保存已接通。
-- 文档：[产品约束与验收](../architecture/ssh-driver.md#命令消息块)、[SSH 架构契约](../architecture/ssh-driver.md)、[SDK 终端行号栏](../../packages/driver-sdk/docs/command-blocks.md#终端行号栏)。
+- 文档：[产品约束与验收](../architecture/ssh-driver.md#命令消息块)、[SSH 架构契约](../architecture/ssh-driver.md)、[SDK 终端行号栏](../../apps/shared/docs/command-blocks.md#终端行号栏)。
 - 验收：SSH 前端真实浏览器覆盖边界、Human/Agent 标签、实例选择上下文、按键焦点、备用屏幕、scrollback 淘汰、主题、320px 布局；Exec 浏览器覆盖关闭面板、跟随/锁定/恢复、方向停靠、拖动与卸载。真实 SSH 测试覆盖 Human 写选择、Agent 只读、stale epoch 拒绝和原始按键不入上下文。
 
 ## 2026-11-01：消息块首次接入

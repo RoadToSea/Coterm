@@ -2,11 +2,11 @@
 
 ## 接入与职责
 
-驱动前端直接引用 SDK 模块，构建时将组件打入驱动的单文件前端 bundle：
+驱动前端直接引用共享前端组件，构建时将组件打入驱动的单文件前端 bundle：
 
 ```ts
-import { mountBlockList } from "@coterm/driver-sdk/components/block-list";
-import type { CommandBlock } from "@coterm/driver-sdk";
+import { mountBlockList } from "../../../../apps/shared/components/block-list";
+import type { CommandBlock } from "../../../../apps/shared/index";
 ```
 
 数据流为：**驱动后端生成块 → 基座转交操作结果 / 实例事件 → 驱动前端接收并适配 → `mountBlockList` / `view.update`**。
@@ -28,7 +28,7 @@ import type { CommandBlock } from "@coterm/driver-sdk";
 
 ## 类型与参数
 
-类型定义见 [driver-api.ts](../src/driver-api.ts)，实现见 [block-list.ts](../src/components/block-list.ts)。
+类型定义见 [driver-api.ts](../driver-api.ts)，实现见 [block-list.ts](../components/block-list.ts)。
 
 | `CommandBlock` 字段 | 必填 | 含义 |
 |---|:---:|---|
@@ -50,15 +50,15 @@ import type { CommandBlock } from "@coterm/driver-sdk";
 
 `update(props)` 接收新的完整 props。驱动若显式提供 `selected`，需在回调中同步自身选择数据，避免下一次快照用旧值覆盖用户选择；省略该字段则由组件保留选择。删除块会移除对应选择，驱动持有的上下文也应按当前 blocks 筛选。
 
-新接入使用直接导入的 `mountBlockList`，组件实现版本随驱动构建固定。已有 `api.components.blocks` 保留兼容，它由宿主提供实现；旧宿主渲染器不保证展示新增字段。SDK 契约版本仍为 1.0，新增数据字段均可选。
+新接入使用直接导入的 `mountBlockList`，组件实现版本随驱动构建固定。已有 `api.components.blocks` 保留兼容，它由宿主提供实现；旧宿主渲染器不保证展示新增字段。前端契约版本为 2.0，新增数据字段均可选。
 
 ## 驱动接入示例
 
 下面展示驱动前端的挂载与更新逻辑；导入语句置于模块顶部，其余代码放在驱动 `mount(container, api)` 内。`receiveBlocks` 接收驱动前端从后端结果 / 事件适配得到的完整快照：
 
 ```ts
-import { mountBlockList } from "@coterm/driver-sdk/components/block-list";
-import type { BlockListProps, CommandBlock } from "@coterm/driver-sdk";
+import { mountBlockList } from "../../../../apps/shared/components/block-list";
+import type { BlockListProps, CommandBlock } from "../../../../apps/shared/index";
 
 // 此类型只描述适配后的显示数据；后端具体操作和事件契约属于驱动。
 type DisplayBlock = Omit<CommandBlock, "selected">;
@@ -99,15 +99,15 @@ function selectedBlocks() {
 
 ### 终端行号栏
 
-`@coterm/driver-sdk/components/terminal-blocks` 导出 `mountTerminalBlocks(gutter, overlay, terminal, options)`，用于已有 xterm.js 终端，不替代终端输出或协议实现。驱动通过实例绑定的数据通知 `begin(block, lineOffset = 0)` / `end(id, lineOffset?)`；`lineOffset` 是相对当前光标行的 marker 偏移，可将已回显并软折行的人工命令锚定至首行，也可把显示结束位置放在下一条提示符前。省略 end 偏移时，默认当前行（光标在第 0 列时为前一行）；重复 end 保留首次确认的结束 marker。组件不识别提示符或判断执行边界，驱动须区分可靠执行边界与前端观察。组件使用 xterm marker 定位块号，使用单层 DOM 绘制上下横向分割线，不绘制左右竖线，行号栏也不绘制竖向边线；分割线按 border-box 定位，不重复叠加 decoration；相邻块自动以后一块首行作为前一块显示上限。调用 `update(blocks)` 后仅允许当前快照中的稳定 ID 被选择。`toggle(id)` 可连接未内嵌在 PTY 网格中的任务胶囊。`onSelectionChange(ids)` 供驱动把选择交给自己的后端上下文接口。按钮与高亮随可见 buffer 行呈现，响应滚动、渲染、尺寸和 buffer 清理；备用屏幕隐藏 PTY 标记。卸载注销终端监听、ResizeObserver 和键盘事件。
+`apps/shared/components/terminal-blocks` 导出 `mountTerminalBlocks(gutter, overlay, terminal, options)`，用于已有 xterm.js 终端，不替代终端输出或协议实现。驱动通过实例绑定的数据通知 `begin(block, lineOffset = 0)` / `end(id, lineOffset?)`；`lineOffset` 是相对当前光标行的 marker 偏移，可将已回显并软折行的人工命令锚定至首行，也可把显示结束位置放在下一条提示符前。省略 end 偏移时，默认当前行（光标在第 0 列时为前一行）；重复 end 保留首次确认的结束 marker。组件不识别提示符或判断执行边界，驱动须区分可靠执行边界与前端观察。组件使用 xterm marker 定位块号，使用单层 DOM 绘制上下横向分割线，不绘制左右竖线，行号栏也不绘制竖向边线；分割线按 border-box 定位，不重复叠加 decoration；相邻块自动以后一块首行作为前一块显示上限。调用 `update(blocks)` 后仅允许当前快照中的稳定 ID 被选择。`toggle(id)` 可连接未内嵌在 PTY 网格中的任务胶囊。`onSelectionChange(ids)` 供驱动把选择交给自己的后端上下文接口。按钮与高亮随可见 buffer 行呈现，响应滚动、渲染、尺寸和 buffer 清理；备用屏幕隐藏 PTY 标记。卸载注销终端监听、ResizeObserver 和键盘事件。
 
 行号栏宽度按当前有效 PTY 块号最大字符数伸缩，最小 28px；仅显示数字，不加 `#` 前缀。使用行号栏自身的等宽字体计算，淘汰、更新及重置时同步收缩。顶部的红色圆形叉号用于取消全选（16px），`cancelLabel` / `refreshLocale(label)` 更新 tooltip 与可访问名称；空选择时禁用并保留红色，按钮具有键盘焦点样式。
 
-选择区域持有 Esc 清除选择；主终端的 Esc 不被 SDK 拦截。驱动负责限制块和选择数量，后端再次按实例 / epoch 校验，且只允许人工来源修改选择。不要把原始终端输入、命令秘密、输出或用户可控终端文本编码为可信执行边界。SSH 人工 Enter 使用单独的 `boundary=observed` 观察语义，不能据此推断执行结果；命令和回复仍只通过人工明确选择后交给 Agent。
+选择区域持有 Esc 清除选择；主终端的 Esc 不被 共享前端模块拦截。驱动负责限制块和选择数量，后端再次按实例 / epoch 校验，且只允许人工来源修改选择。不要把原始终端输入、命令秘密、输出或用户可控终端文本编码为可信执行边界。SSH 人工 Enter 使用单独的 `boundary=observed` 观察语义，不能据此推断执行结果；命令和回复仍只通过人工明确选择后交给 Agent。
 
 SSH 实际边界与选择接口见 [SSH 消息块](../../../docs/architecture/ssh-driver.md#命令消息块)。浏览器集成入口：`tests/ssh-blocks-browser.test.mjs`。
 
-仓库根目录执行以下命令构建同一份真实 SDK 源码并启动本地静态服务：
+仓库根目录执行以下命令构建同一份真实共享前端源码并启动本地静态服务：
 
 ```bash
 pnpm test:build
@@ -117,7 +117,7 @@ python -m http.server 4174 --bind 127.0.0.1
 浏览器访问：
 
 ```text
-http://127.0.0.1:4174/packages/driver-sdk/examples/command-blocks.html
+http://127.0.0.1:4174/apps/shared/examples/command-blocks.html
 ```
 
 [示例页面](../examples/command-blocks.html) 可切换主题、选择块并追加示例回复；没有设备连接和命令执行。浏览器验收使用实际组件、Shadow DOM、原生键盘事件及计算样式，不用 UI 替身：

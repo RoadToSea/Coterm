@@ -1,6 +1,5 @@
 packages:
   - "apps/*"
-  - "packages/*"
   - "drivers/*/frontend"
 allowBuilds:
   esbuild: true

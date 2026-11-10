@@ -13,9 +13,9 @@ for (const protocol of ["serial", "ssh"]) {
     for (const source of [
       new URL(`../drivers/driver-${protocol}/frontend/src/index.ts`, import.meta.url),
       new URL(`../drivers/driver-${protocol}/frontend/src/i18n.ts`, import.meta.url),
-      new URL("../packages/driver-sdk/src/components/terminal-shortcuts.ts", import.meta.url),
-      new URL("../packages/driver-sdk/src/components/terminal-search.ts", import.meta.url),
-      ...(protocol === "ssh" ? [new URL("../packages/driver-sdk/src/components/terminal-blocks.ts", import.meta.url)] : []),
+      new URL("../apps/shared/components/terminal-shortcuts.ts", import.meta.url),
+      new URL("../apps/shared/components/terminal-search.ts", import.meta.url),
+      ...(protocol === "ssh" ? [new URL("../apps/shared/components/terminal-blocks.ts", import.meta.url)] : []),
     ]) assert.ok(built >= fs.statSync(source).mtimeMs, `rebuild driver:${protocol}:build before testing`);
     const moduleURL = `data:text/javascript;base64,${fs.readFileSync(artifact).toString("base64")}`;
     const session = await openSession({ browserPath, totalTimeoutMs:30_000 });

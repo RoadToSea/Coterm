@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { createDriverAPI, type InstanceInfo } from "../../host-api";
-import type { DriverFrontend } from "@coterm/driver-sdk";
+import type { DriverFrontend } from "../../../../shared/index";
 import { loadDriverFrontend } from "../../driver-loader";
 
 export function DriverWorkspace({ instance, configRef }: { instance: InstanceInfo; configRef?: string }) {

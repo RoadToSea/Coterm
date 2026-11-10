@@ -1,4 +1,4 @@
-import type { CommandBlock, DriverAPI } from "@coterm/driver-sdk";
+import type { CommandBlock, DriverAPI } from "../../../../apps/shared/index";
 import type { createTranslator } from "./i18n";
 export interface SshBlock extends CommandBlock {
   channel: "pty" | "exec";

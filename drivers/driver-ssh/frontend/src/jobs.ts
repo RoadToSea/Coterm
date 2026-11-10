@@ -1,4 +1,4 @@
-import type { DriverAPI } from "@coterm/driver-sdk";
+import type { DriverAPI } from "../../../../apps/shared/index";
 import type { SshBlock } from "./blocks";
 import type { createTranslator } from "./i18n";
 interface Job {

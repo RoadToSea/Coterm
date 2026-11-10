@@ -23,13 +23,13 @@ SSH、Serial、Local 位于 `drivers/driver-*`，随应用一起构建与分发�
 
 ## 前端
 
-从 `@coterm/driver-sdk` 导入类型和可选 UI，构建单文件 ES 模块。导出 `mount(container: HTMLElement, api: DriverAPI): DriverFrontend`，返回 `unmount(): void`，负责释放事件、计时器和终端。可选 `configure(container, api: DriverConfigurationAPI)` 提供创建前配置界面，提交配置后由基座创建实例。
+桌面与内置驱动通过相对路径引用 `apps/shared/` 中的类型和共享 UI，驱动前端仍构建为单文件 ES 模块。该目录是应用内部源码，不注册独立工作区包，也不依赖桌面组件或具体驱动实现。导出 `mount(container: HTMLElement, api: DriverAPI): DriverFrontend`，返回 `unmount(): void`，负责释放事件、计时器和终端。可选 `configure(container, api: DriverConfigurationAPI)` 提供创建前配置界面，提交配置后由基座创建实例。
 
-SDK v2.0 将 driverId、driverInstanceId、sessionId 绑定到当前实例；invoke 不允许修改目标、source 或 effect。结果为结构化收据，失败包含 RuntimeError；等待超时不等于取消。可选 instanceConfigRef 是跨启动身份；saveConfiguration(config) 保存完整已验证配置，失败保留旧值，不能保存运行期秘密句柄。非 Windows 当前仅会话内保存。
+前端契约 v2.0 将 driverId、driverInstanceId、sessionId 绑定到当前实例；invoke 不允许修改目标、source 或 effect。结果为结构化收据，失败包含 RuntimeError；等待超时不等于取消。可选 instanceConfigRef 是跨启动身份；saveConfiguration(config) 保存完整已验证配置，失败保留旧值，不能保存运行期秘密句柄。非 Windows 当前仅会话内保存。
 
 subscribeEvents 在订阅安装后返回注销函数；处理器完成后确认投递。慢消费者和断线按驱动契约恢复，界面卸载不销毁实例。requestSecret 返回短期一次性句柄，秘密不进入日志、MCP、普通账本或明文配置。正式流 API 当前返回不支持。
 
-可选组件的参数、返回值和卸载边界见[SDK UI 文档](../../packages/driver-sdk/docs/README.md)。前端与宿主共享 WebView，是可信应用代码，不构成第三方安全沙箱。
+可选组件的参数、返回值和卸载边界见[共享前端组件文档](../../apps/shared/docs/README.md)。前端与宿主共享 WebView，是可信应用代码，不构成第三方安全沙箱。
 
 ## 构建与验证
 

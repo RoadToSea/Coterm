@@ -63,7 +63,7 @@ HEX 接受偶数位十六进制字符，可包含 ASCII 空白和一个开头 `0
 
 `serial.configure` 只在断开状态接受非空参数补丁，字段约束同下表（波特率上限为 u32 最大值）；未知字段、空补丁和类型错误均拒绝。端口身份固定，不能通过该接口更换 `port`。成功后清理该实例的旧提案，并发布 `serial.status`；下一次连接使用新参数。它只更新当前驱动进程内的实例配置，不改宿主的初始配置快照或已有实例名称，重建 / 恢复实例仍使用宿主保存的初始参数。
 
-人工界面只在断开时维护参数草稿，用户点击连接后按 `serial.configure` → `serial.connect` 顺序执行；编辑本身不触发后端调用，配置失败不会继续连接。连接中的 DTR / RTS 修改仍调用 `serial.signals`，不可变参数的提示使用 SDK 公共前端组件，后端接口不变。
+人工界面只在断开时维护参数草稿，用户点击连接后按 `serial.configure` → `serial.connect` 顺序执行；编辑本身不触发后端调用，配置失败不会继续连接。连接中的 DTR / RTS 修改仍调用 `serial.signals`，不可变参数的提示使用共享前端组件 公共前端组件，后端接口不变。
 
 「LF 补 CR」「CR 补 LF」是可同时勾选的前端接收显示偏好，默认均不选，按宿主提供的 `instanceConfigRef` 固定保存项标识保存在本地，不能用 COM、名称或运行 ID 替代；它们不属于下表的实例通信配置，不通过 `serial.configure` 发送。仅在显示时将选中的单独换行符补为 CRLF，已有 CRLF 不重复补全（含跨事件拆包）。`serial.read`、`serial.read_hex`、命令回显捕获、事件载荷、接收快照保存及字节计数始终保留原始内容。
 
@@ -140,4 +140,4 @@ MCP 完成结果的机器可读副本位于 `structuredContent`，文本块包�
 
 接口实现见 [backend.rs](../src/backend.rs)、[command.rs](../src/command.rs)、[session.rs](../src/session.rs) 和 [payload.rs](../src/payload.rs)。调用示例与验收命令见 [使用说明](usage.md)。
 
-桌面参数更新成功后调用 SDK `saveConfiguration(config)`，复用现有加密保存项；写盘失败保留旧保存值并阻止连接，重试不会发送设备命令。原生 configure 不承诺独立持久化。
+桌面参数更新成功后调用前端 API `saveConfiguration(config)`，复用现有加密保存项；写盘失败保留旧保存值并阻止连接，重试不会发送设备命令。原生 configure 不承诺独立持久化。

@@ -1,7 +1,7 @@
 import { t } from "../../i18n";
 import { useI18n } from "../../use-i18n";
 import { useRef, useState } from "react";
-import type { OperationRecord } from "@coterm/driver-sdk";
+import type { OperationRecord } from "../../../../shared/index";
 
 interface ApprovalCardProps {
   record: OperationRecord;

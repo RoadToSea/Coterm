@@ -47,19 +47,7 @@ export async function buildHostInteractionsEntry() {
     logLevel: "warn",
     // 与产品构建一致：React 走 production 分支，浏览器里没有 process。
     define: { "process.env.NODE_ENV": '"production"' },
-    resolve: {
-      alias: [
-        ...bareAlias,
-        {
-          find: /^@coterm\/driver-sdk\/components\/block-list$/,
-          replacement: path.join(rootDir, "packages/driver-sdk/src/components/block-list.ts"),
-        },
-        {
-          find: /^@coterm\/driver-sdk$/,
-          replacement: path.join(rootDir, "packages/driver-sdk/src/index.ts"),
-        },
-      ],
-    },
+    resolve: { alias: bareAlias },
     build: {
       outDir: path.join(desktopDir, "dist/host-interactions"),
       emptyOutDir: true,

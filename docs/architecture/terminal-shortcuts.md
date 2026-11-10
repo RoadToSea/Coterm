@@ -33,9 +33,9 @@ Ctrl+F 搜索的是该实例当前终端保留的输出（含现有 3000 行滚�
 
 ## 实现与验证
 
-公共实现位于 [`terminal-shortcuts.ts`](../../packages/driver-sdk/src/components/terminal-shortcuts.ts)，由 SDK 子路径 `@coterm/driver-sdk/components/terminal-shortcuts` 导出。它只依赖终端的选择和键盘接口，不引入 xterm 依赖、不监听全局键盘，也不改变宿主通信协议。SSH 和串口前端在挂载时安装，卸载时回收。
+公共实现位于 [`terminal-shortcuts.ts`](../../apps/shared/components/terminal-shortcuts.ts)，通过源码路径 `apps/shared/components/terminal-shortcuts` 导出。它只依赖终端的选择和键盘接口，不引入 xterm 依赖、不监听全局键盘，也不改变宿主通信协议。SSH 和串口前端在挂载时安装，卸载时回收。
 
-搜索条位于 [`terminal-search.ts`](../../packages/driver-sdk/src/components/terminal-search.ts)，由 `@coterm/driver-sdk/components/terminal-search` 导出。驱动前端各自加载 `@xterm/addon-search ~0.15.0`，兼容现有 xterm 5.5；SDK 只接收搜索适配接口。该依赖为纯浏览器 JavaScript，无原生进程、OS IO 或 Tauri 权限变化；通过 `allowProposedApi` 开启的是 xterm 渲染器的高亮装饰接口，不是宿主权限。Windows 浏览器构建与回归已覆盖，macOS/Linux 真机仍需独立验收。
+搜索条位于 [`terminal-search.ts`](../../apps/shared/components/terminal-search.ts)，由 `apps/shared/components/terminal-search` 导出。驱动前端各自加载 `@xterm/addon-search ~0.15.0`，兼容现有 xterm 5.5；共享前端模块只接收搜索适配接口。该依赖为纯浏览器 JavaScript，无原生进程、OS IO 或 Tauri 权限变化；通过 `allowProposedApi` 开启的是 xterm 渲染器的高亮装饰接口，不是宿主权限。Windows 浏览器构建与回归已覆盖，macOS/Linux 真机仍需独立验收。
 
 ```bash
 pnpm --filter coterm-driver-ssh-ui build

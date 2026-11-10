@@ -79,13 +79,18 @@ export function assertFreshBuild() {
   if (!fs.existsSync(sshDist)) {
     throw new Error(`drivers/driver-ssh/dist/frontend/index.js is missing; run "pnpm --filter coterm-driver-ssh-ui build"`);
   }
-  assertNotStale(entry, [path.join(rootDir, "apps/desktop/src"), path.join(rootDir, "packages/driver-sdk/src")]);
+  assertNotStale(entry, [
+    path.join(rootDir, "apps/desktop/src"),
+    path.join(rootDir, "apps/shared/index.ts"),
+    path.join(rootDir, "apps/shared/driver-api.ts"),
+    path.join(rootDir, "apps/shared/components"),
+  ]);
 }
 
 const HOST_INTERACTIONS_ENTRY = path.join(distDir, "host-interactions/entry.js");
-const SDK_BROWSER_MODULE = path.join(rootDir, "packages/driver-sdk/dist/browser/block-list.js");
+const SHARED_BROWSER_MODULE = path.join(rootDir, "apps/shared/dist/browser/block-list.js");
 
-/** 交互与 SDK 组件的测试产物：缺失或比源码旧都必须失败，不许静默测旧实现。 */
+/** 交互与共享前端组件的测试产物：缺失或比源码旧都必须失败，不许静默测旧实现。 */
 export function assertFreshTestArtifacts() {
   for (const [artifact, sources] of [
     [HOST_INTERACTIONS_ENTRY, [
@@ -93,7 +98,7 @@ export function assertFreshTestArtifacts() {
       path.join(rootDir, "apps/desktop/src/secret-input.ts"),
       path.join(rootDir, "apps/desktop/src/host-api.ts"),
     ]],
-    [SDK_BROWSER_MODULE, [path.join(rootDir, "packages/driver-sdk/src/components/block-list.ts")]],
+    [SHARED_BROWSER_MODULE, [path.join(rootDir, "apps/shared/components/block-list.ts")]],
   ]) {
     if (!fs.existsSync(artifact)) {
       throw new Error(`${path.relative(rootDir, artifact)} is missing; run "pnpm test:build"`);
@@ -145,17 +150,17 @@ export async function startStaticServer() {
       response.end(HOST_INTERACTIONS_HTML);
       return;
     }
-    // 真实 SDK 模块：直接给源文件的构建产物，测试里不存在替身。
-    const sdkMatch = requestPath.match(/^\/__sdk\/(.+)$/);
-    if (sdkMatch) {
-      const sdkPath = path.join(rootDir, "packages/driver-sdk/dist/browser", sdkMatch[1]);
-      if (!sdkPath.startsWith(path.join(rootDir, "packages/driver-sdk/dist/browser")) || !fs.existsSync(sdkPath)) {
+    // 真实共享前端模块：直接给源文件的构建产物，测试里不存在替身。
+    const sharedMatch = requestPath.match(/^\/__shared\/(.+)$/);
+    if (sharedMatch) {
+      const sharedPath = path.join(rootDir, "apps/shared/dist/browser", sharedMatch[1]);
+      if (!sharedPath.startsWith(path.join(rootDir, "apps/shared/dist/browser")) || !fs.existsSync(sharedPath)) {
         response.writeHead(404, { "Content-Type": "text/plain" });
         response.end("Not Found");
         return;
       }
-      response.writeHead(200, { "Content-Type": MIME[path.extname(sdkPath)] ?? "application/octet-stream" });
-      fs.createReadStream(sdkPath).pipe(response);
+      response.writeHead(200, { "Content-Type": MIME[path.extname(sharedPath)] ?? "application/octet-stream" });
+      fs.createReadStream(sharedPath).pipe(response);
       return;
     }
     const relative = requestPath === "/" ? "index.html" : requestPath.replace(/^\/+/, "");

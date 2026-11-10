@@ -6,7 +6,7 @@
  * 事件的 transport 细节（callback 注册、emit → `__TAURI_EVENT_PLUGIN_INTERNALS__`）按
  * @tauri-apps/api 的实现走，所以用例验证的是真实前端代码路径。
  *
- * 不模拟产品组件：SDK 的 block-list 由构建产物注入 `window.__cotermTestSdk`，
+ * 不模拟产品组件：共享前端的 block-list 由构建产物注入 `window.__cotermTestShared`，
  * 这里只负责把真实的模块搬到页面上。
  */
 import fs from "node:fs";
@@ -23,15 +23,15 @@ const serialFrontendSource = fs.existsSync(serialFrontendBundlePath)
   ? fs.readFileSync(serialFrontendBundlePath, "utf8") : null;
 
 /**
- * 真实 Driver SDK 模块的 ES 源码，供页面以动态 import 加载。
- * 由 scripts/build-sdk-browser.mjs 从 `packages/driver-sdk/src/components/block-list.ts` 生成；
+ * 真实共享前端模块的 ES 源码，供页面以动态 import 加载。
+ * 由 scripts/build-shared-browser.mjs 从 `apps/shared/components/block-list.ts` 生成；
  * 缺失时直接报错，绝不回退到手工替身。
  */
-export function sdkModuleSource() {
-  const modulePath = path.join(rootDir, "packages/driver-sdk/dist/browser/block-list.js");
+export function sharedModuleSource() {
+  const modulePath = path.join(rootDir, "apps/shared/dist/browser/block-list.js");
   if (!fs.existsSync(modulePath)) {
     throw new Error(
-      `packages/driver-sdk/dist/browser/block-list.js is missing; run "pnpm build:sdk"`,
+      `apps/shared/dist/browser/block-list.js is missing; run "pnpm test:build"`,
     );
   }
   return fs.readFileSync(modulePath, "utf8");
@@ -169,9 +169,9 @@ export function makeHostMockSource(initial) {
         const button = [...dialog.querySelectorAll("button")].find((item) => item.type === "button");
         button.click();
       },
-      /** 真实 SDK 组件的动态 import；不用页面里的任何手写替身。 */
-      async loadSdk() {
-        return import("/__sdk/block-list.js");
+      /** 真实共享前端组件的动态 import；不用页面里的任何手写替身。 */
+      async loadShared() {
+        return import("/__shared/block-list.js");
       },
       /** 真实 SSH 前端的构建产物源码，供隔离 iframe 自行 import。 */
       sshFrontendSource() {

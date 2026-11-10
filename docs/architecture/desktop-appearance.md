@@ -42,7 +42,7 @@
 
 `apps/desktop/src/index.css` 是颜色的唯一来源。shadcn 的 `background/foreground/card/primary/muted/accent/destructive/border/input/ring` 等语义颜色映射到 Tailwind；原有 `--coterm-*` 变量继续保留并引用这些颜色，供驱动的 Shadow DOM 继承。正文与强调按钮前景分开：正文的 `--coterm-text-bright` 随主题变化，强调按钮使用 `--coterm-accent-foreground`。
 
-终端渲染器不直接使用 CSS 变量字符串。SDK 的纯浏览器模块 `@coterm/driver-sdk/components/terminal-theme` 提供：
+终端渲染器不直接使用 CSS 变量字符串。共享前端模块的纯浏览器模块 `apps/shared/components/terminal-theme` 提供：
 
 ```ts
 const terminal = new Terminal({ theme: readTerminalTheme(container) });
@@ -58,7 +58,7 @@ SSH、串口 Shell 前端原地设置 xterm `options.theme`，不重建终端、
 
 新增显示变量 `--coterm-ui-font-size`、`--coterm-terminal-font-size`（px）、`--coterm-terminal-line-height`（倍数）、`--coterm-terminal-cursor-blink`（true / false）。界面根字号通过 `--coterm-root-font-size` 保持 14 px 逻辑字号对应原有 16 px rem 基准。驱动 Shadow DOM 可继承显示变量；命令块和 UART 接收区按终端字号渲染。
 
-SDK 同一模块导出 `readTerminalPreferences(element)` 与 `attachTerminalPreferences(element, apply)`，返回 `fontSize / lineHeight / cursorBlink`。SSH、串口前端初始化时读取，之后原地更新选项并 fit，卸载注销观察器。无变量的旧宿主回退 13 px、1.0 行高与光标闪烁；驱动自行选择接入。字体调整允许按既有接口同步 SSH PTY 尺寸，不连接 / 断开或发送命令，不改 `DriverAPI` 或跨进程协议。
+共享前端模块同一模块导出 `readTerminalPreferences(element)` 与 `attachTerminalPreferences(element, apply)`，返回 `fontSize / lineHeight / cursorBlink`。SSH、串口前端初始化时读取，之后原地更新选项并 fit，卸载注销观察器。无变量的旧宿主回退 13 px、1.0 行高与光标闪烁；驱动自行选择接入。字体调整允许按既有接口同步 SSH PTY 尺寸，不连接 / 断开或发送命令，不改 `DriverAPI` 或跨进程协议。
 
 ## 验证
 

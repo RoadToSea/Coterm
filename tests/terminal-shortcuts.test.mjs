@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { attachTerminalShortcuts } from "../packages/driver-sdk/src/components/terminal-shortcuts.ts";
+import { attachTerminalShortcuts } from "../apps/shared/components/terminal-shortcuts.ts";
 
 function fixture({ selection = "selected output", clipboardFails = false, nativeCopy = false, find = false } = {}) {
   const copies = [];

@@ -3,7 +3,7 @@
 驱动前端直接导入公共组件，随自己的 bundle 构建；不需要后端生成 UI，不增加宿主权限或跨进程消息。
 
 ```ts
-import { mountToasts } from "@coterm/driver-sdk/components/toasts";
+import { mountToasts } from "../../../../apps/shared/components/toasts";
 
 // 容器提供定位上下文；支持普通 DOM 和 Shadow DOM。
 container.style.position = "relative";

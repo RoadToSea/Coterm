@@ -62,7 +62,7 @@ test("disabled storage and an exception in a driver listener do not prevent lang
   }
 });
 
-test("SSH uses the optional SDK language capability and falls back on older hosts", () => {
+test("SSH uses the optional shared frontend language capability and falls back on older hosts", () => {
   let locale = "zh-CN";
   const translate = createTranslator({ get locale() { return locale; }, subscribe: () => () => {} });
   assert.equal(translate("Connect"), "连接");

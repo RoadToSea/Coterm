@@ -14,13 +14,13 @@ import type {
   StreamOptions,
   StreamSubscription,
   DriverInstanceEvent,
-} from "@coterm/driver-sdk";
+} from "../../shared/index";
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { driverI18n } from "./i18n";
 import { listen } from "@tauri-apps/api/event";
 import { cancelSecretInput, promptForSecret, promptForText, promptForConfirmation, promptForSelection } from "./secret-input";
-import { FRONTEND_API_VERSION } from "@coterm/driver-sdk";
-import { mountBlockList } from "@coterm/driver-sdk/components/block-list";
+import { FRONTEND_API_VERSION } from "../../shared/index";
+import { mountBlockList } from "../../shared/components/block-list";
 
 /** 宿主待处理状态变化的全局事件；payload 只有版本号。 */
 export const ATTENTION_CHANGED_EVENT = "host://attention-changed";

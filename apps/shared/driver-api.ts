@@ -1,4 +1,4 @@
-/** SDK v2.0: additive optional features use minor versions; breaking changes use a major version. */
+/** shared frontend v2.0: additive optional features use minor versions; breaking changes use a major version. */
 export const FRONTEND_API_VERSION = "2.0" as const;
 
 export type OperationSource = "human" | "agent" | "system";

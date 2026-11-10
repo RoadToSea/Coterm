@@ -33,4 +33,4 @@ SSH / Serial / Local Worker → 远端、设备或本地 Shell
 
 ## 界面与实施入口
 
-实例分组与标签生命周期见 [桌面界面](../architecture/desktop-appearance.md)，共享终端交互见 [终端快捷键](../architecture/terminal-shortcuts.md)，组件接口见 [SDK](../../packages/driver-sdk/docs/README.md)。当前能力、验证范围和未完成项统一记录在 [项目进度](../progress/project.md)。
+实例分组与标签生命周期见 [桌面界面](../architecture/desktop-appearance.md)，共享终端交互见 [终端快捷键](../architecture/terminal-shortcuts.md)，组件接口见 [共享前端模块](../../apps/shared/docs/README.md)。当前能力、验证范围和未完成项统一记录在 [项目进度](../progress/project.md)。

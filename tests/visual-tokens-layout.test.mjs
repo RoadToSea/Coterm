@@ -7,7 +7,7 @@ const rootDir = process.cwd();
 const indexCssPath = path.join(rootDir, "apps/desktop/src/index.css");
 const tailwindConfigPath = path.join(rootDir, "apps/desktop/tailwind.config.js");
 const sshDriverPath = path.join(rootDir, "drivers/driver-ssh/frontend/src/index.ts");
-const blockListPath = path.join(rootDir, "packages/driver-sdk/src/components/block-list.ts");
+const blockListPath = path.join(rootDir, "apps/shared/components/block-list.ts");
 const appTsxPath = path.join(rootDir, "apps/desktop/src/App.tsx");
 
 test("Desktop CSS defines required semantic tokens in :root", () => {
@@ -77,7 +77,7 @@ test("SSH Driver Shadow DOM styles use semantic tokens with readable fallbacks",
   }
 });
 
-test("Driver SDK block-list component styles use semantic tokens with fallbacks", () => {
+test("Shared frontend block-list component styles use semantic tokens with fallbacks", () => {
   const blockListContent = fs.readFileSync(blockListPath, "utf8");
 
   const match = blockListContent.match(/const style = `([\s\S]*?)`;/);

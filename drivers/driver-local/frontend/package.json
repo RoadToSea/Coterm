@@ -7,7 +7,6 @@
     "build": "tsc --noEmit && vite build"
   },
   "dependencies": {
-    "@coterm/driver-sdk": "workspace:*",
     "@xterm/addon-fit": "^0.10.0",
     "@xterm/addon-search": "~0.15.0",
     "@xterm/xterm": "^5.5.0"

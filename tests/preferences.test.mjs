@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { DEFAULT_PREFERENCES, PREFERENCES_STORAGE_KEY, resolvePreferences, getPreferences, setPreferences, subscribePreferences } from "../apps/desktop/src/preferences.ts";
-import { attachTerminalPreferences, readTerminalPreferences } from "../packages/driver-sdk/src/components/terminal-theme.ts";
+import { attachTerminalPreferences, readTerminalPreferences } from "../apps/shared/components/terminal-theme.ts";
 
 test("display preferences validate saved data and retain safe defaults", () => {
   for (const value of [null, undefined, [], true, "bad"]) assert.deepEqual(resolvePreferences(value), DEFAULT_PREFERENCES);

@@ -1,5 +1,5 @@
 import { hostAPI } from "./host-api";
-import type { DriverFrontendModule } from "@coterm/driver-sdk";
+import type { DriverFrontendModule } from "../../shared/index";
 
 const modules = new Map<string, Promise<DriverFrontendModule | null>>();
 

@@ -1,8 +1,8 @@
 /**
  * 当前构建的真实浏览器验收：布局（1280/1024/768）、纯键盘折叠恢复、DriverCatalog 逐包诊断、
- * 真实 SSH 前端 Shadow DOM 与 SDK mountBlockList 的 token/fallback 计算样式验证、多审批卡片独立处理。
+ * 真实 SSH 前端 Shadow DOM 与共享前端 mountBlockList 的 token/fallback 计算样式验证、多审批卡片独立处理。
  *
- * 这里验证的是 App.tsx + index.css + driver-sdk + coterm-driver-ssh-ui 的实际浏览器渲染结果。
+ * 这里验证的是 App.tsx + index.css + apps/shared + coterm-driver-ssh-ui 的实际浏览器渲染结果。
  * 没有浏览器时整组 skip 并写明原因；skip 不等于通过。
  */
 import test from "node:test";
@@ -168,7 +168,7 @@ test("appearance switches live SSH and serial renderers, persists, and follows s
 
     // Mount the actual serial bundle in the same themed document, with a typed-contract mock only.
     const artifact = path.join(rootDir, "drivers/driver-serial/dist/frontend/index.js");
-    assert.ok(fs.statSync(artifact).mtimeMs >= fs.statSync(path.join(rootDir, "packages/driver-sdk/src/components/terminal-theme.ts")).mtimeMs);
+    assert.ok(fs.statSync(artifact).mtimeMs >= fs.statSync(path.join(rootDir, "apps/shared/components/terminal-theme.ts")).mtimeMs);
     const serialURL = `data:text/javascript;base64,${fs.readFileSync(artifact).toString("base64")}`;
     await page.evaluate(`(async () => {
       const container = document.createElement('div'); container.style.cssText = 'position:fixed;inset:80px 24px 50px 330px'; document.body.append(container);
@@ -517,12 +517,12 @@ test("Browser layout, catalog diagnostics, and keyboard collapse on the current 
       assert.equal(sshFallbacks.barBg, "rgb(37, 37, 38)", "SSH .bar falls back to its own #252526");
       assert.equal(sshFallbacks.strongColor, "rgb(204, 204, 204)", "SSH .bar strong falls back to its own #cccccc");
 
-      // --- 真实 SDK mountBlockList：token 继承、选择状态与销毁 ---
-      // 组件来自 packages/driver-sdk/src/components/block-list.ts 的构建产物，
+      // --- 真实共享前端 mountBlockList：token 继承、选择状态与销毁 ---
+      // 组件来自 apps/shared/components/block-list.ts 的构建产物，
       // 页面以动态 import 加载，脚本里没有任何手写 DOM 或样式替身。
-      await page.evaluate(`(async () => { window.__sdkModule = await window.__cotermTest.loadSdk(); })()`);
+      await page.evaluate(`(async () => { window.__sharedModule = await window.__cotermTest.loadShared(); })()`);
       const blockStyles = await page.evaluate(`(() => {
-        const { mountBlockList } = window.__sdkModule;
+        const { mountBlockList } = window.__sharedModule;
         const container = document.createElement('div');
         document.body.append(container);
         const selections = [];
@@ -574,32 +574,32 @@ test("Browser layout, catalog diagnostics, and keyboard collapse on the current 
         return result;
       })()`);
       assert.deepEqual(blockStyles.rowTagNames, ["ARTICLE", "ARTICLE", "ARTICLE"], "commands and replies are list items with separate number buttons");
-      assert.equal(blockStyles.rootRole, "list", "real SDK root carries role=list");
-      assert.equal(blockStyles.rootLabel, "Command blocks", "real SDK root is labelled");
-      assert.equal(blockStyles.rootColor, palette.text, "SDK block-list inherits --coterm-text-primary");
-      assert.equal(blockStyles.rootBg, palette.surface, "SDK block-list inherits --coterm-surface");
-      assert.equal(blockStyles.robotColor, palette.accent, "SDK robot actor inherits --coterm-accent-glow");
-      assert.equal(blockStyles.robotText, "Robot", "SDK renders the actor label, not the raw enum");
-      assert.equal(blockStyles.humanText, "Human", "SDK renders the human actor label");
-      assert.equal(blockStyles.failureMark, "!", "SDK marks a non-zero exit");
-      assert.equal(blockStyles.failureTitle, "Exit code 1", "SDK exposes the exit code as a title");
-      assert.equal(blockStyles.successMark, "", "SDK leaves a zero exit unmarked");
+      assert.equal(blockStyles.rootRole, "list", "real shared frontend root carries role=list");
+      assert.equal(blockStyles.rootLabel, "Command blocks", "real shared frontend root is labelled");
+      assert.equal(blockStyles.rootColor, palette.text, "shared frontend block-list inherits --coterm-text-primary");
+      assert.equal(blockStyles.rootBg, palette.surface, "shared frontend block-list inherits --coterm-surface");
+      assert.equal(blockStyles.robotColor, palette.accent, "shared frontend robot actor inherits --coterm-accent-glow");
+      assert.equal(blockStyles.robotText, "Robot", "shared frontend renders the actor label, not the raw enum");
+      assert.equal(blockStyles.humanText, "Human", "shared frontend renders the human actor label");
+      assert.equal(blockStyles.failureMark, "!", "shared frontend marks a non-zero exit");
+      assert.equal(blockStyles.failureTitle, "Exit code 1", "shared frontend exposes the exit code as a title");
+      assert.equal(blockStyles.successMark, "", "shared frontend leaves a zero exit unmarked");
       assert.deepEqual(blockStyles.afterClick.pressed, ["false", "true", "false"], "clicking a number selects its block");
       assert.deepEqual(blockStyles.afterClick.selections, [["b2"]], "selection change reports the selected block id");
       assert.deepEqual(blockStyles.afterUpdate, ["false", "true"], "update() adopts explicitly declared selection");
       assert.equal(blockStyles.afterUnmount, 0, "unmount clears the container it was given");
       assert.equal(blockStyles.afterLateUpdate, 0, "a disposed view ignores further updates");
 
-      // --- token fallback：让真实 SDK 组件在无主题的文档里自己回退 ---
+      // --- token fallback：让真实共享前端组件在无主题的文档里自己回退 ---
       // 同文档里连 Shadow DOM 的内联 style 都会从 :root 继承，所以再开一个同源空白 iframe。
       // 源码先放到 window 上，避免把它拼进求值字符串（源里本身就有模板字符）。
-      await page.evaluate(`(async () => { window.__sdkSource = await (await fetch("/__sdk/block-list.js")).text(); })()`);
+      await page.evaluate(`(async () => { window.__sharedSource = await (await fetch("/__shared/block-list.js")).text(); })()`);
       const fallbacks = await page.evaluate(`(async () => {
         const frame = document.createElement('iframe');
         frame.style.cssText = 'width:480px;height:240px;border:0';
         document.body.append(frame);
         const win = frame.contentWindow;
-        const url = URL.createObjectURL(new Blob([window.__sdkSource], { type: "text/javascript" }));
+        const url = URL.createObjectURL(new Blob([window.__sharedSource], { type: "text/javascript" }));
         try {
           const { mountBlockList } = await import(url);
           const container = win.document.createElement('div');
@@ -627,11 +627,11 @@ test("Browser layout, catalog diagnostics, and keyboard collapse on the current 
         }
       })()`);
       assert.equal(fallbacks.docPrimary, "", "the isolated document really has no --coterm-text-primary");
-      assert.equal(fallbacks.rootColor, "rgb(204, 204, 204)", "real SDK block-list falls back to its own #cccccc");
-      assert.equal(fallbacks.rootBg, "rgb(30, 30, 30)", "real SDK block-list falls back to its own #1e1e1e surface");
-      assert.equal(fallbacks.robotColor, "rgb(117, 190, 255)", "real SDK robot actor falls back to its own #75beff");
-      assert.equal(fallbacks.gutterColor, "rgb(133, 133, 133)", "real SDK gutter falls back to its own #858585");
-      assert.equal(fallbacks.failureColor, "rgb(244, 135, 113)", "real SDK failure status falls back to its own #f48771");
+      assert.equal(fallbacks.rootColor, "rgb(204, 204, 204)", "real shared frontend block-list falls back to its own #cccccc");
+      assert.equal(fallbacks.rootBg, "rgb(30, 30, 30)", "real shared frontend block-list falls back to its own #1e1e1e surface");
+      assert.equal(fallbacks.robotColor, "rgb(117, 190, 255)", "real shared frontend robot actor falls back to its own #75beff");
+      assert.equal(fallbacks.gutterColor, "rgb(133, 133, 133)", "real shared frontend gutter falls back to its own #858585");
+      assert.equal(fallbacks.failureColor, "rgb(244, 135, 113)", "real shared frontend failure status falls back to its own #f48771");
     } finally {
       await page.close();
     }

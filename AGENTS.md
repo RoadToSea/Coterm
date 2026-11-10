@@ -18,6 +18,7 @@ Coterm 是 Tauri v2 桌面基座。基座负责驱动生命周期、实例路由
 
 ```text
 apps/desktop/          Tauri + React 桌面应用
+apps/shared/           桌面与内置驱动共用的前端类型和交互模块
 apps/desktop/src-tauri Tauri Rust 后端
 crates/coterm-proto    跨进程协议和共享数据类型
 crates/coterm-core     会话、输入仲裁、命令块和安全逻辑

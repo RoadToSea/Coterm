@@ -8,7 +8,7 @@ interface SearchOptions {
   };
 }
 
-/** Compatible with xterm's SearchAddon without coupling the SDK to its renderer. */
+/** Compatible with xterm's SearchAddon without coupling the shared frontend to its renderer. */
 export interface TerminalSearchAdapter {
   findNext(term: string, options: SearchOptions): boolean;
   findPrevious(term: string, options: SearchOptions): boolean;

@@ -137,7 +137,7 @@ if (receipt.status === "completed" && receipt.output) {
 }
 ```
 
-Shell 输入调用 `serial.write` 并显式使用 `lineEnding:"none"`；UART 发送框按所选模式调用 `serial.write` 或 `serial.write_hex`。通过 `api.subscribeEvents()` 接收事件并保留注销函数，组件卸载时注销。完整类型见 [DriverAPI](../../../packages/driver-sdk/src/driver-api.ts)，事件与返回结构见 [接口设计](interfaces.md)。
+Shell 输入调用 `serial.write` 并显式使用 `lineEnding:"none"`；UART 发送框按所选模式调用 `serial.write` 或 `serial.write_hex`。通过 `api.subscribeEvents()` 接收事件并保留注销函数，组件卸载时注销。完整类型见 [DriverAPI](../../../apps/shared/driver-api.ts)，事件与返回结构见 [接口设计](interfaces.md)。
 
 ## 验证
 

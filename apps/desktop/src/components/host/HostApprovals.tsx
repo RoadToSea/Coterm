@@ -2,7 +2,7 @@ import { t } from "../../i18n";
 import { useI18n } from "../../use-i18n";
 import { useEffect, useRef, useState } from "react";
 import { hostAPI, subscribeHostAttention, type AttentionApproval } from "../../host-api";
-import type { OperationRecord } from "@coterm/driver-sdk";
+import type { OperationRecord } from "../../../../shared/index";
 import { ApprovalCard } from "./ApprovalCard";
 
 /**

@@ -6,7 +6,7 @@
  *   这些是 host-api 的纯状态机行为，用手写 IPC 支架就能完整覆盖。
  * - `tests/host-interactions-component.test.mjs`：真实 HostInteractions 组件 + 真实 secret-input + 真实 IPC
  *   契约下的弹窗队列与凭据归属，在浏览器里跑。
- * - `tests/browser-layout.test.mjs`：真实构建产物的布局、真实 SDK 组件与真实 SSH 前端。
+ * - `tests/browser-layout.test.mjs`：真实构建产物的布局、真实共享前端组件与真实 SSH 前端。
  * - Rust 测试（`drivers/driver-ssh/tests/*`、`crates/*`）：协议核心与基座安全边界。
  *
  * 本文件不声称覆盖任何 UI 渲染或组件生命周期。
@@ -84,7 +84,7 @@ async function waitFor(predicate, timeoutMs = 2000) {
 const { subscribeHostAttention, retryHostAttention, hostAPI, createDriverAPI } = await import("../apps/desktop/src/host-api.ts");
 const { setLocale } = await import("../apps/desktop/src/i18n.ts");
 
-test("Driver SDK language subscriptions are released with their frontend scope", () => {
+test("Shared frontend language subscriptions are released with their frontend scope", () => {
   setLocale("en");
   const api = createDriverAPI({ driverId: "ssh", driverInstanceId: "locale-instance", sessionId: "locale-session", label: "Locale", status: "ready" });
   let calls = 0;
@@ -100,7 +100,7 @@ test("Driver SDK language subscriptions are released with their frontend scope",
 
 // --- 2. subscribeHostAttention 可控并发、代次与生命周期测试 ---
 
-test("Driver SDK exposes stable saved identity while operations remain bound to the runtime instance", async () => {
+test("Shared frontend exposes stable saved identity while operations remain bound to the runtime instance", async () => {
   const previousInvoke = mockInvoke;
   const calls = [];
   mockInvoke = async (command, args) => { calls.push({ command, args }); return { status: "completed" }; };

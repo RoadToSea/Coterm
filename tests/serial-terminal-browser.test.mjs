@@ -9,11 +9,11 @@ test("human Shell uses terminal keys, UART uses its sender, and MCP queues stay 
   if (!browserPath) { t.skip("No Chrome/Edge binary; serial terminal UI was not verified"); return; }
   const artifact = new URL("../drivers/driver-serial/dist/frontend/index.js", import.meta.url);
   const built = fs.statSync(artifact).mtimeMs;
-  assert.ok(built >= fs.statSync(new URL("../packages/driver-sdk/src/components/terminal-shortcuts.ts", import.meta.url)).mtimeMs,
+  assert.ok(built >= fs.statSync(new URL("../apps/shared/components/terminal-shortcuts.ts", import.meta.url)).mtimeMs,
     "rebuild the serial frontend after changing shared terminal shortcuts");
-  assert.ok(built >= fs.statSync(new URL("../packages/driver-sdk/src/components/terminal-search.ts", import.meta.url)).mtimeMs,
+  assert.ok(built >= fs.statSync(new URL("../apps/shared/components/terminal-search.ts", import.meta.url)).mtimeMs,
     "rebuild the serial frontend after changing terminal search");
-  assert.ok(built >= fs.statSync(new URL("../packages/driver-sdk/src/components/toasts.ts", import.meta.url)).mtimeMs,
+  assert.ok(built >= fs.statSync(new URL("../apps/shared/components/toasts.ts", import.meta.url)).mtimeMs,
     "rebuild the serial frontend after changing shared notices");
   for (const file of ["index.ts", "i18n.ts", "console-settings.ts", "format-switch.ts", "toolbar.ts", "receive-newlines.ts"]) {
     assert.ok(built >= fs.statSync(new URL(`../drivers/driver-serial/frontend/src/${file}`, import.meta.url)).mtimeMs,

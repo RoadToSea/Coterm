@@ -2,7 +2,7 @@ import { hostAPI } from "../../host-api";
 import { t } from "../../i18n";
 import { useI18n } from "../../use-i18n";
 import { useEffect, useRef, useState } from "react";
-import type { InvokeOptions, DriverFrontend } from "@coterm/driver-sdk";
+import type { InvokeOptions, DriverFrontend } from "../../../../shared/index";
 import { loadDriverFrontend } from "../../driver-loader";
 import { driverI18n } from "../../i18n";
 

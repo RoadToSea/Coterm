@@ -40,7 +40,7 @@ Windows CI 执行检查、浏览器与真实安装验收，并上传 NSIS 安装
 
 - `apps/desktop`：Tauri + React 桌面基座。
 - `crates`：共享协议、运行时和 MCP Bridge。
-- `packages/driver-sdk`：驱动前端契约与通用组件。
+- `apps/shared`：桌面与内置驱动共用的前端类型和交互组件。
 - `drivers`：SSH、串口和本地终端驱动。
 - `scripts`：构建、打包和本机验收脚本。
 - `tests`：跨模块测试、测试夹具与浏览器验收；布局截图输出到忽略目录 `.agent-debug/layout/`。

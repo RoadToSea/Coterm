@@ -1,18 +1,18 @@
-import { attachTerminalPreferences, attachTerminalTheme, readTerminalPreferences, readTerminalTheme } from "@coterm/driver-sdk/components/terminal-theme";
+import { attachTerminalPreferences, attachTerminalTheme, readTerminalPreferences, readTerminalTheme } from "../../../../apps/shared/components/terminal-theme";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { SearchAddon } from "@xterm/addon-search";
 import terminalCSS from "@xterm/xterm/css/xterm.css?inline";
-import type { DriverAPI, DriverConfigurationAPI, DriverFrontend, OperationReceipt } from "@coterm/driver-sdk";
+import type { DriverAPI, DriverConfigurationAPI, DriverFrontend, OperationReceipt } from "../../../../apps/shared/index";
 import { createTranslator } from "./i18n";
-import { mountToasts, type ToastTone } from "@coterm/driver-sdk/components/toasts";
+import { mountToasts, type ToastTone } from "../../../../apps/shared/components/toasts";
 import { createFormatSwitch, type Format } from "./format-switch";
 import { createToolbar } from "./toolbar";
 import { createCommunicationSettings, type SerialConfig } from "./console-settings";
 import { createReceiveNewlineNormalizer, type ReceiveNewlineMode } from "./receive-newlines";
 import { readSerialDisplayPreferences, saveSerialDisplayPreferences } from "./display-preferences";
-import { attachTerminalShortcuts } from "@coterm/driver-sdk/components/terminal-shortcuts";
-import { mountTerminalSearch, TERMINAL_SEARCH_HIGHLIGHT_LIMIT } from "@coterm/driver-sdk/components/terminal-search";
+import { attachTerminalShortcuts } from "../../../../apps/shared/components/terminal-shortcuts";
+import { mountTerminalSearch, TERMINAL_SEARCH_HIGHLIGHT_LIMIT } from "../../../../apps/shared/components/terminal-search";
 
 const css = `
   :host {

@@ -40,6 +40,6 @@ export function t(message: string, values: Record<string, string | number> = {})
   return template.replace(/\{(\w+)\}/g, (match, key: string) => String(values[key] ?? match));
 }
 
-/** Optional SDK capability; changing language never remounts a live connection. */
+/** Optional frontend API capability; changing language never remounts a live connection. */
 export const driverI18n = Object.freeze({ get locale() { return locale; }, subscribe: subscribeLocale });
 if (typeof document !== "undefined") document.documentElement.lang = locale;

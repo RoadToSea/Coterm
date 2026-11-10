@@ -1,17 +1,17 @@
-import { attachTerminalPreferences, attachTerminalTheme, readTerminalPreferences, readTerminalTheme } from "@coterm/driver-sdk/components/terminal-theme";
+import { attachTerminalPreferences, attachTerminalTheme, readTerminalPreferences, readTerminalTheme } from "../../../../apps/shared/components/terminal-theme";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { SearchAddon } from "@xterm/addon-search";
 import terminalCSS from "@xterm/xterm/css/xterm.css?inline";
-import type { DriverAPI, DriverConfigurationAPI, DriverFrontend, OperationReceipt } from "@coterm/driver-sdk";
+import type { DriverAPI, DriverConfigurationAPI, DriverFrontend, OperationReceipt } from "../../../../apps/shared/index";
 import { createTranslator } from "./i18n";
 import { mountSshBlocks } from "./blocks";
 import { mountJobs } from "./jobs";
 import { observeHumanCommands } from "./human-commands";
 import { observeBlockPrompt } from "./observed-boundaries";
-import { mountTerminalBlocks } from "@coterm/driver-sdk/components/terminal-blocks";
-import { attachTerminalShortcuts } from "@coterm/driver-sdk/components/terminal-shortcuts";
-import { mountTerminalSearch, TERMINAL_SEARCH_HIGHLIGHT_LIMIT } from "@coterm/driver-sdk/components/terminal-search";
+import { mountTerminalBlocks } from "../../../../apps/shared/components/terminal-blocks";
+import { attachTerminalShortcuts } from "../../../../apps/shared/components/terminal-shortcuts";
+import { mountTerminalSearch, TERMINAL_SEARCH_HIGHLIGHT_LIMIT } from "../../../../apps/shared/components/terminal-search";
 
 const css = `
   :host {

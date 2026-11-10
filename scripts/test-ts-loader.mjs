@@ -1,7 +1,7 @@
 /**
  * 让 node --test 直接 import 仓库里的 .ts 源码，不需要先构建，也不新增依赖。
  *
- * - 解析：为省略扩展名的相对导入补 .ts/.tsx/index，并把 `@coterm/driver-sdk` 映射到 workspace 源码。
+ * - 解析：为省略扩展名的相对导入补 .ts/.tsx/index。
  * - 加载：交给 node:module 的类型剥离（node 22.13+ 自带），只去掉类型，不改语义。
  *
  * .tsx 只做类型剥离，不转换 JSX —— 组件渲染行为在有真实浏览器的用例里验证。
@@ -11,19 +11,11 @@ import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import path from "node:path";
 
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const sdkRoot = path.join(repoRoot, "packages/driver-sdk/src");
 const SUFFIXES = ["", ".ts", ".tsx", "/index.ts", "/index.tsx"];
 
 function resolveFile(specifier, parentURL) {
-  let base;
-  if (specifier.startsWith("@coterm/driver-sdk")) {
-    base = path.join(sdkRoot, specifier.slice("@coterm/driver-sdk".length).replace(/^\//, ""));
-  } else if (specifier.startsWith(".")) {
-    base = path.resolve(path.dirname(fileURLToPath(parentURL)), specifier);
-  } else {
-    return null;
-  }
+  if (!specifier.startsWith(".")) return null;
+  const base = path.resolve(path.dirname(fileURLToPath(parentURL)), specifier);
   for (const suffix of SUFFIXES) {
     const candidate = `${base}${suffix}`;
     if (path.extname(candidate) !== "" && existsSync(candidate)) return candidate;

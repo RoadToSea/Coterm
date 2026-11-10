@@ -70,7 +70,7 @@
 - 原始秘密通过 `provide_secret` 交给目标后端，普通交互结果仅带句柄。
 - 句柄绑定实例、用途，30 秒有效且一次性消费；不能进入普通账本、事件或 MCP。
 - 交互最多 32 个，宿主限制等待期限；取消、过期、实例销毁或驱动停止后拒绝迟到结果。
-- 当前支持一次秘密交互；多轮交互、MFA 和通用秘密兑换 SDK 待完善。
+- 当前支持一次秘密交互；多轮交互、MFA 和通用秘密兑换接口待完善。
 - 秘密与控制消息仍共用物理 stdio，仅逻辑隔离；同 WebView 前端也不是安全沙箱。
 
 ## 实例事件与流
@@ -117,6 +117,6 @@ Windows 首版将版本化工作区、初始配置及配置引用整体用当前
 
 桌面只发现 SSH、Serial、Local 三个固定目录。开发构建读取仓库 `target/bundled-drivers/{ssh,serial,local}`；发行构建读取 Tauri resource 目录下的 `drivers/{ssh,serial,local}`。`pnpm drivers:build` 为当前平台构建前端与 Worker 并暂存；生产构建使用 `--release`。不扫描应用数据目录，不提供安装、升级、移除离线包的桌面 API。
 
-运行时字段统一使用 `driverId/driverInstanceId`、操作作用域为 `driver|instance`、事件能力为 `driver-events`；旧 v1 Worker 不兼容，握手直接拒绝。前端契约为 `@coterm/driver-sdk` v2.0，MCP 的 `coterm_ssh_command` 等终端工具名保持稳定，实例列表字段使用 driver 命名。
+运行时字段统一使用 `driverId/driverInstanceId`、操作作用域为 `driver|instance`、事件能力为 `driver-events`；旧 v1 Worker 不兼容，握手直接拒绝。前端契约版本为 v2.0，共享类型位于 `apps/shared/`，MCP 的 `coterm_ssh_command` 等终端工具名保持稳定，实例列表字段使用 driver 命名。
 
 前端通过绑定当前实例的 `saveConfiguration(config)` 保存驱动已验证的完整配置。桌面 `save_instance_configuration({driverInstanceId,config})` 与生命周期变更共用工作区锁，仅替换对应保存项配置，保留 configRef、名称、分组及审批组引用。拒绝失效实例、秘密句柄、超限配置与写盘失败；失败不覆盖原保存值。串口配置保存成功后才连接，恢复不自动连接。

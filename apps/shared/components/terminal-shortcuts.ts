@@ -1,4 +1,4 @@
-/** xterm-compatible surface; the SDK does not depend on a terminal renderer. */
+/** xterm-compatible surface; the shared frontend does not depend on a terminal renderer. */
 export interface ShortcutTerminal {
   readonly element: HTMLElement | undefined;
   hasSelection(): boolean;

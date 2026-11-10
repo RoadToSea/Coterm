@@ -596,15 +596,15 @@ test("HostInteractions: an older prefetch failure does not overwrite a newer sta
 });
 
 
-test("Frontend SDK v1: typed host dialogs, rejection, timeout, scope replacement and disposal", async (t) => {
-  if (!browserPath) { t.skip("No browser available for SDK dialog acceptance"); return; }
+test("Frontend API: typed host dialogs, rejection, timeout, scope replacement and disposal", async (t) => {
+  if (!browserPath) { t.skip("No browser available for shared frontend dialog acceptance"); return; }
   assertFreshTestArtifacts();
   const { url, server } = await startStaticServer();
   serverUrl = url;
   const session = await openSession({ browserPath, totalTimeoutMs: 60_000 });
   const page = await openInteractionsPage(session, scenarioBase(attention(1, [])));
   try {
-    await page.evaluate(`window.api = window.__cotermHostInteractions.createDriverAPI({driverId:'fixture',driverInstanceId:'sdk-instance',sessionId:'session',label:'SDK',status:'ready'});
+    await page.evaluate(`window.api = window.__cotermHostInteractions.createDriverAPI({driverId:'fixture',driverInstanceId:'shared-instance',sessionId:'session',label:'shared frontend',status:'ready'});
       window.result = null; window.api.requestText({title:'Text',prompt:'<b>plain text</b>'}).then(value=>window.result=value); true;`);
     await waitForDialogs(page, 1, "text prompt");
     assert.equal(await page.evaluate("document.querySelector('dialog label span').textContent"), "<b>plain text</b>");
