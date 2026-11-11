@@ -1,15 +1,14 @@
 import type { Translator } from "./i18n";
 
 interface Item { id: string; label: string; element: HTMLElement }
-const KEY = "coterm.serial.toolbar.v1";
 
 /** Only UI layout IDs are persisted; no messages, file paths or protocol data enter storage. */
-export function createToolbar(bar: HTMLElement, items: Item[], translate: Translator) {
+export function createToolbar(bar: HTMLElement, items: Item[], translate: Translator, key = "coterm.serial.toolbar.v1") {
   let t = translate;
   let order = items.map(item => item.id);
   const hidden = new Set<string>();
   try {
-    const saved: unknown = JSON.parse(localStorage.getItem(KEY) ?? "null");
+    const saved: unknown = JSON.parse(localStorage.getItem(key) ?? "null");
     if (saved && typeof saved === "object" && "order" in saved && "hidden" in saved
       && Array.isArray(saved.order) && Array.isArray(saved.hidden)) {
       const known = new Set(order);
@@ -46,7 +45,7 @@ export function createToolbar(bar: HTMLElement, items: Item[], translate: Transl
     for (const slot of slots.values()) delete slot.dataset.dragging;
   };
   const save = () => {
-    try { localStorage.setItem(KEY, JSON.stringify({ order, hidden: [...hidden] })); } catch { /* Session layout still works. */ }
+    try { localStorage.setItem(key, JSON.stringify({ order, hidden: [...hidden] })); } catch { /* Session layout still works. */ }
   };
   const arrange = () => {
     for (const id of order) {

@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { DEFAULT_SERIAL_DISPLAY_PREFERENCES as defaults, readSerialDisplayPreferences as read,
-  saveSerialDisplayPreferences as save } from "../crates/coterm-driver/frontend/serial/src/display-preferences.ts";
+import { DEFAULT_DISPLAY_PREFERENCES as defaults, readDisplayPreferences as read,
+  saveDisplayPreferences as save } from "../apps/shared/components/stream-workbench/display-preferences.ts";
 
 function withStorage(run) {
   const previous = Object.getOwnPropertyDescriptor(globalThis, "localStorage");

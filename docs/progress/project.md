@@ -2,11 +2,19 @@
 
 ## 当前能力
 
-- 三个内置驱动后端及前端编入桌面可执行文件，使用独立异步任务和多实例状态隔离，无旁路驱动 EXE；不提供进程级故障隔离。
+- SSH、Serial、Local、Raw TCP、Telnet 五个内置驱动后端及前端编入桌面可执行文件，使用独立异步任务和多实例状态隔离，无旁路驱动 EXE；不提供进程级故障隔离。
 - 每实例审批对象、独立规则组和单组绑定；已保存实例同时保存和恢复 Bypass，临时实例仅内存保留。
 - SSH、Local command 默认前台，显式 exec 后台；后端保留 stdin/stdout/stderr，PTY 合并输出。
 - Serial 终端 / UART 切换同步 Shell / stream 读取能力，模式由驱动配置保存与恢复；在线切换保留连接及原始接收缓冲，通信参数修改仍在下次连接前应用与保存。
 - Agent 三类读取不使用游标；原始 stream 仅支持 read_lines。
+- Telnet 与 Raw TCP 支持代理、可选重连及终端显示参数；Raw TCP 共用串口的终端／字节工作台，Telnet 共用 xterm 生命周期，不提供 SSH exec。
+
+## 2026-11-11：Telnet 与 Raw TCP
+
+- 两个网络驱动接入固定注册、构建、实例配置、审批和 MCP；不增加宿主契约、工作区版本或 Rust 依赖。TCP 生命周期在 network 内共享，串口与网络的有界接收和提示符观察在 stream 内共享。
+- 公共前端提取 xterm 生命周期与终端／字节工作台；串口 UART 和 SSH 专属能力仍留在各自适配层。网络配置保存后显式连接，自动重连不重放输入。
+- Windows 原生 MCP → 审批界面 → 网络回环 Shell → 后端对话读取通过；保存实例恢复后保持断开，Local PowerShell 原生验收通过。能力、限制和后续入口见[网络驱动进度](network-drivers.md)。
+- 最终验证：工作区全目标 check、274 项 Rust 测试、全目标严格 Clippy、五个驱动前端与桌面构建、103 项前端回归通过；3 项真实串口硬件用例按原设置忽略，前端无跳过。原生验收后已恢复普通 Coterm debug 构建；335 处本地文档链接及锚点、差异空白检查通过。
 
 ## 2026-11-11：遗留未提交改动收敛
 
@@ -97,4 +105,4 @@
 
 - 非 Windows 的实机与发行安装验收尚未完成；NSIS 资源与干净环境安装需发行前验证。
 - Local 原始人工按键不生成对话块；后台取消不能保证回收完整进程树。
-- 各模块入口：[Local](local-driver.md)、[SSH](ssh-driver.md)、[Serial](../../crates/coterm-driver/docs/serial/progress.md)、[MCP](mcp.md)、[共享前端](frontend-shared.md)、[工作区与桌面](workspace.md)。
+- 各模块入口：[Local](local-driver.md)、[SSH](ssh-driver.md)、[Serial](../../crates/coterm-driver/docs/serial/progress.md)、[网络驱动](network-drivers.md)、[MCP](mcp.md)、[共享前端](frontend-shared.md)、[工作区与桌面](workspace.md)。

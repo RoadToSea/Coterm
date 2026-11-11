@@ -1,0 +1,33 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "ESNext",
+    "lib": [
+      "ES2020",
+      "DOM"
+    ],
+    "moduleResolution": "bundler",
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "types": [
+      "vite/client"
+    ],
+    "noUnusedLocals": true,
+    "baseUrl": ".",
+    "paths": {
+      "@xterm/xterm": [
+        "./node_modules/@xterm/xterm"
+      ],
+      "@xterm/addon-fit": [
+        "./node_modules/@xterm/addon-fit"
+      ],
+      "@xterm/addon-search": [
+        "./node_modules/@xterm/addon-search"
+      ]
+    }
+  },
+  "include": [
+    "src"
+  ]
+}

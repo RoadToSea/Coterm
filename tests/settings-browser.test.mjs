@@ -1,3 +1,4 @@
+import { assertFreshDriverBuild } from "./support/browser-harness.mjs";
 /** Public Settings UI + actual host/SSH/serial bundles; only backend operations are mocked. */
 import test from "node:test";
 import assert from "node:assert/strict";

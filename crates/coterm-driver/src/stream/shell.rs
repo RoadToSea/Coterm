@@ -1,11 +1,11 @@
-//! Observed serial Shell boundaries; a prompt never proves an exit status.
+//! Observed byte-stream Shell boundaries; a prompt never proves an exit status.
 use std::collections::VecDeque;
 
 use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use crate::serial::payload::bounded_output_text;
+use crate::stream::payload::bounded_output_text;
 
 const RECORDS: usize = 32;
 const OUTPUT_BYTES: usize = 16 * 1024;

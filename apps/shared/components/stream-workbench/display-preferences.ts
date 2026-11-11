@@ -1,6 +1,6 @@
 import { readReceiveNewlineMode, RECEIVE_NEWLINE_MODES, type ReceiveNewlineMode } from "./receive-newlines";
 
-export interface SerialDisplayPreferences {
+export interface DisplayPreferences {
   view: "terminal" | "uart";
   receiveFormat: "text" | "hex";
   timestamps: boolean;
@@ -10,23 +10,22 @@ export interface SerialDisplayPreferences {
   sendLineEnding: "none" | "cr" | "lf" | "crlf";
 }
 
-export const DEFAULT_SERIAL_DISPLAY_PREFERENCES: Readonly<SerialDisplayPreferences> = Object.freeze({
+export const DEFAULT_DISPLAY_PREFERENCES: Readonly<DisplayPreferences> = Object.freeze({
   view: "terminal", receiveFormat: "text", timestamps: false, autoScroll: true,
   receiveNewlines: "none", backspace: "bs", sendLineEnding: "crlf",
 });
-const PREFIX = "coterm.serial.display.v1:";
 const MAX_CHARS = 2048;
 
 /** Never identify a saved instance by device address or display name. */
-function storageKey(configRef?: string, runtimeInstanceId?: string): string | null {
+function storageKey(configRef: string | undefined, runtimeInstanceId: string | undefined, namespace: string): string | null {
   const value = configRef ?? runtimeInstanceId;
   if (typeof value !== "string") return null;
   if (!value || value.length > 512 || /[\u0000-\u001f\u007f]/.test(value)) return null;
   if (!value.trim()) return null;
-  return PREFIX + (configRef === undefined ? "runtime:" : "config:") + encodeURIComponent(value);
+  return `coterm.${namespace}.display.v1:` + (configRef === undefined ? "runtime:" : "config:") + encodeURIComponent(value);
 }
 
-function normalize(value: Record<string, unknown>): SerialDisplayPreferences {
+function normalize(value: Record<string, unknown>): DisplayPreferences {
   return {
     view: value.view === "uart" ? "uart" : "terminal",
     receiveFormat: value.receiveFormat === "hex" ? "hex" : "text",
@@ -39,10 +38,10 @@ function normalize(value: Record<string, unknown>): SerialDisplayPreferences {
   };
 }
 
-export function readSerialDisplayPreferences(configRef?: string, runtimeInstanceId?: string): SerialDisplayPreferences {
-  const defaults = { ...DEFAULT_SERIAL_DISPLAY_PREFERENCES };
+export function readDisplayPreferences(configRef?: string, runtimeInstanceId?: string, namespace = "serial"): DisplayPreferences {
+  const defaults = { ...DEFAULT_DISPLAY_PREFERENCES };
   try {
-    const key = storageKey(configRef, runtimeInstanceId);
+    const key = storageKey(configRef, runtimeInstanceId, namespace);
     if (!key) return defaults;
     const raw = localStorage.getItem(key);
     if (raw !== null) {
@@ -52,19 +51,19 @@ export function readSerialDisplayPreferences(configRef?: string, runtimeInstance
       return normalize(value as Record<string, unknown>);
     }
     // Migrate only the current runtime instance; never guess another device's legacy settings.
-    if (runtimeInstanceId) {
+    if (namespace === "serial" && runtimeInstanceId) {
       defaults.receiveNewlines = readReceiveNewlineMode(runtimeInstanceId);
-      if (defaults.receiveNewlines !== "none") saveSerialDisplayPreferences(configRef, defaults, runtimeInstanceId);
+      if (defaults.receiveNewlines !== "none") saveDisplayPreferences(configRef, defaults, runtimeInstanceId);
     }
   } catch { /* Invalid or unavailable storage leaves a usable current view. */ }
   return defaults;
 }
 
 /** Only bounded UI choices are saved, never commands, output, files or connection credentials. */
-export function saveSerialDisplayPreferences(configRef: string | undefined, preferences: SerialDisplayPreferences,
-  runtimeInstanceId?: string): void {
+export function saveDisplayPreferences(configRef: string | undefined, preferences: DisplayPreferences,
+  runtimeInstanceId?: string, namespace = "serial"): void {
   try {
-    const key = storageKey(configRef, runtimeInstanceId);
+    const key = storageKey(configRef, runtimeInstanceId, namespace);
     if (key) localStorage.setItem(key, JSON.stringify({ version: 1, ...normalize({ ...preferences }) }));
   } catch { /* Changes still apply to the current view when storage is unavailable. */ }
 }

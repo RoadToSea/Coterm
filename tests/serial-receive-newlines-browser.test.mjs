@@ -1,3 +1,4 @@
+import { assertFreshDriverBuild } from "./support/browser-harness.mjs";
 /** Real Serial bundle and xterm; no physical port is opened. */
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -9,8 +10,9 @@ import { findBrowser, openSession, evaluate, waitForValue } from "./support/brow
 test("receive newline settings update xterm, preserve raw bytes and persist per instance", async t => {
   const browserPath = findBrowser();
   if (!browserPath) { t.skip("No Chrome/Edge binary"); return; }
+  assertFreshDriverBuild("serial");
   const artifact = new URL("../crates/coterm-driver/dist/serial/frontend/index.js", import.meta.url);
-  for (const file of ["index.ts", "i18n.ts", "receive-newlines.ts"]) {
+  for (const file of ["index.ts"]) {
     assert.ok(fs.statSync(artifact).mtimeMs >= fs.statSync(new URL(`../crates/coterm-driver/frontend/serial/src/${file}`, import.meta.url)).mtimeMs,
       "build the Serial frontend before testing");
   }

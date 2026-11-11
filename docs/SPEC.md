@@ -1,13 +1,13 @@
 # Coterm 架构规格
 
-Coterm 是面向人类与 Agent 协同的终端交互基座，支持 SSH、物理串口（Serial）与本地终端（Local）。
+Coterm 是面向人类与 Agent 协同的终端交互基座，支持 SSH、物理串口（Serial）、本地终端（Local）、Telnet 与 Raw TCP。
 
 系统专注终端场景，非标字节流解码、波形可视化与信号数学分析由 Lissio 等专用工具承担。当前实现状态见 [项目进度](progress/project.md)。
 
 ## 核心原则
 
-1. **内置驱动**：SSH、串口与本地终端随桌面应用分发，用户无需安装独立驱动包。连接参数与认证仍由对应驱动管理。
-2. **进程内驱动**：SSH、Serial、Local 后端以 Rust 库链接到桌面主进程，通过类型化请求和有界通知队列通信。每种驱动有独立异步任务与多实例状态；普通任务 panic 可收敛，原生崩溃、进程 abort 或阻塞底层调用仍可能影响宿主。
+1. **内置驱动**：SSH、串口、本地终端、Telnet 与 Raw TCP 随桌面应用分发，用户无需安装独立驱动包。连接参数与认证仍由对应驱动管理。
+2. **进程内驱动**：五个后端以 Rust 库链接到桌面主进程，通过类型化请求和有界通知队列通信。每种驱动有独立异步任务与多实例状态；普通任务 panic 可收敛，原生崩溃、进程 abort 或阻塞底层调用仍可能影响宿主。
 3. **共享连接实例**：界面与 MCP 统一操作同一实例；不能根据当前标签页隐式改变 Agent 的操作目标。
 4. **用户控制与安全审批**：Agent 写操作（`effect: commit`）默认经过人工审批；用户可独立维护正向放行或反向拦截规则组，每实例可选绑定一个组，保存组后对所有绑定实例的新提交生效；Bypass 只能由用户显式开启，不能绕过协议自身的认证。
 5. **终端与命令块**：使用 xterm.js 呈现终端输出，按驱动能力提供命令块与结构化读取。操作账本仅保留本次会话，不作为持久审计日志。
@@ -16,7 +16,7 @@ Coterm 是面向人类与 Agent 协同的终端交互基座，支持 SSH、物�
 
 ```text
 外部 Agent → MCP Bridge ─┐
-                        ├→ 实例路由 / 审批 / 账本 → 进程内驱动 (SSH / Serial / Local)
+                        ├→ 实例路由 / 审批 / 账本 → 进程内驱动 (SSH / Serial / Local / Telnet / TCP)
 桌面交互界面 → Host API ┘                           ↕
                         ← 终端事件 / 审批通知 ←──────┘
 ```
@@ -30,7 +30,7 @@ Coterm 是面向人类与 Agent 协同的终端交互基座，支持 SSH、物�
 ## 后端模块
 
 - `coterm-core`：共享数据模型、驱动接口、实例运行时、审批、操作记录与终端工具。
-- `coterm-driver`：单个库，内部按 `ssh/serial/local` 组织协议实现。
+- `coterm-driver`：单个库，内部按 `ssh/serial/local/tcp/telnet` 组织协议实现；`network` 复用 TCP 生命周期，`stream` 复用有界接收与提示符观察。
 - `coterm-mcp`：外部 Agent 接入和工具映射。
 
 桌面负责组合与注册，driver、MCP 单向依赖 core。驱动注册时校验固定声明，运行时通过类型化请求调用，无内部 JSON-RPC 往返或握手协商。工作区持久化继续由桌面维护。
@@ -47,4 +47,4 @@ Coterm 是面向人类与 Agent 协同的终端交互基座，支持 SSH、物�
 
 ## 架构与设计入口
 
-架构设计与需求分析见 [终端聚焦与内置驱动架构设计](design/terminal-focus-and-in-tree-architecture.md)。消息与交互见 [运行时通信](architecture/runtime-communication.md)，Agent 接入见 [MCP 接入](architecture/mcp-integration.md)，SSH 规范见 [SSH 驱动](architecture/ssh-driver.md)，串口规范见 [串口驱动](architecture/serial-driver.md)。
+架构设计与需求分析见 [终端聚焦与内置驱动架构设计](design/terminal-focus-and-in-tree-architecture.md)。消息与交互见 [运行时通信](architecture/runtime-communication.md)，Agent 接入见 [MCP 接入](architecture/mcp-integration.md)，协议能力见 [SSH 驱动](architecture/ssh-driver.md)、[串口驱动](architecture/serial-driver.md)、[Telnet 与 Raw TCP](architecture/network-drivers.md)。

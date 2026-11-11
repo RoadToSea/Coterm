@@ -132,6 +132,17 @@ function assertNotStale(artifact, sources) {
   }
 }
 
+/** Check the actual shared sources as well as the concrete driver adapter. */
+export function assertFreshDriverBuild(protocol) {
+  if (!["ssh", "serial", "local", "tcp", "telnet"].includes(protocol)) throw new Error("Unknown built-in driver");
+  const base = path.join(rootDir,"crates/coterm-driver");
+  assertNotStale(path.join(base,"dist",protocol,"frontend/index.js"),[
+    path.join(base,"frontend",protocol,"src"),
+    path.join(rootDir,"apps/shared/components"),
+    path.join(rootDir,"apps/shared/driver-api.ts"),
+  ]);
+}
+
 /**
  * 只挂 HostInteractions 的页面。产品 index.html 会一起挂 HostApprovals，
  * 两份订阅记录混在一起就分不清是谁开的弹窗。

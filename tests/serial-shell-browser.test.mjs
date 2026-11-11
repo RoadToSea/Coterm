@@ -1,3 +1,4 @@
+import { assertFreshDriverBuild } from "./support/browser-harness.mjs";
 /** Real Serial bundle: one console mode controls presentation and backend capabilities. */
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -7,8 +8,9 @@ import { evaluate, findBrowser, openSession, waitForValue } from "./support/brow
 test("Serial view switches synchronize backend mode without reconnecting or losing output", async t => {
   const browserPath = findBrowser();
   if (!browserPath) { t.skip("No Chrome/Edge binary"); return; }
+  assertFreshDriverBuild("serial");
   const artifact = new URL("../crates/coterm-driver/dist/serial/frontend/index.js", import.meta.url);
-  for (const name of ["index.ts", "i18n.ts", "console-settings.ts"]) {
+  for (const name of ["index.ts", "console-settings.ts"]) {
     assert.ok(fs.statSync(artifact).mtimeMs >= fs.statSync(new URL(`../crates/coterm-driver/frontend/serial/src/${name}`, import.meta.url)).mtimeMs);
   }
   const moduleURL = `data:text/javascript;base64,${fs.readFileSync(artifact).toString("base64")}`;

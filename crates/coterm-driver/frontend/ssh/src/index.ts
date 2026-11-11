@@ -1,8 +1,4 @@
-import { attachTerminalPreferences, attachTerminalTheme, readTerminalPreferences, readTerminalTheme } from "../../../../../apps/shared/components/terminal-theme";
-import { Terminal } from "@xterm/xterm";
-import { FitAddon } from "@xterm/addon-fit";
-import { SearchAddon } from "@xterm/addon-search";
-import terminalCSS from "@xterm/xterm/css/xterm.css?inline";
+import { mountTerminalSurface } from "../../../../../apps/shared/components/terminal-surface";
 import type { DriverAPI, DriverConfigurationAPI, DriverFrontend, OperationReceipt } from "../../../../../apps/shared/index";
 import { createTranslator } from "./i18n";
 import { mountSshBlocks } from "./blocks";
@@ -10,8 +6,6 @@ import { mountJobs } from "./jobs";
 import { observeHumanCommands } from "./human-commands";
 import { observeBlockPrompt } from "./observed-boundaries";
 import { mountTerminalBlocks } from "../../../../../apps/shared/components/terminal-blocks";
-import { attachTerminalShortcuts } from "../../../../../apps/shared/components/terminal-shortcuts";
-import { mountTerminalSearch, TERMINAL_SEARCH_HIGHLIGHT_LIMIT } from "../../../../../apps/shared/components/terminal-search";
 
 const css = `
   :host {
@@ -180,9 +174,6 @@ function base64(data: Uint8Array): string {
 export function mount(container: HTMLElement, api: DriverAPI): DriverFrontend {
   const t = createTranslator(api.i18n);
   const root = surface(container);
-  const xtermStyle = document.createElement("style");
-  xtermStyle.textContent = terminalCSS;
-  root.append(xtermStyle);
   const layout = document.createElement("div");
   layout.className = "layout";
   const bar = document.createElement("div");
@@ -210,23 +201,11 @@ export function mount(container: HTMLElement, api: DriverAPI): DriverFrontend {
   layout.append(bar, workbench, notice);
   root.append(layout);
 
-  const terminal = new Terminal({
-    allowProposedApi: true,
-    ...readTerminalPreferences(terminalContainer), scrollback: 3000,
-    fontFamily: 'Consolas, "Liberation Mono", monospace',
-    theme: readTerminalTheme(terminalContainer),
-  });
-  const fit = new FitAddon();
-  terminal.loadAddon(fit);
-  const searchAddon = new SearchAddon({ highlightLimit: TERMINAL_SEARCH_HIGHLIGHT_LIMIT });
-  terminal.loadAddon(searchAddon);
-  terminal.open(terminalContainer);
+  const terminalSurface = mountTerminalSurface(terminalContainer, bar, t, (cols, rows) => {
+    if (connected) void invoke("ssh.resize", {cols, rows}).catch(showError);
+  }, () => { if (!disposed) notice.textContent = t("Could not copy terminal selection. Try copying again."); });
+  const { terminal, searchView } = terminalSurface;
   const humanCommands = observeHumanCommands(terminal);
-  const stopTheme = attachTerminalTheme(terminalContainer, (theme) => { terminal.options.theme = theme; });
-  const stopPreferences = attachTerminalPreferences(terminalContainer, (preferences) => {
-    Object.assign(terminal.options, preferences);
-    resize();
-  });
   let disposed = false;
   let connected = false;
   let working = false;
@@ -234,7 +213,6 @@ export function mount(container: HTMLElement, api: DriverAPI): DriverFrontend {
   let connectionId: string | null = null;
   let unsubscribe: (() => void) | undefined;
   let updates = Promise.resolve();
-  let resizeTimer = 0;
   let queuedBytes = 0;
   let inputQueue = Promise.resolve();
   let selectionQueue = Promise.resolve();
@@ -249,11 +227,6 @@ export function mount(container: HTMLElement, api: DriverAPI): DriverFrontend {
   const blocksView = mountSshBlocks(blocksControls, api, t, blocks => {
     terminalBlocks.update(blocks); jobsView.setBlocks(blocks);
   }, () => { observedBoundaries.reset(); terminalBlocks.reset(); jobsView.reset(); });
-  const searchView = mountTerminalSearch(bar, terminal, searchAddon, t);
-  const stopShortcuts = attachTerminalShortcuts(terminal, () => {
-    if (!disposed) notice.textContent = t("Could not copy terminal selection. Try copying again.");
-  }, searchView.open);
-
   const invoke = async <T = unknown>(operation: string, args: unknown): Promise<T> => output(await api.invoke<T>(operation, args));
   const showError = (reason: unknown) => { if (!disposed) notice.textContent = String(reason); };
   const setConnected = (next: boolean) => {
@@ -265,8 +238,7 @@ export function mount(container: HTMLElement, api: DriverAPI): DriverFrontend {
   };
   const resize = () => {
     if (disposed || terminalContainer.clientWidth === 0 || terminalContainer.clientHeight === 0) return;
-    fit.fit();
-    if (connected) void invoke("ssh.resize", { cols: terminal.cols, rows: terminal.rows }).catch(showError);
+    terminalSurface.resize();
   };
   const write = async (data: string) => {
     if (!data || disposed) return;
@@ -438,11 +410,6 @@ export function mount(container: HTMLElement, api: DriverAPI): DriverFrontend {
       }).catch(showError);
     }, 100);
   });
-  const observer = new ResizeObserver(() => {
-    window.clearTimeout(resizeTimer);
-    resizeTimer = window.setTimeout(resize, 100);
-  });
-  observer.observe(terminalContainer);
   const stopLocale = api.i18n?.subscribe(() => {
     terminalBlocks.refreshLocale(t("Clear selection"));
     blocksView.refreshLocale();
@@ -464,19 +431,14 @@ export function mount(container: HTMLElement, api: DriverAPI): DriverFrontend {
     blocksView.unmount();
     stopLocale?.();
     unsubscribe?.();
-    window.clearTimeout(resizeTimer);
     window.clearTimeout(selectionTimer);
-    observer.disconnect();
     jobsView.unmount();
     terminalBlocks.unmount();
     observedBoundaries.dispose();
     humanCommands.dispose();
     onData.dispose();
     onSelection.dispose();
-    stopShortcuts();
-    searchView.dispose();
-    stopTheme(); stopPreferences();
-    terminal.dispose();
+    terminalSurface.dispose();
     container.replaceChildren();
   } };
 }

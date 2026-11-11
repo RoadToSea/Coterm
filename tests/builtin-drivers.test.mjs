@@ -8,7 +8,7 @@ test("built-in drivers are linked libraries with embedded frontends and no worke
   assert.ok(dependencies.includes("coterm-driver.workspace = true"));
   const base = new URL("../crates/coterm-driver/", import.meta.url);
   assert.equal(fs.existsSync(new URL("Cargo.toml", base)), true);
-  for (const name of ["ssh", "serial", "local"]) {
+  for (const name of ["ssh", "serial", "local", "tcp", "telnet"]) {
     const manifest = JSON.parse(fs.readFileSync(new URL(`manifests/${name}.json`, base)));
     assert.equal(manifest.id, `coterm-driver-${name}`);
     assert.equal(Object.hasOwn(manifest, "backend"), false);

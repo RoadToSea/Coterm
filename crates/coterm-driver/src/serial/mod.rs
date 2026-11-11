@@ -1,7 +1,7 @@
 pub mod backend;
 mod command;
-pub mod payload;
-mod result;
+pub use crate::stream::payload;
+pub(crate) use crate::stream::result;
 mod serial_io;
 pub mod session;
-mod shell;
+pub(crate) use crate::stream::shell;

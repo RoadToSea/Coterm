@@ -1,3 +1,4 @@
+import { assertFreshDriverBuild } from "./support/browser-harness.mjs";
 /** Real host and Serial configuration; a stopped backend must start before enumeration. */
 import test from "node:test";
 import assert from "node:assert/strict";

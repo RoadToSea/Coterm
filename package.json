@@ -18,7 +18,9 @@
     "tauri": "pnpm --filter coterm-desktop tauri",
     "tauri:dev": "pnpm --filter coterm-desktop tauri dev",
     "tauri:build": "node scripts/build-desktop.mjs",
-    "drivers:build": "node scripts/build-drivers.mjs"
+    "drivers:build": "node scripts/build-drivers.mjs",
+    "driver:tcp:build": "node scripts/build-tcp.mjs",
+    "driver:telnet:build": "node scripts/build-telnet.mjs"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.0.0"

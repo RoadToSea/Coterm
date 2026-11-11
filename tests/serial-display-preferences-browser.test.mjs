@@ -1,3 +1,4 @@
+import { assertFreshDriverBuild } from "./support/browser-harness.mjs";
 /** Real Serial frontend, recreated runtime IDs and a synthetic embedded device; no hardware I/O. */
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -6,6 +7,7 @@ import http from "node:http";
 import { evaluate, findBrowser, openSession, waitForValue } from "./support/browser-harness.mjs";
 
 async function serialSession(browserPath, { delayStatus = false } = {}) {
+  assertFreshDriverBuild("serial");
   const artifact = new URL("../crates/coterm-driver/dist/serial/frontend/index.js", import.meta.url);
   const server = http.createServer((request, response) => {
     if (request.url === "/serial.js") {

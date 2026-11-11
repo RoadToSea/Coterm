@@ -1,0 +1,30 @@
+{
+  "manifestVersion": 1,
+  "id": "coterm-driver-tcp",
+  "name": "Raw TCP",
+  "version": "0.1.0",
+  "runtime": {
+    "interfaceMajor": 2,
+    "requires": [
+      "instances",
+      "backend-calls",
+      "operation-catalog",
+      "native-mcp-tools",
+      "async-operations",
+      "driver-events"
+    ]
+  },
+  "frontend": {
+    "entry": "frontend/index.js"
+  },
+  "mcp": {
+    "provider": "backend"
+  },
+  "instances": {
+    "type": "tcp-stream",
+    "multiple": true
+  },
+  "capabilities": [
+    "confirmation"
+  ]
+}

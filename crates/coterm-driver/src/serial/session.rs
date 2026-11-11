@@ -1,6 +1,6 @@
 //! 串口连接、读取线程和有界回放缓冲。协议语义全部留在这里，基座不感知 UART。
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::HashMap,
     io::{Read, Write},
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -11,12 +11,15 @@ use std::{
 };
 
 use crate::serial::command::{CommandHandle, CommandJob, CommandList};
-use crate::serial::payload::{
-    bounded_output_text, encode_hex, Utf8Decoder, OUTPUT_TEXT_JSON_BUDGET,
-};
 use crate::serial::serial_io::SerialWriter;
+use crate::serial::shell::validate_prompt;
 pub use crate::serial::shell::Mode;
-use crate::serial::shell::{validate_prompt, ShellHistory};
+use crate::stream::buffer::OUTPUT_CHUNK_BYTES;
+#[cfg(test)]
+use crate::stream::{
+    buffer::{MAX_OUTPUT_BYTES, READ_BYTES},
+    payload::OUTPUT_TEXT_JSON_BUDGET,
+};
 use anyhow::{anyhow, bail, Result};
 use coterm_core::driver::DriverNotification;
 use coterm_core::model::{ErrorCategory, RuntimeError};
@@ -28,11 +31,6 @@ use tokio::{
     time::timeout,
 };
 
-const MAX_OUTPUT_BYTES: usize = 256 * 1024;
-// Even an all-control-character text page must fit the 16 KiB JSON result limit,
-// including the MCP content envelope and its JSON string escaping.
-const OUTPUT_CHUNK_BYTES: usize = 1024;
-const READ_BYTES: usize = 1024;
 const IO_TIMEOUT: Duration = Duration::from_secs(2);
 const OPEN_TIMEOUT: Duration = Duration::from_secs(5);
 /// 读取线程单次阻塞等待；只影响断开延迟，不影响数据完整性。
@@ -149,172 +147,11 @@ pub fn same_port(left: &str, right: &str) -> bool {
     }
 }
 
-#[derive(Default)]
-pub struct OutputBuffer {
-    chunks: VecDeque<(u64, Vec<u8>, String)>,
-    decoder: Utf8Decoder,
-    bytes: usize,
-    sequence: u64,
-    pub closed: bool,
-    pub(crate) shell: ShellHistory,
-}
+pub use crate::stream::buffer::OutputBuffer;
 
 impl OutputBuffer {
     pub(crate) fn configured(config: &Config) -> Self {
-        Self {
-            shell: ShellHistory::new(config.mode, config.prompt.as_deref()),
-            ..Self::default()
-        }
-    }
-
-    pub fn cursor(&self) -> u64 {
-        self.sequence
-    }
-
-    pub fn push(&mut self, data: &[u8]) -> String {
-        let mut text = String::new();
-        for part in data.chunks(OUTPUT_CHUNK_BYTES) {
-            let decoded = self.decoder.push(part);
-            text.push_str(&decoded);
-            self.sequence += 1;
-            self.chunks
-                .push_back((self.sequence, part.to_vec(), decoded));
-            self.bytes += part.len();
-            while self.bytes > MAX_OUTPUT_BYTES {
-                if let Some((_, data, _)) = self.chunks.pop_front() {
-                    self.bytes -= data.len();
-                }
-            }
-        }
-        self.shell.feed(&text);
-        text
-    }
-
-    pub fn close(&mut self) {
-        if self.closed {
-            return;
-        }
-        let tail = self.decoder.finish();
-        self.shell.feed(&tail);
-        self.shell.interrupt("unknown");
-        if self.shell.enabled() {
-            let _ = self.shell.set_selection("", false);
-        }
-        if !tail.is_empty() {
-            self.sequence += 1;
-            self.chunks.push_back((self.sequence, Vec::new(), tail));
-        }
-        self.closed = true;
-    }
-
-    /// 读取 `after` 之后的有界数据；游标过期时报告 gap，交由调用方重新对齐。
-    pub fn read(&self, after: u64) -> Result<Value> {
-        self.read_page(after, false)
-    }
-
-    pub fn read_hex(&self, after: u64) -> Result<Value> {
-        self.read_page(after, true)
-    }
-
-    /// Return a bounded tail snapshot without requiring the caller to remember a cursor.
-    pub fn recent_text(&self, lines: usize) -> Result<Value> {
-        if !(1..=200).contains(&lines) {
-            bail!("Recent serial output lines must be between 1 and 200");
-        }
-
-        let text = self
-            .chunks
-            .iter()
-            .map(|(_, _, decoded)| decoded.as_str())
-            .collect::<String>();
-        let selected = text
-            .split_inclusive('\n')
-            .rev()
-            .take(lines)
-            .collect::<Vec<_>>();
-        let recent = selected.iter().rev().copied().collect::<String>();
-        let (bounded, _) = bounded_output_text(&recent, OUTPUT_TEXT_JSON_BUDGET, true);
-        let truncated = bounded.len() < recent.len();
-
-        Ok(json!({
-            "text": bounded,
-            "lines": bounded.split_inclusive('\n').count(),
-            "cursor": self.sequence,
-            "closed": self.closed,
-            "gap": self.chunks.front().is_some_and(|chunk| chunk.0 > 1),
-            "truncated": truncated,
-        }))
-    }
-
-    /// Returns 1–1000 trailing LF-delimited lines, bounded by the result JSON budget.
-    pub fn read_lines(&self, count: usize) -> Result<Value> {
-        if !(1..=1000).contains(&count) {
-            bail!("Serial line count must be between 1 and 1000");
-        }
-        let text = self
-            .chunks
-            .iter()
-            .map(|(_, _, text)| text.as_str())
-            .collect::<String>();
-        let mut lines: Vec<_> = text.lines().rev().take(count).map(str::to_owned).collect();
-        lines.reverse();
-        let mut truncated = false;
-        while serde_json::to_vec(&lines)?.len() > 10 * 1024 {
-            truncated = true;
-            if lines.len() > 1 {
-                lines.remove(0);
-            } else if let Some(line) = lines.first_mut() {
-                let mut start = line.len() / 2;
-                while !line.is_char_boundary(start) {
-                    start += 1;
-                }
-                *line = line[start..].into();
-            } else {
-                break;
-            }
-        }
-        Ok(
-            json!({"lines":lines,"stderrLines":[],"streamMode":"merged","closed":self.closed,
-            "truncated":truncated,"dropped":self.chunks.front().is_some_and(|chunk| chunk.0>1)}),
-        )
-    }
-
-    fn read_page(&self, after: u64, hex: bool) -> Result<Value> {
-        if after > self.sequence {
-            bail!("Output cursor is ahead of the connection");
-        }
-        let first = self
-            .chunks
-            .front()
-            .map_or(self.sequence + 1, |chunk| chunk.0);
-        let gap = after.saturating_add(1) < first;
-        let mut next = if gap { first - 1 } else { after };
-        let mut data = Vec::with_capacity(READ_BYTES);
-        let mut text = String::new();
-        for (sequence, part, decoded) in &self.chunks {
-            if *sequence <= next {
-                continue;
-            }
-            if data.len() + part.len() > READ_BYTES {
-                break;
-            }
-            data.extend_from_slice(part);
-            text.push_str(decoded);
-            next = *sequence;
-        }
-        let mut result = json!({
-            "bytes": data.len(),
-            "cursor": next,
-            "gap": gap,
-            "closed": self.closed,
-            "more": next < self.sequence,
-        });
-        if hex {
-            result["hex"] = json!(encode_hex(&data));
-        } else {
-            result["text"] = json!(text);
-        }
-        Ok(result)
+        Self::with_shell(config.mode, config.prompt.as_deref())
     }
 }
 
@@ -539,7 +376,7 @@ impl Connection {
             drop(writer);
             task_output.lock().await.close();
             if let Some((instance, sender)) = &events {
-                let cursor = task_output.lock().await.sequence;
+                let cursor = task_output.lock().await.cursor();
                 let _ = sender
                     .send(DriverNotification::Event {
                         driver_instance_id: instance.clone(),
@@ -721,7 +558,7 @@ fn read_until_stopped<R: Read>(mut source: ReaderSource<R>) {
                 let (pushed, text) = {
                     let mut output = source.output.blocking_lock();
                     let text = output.push(&data);
-                    (output.sequence, text)
+                    (output.cursor(), text)
                 };
                 if let Some((instance, sender)) = &source.events {
                     let notification = DriverNotification::Event {
@@ -1057,7 +894,7 @@ mod tests {
         assert!(output.bytes <= MAX_OUTPUT_BYTES);
 
         // 超出末尾的游标必须被拒绝，而不是静默返回空。
-        assert!(output.read(output.sequence + 1).is_err());
+        assert!(output.read(output.cursor() + 1).is_err());
     }
 
     /// 不打开硬件的回收契约：停止标志必须让真实读取循环退出，数据也不会丢。
@@ -1111,7 +948,7 @@ mod tests {
         );
         // 每个字节都进入回放缓冲并计入接收计数，退出不能丢数据。
         assert_eq!(rx_bytes.load(Ordering::SeqCst), after_stop);
-        assert_eq!(output.blocking_lock().sequence, after_stop);
+        assert_eq!(output.blocking_lock().cursor(), after_stop);
     }
 
     #[test]

@@ -12,7 +12,7 @@
 - 在线切换只修改 mode / prompt，保留物理连接、原始字节、计数、回放位置和已有对话；命令队列忙时拒绝切换。失效的提案、选区与提示符就绪状态清理，未完成的人工观察记录标为 unknown，UART 数据不追溯为对话。
 - 后端拒绝切换时保留当前界面；写盘失败时当前模式继续生效并提示，原保存值不覆盖，点击当前模式可重试保存。沿用现有配置字段、审批和驱动协议。
 - 验证：工作区 cargo check、Serial 67 项 Rust 测试及全目标严格 Clippy 通过，3 项硬件 / 虚拟配对用例忽略；桌面、三个驱动和测试产物构建通过，前端全量 101 项测试通过。暂存源码独立导出后，桌面 / 串口构建与模式切换浏览器回归通过；未打开物理串口，未验证非 Windows 实机。
-- 继续入口：[模式和缓冲](../../src/serial/backend.rs)、[对话状态](../../src/serial/shell.rs)、[界面与保存](../../frontend/serial/src/index.ts)、[浏览器验收](../../../../tests/serial-shell-browser.test.mjs)。
+- 继续入口：[模式和缓冲](../../src/serial/backend.rs)、[对话状态](../../src/stream/shell.rs)、[界面与保存](../../frontend/serial/src/index.ts)、[浏览器验收](../../../../tests/serial-shell-browser.test.mjs)。
 
 ## 2026-11-10：停止连接的状态竞态
 
@@ -45,7 +45,7 @@
 
 - 发送行尾并入现有 configRef 偏好，支持 none/cr/lf/crlf；旧偏好默认 CRLF。恢复不发送数据，终端按键和 MCP command 默认参数保持各自语义。
 - 发送 ASCII / HEX、定时发送间隔和运行开关不持久化。浏览器验证重建运行 ID、同 COM 不同实例隔离和恢复后实际写入 CR；旧偏好与非法值回退由存储测试覆盖。桌面与串口前端构建通过，未操作真实串口。
-- 继续入口：[偏好存储](../../frontend/serial/src/display-preferences.ts)、[界面接入](../../frontend/serial/src/index.ts)、[浏览器回归](../../../../tests/serial-display-preferences-browser.test.mjs)。
+- 继续入口：[偏好存储](../../../../apps/shared/components/stream-workbench/display-preferences.ts)、[界面接入](../../frontend/serial/src/index.ts)、[浏览器回归](../../../../tests/serial-display-preferences-browser.test.mjs)。
 
 ## 2026-11-08：配置保存与原生全链路
 
@@ -60,7 +60,7 @@
 - 验证通过：隔离本次提交源码后，`cargo check --locked --workspace`、64 项串口 Rust 测试、Core / MCP / Serial 全目标 Clippy（`-D warnings`）、桌面与 Serial 前端构建、20 项前端回归通过；宿主浏览器用例先补构建其依赖的 SSH 前端后通过。中文 360px 配置面板已目视核对，原有工作区改动不进入本次提交。
 - 真实开发板 `COM6@115200`、提示符 `# ` 验收通过：两条 `printf`（第二条写 stderr 并运行 `uname -s`）形成独立对话，stderr 合并、退出码未知、无游标行读取、断开保留快照和 stream 拒绝对话均已验证；测试后关闭连接并释放端口。验收使用驱动 Backend，进程加载与 MCP schema 由无硬件集成测试覆盖，浏览器使用宿主 API 替身，未验收真实桌面全链路或非 Windows 平台。原控制线硬件测试和虚拟串口配对测试未启用。
 - 限制：提示符是观察性边界；相同输出可误判，提示符随目录或权限变化时需更新配置或显式覆盖。对话最多 32 项、每项输出 16 KiB，结构化快照预算 12 KiB。未新增依赖、宿主权限、跨进程消息或明文落盘日志。
-- 继续入口：[Shell 记录与识别](../../src/serial/shell.rs)、[命令队列](../../src/serial/command.rs)、[读取路由](../../src/serial/backend.rs)、[读取契约测试](../../tests/serial_shell_reads.rs)、[可选硬件验收](../../tests/serial_shell_live.rs)、[前端回归](../../../../tests/serial-shell-browser.test.mjs)。
+- 继续入口：[Shell 记录与识别](../../src/stream/shell.rs)、[命令队列](../../src/serial/command.rs)、[读取路由](../../src/serial/backend.rs)、[读取契约测试](../../tests/serial_shell_reads.rs)、[可选硬件验收](../../tests/serial_shell_live.rs)、[前端回归](../../../../tests/serial-shell-browser.test.mjs)。
 
 ## 2026-11-04：显示偏好跨启动恢复与串口退格
 
@@ -70,7 +70,7 @@
 - 桌面与串口前端构建通过；定向浏览器覆盖运行 ID 重建、名称变化、同 COM 多实例、端口变化、慢状态、全部显示选项恢复、BS / DEL 单次发送、设备回显删除、粘贴控制字节、UART 本地退格和不自动发送。宿主契约验证固定标识不会替代运行 ID 进行操作路由；原始保存和换行转换回归通过。未读写物理串口。
 - 完整前端回归 88 项通过、0 失败、0 跳过；补充首次工作区慢响应保护后，构建及 11 项定向回归通过。桌面等待元数据读取完成后再挂载驱动，避免先用临时身份挂载、后因固定身份到达而重建界面。已复核常规与 360px 配置截图。
 - 本次暂存源码单独导出后，桌面 / 串口构建及 21 项回归通过，确认提交不依赖工作区其他改动；新增相对链接、`docs/` 根目录和暂存区空白检查通过。原有未提交修改未纳入提交。
-- 继续入口：[偏好存储](../../frontend/serial/src/display-preferences.ts)、[驱动集成](../../frontend/serial/src/index.ts)、[保存身份契约](../../../../docs/architecture/driver-development.md#前端)、[端到端恢复回归](../../../../tests/serial-saved-identity-browser.test.mjs)、[退格与偏好回归](../../../../tests/serial-display-preferences-browser.test.mjs)。
+- 继续入口：[偏好存储](../../../../apps/shared/components/stream-workbench/display-preferences.ts)、[驱动集成](../../frontend/serial/src/index.ts)、[保存身份契约](../../../../docs/architecture/driver-development.md#前端)、[端到端恢复回归](../../../../tests/serial-saved-identity-browser.test.mjs)、[退格与偏好回归](../../../../tests/serial-display-preferences-browser.test.mjs)。
 
 ## 2026-11-04：接收换行补全
 
@@ -80,7 +80,7 @@
 - 显示层用有界状态将选中的单独 LF / CR 补为 CRLF，跨接收事件拆开的已有 CRLF 不重复补全；单独 CR 立即显示，不等待下一包。清空、连接更换和回放缺口重置状态。终端仅对后续输出生效，UART 文本从原始缓存重新渲染。
 - 原始缓冲、MCP 结果、HEX、保存文件和收发计数保持不变，发送行结束符与此功能独立。未新增 Rust、依赖、权限或跨进程消息。
 - 验收：桌面 `pnpm build` 与串口前端构建通过；10 项串口回归通过，覆盖各开关组合、跨包 CRLF、混合 / 连续换行、中文 / ANSI、连接 / 清空 / 缺口、原始保存和 HEX、按实例恢复、中英文和既有创建 / 发送流程。已复核常规及 360px 窄窗口截图，未打开或读写物理串口。
-- 继续开发入口：[显示转换](../../frontend/serial/src/receive-newlines.ts)、[界面集成](../../frontend/serial/src/index.ts)、[流转换回归](../../../../tests/serial-receive-newlines.test.mjs)、[真实浏览器回归](../../../../tests/serial-receive-newlines-browser.test.mjs)。
+- 继续开发入口：[显示转换](../../../../apps/shared/components/stream-workbench/receive-newlines.ts)、[界面集成](../../frontend/serial/src/index.ts)、[流转换回归](../../../../tests/serial-receive-newlines.test.mjs)、[真实浏览器回归](../../../../tests/serial-receive-newlines-browser.test.mjs)。
 - 本次暂存源码独立导出后，串口前端构建及 8 项转换 / 浏览器回归通过；工作区既有未提交修改保持原样，未纳入本次提交。新增文档链接、`docs/` 根目录及暂存区 `git diff --check` 检查通过。
 
 ## 2026-11-04：展开下拉框时刷新串口

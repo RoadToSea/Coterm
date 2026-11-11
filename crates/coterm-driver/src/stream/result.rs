@@ -1,6 +1,6 @@
-//! Bounded readable previews; structuredContent contains the authoritative snapshot.
 use serde_json::{json, Value};
 
+/// A bounded readable preview accompanies the authoritative structured snapshot.
 pub(crate) fn tool_result(value: Value) -> Value {
     let encoded = if let Some(lines) = value["lines"].as_array() {
         lines
@@ -13,9 +13,9 @@ pub(crate) fn tool_result(value: Value) -> Value {
     } else {
         value.to_string()
     };
-    let (text, _) = crate::serial::payload::bounded_output_text(&encoded, 1024, false);
-    let is_error = value["timedOut"] == true
+    let (text, _) = super::payload::bounded_output_text(&encoded, 1024, false);
+    let failed = value["timedOut"] == true
         || value["cancelled"] == true
-        || value.get("error").is_some_and(|error| !error.is_null());
-    json!({"content":[{"type":"text","text":text}],"structuredContent":value,"isError":is_error})
+        || value.get("error").is_some_and(|e| !e.is_null());
+    json!({"content":[{"type":"text","text":text}],"structuredContent":value,"isError":failed})
 }

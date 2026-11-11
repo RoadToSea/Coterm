@@ -1,16 +1,16 @@
 # 内置驱动开发
 
-SSH、Serial、Local 位于 `crates/coterm-driver/src/{ssh,serial,local}`，共用一个 Cargo 包，随应用一起构建与分发。后端以 Rust 库直接链接进桌面进程，每种驱动有一个独立异步任务，管理多个状态隔离的实例。基座只负责路由、审批、操作记录和公共交互，不解释领域命令或字节流。
+SSH、Serial、Local、Raw TCP、Telnet 位于 `crates/coterm-driver/src/{ssh,serial,local,tcp,telnet}`，共用一个 Cargo 包，随应用一起构建与分发。后端以 Rust 库直接链接进桌面进程，每种驱动有一个独立异步任务，管理多个状态隔离的实例。基座只负责路由、审批、操作记录和公共交互，不解释领域命令或字节流。
 
 ## 共享 Rust 模块
 
 | 包 | 职责 |
 |---|---|
 | `coterm-core` | 共享数据模型、驱动接口、实例运行时、审批、秘密交互、操作记录及终端工具 |
-| `coterm-driver` | SSH、Serial、Local 三个内部模块，分别管理协议连接、命令和接收数据 |
+| `coterm-driver` | 五个驱动入口，分别管理协议连接、命令和接收数据 |
 | `coterm-mcp` | MCP 工具发现与调用、本机 Bridge 和 Stdio 适配 |
 
-桌面组合入口注册具体驱动，core 不依赖 driver 或 MCP。SSH、Serial 保留各自的领域缓冲；Local 使用 `coterm_core::terminal`。
+桌面组合入口注册具体驱动，core 不依赖 driver 或 MCP。SSH 保留自身领域缓冲；Serial、Raw TCP 与 Telnet 共用 `stream` 的有界接收和提示符观察，网络连接生命周期位于 `network`；Local 使用 `coterm_core::terminal`。共享模块不引入设备协议依赖。
 
 ## 后端
 
@@ -18,7 +18,7 @@ SSH、Serial、Local 位于 `crates/coterm-driver/src/{ssh,serial,local}`，共�
 
 操作通过显式 schema 声明 scope、effect、敏感输入及 MCP 工具。Agent 提交由宿主完成来源识别与每实例审批；准备提案不能执行写入。批准后重新校验参数，返回实际执行事实，不能确认时报告 unknown。命令文本审批声明见[命令审批](command-approval.md)。
 
-领域接收数据和命令结果在驱动后端有界保留，前端另有显示副本；MCP 查询后端。Agent 使用 read_lines、read_selected_lines、read_dialogue_pairs，不维护游标。内部事件回放允许使用游标，过载必须报告缺口。各驱动的具体能力见[SSH](ssh-driver.md)、[串口](serial-driver.md)、[本地终端](local-driver.md)。
+领域接收数据和命令结果在驱动后端有界保留，前端另有显示副本；MCP 查询后端。Agent 使用 read_lines、read_selected_lines、read_dialogue_pairs，不维护游标。内部事件回放允许使用游标，过载必须报告缺口。各驱动的具体能力见[SSH](ssh-driver.md)、[串口](serial-driver.md)、[本地终端](local-driver.md)、[网络驱动](network-drivers.md)。
 
 ## 前端
 
@@ -32,7 +32,7 @@ subscribeEvents 在订阅安装后返回注销函数；处理器完成后确认�
 
 ## 构建与验证
 
-先运行 `pnpm drivers:build` 生成三个前端的单文件 ES 模块，再执行 Cargo / Tauri 构建。桌面通过 coterm-driver 库链接三个内部模块，通过 `include_str!` 嵌入声明与前端；manifest 不声明平台可执行入口，Tauri 不打包驱动资源目录。普通 `cargo build --workspace` 不生成三个独立驱动 EXE。前端源码修改后须重新运行 `pnpm drivers:build` 并重编桌面。
+先运行 `pnpm drivers:build` 生成五个前端的单文件 ES 模块，再执行 Cargo / Tauri 构建。桌面通过 coterm-driver 库链接五个驱动入口，通过 `include_str!` 嵌入声明与前端；manifest 不声明平台可执行入口，Tauri 不打包驱动资源目录。普通 `cargo build --workspace` 不生成独立驱动 EXE。前端源码修改后须重新运行 `pnpm drivers:build` 并重编桌面。
 
 驱动停止、请求超时或任务 panic 后必须释放后端持有的会话与作业；不能依赖杀进程回收资源。阻塞设备读写放到专用线程或 `spawn_blocking`。普通 panic 的收敛依赖 unwind；native fault、abort、内存损坏与不可取消的底层阻塞可能影响整个宿主。Local 的真实 Shell 和 MCP stdio 适配器仍可使用子进程，不属于驱动 Worker。
 

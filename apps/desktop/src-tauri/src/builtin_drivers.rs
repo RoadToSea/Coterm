@@ -34,6 +34,26 @@ pub async fn register(runtime: &Runtime) -> Result<(), RuntimeError> {
             )),
         )
         .await?;
+    runtime
+        .register::<coterm_driver::tcp::backend::Backend>(
+            manifest(include_str!(
+                "../../../../crates/coterm-driver/manifests/tcp.json"
+            ))?,
+            Some(include_str!(
+                "../../../../crates/coterm-driver/dist/tcp/frontend/index.js"
+            )),
+        )
+        .await?;
+    runtime
+        .register::<coterm_driver::telnet::backend::Backend>(
+            manifest(include_str!(
+                "../../../../crates/coterm-driver/manifests/telnet.json"
+            ))?,
+            Some(include_str!(
+                "../../../../crates/coterm-driver/dist/telnet/frontend/index.js"
+            )),
+        )
+        .await?;
     Ok(())
 }
 

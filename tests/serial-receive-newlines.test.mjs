@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createReceiveNewlineNormalizer, readReceiveNewlineMode, saveReceiveNewlineMode,
-  RECEIVE_NEWLINE_MODES } from "../crates/coterm-driver/frontend/serial/src/receive-newlines.ts";
+  RECEIVE_NEWLINE_MODES } from "../apps/shared/components/stream-workbench/receive-newlines.ts";
 
 const cases = [
   ["a\nb", ["a\nb", "a\r\nb", "a\nb", "a\r\nb"]],

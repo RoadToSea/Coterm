@@ -4,7 +4,7 @@
 
 ## 模块与依赖
 
-后端由三个 crate 组成：`coterm-core` 保存共享数据模型、运行时、审批、操作记录和终端工具；`coterm-driver` 的 `ssh/serial/local` 模块实现具体通信；`coterm-mcp` 处理 Agent 接入。桌面依赖三者，driver 和 MCP 依赖 core，core 不依赖具体驱动或 MCP。
+后端由三个 crate 组成：`coterm-core` 保存共享数据模型、运行时、审批、操作记录和终端工具；`coterm-driver` 的 `ssh/serial/local/tcp/telnet` 模块实现具体通信；`coterm-mcp` 处理 Agent 接入。桌面依赖三者，driver 和 MCP 依赖 core，core 不依赖具体驱动或 MCP。
 
 `coterm_core::driver` 定义 `DriverBackend`、`DriverDefinition`、`HostCommand` 和 `DriverNotification`；`coterm_core::model` 保存共享类型；`coterm_core::runtime::Runtime` 是桌面与 MCP 共用的操作入口。运行时方法直接返回异步 `Result`，不再经过单实现 trait 或 boxed future。
 
@@ -112,8 +112,8 @@ Windows 首版将版本化工作区、初始配置及配置引用整体用当前
 
 ## 内置分发与配置保存
 
-桌面在编译期固定注册 SSH、Serial、Local 三种后端工厂，后端统一由 coterm-driver 库链接，声明与前端以 `include_str!` 嵌入。`pnpm drivers:build` 只构建前端模块，Tauri 构建不复制驱动 EXE，也不打包驱动资源目录。不扫描用户数据目录，不提供离线包安装 API。声明仅包含身份、能力、实例及前端信息，不包含平台可执行入口。
+桌面在编译期固定注册 SSH、Serial、Local、Raw TCP、Telnet 五种后端工厂，后端统一由 coterm-driver 库链接，声明与前端以 `include_str!` 嵌入。`pnpm drivers:build` 只构建前端模块，Tauri 构建不复制驱动 EXE，也不打包驱动资源目录。不扫描用户数据目录，不提供离线包安装 API。声明仅包含身份、能力、实例及前端信息，不包含平台可执行入口。
 
 运行时字段统一使用 `driverId/driverInstanceId`、操作作用域为 `driver|instance`、事件能力为 `driver-events`；注册时验证固定声明，运行时不协商协议版本。前端契约版本为 v2.0，共享类型位于 `apps/shared/`，MCP 的 `coterm_ssh_command` 等终端工具名保持稳定，实例列表字段使用 driver 命名。
 
-前端通过绑定当前实例的 `saveConfiguration(config)` 保存驱动已验证的完整配置。桌面 `save_instance_configuration({driverInstanceId,config})` 与生命周期变更共用工作区锁，仅替换对应保存项配置，保留 configRef、名称、分组及审批组引用。拒绝失效实例、秘密句柄、超限配置与写盘失败；失败不覆盖原保存值。串口配置保存成功后才连接，恢复不自动连接。
+前端通过绑定当前实例的 `saveConfiguration(config)` 保存驱动已验证的完整配置。桌面 `save_instance_configuration({driverInstanceId,config})` 与生命周期变更共用工作区锁，仅替换对应保存项配置，保留 configRef、名称、分组及审批组引用。拒绝失效实例、秘密句柄、超限配置与写盘失败；失败不覆盖原保存值。串口和网络配置保存成功后才连接，恢复不自动连接。Telnet／Raw TCP 复用既有配置保存入口，不增加工作区版本；连接 ID、缓冲、计数和重连状态只在内存中保留，具体结构见[网络驱动](network-drivers.md)。

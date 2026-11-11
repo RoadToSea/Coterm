@@ -1,3 +1,4 @@
+import { assertFreshDriverBuild } from "./support/browser-harness.mjs";
 /** Actual driver bundles and xterm keyboard/paste events; clipboard writes are isolated. */
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -8,11 +9,12 @@ for (const protocol of ["serial", "ssh"]) {
   test(`${protocol} Shell handles local shortcuts without sending them to the remote terminal`, async (t) => {
     const browserPath = findBrowser();
     if (!browserPath) { t.skip("No Chrome/Edge binary; terminal shortcuts were not browser-verified"); return; }
+    assertFreshDriverBuild(protocol);
     const artifact = new URL(`../crates/coterm-driver/dist/${protocol}/frontend/index.js`, import.meta.url);
     const built = fs.statSync(artifact).mtimeMs;
     for (const source of [
       new URL(`../crates/coterm-driver/frontend/${protocol}/src/index.ts`, import.meta.url),
-      new URL(`../crates/coterm-driver/frontend/${protocol}/src/i18n.ts`, import.meta.url),
+      ...(protocol === "ssh" ? [new URL("../crates/coterm-driver/frontend/ssh/src/i18n.ts", import.meta.url)] : []),
       new URL("../apps/shared/components/terminal-shortcuts.ts", import.meta.url),
       new URL("../apps/shared/components/terminal-search.ts", import.meta.url),
       ...(protocol === "ssh" ? [new URL("../apps/shared/components/terminal-blocks.ts", import.meta.url)] : []),

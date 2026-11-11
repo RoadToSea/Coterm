@@ -16,6 +16,7 @@ catch(error){if(error.code!=="ENOENT")throw error;}
 const scratch=await fs.mkdtemp(path.join(os.tmpdir(),"coterm-native-"));
 const port=await new Promise((resolve,reject)=>{const server=net.createServer();server.on("error",reject);server.listen(0,"127.0.0.1",()=>{const port=server.address().port;server.close(()=>resolve(port));});});
 let client,adapter;const calls=new Map();let sequence=0;
+const networkPeers=new Set();const networkServers=[];
 const app=spawn(executable,[],{windowsHide:true,stdio:["ignore","ignore","pipe"],env:{...process.env,WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS:`--remote-debugging-port=${port}`,WEBVIEW2_USER_DATA_FOLDER:path.join(scratch,"webview")}});
 let diagnostic="";app.stderr.on("data",data=>{diagnostic=(diagnostic+data).slice(-4096)});
 const run=source=>evaluate(client,source);
@@ -26,11 +27,15 @@ const tool=(name,args)=>rpc("tools/call",{name,arguments:args});
 async function approve(name,id,toolName,commands){
   const result=await tool(toolName,{name,commands});
   assert.equal(result.structuredContent.status,"pending_approval",JSON.stringify(result));
-  await waitForValue(client,"!!document.querySelector('.approval-tray-shell button[type=submit]')");
-  await run("document.querySelector('.approval-tray-shell button[type=submit]').click()");
+  const editorId=`agent-approval-${result.structuredContent.operationId}`;
+  await waitForValue(client,`!!document.getElementById(${JSON.stringify(editorId)})?.closest('form').querySelector('button[type=submit]:not(:disabled)')`);
+  await run(`document.getElementById(${JSON.stringify(editorId)}).closest('form').querySelector('button[type=submit]').click()`);
   let record;
-  for(let i=0;i<600;i++){record=await invoke("get_operation",{driverInstanceId:id,operationId:result.structuredContent.operationId});if(["completed","failed","unknown","cancelled"].includes(record.status))break;await delay(50);}
+  for(let i=0;i<600;i++){record=await invoke("get_operation",{driverInstanceId:id,operationId:result.structuredContent.operationId});if(["completed","failed","unknown","cancelled"].includes(record.status))break;
+    const error=await run(`document.getElementById(${JSON.stringify(editorId)})?.closest('form').querySelector('[role=alert]')?.textContent`);
+    assert.ok(!error,error);await delay(50);}
   assert.equal(record.status,"completed",JSON.stringify(record));
+  await waitForValue(client,`!document.getElementById(${JSON.stringify(editorId)})`);
 }
 try{
   let page;
@@ -45,7 +50,7 @@ try{
   assert.equal(await invoke("plugin:app|name"),"Coterm Smoke","Build with tests/fixtures/tauri-smoke.conf.json");
   await setAppLocale(client,"en");
   const catalog=await invoke("list_drivers");
-  assert.deepEqual(catalog.drivers.map(item=>item.id).sort(),["coterm-driver-local","coterm-driver-serial","coterm-driver-ssh"]);assert.deepEqual(catalog.issues,[]);
+  assert.deepEqual(catalog.drivers.map(item=>item.id).sort(),["coterm-driver-local","coterm-driver-serial","coterm-driver-ssh","coterm-driver-tcp","coterm-driver-telnet"]);assert.deepEqual(catalog.issues,[]);
   await assert.rejects(invoke("prepare_driver_install",{locale:"en"}));
   await run("document.getElementById('open-settings').click()");await waitForValue(client,"document.getElementById('app-settings-dialog')?.open");
   assert.equal(await run("!!document.querySelector('[data-category=drivers]')"),false);
@@ -67,6 +72,32 @@ try{
   await approve("Native local",local.driverInstanceId,"coterm_local_command",["$env:COTERM_ACCEPTANCE='retained'; Write-Output 'native-local-first'"]);
   await approve("Native local",local.driverInstanceId,"coterm_local_command",["Write-Output $env:COTERM_ACCEPTANCE"]);
   const pairs=await tool("coterm_local_read_dialogue_pairs",{name:"Native local",count:2});assert.equal(pairs.structuredContent.pairs.length,2);assert.ok(pairs.structuredContent.pairs[0].stdout.includes("retained"));
+  for(const protocol of ["tcp","telnet"]){
+    const server=net.createServer(socket=>{
+      networkPeers.add(socket);socket.on("close",()=>networkPeers.delete(socket));socket.on("error",()=>{});
+      socket.write("test# ");let pending="";
+      socket.on("data",data=>{pending+=data.toString("utf8");if(pending.length>16384){socket.destroy();return;}
+        let end;while((end=pending.indexOf("\n"))>=0){const command=pending.slice(0,end).replace(/\r$/u,"");pending=pending.slice(end+1);socket.write(`${command}\r\n${protocol}-native-result\r\ntest# `);}});
+    });networkServers.push(server);
+    await new Promise(resolve=>server.listen(0,"127.0.0.1",resolve));
+    const driverId=`coterm-driver-${protocol}`,name=`Native ${protocol}`;
+    await invoke("start_driver",{driverId});
+    const instance=await invoke("create_instance",{driverId,name,config:{host:"127.0.0.1",port:server.address().port,mode:"shell",prompt:"test# ",localEcho:"off",backspace:"del",autoReconnect:false}});
+    assert.equal((await operation(instance.driverInstanceId,`${protocol}.status`)).connected,false);
+    await operation(instance.driverInstanceId,`${protocol}.connect`);
+    for(let attempt=0;attempt<100;attempt++){if((await operation(instance.driverInstanceId,`${protocol}.status`)).shellReady)break;await delay(20);}
+    const networkTools=(await rpc("tools/list")).tools.map(tool=>tool.name);
+    assert.ok(networkTools.includes(`coterm_${protocol}_command`));assert.ok(!networkTools.includes(`coterm_${protocol}_exec`));
+    await approve(name,instance.driverInstanceId,`coterm_${protocol}_command`,["native-loopback"]);
+    const result=await tool(`coterm_${protocol}_read_dialogue_pairs`,{name,count:1});
+    assert.ok(result.structuredContent.pairs[0].stdout.includes(`${protocol}-native-result`));
+    assert.equal(result.structuredContent.pairs[0].stderr,"");assert.equal(result.structuredContent.pairs[0].exitCode,null);
+    const entry=(await invoke("workspace_snapshot")).entries.find(entry=>entry.instanceId===instance.driverInstanceId);
+    await invoke("stop_driver",{driverId});const restored=await invoke("restore_saved_instance",{configRef:entry.configRef});
+    const status=await operation(restored.driverInstanceId,`${protocol}.status`);
+    assert.equal(status.connected,false);assert.equal(status.config.mode,"shell");assert.equal(status.config.backspace,"del");
+    console.log(`PASS ${protocol}: real MCP approval, loopback command/results and saved restore without reconnect`);
+  }
   if(process.env.COTERM_SERIAL_SHELL_LIVE){
     await invoke("start_driver",{driverId:"coterm-driver-serial"});
     const serial=await invoke("create_instance",{driverId:"coterm-driver-serial",name:"Native board",config:{port:process.env.COTERM_SERIAL_SHELL_LIVE,baudRate:Number(process.env.COTERM_SERIAL_LIVE_BAUD??115200),dtr:false,rts:false,mode:"stream"}});
@@ -85,6 +116,8 @@ try{
   }
   console.log("PASS native in-process drivers, MCP Stdio, approval UI and shared PowerShell state");
 }finally{
+  for(const socket of networkPeers)socket.destroy();
+  for(const server of networkServers)if(server.listening)await new Promise(resolve=>server.close(resolve));
   adapter?.kill();for(const call of calls.values()){clearTimeout(call.timer);call.reject(new Error("Acceptance ended"));}
   if(app.exitCode===null){
     const closer=spawn("powershell",["-NoProfile","-NonInteractive","-Command",`Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public class CotermClose { [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr h,uint m,IntPtr w,IntPtr l); }'; $p=Get-Process -Id ${app.pid}; [CotermClose]::PostMessage($p.MainWindowHandle,0x0010,[IntPtr]::Zero,[IntPtr]::Zero) | Out-Null`],{windowsHide:true,stdio:"ignore"});

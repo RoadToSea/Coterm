@@ -1,3 +1,4 @@
+import { assertFreshDriverBuild } from "./support/browser-harness.mjs";
 /** 真实串口前端 + 无头浏览器 + 驱动 API 替身；不访问物理设备。 */
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -7,6 +8,7 @@ import { findBrowser, openSession, evaluate, waitForValue } from "./support/brow
 test("human Shell uses terminal keys, UART uses its sender, and MCP queues stay separate", async (t) => {
   const browserPath = findBrowser();
   if (!browserPath) { t.skip("No Chrome/Edge binary; serial terminal UI was not verified"); return; }
+  assertFreshDriverBuild("serial");
   const artifact = new URL("../crates/coterm-driver/dist/serial/frontend/index.js", import.meta.url);
   const built = fs.statSync(artifact).mtimeMs;
   assert.ok(built >= fs.statSync(new URL("../apps/shared/components/terminal-shortcuts.ts", import.meta.url)).mtimeMs,
@@ -15,7 +17,7 @@ test("human Shell uses terminal keys, UART uses its sender, and MCP queues stay 
     "rebuild the serial frontend after changing terminal search");
   assert.ok(built >= fs.statSync(new URL("../apps/shared/components/toasts.ts", import.meta.url)).mtimeMs,
     "rebuild the serial frontend after changing shared notices");
-  for (const file of ["index.ts", "i18n.ts", "console-settings.ts", "format-switch.ts", "toolbar.ts", "receive-newlines.ts"]) {
+  for (const file of ["index.ts", "console-settings.ts"]) {
     assert.ok(built >= fs.statSync(new URL(`../crates/coterm-driver/frontend/serial/src/${file}`, import.meta.url)).mtimeMs,
       "run pnpm --filter coterm-driver-serial-ui build before the serial browser test");
   }

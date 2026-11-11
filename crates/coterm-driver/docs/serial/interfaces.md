@@ -138,6 +138,6 @@ MCP 完成结果的机器可读副本位于 `structuredContent`，文本块包�
 
 文本 / HEX 写入及命令列表均为敏感输入，普通账本只保留脱敏占位；秘密不应通过 Agent 参数提交。尚无硬件流控握手、自动重连、热插拔监听和文件收发。
 
-接口实现见 [backend.rs](../../src/serial/backend.rs)、[command.rs](../../src/serial/command.rs)、[session.rs](../../src/serial/session.rs) 和 [payload.rs](../../src/serial/payload.rs)。调用示例与验收命令见 [使用说明](usage.md)。
+接口实现见 [backend.rs](../../src/serial/backend.rs)、[command.rs](../../src/serial/command.rs)、[session.rs](../../src/serial/session.rs) 和 [payload.rs](../../src/stream/payload.rs)。串口与网络共用有界接收和提示符观察，UART 参数与控制线仍由串口实现；前端工作台见[共享终端](../../../../apps/shared/docs/terminal-surfaces.md)。调用示例与验收命令见 [使用说明](usage.md)。
 
 桌面参数更新成功后调用前端 API `saveConfiguration(config)`，复用现有加密保存项；写盘失败保留旧保存值并阻止连接，重试不会发送设备命令。原生 configure 不承诺独立持久化。

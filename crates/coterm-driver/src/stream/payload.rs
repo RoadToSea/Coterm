@@ -1,4 +1,4 @@
-//! Separate text and HEX contracts; both terminate in exact serial bytes.
+//! Separate text and HEX contracts; both terminate in exact transport bytes.
 use anyhow::{anyhow, bail, Result};
 use serde::Deserialize;
 use serde_json::Value;
@@ -64,7 +64,7 @@ pub fn encode_text(text: &str, ending: &str) -> Result<Vec<u8>> {
         "cr" => b"\r",
         "lf" => b"\n",
         "crlf" => b"\r\n",
-        _ => bail!("Invalid serial line ending"),
+        _ => bail!("Invalid line ending"),
     };
     let mut bytes = text.as_bytes().to_vec();
     bytes.extend_from_slice(suffix);

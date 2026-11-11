@@ -1,4 +1,4 @@
-import type { Translator } from "./i18n";
+import type { Translator } from "../../../../../apps/shared/components/stream-workbench/i18n";
 
 export interface SerialConfig {
   port: string; baudRate: number; dataBits: number; stopBits: number;

@@ -45,7 +45,7 @@ MCP 只有一个对外入口：本地 Stdio 子进程。桌面前端通过 Tauri
 | `coterm.status` | 无参数、只读的桌面 / Bridge 与实例连接快照；区分 ready、已连接和未知 |
 | `coterm.get_operation` | 查询审批、交互和执行结果 |
 | `coterm.cancel_operation` | 请求取消，结果依赖驱动确认 |
-| `coterm_<driver>_<tool>` | 驱动显式注册的原生 Tool，例如 `coterm_ssh_exec`、`coterm_serial_command` |
+| `coterm_<driver>_<tool>` | 驱动显式注册的原生 Tool，例如 `coterm_ssh_command`、`coterm_serial_command`、`coterm_telnet_command`、`coterm_tcp_command_hex` |
 
 SSH 命令统一由 `coterm_ssh_command` 提交，默认 `mode=terminal`；预计长任务或用户明确要求后台时显式选择 `mode=exec`。读取使用 `coterm_ssh_read_lines`、`coterm_ssh_read_selected_lines` 和 `coterm_ssh_read_dialogue_pairs`，均为后端快照，不要求 Agent 维护游标。xterm 选区由仅 Human 可用的 `ssh.select_lines` 同步；Agent 不能伪造选择。数据结构和界限见 [SSH 驱动](ssh-driver.md#后端-json-记录与读取)。
 
@@ -66,19 +66,19 @@ Bridge 保留驱动参数和原生 `CallToolResult`，仅处理命名空间、�
 - 命令审批在桌面设置中管理独立规则组，支持正向放行与反向拦截，实例审批入口负责分配组。规则组可不绑定实例，保存后对所有绑定实例的新提交生效；已保存实例记录组引用和自身 Bypass。规则仅影响宿主审批，不改变 effect、驱动校验、秘密交互或来源限制；Agent 不能修改规则或自批。跨平台保存、列表聚合、无命令文本时的回退与驱动接入见 [命令审批规则](command-approval.md)。
 - `effect=read` 且不涉及敏感输入的操作不需要审批；它们只观察状态，不能修改远端。
 
-SSH 认证步骤和工具边界见 [SSH](ssh-driver.md)，串口可用工具见 [串口](serial-driver.md)。
+SSH 认证步骤和工具边界见 [SSH](ssh-driver.md)，串口可用工具见 [串口](serial-driver.md)，Telnet／Raw TCP 见 [网络驱动](network-drivers.md)。网络工具使用后端接收数据；Shell 可读选区和对话，stream 只读行。两个网络驱动无 exec；stream／HEX 命令仅确认发送，设备结果通过 read_lines 读取，不伪造完成状态或退出码。
 
 ### 健康与默认实例
 
 `coterm.status({})` 返回 `desktopAlive`、`bridgeEnabled`、`totalInstances`、`activeInstances`、`connectedInstances`、`instances` 和 `truncated`。每个实例仅有 `name/driverId/status/connected`；`activeInstances` 是本次快照中 ready 的数量，不代表协议已认证。`connected=true/false/null` 分别表示确认已连接、未连接、未知。最多采样 64 个实例，数量统计针对采样项，`totalInstances` 是总数；超限设置 `truncated=true`，禁止默认路由。
 
-连接状态由驱动原生 MCP descriptor 的 `_meta["coterm/connectionStatus"]: true` 声明，每驱动最多选择一个状态工具；对应操作必须是实例级、read、非敏感且 transient，结果提供 `structuredContent.connected: boolean`。SSH 的 status 和 Serial 的 status 已声明；未声明、声明歧义、不安全或失败返回未知。基座不猜测协议名称、不执行 connect/probe，不申请认证或写操作审批。探测最多 8 并发，每次等待至多 500ms，整体收集至多 1 秒；慢读不能拖住整个健康检查。
+连接状态由驱动原生 MCP descriptor 的 `_meta["coterm/connectionStatus"]: true` 声明，每驱动最多选择一个状态工具；对应操作必须是实例级、read、非敏感且 transient，结果提供 `structuredContent.connected: boolean`。SSH、Serial、Raw TCP、Telnet 的 status 已声明；未声明、声明歧义、不安全或失败返回未知。基座不猜测协议名称、不执行 connect/probe，不申请认证或写操作审批。探测最多 8 并发，每次等待至多 500ms，整体收集至多 1 秒；慢读不能拖住整个健康检查。
 
 该工具需要已建立的 MCP 连接：返回成功证明桌面与 Bridge 当时可达，不能通过关闭的 Bridge 返回 `desktopAlive:false`。桌面关闭 / Bridge 未启用时仍由 Stdio 适配器在 stderr 明确报连接失败，不能把服务离线理解成健康工具返回的未知实例状态。
 
 ## 等待、结果与取消
 
-默认最多等待 60 秒，覆盖秘密交互及执行。SSH 和串口实例工具在进入人工审批时立即返回 `structuredContent.status` 为 `pending_approval` 的结果，带 `operationId/proposalId`；调用方提示用户到桌面审批，再用 `coterm.get_operation` 查询原操作，不重提写入。调用完成直接返回驱动结果，`_meta["coterm/operation"]` 附操作收据。立即返回或等待到期时返回当前状态，最终结果可通过查询记录的 `output` 获取。
+默认最多等待 60 秒，覆盖秘密交互及执行。SSH、串口、Raw TCP 和 Telnet 实例工具在进入人工审批时立即返回 `structuredContent.status` 为 `pending_approval` 的结果，带 `operationId/proposalId`；调用方提示用户到桌面审批，再用 `coterm.get_operation` 查询原操作，不重提写入。调用完成直接返回驱动结果，`_meta["coterm/operation"]` 附操作收据。立即返回或等待到期时返回当前状态，最终结果可通过查询记录的 `output` 获取。
 
 驱动可在注册的工具 descriptor（不是调用参数）中声明 `_meta["coterm/returnOnApproval"]: true`。Bridge 使用运行时已有的状态订阅，在终态或 `awaiting_approval` 时结束本次等待；不轮询账本，不在基座硬编码驱动 ID，也不改变普通 `Operations.submit` 的等待行为。未声明的工具仍等待审批、交互和执行直到终态或本次期限。此扩展只影响等待，不能授予审批权限或改变操作的 effect，前端和跨进程调用消息无需变更。
 
@@ -94,7 +94,7 @@ SSH 认证步骤和工具边界见 [SSH](ssh-driver.md)，串口可用工具见 
 
 `0` 表示立即返回，`1..300000` 指定毫秒上限。等待超时或客户端断开均不代表底层操作取消，也不触发重放。取消仅在驱动确认未提交或已停止时成功，否则可能为 unknown。
 
-部分客户端只向模型暴露 `arguments`，无法设置协议级 `_meta`。这类客户端应省略 `_meta`；SSH / 串口仍会在进入审批时及时返回，其余等待使用默认 60 秒上限。收到 `pending_approval`、运行中或等待到期收据后，使用同一工具返回的 `operationId` 调用 `coterm.get_operation` 查询，不能把 `_meta` 塞进领域参数。服务端保持严格的 `additionalProperties:false` 校验，未知字段会返回 `operation_args_invalid` 并指出未知或缺失的字段名，不回显参数值。
+部分客户端只向模型暴露 `arguments`，无法设置协议级 `_meta`。这类客户端应省略 `_meta`；SSH／串口／网络驱动仍会在进入审批时及时返回，其余等待使用默认 60 秒上限。收到 `pending_approval`、运行中或等待到期收据后，使用同一工具返回的 `operationId` 调用 `coterm.get_operation` 查询，不能把 `_meta` 塞进领域参数。服务端保持严格的 `additionalProperties:false` 校验，未知字段会返回 `operation_args_invalid` 并指出未知或缺失的字段名，不回显参数值。
 
 ## 适配器传输
 

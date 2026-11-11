@@ -15,6 +15,6 @@ Serial 提供通用串口文本与 HEX 收发，支持多实例、人工终端�
 - [操作目录与 MCP 注册](../../src/serial/backend.rs)
 - [命令列表与回显捕获](../../src/serial/command.rs)
 - [实例配置、连接与输出缓冲](../../src/serial/session.rs)
-- [文本与 HEX 编码](../../src/serial/payload.rs)
+- [文本与 HEX 编码](../../src/stream/payload.rs)
 - [驱动进程契约测试](../../tests/serial.rs)
 - [MCP 实施进度与待确认项](../../../../docs/progress/mcp.md)

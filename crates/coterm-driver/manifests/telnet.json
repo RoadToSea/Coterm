@@ -1,0 +1,30 @@
+{
+  "manifestVersion": 1,
+  "id": "coterm-driver-telnet",
+  "name": "Telnet",
+  "version": "0.1.0",
+  "runtime": {
+    "interfaceMajor": 2,
+    "requires": [
+      "instances",
+      "backend-calls",
+      "operation-catalog",
+      "native-mcp-tools",
+      "async-operations",
+      "driver-events"
+    ]
+  },
+  "frontend": {
+    "entry": "frontend/index.js"
+  },
+  "mcp": {
+    "provider": "backend"
+  },
+  "instances": {
+    "type": "telnet-terminal",
+    "multiple": true
+  },
+  "capabilities": [
+    "confirmation"
+  ]
+}
