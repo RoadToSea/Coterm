@@ -30,6 +30,7 @@ const css = `
     padding: 5px 12px;
     background: var(--coterm-surface-sidebar, #333333);
     cursor: pointer;
+    border-radius: var(--radius, 6px);
   }
   button:hover { background: var(--coterm-surface-hover, #414141); }
   button:disabled { opacity: .5; cursor: default; }
@@ -92,8 +93,8 @@ const css = `
   .format-switch button[aria-pressed="true"] { background: transparent; color: var(--coterm-text-bright, #ffffff); }
   .modes { display: inline-flex; }
   .modes button { border-radius: 0; }
-  .modes button:first-child { border-radius: 2px 0 0 2px; }
-  .modes button:last-child { border-radius: 0 2px 2px 0; border-left: 0; }
+  .modes button:first-child { border-top-left-radius: var(--radius, 6px); border-bottom-left-radius: var(--radius, 6px); }
+  .modes button:last-child { border-top-right-radius: var(--radius, 6px); border-bottom-right-radius: var(--radius, 6px); border-left: 0; }
   .panel { flex: 1; min-height: 0; display: flex; flex-direction: column; }
   .panel[hidden] { display: none; }
   .receive-area { position: relative; display: flex; flex: 1; min-height: 0; overflow: hidden; isolation: isolate; }

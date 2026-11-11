@@ -326,7 +326,7 @@ export default function App() {
   );
 
   const driverIssueNotice = driverIssues.length > 0 && (
-    <ul role="status" aria-label={t("Driver package issues")} className="max-h-32 overflow-y-auto break-words border-l-2 border-warning bg-warning-surface px-3 py-2 text-xs leading-relaxed text-warning">
+    <ul role="status" aria-label={t("Driver registration issues")} className="max-h-32 overflow-y-auto break-words border-l-2 border-warning bg-warning-surface px-3 py-2 text-xs leading-relaxed text-warning">
       {driverIssues.map((issue) => (
         <li key={`${issue.directory}:${issue.code}`} title={issue.code}>
           <span className="font-medium">{issue.driverId ? `${issue.driverId} (${issue.directory})` : issue.directory}</span>
@@ -376,7 +376,7 @@ export default function App() {
       {approvalTarget && <ApprovalSettings key={approvalTarget.configRef ?? approvalTarget.driverInstanceId} instance={approvalTarget} onClose={() => setApprovalTarget(null)} />}
 
       <div className="flex min-h-0 flex-1">
-        <aside aria-label={t("Installed drivers")} className="flex w-[64px] shrink-0 flex-col border-r border-coterm-border bg-coterm-surface-sidebar sm:w-[72px]">
+        <aside aria-label={t("Built-in drivers")} className="flex w-[64px] shrink-0 flex-col border-r border-coterm-border bg-coterm-surface-sidebar sm:w-[72px]">
           {instancesCollapsed && <Button variant="ghost" size="icon" type="button" id="toggle-instances-button"
             className="mx-auto mt-3 shrink-0" aria-controls="instances-sidebar" aria-expanded={false}
             aria-label={t("Expand instances panel")} title={t("Expand instances panel")}
@@ -432,11 +432,11 @@ export default function App() {
 
         <aside
           id="instances-sidebar"
-          aria-label={t("Instances")}
+          aria-label={t("Workspaces")}
           className={cn("flex w-[240px] min-w-0 shrink-0 flex-col border-r border-coterm-border bg-coterm-surface-raised max-[1024px]:w-[200px]", instancesCollapsed && "hidden")}
         >
           <div className="flex h-14 shrink-0 items-center justify-between px-4">
-            <h2 className="text-[11px] font-medium tracking-[0.06em]">{t("INSTANCES")}</h2>
+            <h2 className="text-[11px] font-medium tracking-[0.06em]">{t("WORKSPACE")}</h2>
             <Button variant="ghost" size="icon" type="button" className="ml-auto mr-1 size-7"
               disabled={busyId !== null || !workspace} aria-label={t("New workspace")} title={t("New workspace")}
               onClick={() => void createWorkspace()}><Plus data-icon="inline-start" /></Button>

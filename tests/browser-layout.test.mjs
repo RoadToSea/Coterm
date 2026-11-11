@@ -289,7 +289,7 @@ test("Browser layout, catalog diagnostics, and keyboard collapse on the current 
       };
 
       const measure = async () => page.evaluate(`(() => {
-        const drivers = document.querySelector('aside[aria-label="Installed drivers"]');
+        const drivers = document.querySelector('aside[aria-label="Built-in drivers"]');
         const instances = document.getElementById('instances-sidebar');
         const workspace = document.querySelector('main[aria-label="Driver workspace"]');
         const toggle = document.getElementById('toggle-instances-button');
@@ -424,11 +424,11 @@ test("Browser layout, catalog diagnostics, and keyboard collapse on the current 
 
       // --- 逐包诊断与有效驱动并存 ---
       const diagnostics = await page.evaluate(`(() => {
-        const list = document.querySelector('ul[aria-label="Driver package issues"]');
+        const list = document.querySelector('ul[aria-label="Driver registration issues"]');
         return {
           present: !!list,
           entries: list ? [...list.querySelectorAll('li')].map((item) => item.textContent) : [],
-          driverButtons: [...document.querySelectorAll('aside[aria-label="Installed drivers"] nav button[aria-label^="Manage "]')].map((item) => item.getAttribute('aria-label')),
+          driverButtons: [...document.querySelectorAll('aside[aria-label="Built-in drivers"] nav button[aria-label^="Manage "]')].map((item) => item.getAttribute('aria-label')),
           roles: list ? list.getAttribute('role') : null,
         };
       })()`);

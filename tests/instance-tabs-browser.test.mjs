@@ -111,7 +111,7 @@ test("inline protocol configuration and instance tabs preserve live frontends an
     await selectTab("created-2");
     await wait(`document.querySelector('[role=tablist]').scrollLeft>0`, "selected last tab scrolls into view");
     assert.equal(await run(`document.documentElement.scrollWidth<=innerWidth`), true);
-    await wait(`(()=>{const a=document.querySelector('[role=tablist]').getBoundingClientRect(),b=document.getElementById('instance-tab-created-2').getBoundingClientRect();return b.left>=a.left && b.right<=a.right;})()`, "selected tab stays visible after responsive sidebar resize");
+    await wait(`(()=>{const a=document.querySelector('[role=tablist]').getBoundingClientRect(),b=document.getElementById('instance-tab-created-2').parentElement.getBoundingClientRect();return b.left>=a.left && b.right<=a.right;})()`, "selected tab and close button stay visible after responsive sidebar resize");
     await client.send("Emulation.setDeviceMetricsOverride", {width:1280,height:800,deviceScaleFactor:1,mobile:false});
 
     // Closing a background tab keeps the active one; closing a view does not delete/disconnect.

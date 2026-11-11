@@ -74,7 +74,7 @@ test("SSH integrates command blocks into the real terminal and publishes only hu
     await waitForValue(client,"calls.filter(c=>c.operation==='ssh.select_lines').at(-1)?.args.text===''");
     assert.equal(await run("root.querySelectorAll('.coterm-terminal-gutter > button:not(.coterm-terminal-number)').length"),1);
     assert.equal(await run("root.querySelector('.coterm-terminal-clear').disabled"),true);
-    assert.deepEqual(await run("(()=>{const b=root.querySelector('.coterm-terminal-clear');const r=b.getBoundingClientRect();const s=getComputedStyle(b);return [b.textContent,b.getAttribute('aria-label'),Math.round(r.width),Math.round(r.height),s.borderRadius,s.backgroundColor,s.opacity]})()"),["×","Clear selection",16,16,"50%","rgb(255, 95, 87)","1"]);
+    assert.deepEqual(await run("(()=>{const b=root.querySelector('.coterm-terminal-clear');const r=b.getBoundingClientRect();const s=getComputedStyle(b);return [b.textContent,b.getAttribute('aria-label'),Math.round(r.width),Math.round(r.height),s.borderRadius,s.backgroundColor,s.opacity]})()"),["×","Clear selection",16,16,"4px","rgba(0, 0, 0, 0)","0.45"]);
     await run("window.gutterWidth=()=>root.querySelector('.coterm-terminal-gutter').getBoundingClientRect().width;window.singleDigitWidth=gutterWidth();backend=backend.map(b=>b.id==='two'?{...b,index:10}:b);version++;event({name:'ssh.blocks.changed',payload:{}})");
     await waitForValue(client,"gutters()[1].textContent==='10' && gutterWidth()>=singleDigitWidth");
     await run("window.twoDigitWidth=gutterWidth();backend=backend.map(b=>b.id==='two'?{...b,index:4294967295}:b);version++;event({name:'ssh.blocks.changed',payload:{}})");

@@ -29,6 +29,7 @@ const css = `
     padding: 5px 12px;
     background: var(--coterm-surface-sidebar, #333333);
     cursor: pointer;
+    border-radius: var(--radius, 6px);
   }
   button:hover { background: var(--coterm-surface-hover, #414141); }
   button:disabled { opacity: .5; cursor: default; }
@@ -297,7 +298,7 @@ export function mount(container: HTMLElement, api: DriverAPI): DriverFrontend {
         humanCommands.suspend(true);
         observedBoundaries.reset();
         const command = (await blocksView.command(block.id)).replace(/[\u0000-\u001f\u007f-\u009f]/g, " ");
-        const label = block.actor === "human" ? "[👤 Human]" : "[🤖 Agent]";
+        const label = block.actor === "human" ? "[Human]" : "[Agent]";
         const prefix = block.actor === "human" ? "\x1b[38;2;52;211;153m" : "\x1b[38;2;56;189;248m";
         // Display metadata stays local; it never goes to ssh.input.
         await new Promise<void>(resolve => terminal.write(prefix + label + "\x1b[0m " + command + "\r\n", resolve));

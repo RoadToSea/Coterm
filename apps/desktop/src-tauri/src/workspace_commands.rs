@@ -71,6 +71,7 @@ pub async fn save_workspace_layout(
     active_workspace_id: Option<String>,
     state: tauri::State<'_, AppState>,
 ) -> Result<(), RuntimeError> {
+    let _guard = state.workspace_actions.lock().await;
     if order.len() > 128 {
         return Err(workspace::error("workspace_capacity"));
     }

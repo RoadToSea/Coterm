@@ -55,7 +55,8 @@ test("workspace groups manage and move live/saved instances without reconnecting
     assert.equal(await run(`document.querySelector('[role=toolbar]').textContent.includes('Prod-Server')`), false);
     assert.equal(await run(`document.querySelector('[role=toolbar]').textContent.includes('MCP')`), false);
     assert.equal(await run(`document.querySelector('[role=toolbar] #toggle-instances-button')`), null);
-    assert.equal(await run(`document.querySelector('aside[aria-label="Installed drivers"] h1')`), null);
+    assert.equal(await run(`!!document.querySelector('aside[aria-label="Built-in drivers"]')`), true);
+    assert.equal(await run(`document.querySelector('aside[aria-label="Built-in drivers"] h1')`), null);
     assert.equal(await run(`document.querySelectorAll('#toggle-instances-button').length`), 1);
     assert.equal(await run(`document.querySelector('[data-instance-id] [data-driver-icon]').innerHTML === document.querySelector('nav[aria-label="Driver list"] [data-driver-icon]').innerHTML`), true);
     assert.ok(await run(`parseFloat(getComputedStyle(document.querySelector('[data-saved-ref]')).borderRadius) > 0`), "saved cards use the same rounded layout");

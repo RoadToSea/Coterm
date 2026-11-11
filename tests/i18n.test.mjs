@@ -25,7 +25,7 @@ test("switching languages translates host text, interpolates values, and persist
     const stop = subscribeLocale(() => updates++);
     setLocale("zh-CN");
     assert.equal(getLocale(), "zh-CN");
-    assert.equal(t("Install driver"), "安装驱动");
+    assert.equal(t("Settings"), "设置");
     assert.equal(t("Manage {name}", { name: "SSH" }), "管理 SSH");
     assert.equal(t("vendor-owned text"), "vendor-owned text");
     assert.equal(values.get(LOCALE_STORAGE_KEY), "zh-CN");
@@ -33,7 +33,7 @@ test("switching languages translates host text, interpolates values, and persist
     assert.equal(updates, 1, "the same language does not notify listeners");
     stop();
     setLocale("en");
-    assert.equal(t("Install driver"), "Install driver");
+    assert.equal(t("Settings"), "Settings");
     assert.equal(updates, 1, "released subscribers stay released");
   } finally {
     if (original) Object.defineProperty(globalThis, "localStorage", original);

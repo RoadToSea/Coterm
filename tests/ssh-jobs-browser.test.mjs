@@ -111,6 +111,8 @@ test("SSH tasks collapse to one row and keep the selected task last while live e
     assert.equal(await run(`items().length`), 20);
     assert.equal(await run(`items().at(-1).querySelector('.job-select').title`), "echo task 030");
     assert.equal(await run(`new Set(items().map(el=>el.offsetTop)).size`), 1);
+    await waitForValue(client, `Math.abs(list.scrollWidth-list.clientWidth-list.scrollLeft) <= 1`,
+      {label:"selected task stays at the end after panel resize"});
     assert.ok(await run(`Math.abs(list.scrollWidth-list.clientWidth-list.scrollLeft) <= 1`));
     assert.ok(await run(`select(30).getBoundingClientRect().left >= list.getBoundingClientRect().left`));
     assert.equal(await run(`root.querySelector('.job-view').hidden`), false);

@@ -20,7 +20,10 @@ export function InstanceTabs({ instances, activeId, onSelect, onClose }: Props) 
   useEffect(() => {
     const container = list.current;
     if (!container || !activeId) return;
-    const reveal = () => document.getElementById(instanceTabId(activeId))?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    const reveal = () => {
+      const el = document.getElementById(instanceTabId(activeId));
+      (el?.parentElement ?? el)?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    };
     reveal();
     const observer = new ResizeObserver(reveal);
     observer.observe(container);
@@ -59,19 +62,29 @@ export function InstanceTabs({ instances, activeId, onSelect, onClose }: Props) 
     focus(instances[target]);
   };
   return <div ref={list} role="tablist" aria-label={t("Open instances")} aria-orientation="horizontal"
-    className="flex min-h-11 shrink-0 gap-1 overflow-x-auto border-b border-border bg-card px-2 pt-1">
-    {instances.map((instance, index) => <div key={instance.driverInstanceId} role="presentation"
-      className={cn("flex shrink-0 items-center rounded-t-lg border border-b-0", activeId === instance.driverInstanceId ? "border-border bg-background" : "border-transparent")}>
-      <Button type="button" variant="ghost" size="sm" role="tab" id={instanceTabId(instance.driverInstanceId)}
-        aria-selected={activeId === instance.driverInstanceId} aria-controls={instancePanelId(instance.driverInstanceId)}
-        tabIndex={activeId === instance.driverInstanceId || (!activeId && index === 0) ? 0 : -1}
-        title={`${instance.label} · ${instance.driverId}`} className="max-w-52 justify-start"
-        onClick={() => onSelect(instance.driverInstanceId)} onKeyDown={event => navigate(event, index)}>
-        <PlugZap data-icon="inline-start" /><span className="truncate">{instance.label}</span>
-      </Button>
-      <Button type="button" variant="ghost" size="icon" className="mr-1 size-6 shrink-0"
-        aria-label={t("Close view {name}", { name: instance.label })} title={t("Close view; connection stays open")}
-        onClick={() => close(index)}><X data-icon="inline-start" /></Button>
-    </div>)}
+    className="flex min-h-11 shrink-0 gap-3 overflow-x-auto border-b border-border bg-card px-3 pt-1.5">
+    {instances.map((instance, index) => {
+      const active = activeId === instance.driverInstanceId;
+      return (
+        <div key={instance.driverInstanceId} role="presentation"
+          className={cn(
+            "flex shrink-0 items-center transition-colors",
+            active
+              ? "coterm-tab-active"
+              : "rounded-t-lg text-muted-foreground hover:bg-muted/50 hover:text-foreground"
+          )}>
+          <Button type="button" variant="ghost" size="sm" role="tab" id={instanceTabId(instance.driverInstanceId)}
+            aria-selected={active} aria-controls={instancePanelId(instance.driverInstanceId)}
+            tabIndex={active || (!activeId && index === 0) ? 0 : -1}
+            title={`${instance.label} · ${instance.driverId}`} className={cn("max-w-52 justify-start font-medium", active ? "text-foreground" : "text-muted-foreground")}
+            onClick={() => onSelect(instance.driverInstanceId)} onKeyDown={event => navigate(event, index)}>
+            <PlugZap data-icon="inline-start" /><span className="truncate">{instance.label}</span>
+          </Button>
+          <Button type="button" variant="ghost" size="icon" className="mr-1 size-6 shrink-0 rounded-full hover:bg-muted"
+            aria-label={t("Close view {name}", { name: instance.label })} title={t("Close view; connection stays open")}
+            onClick={() => close(index)}><X data-icon="inline-start" /></Button>
+        </div>
+      );
+    })}
   </div>;
 }

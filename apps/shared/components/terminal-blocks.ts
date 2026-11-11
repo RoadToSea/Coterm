@@ -41,11 +41,11 @@ export function mountTerminalBlocks(gutter: HTMLElement, container: HTMLElement,
   const style = document.createElement("style");
   style.textContent = `
   .coterm-terminal-gutter { position:relative; flex:none; box-sizing:border-box; width:max(28px,calc(var(--coterm-terminal-number-chars,2) * 1ch + 12px)); min-width:28px; font:11px var(--coterm-font-mono,Consolas,monospace); }
-  .coterm-terminal-clear { position:absolute; top:5px; left:50%; transform:translateX(-50%); display:grid; place-items:center; box-sizing:border-box; width:16px; height:16px; padding:0; border:1px solid #df4740; border-radius:50%; background:#ff5f57; color:#711c17; box-shadow:inset 0 1px 0 rgba(255,255,255,.3); font:14px/1 sans-serif; cursor:pointer; z-index:2; }
-  .coterm-terminal-clear:hover:not(:disabled) { background:#ff746d; color:#47110e; }
-  .coterm-terminal-clear:active:not(:disabled) { transform:translateX(-50%) scale(.92); }
-  .coterm-terminal-clear:focus-visible { outline:2px solid var(--coterm-focus,#007fd4); outline-offset:2px; }
-  .coterm-terminal-clear:disabled { opacity:1; color:rgba(113,28,23,.45); cursor:default; }
+  .coterm-terminal-clear { position:absolute; top:5px; left:50%; transform:translateX(-50%); display:grid; place-items:center; box-sizing:border-box; width:16px; height:16px; padding:0; border:1px solid var(--coterm-border-subtle,rgba(128,128,128,.2)); border-radius:4px; background:var(--coterm-surface-raised,rgba(128,128,128,.08)); color:var(--coterm-text-muted,#969696); font:13px/1 var(--coterm-font-sans,"Segoe UI",-apple-system,sans-serif); cursor:pointer; z-index:2; transition:opacity .15s ease, background-color .15s ease, color .15s ease, border-color .15s ease, transform .1s ease; }
+  .coterm-terminal-clear:hover:not(:disabled) { background:var(--coterm-surface-hover,rgba(128,128,128,.15)); border-color:var(--coterm-border,rgba(128,128,128,.35)); color:var(--coterm-text-primary,#ccc); }
+  .coterm-terminal-clear:active:not(:disabled) { transform:translateX(-50%) scale(.92); background:var(--coterm-surface-active,rgba(128,128,128,.25)); }
+  .coterm-terminal-clear:focus-visible { outline:2px solid var(--coterm-focus,#007fd4); outline-offset:1px; }
+  .coterm-terminal-clear:disabled { opacity:.45; border-color:transparent; background:transparent; cursor:default; }
   .coterm-terminal-number { position:absolute; left:2px; box-sizing:border-box; width:calc(100% - 4px); padding:0 2px; border:0; background:transparent; text-align:right; font:inherit; color:var(--coterm-text-muted,#969696); }
   .coterm-terminal-number[aria-pressed="true"] { color:var(--coterm-focus,#38bdf8); background:var(--coterm-selection,rgba(56,189,248,.15)); }
   .coterm-terminal-frames { position:absolute; inset:0; pointer-events:none; overflow:hidden; }
