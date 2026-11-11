@@ -38,4 +38,4 @@ UART 发送行尾 `none/cr/lf/crlf` 随实例 `configRef` 保存，挂载时恢�
 
 文件导入使用用户选择的浏览器 File，只导入草稿，确认后发送；ASCII 按 UTF-8 读取，HEX 导入原始字节。接收保存是有界缓冲的快照下载，不开放任意路径文件代理。发送历史只驻留当前挂载内存，最近 50 项且总计最多 64 KiB，失败不录入。定时发送默认 100 ms、范围 20–60000 ms，等待上次完成再计时；改稿、切换视图、断线、失败或卸载后停止，不恢复旧队列。实现进度与限制见 [Serial 进度](../../crates/coterm-driver/docs/serial/progress.md)。
 
-通用契约见 [驱动开发](driver-development.md)、[运行时通信](runtime-communication.md) 和 [MCP 接入](mcp-integration.md)。终端公共快捷键见 [终端快捷键](terminal-shortcuts.md)。
+通用契约见 [架构规范](../SPEC.md)、[运行时通信](runtime-communication.md) 和 [MCP 接入](mcp-integration.md)。终端公共快捷键见 [终端快捷键](terminal-shortcuts.md)。

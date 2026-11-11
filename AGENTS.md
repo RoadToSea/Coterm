@@ -2,14 +2,16 @@
 
 ## 项目定位
 
-Coterm 是 Tauri v2 桌面基座。基座负责驱动生命周期、实例路由、前端挂载、公共交互、操作记录和 MCP Bridge；SSH、串口、MQTT、CAN 等协议由驱动负责。
+Coterm 是面向人类与 Agent 协同的终端交互基座。专注 SSH、串口（Serial）与本地终端，基座负责实例路由、命令块呈现、公共交互、操作记录和 MCP Bridge；底层通信由内置驱动负责。
 
-驱动以 Rust 库链接到桌面主进程，每种驱动使用独立异步任务；同一驱动支持多个实例。驱动可以无 UI，也可以提供自己的完整前端。驱动自己管理协议数据和持久化，前端只能通过基座 API 访问驱动后端。
+系统明确业务边界：放弃对底层非标字节流解码、连续波形分析与信号数学计算的扩展，此类功能划归 Lissio 等虚拟仪器上位机。
+
+驱动以 Rust 库链接到桌面主进程；每种驱动使用独立异步任务，同一驱动支持多个实例。任务隔离不提供进程级崩溃隔离。
 
 架构和接口设计以以下文档为准：
 
 - `docs/SPEC.md`：总技术路线
-- `docs/architecture/driver-development.md`：驱动开发入口
+- `docs/design/terminal-focus-and-in-tree-architecture.md`：终端聚焦与内置驱动架构设计
 - `docs/architecture/`：运行时、通信和 MCP 设计
 
 这些接口仍在设计阶段，修改实现时同步更新相关文档。
@@ -71,7 +73,7 @@ pnpm tauri:build
 
 - `docs/` 根目录只保留 `SPEC.md`；整体架构和稳定接口以 `SPEC.md` 与 `docs/architecture/` 为准，修改实现时同步更新相关架构文档。
 - `docs/design/` 记录复杂业务实现前的方案、取舍、接口草案和验收条件。方案落地后，将仍有效的约束同步到 `architecture/`，实施状态记录到 `progress/`。
-- `docs/feedback/` 保存外部用户、Agent 和现场使用后的反馈、复现条件及观察结果。反馈确认后，把产品决策写入 `design/` 或 `architecture/`，把实施进度写入 `progress/`。
+- `docs/feedback/` 保存外部用户、Agent 和现场使用后的反馈、复现条件及观察结果。反馈确认后，把产品决策写入 `design/` 或 `architecture/`，把实施进度写入 `progress/`；已解决的问题从 `feedback/` 删除。
 - `docs/progress/` 按长期模块维护，不按日期或单次任务新建文件。模块文件至少记录当前能力、限制、重要实现/验收结果和下次继续开发的入口；同一模块已有文件时追加日期章节并合并维护。项目级状态集中在 `docs/progress/project.md`。
 - `docs/release/` 记录发布范围、构建步骤、发布前验收和已知限制；开发过程仍记录在 `progress/`。
 - 整理或移动文档后，修复所有相对链接，检查 `docs/` 根目录内容，并运行 `git diff --check`。文档变更完成后按常规新建分支、提交并推送。
