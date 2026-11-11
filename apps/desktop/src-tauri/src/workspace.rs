@@ -3,7 +3,7 @@
 use coterm_core::approval_policy::{ApprovalPolicy, ApprovalRuleGroup};
 #[path = "workspace_approval.rs"]
 mod approval;
-use coterm_proto::runtime::{ErrorCategory, RuntimeError};
+use coterm_core::model::{ErrorCategory, RuntimeError};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 #[cfg(windows)]
@@ -37,19 +37,28 @@ pub fn error(code: &str) -> RuntimeError {
         category: match code {
             "approval_group_not_found" => ErrorCategory::NotFound,
             "approval_group_in_use" | "approval_group_name_exists" => ErrorCategory::Conflict,
-            "approval_group_name_invalid" | "approval_group_capacity" | "approval_group_invalid" => ErrorCategory::InvalidRequest,
+            "approval_group_name_invalid"
+            | "approval_group_capacity"
+            | "approval_group_invalid" => ErrorCategory::InvalidRequest,
             _ => ErrorCategory::Internal,
         },
         code: code.into(),
         message: match code {
-            "approval_group_not_found" => "This approval rule group no longer exists. Refresh before saving.",
-            "approval_group_in_use" => "Reassign or unassign all instances before deleting this group.",
-            "approval_group_name_invalid" => "Use a nonempty group name of up to 64 characters without control characters.",
+            "approval_group_not_found" => {
+                "This approval rule group no longer exists. Refresh before saving."
+            }
+            "approval_group_in_use" => {
+                "Reassign or unassign all instances before deleting this group."
+            }
+            "approval_group_name_invalid" => {
+                "Use a nonempty group name of up to 64 characters without control characters."
+            }
             "approval_group_name_exists" => "Another approval rule group already uses this name.",
             "approval_group_capacity" => "The limit of 128 approval rule groups has been reached.",
             "approval_group_invalid" => "The saved approval rule group catalog is invalid.",
             _ => "Workspace could not be saved or restored. No operations were replayed.",
-        }.into(),
+        }
+        .into(),
         details: None,
     }
 }
@@ -385,7 +394,12 @@ impl WorkspaceStore {
         )
     }
     fn commit(&mut self, entries: Vec<SavedInstance>, layout: Layout) -> Result<(), RuntimeError> {
-        self.commit_state(entries, layout, self.groups.clone(), self.approval_rule_groups.clone())
+        self.commit_state(
+            entries,
+            layout,
+            self.groups.clone(),
+            self.approval_rule_groups.clone(),
+        )
     }
 
     fn commit_state(
@@ -478,7 +492,12 @@ impl WorkspaceStore {
         groups.push(group.clone());
         let mut layout = self.layout.clone();
         layout.active_workspace_id = group.id.clone();
-        self.commit_state(self.entries.clone(), layout, groups, self.approval_rule_groups.clone())?;
+        self.commit_state(
+            self.entries.clone(),
+            layout,
+            groups,
+            self.approval_rule_groups.clone(),
+        )?;
         Ok(group)
     }
 
@@ -567,7 +586,8 @@ fn contains_runtime_handle(value: &Value) -> bool {
             ["id", "purpose", "expiresAt"]
                 .iter()
                 .all(|key| object.contains_key(*key))
-                && (object.contains_key("driverInstanceId") || object.contains_key("pluginInstanceId"))
+                && (object.contains_key("driverInstanceId")
+                    || object.contains_key("pluginInstanceId"))
                 || object.values().any(contains_runtime_handle)
         }
         Value::Array(values) => values.iter().any(contains_runtime_handle),

@@ -27,7 +27,7 @@
 - read_lines 默认读取终端最近逻辑行，也可按 operationId 查询命令；read_dialogue_pairs 同时覆盖前台和后台，运行中数据可读。断线保留后端历史，成功重连清理。JSON 仅为内存记录及传输格式，没有新增落盘结构。
 - xterm 选区同步绑定物理连接，Agent 不能写选择；前端卸载、选区清除及断线清理。读取单次 16 KiB，截断可见。终端回放序号仍为前端内部恢复机制，不暴露给 Agent。
 - 验证：SSH 31 项库测试及 23 项集成测试通过，覆盖真实子进程、默认 PTY、显式 exec、审批及 sudo、32 KiB 结果、长脚本、分流、运行中读取、跨实例隔离、选区来源门禁和断线保留。仅将本次暂存源码独立导出后，54 项 Rust 测试再次通过。工作区 cargo check、SSH Clippy、SSH 前端及桌面构建通过；3 项真实浏览器回归通过、无跳过，覆盖 xterm 选区同步/清除、命令块及后台快照显示；文档链接、docs 根目录和保留 CRLF 的空白检查通过。
-- 下次入口：[SSH 操作入口](../../drivers/driver-ssh/src/backend.rs)、[命令记录](../../drivers/driver-ssh/src/blocks.rs)、[终端交付与边界](../../drivers/driver-ssh/src/command.rs)、[架构契约](../architecture/ssh-driver.md)。本次 SSH 命令阶段未改动审批存储或串口接口。每实例审批对象/配置迁移已由后续宿主阶段接入，见 [MCP 进度](mcp.md#2026-11-08每实例审批对象与独立配置)；串口 Shell/stream 已完成，见 [串口进度](../../drivers/driver-serial/docs/progress.md)。
+- 下次入口：[SSH 操作入口](../../crates/coterm-driver/src/ssh/backend.rs)、[命令记录](../../crates/coterm-driver/src/ssh/blocks.rs)、[终端交付与边界](../../crates/coterm-driver/src/ssh/command.rs)、[架构契约](../architecture/ssh-driver.md)。本次 SSH 命令阶段未改动审批存储或串口接口。每实例审批对象/配置迁移已由后续宿主阶段接入，见 [MCP 进度](mcp.md#2026-11-08每实例审批对象与独立配置)；串口 Shell/stream 已完成，见 [串口进度](../../crates/coterm-driver/docs/serial/progress.md)。
 
 ## 2026-11-03：现场块边界与 Exec 展示反馈
 
@@ -37,7 +37,7 @@
 - 定向浏览器回归 8 项通过、0 失败、0 跳过，覆盖分包提示符、无回复命令、选择 / 回放、重排对齐、双输出流、双语主题、大字号窄屏、关闭 / 跟随、快捷键与审批界面。桌面和 SSH 前端构建通过；截图在忽略目录 `target/ssh-feedback-20261103/` 完成人工复核。
 - 完整 `pnpm driver:ssh:build` 的 Rust 编译与前端构建通过，但复制后端 exe 时遇到运行中驱动占用（EBUSY），未停止用户会话；前端产物已更新。退出旧桌面后可重新完整打包，本次无需后端改动。
 - 另将暂存源码独立导出，单独通过桌面 / SSH 的 TypeScript 与 Vite 构建，以及审批 / SSH 块 / 人工块 / Exec 共 4 项浏览器回归，确认本次提交不依赖工作区其他未提交修改。
-- 本次未修改 Rust、协议、依赖或权限，尚未连接用户真实远端。入口：[视觉边界观察](../../drivers/driver-ssh/frontend/src/observed-boundaries.ts)、[SDK 边框](../../apps/shared/components/terminal-blocks.ts)、[Exec UI](../../drivers/driver-ssh/frontend/src/jobs.ts)、[交互约束](../architecture/ssh-driver.md#命令消息块)。
+- 本次未修改 Rust、协议、依赖或权限，尚未连接用户真实远端。入口：[视觉边界观察](../../crates/coterm-driver/frontend/ssh/src/observed-boundaries.ts)、[SDK 边框](../../apps/shared/components/terminal-blocks.ts)、[Exec UI](../../crates/coterm-driver/frontend/ssh/src/jobs.ts)、[交互约束](../architecture/ssh-driver.md#命令消息块)。
 
 ## 2026-11-03：人工终端 Enter 生成可选命令块
 
@@ -47,7 +47,7 @@
 - 另复现并修复快照竞态：开始帧到达后，较早的快照不能删除新 marker；已失效的进行中读取丢弃并重读。浏览器用例通过人为延迟旧空快照，先复现块号丢失再验证修复。
 - 验证：44 项 SSH Rust 测试通过（24 单元、20 真实驱动 / 本地 SSH 集成），覆盖人工 Enter、Human-only 门禁、旧连接拒绝、原始按键隔离、选择后 MCP 读取与边界回放；工作区 check、SSH all-targets Clippy、桌面 build 和 SSH 开发包构建通过。浏览器覆盖人工输入到块选择、历史 / 编辑 / 粘贴 / 折行、延迟回显、密码与备用屏幕隔离、挂载恢复及原有 API / Exec / 快捷键。
 - Exec 浏览器原有滚动断言在改动前基线同样出现时序失败，现等待语言切换后的异步布局完成再检查，没有放宽滚动位置条件。
-- 入口：[人工输入观察](../../drivers/driver-ssh/frontend/src/human-commands.ts)、[会话登记](../../drivers/driver-ssh/src/session.rs)、[浏览器回归](../../tests/ssh-human-blocks-browser.test.mjs)、[接口与限制](../architecture/ssh-driver.md#人工-enter-观察)。重启 SSH 驱动 / 桌面加载新前后端；本轮使用本地测试服务器，尚未连接用户真实远端。
+- 入口：[人工输入观察](../../crates/coterm-driver/frontend/ssh/src/human-commands.ts)、[会话登记](../../crates/coterm-driver/src/ssh/session.rs)、[浏览器回归](../../tests/ssh-human-blocks-browser.test.mjs)、[接口与限制](../architecture/ssh-driver.md#人工-enter-观察)。重启 SSH 驱动 / 桌面加载新前后端；本轮使用本地测试服务器，尚未连接用户真实远端。
 
 ## 2026-11-02：主终端底部裁切修复
 
@@ -85,9 +85,9 @@
 - SSH 前端直接导入 SDK `mountBlockList`，保留完整终端、原任务行及输出视图；消息块新增共享 PTY 单行输入，焦点、文本选择、块选择在回复更新时保持。只在块视图可见时读取，错误可重试，缺口重读，成功重连清理旧 epoch。
 - 无新增依赖、宿主接口、跨平台启动方式或权限；所选上下文提交给 Agent 仍待后续接入。
 
-实现入口：[后端日志](../../drivers/driver-ssh/src/blocks.rs)、[前端适配](../../drivers/driver-ssh/frontend/src/blocks.ts)、[数据契约](../architecture/ssh-driver.md#命令消息块)、[浏览器验收](../../tests/ssh-blocks-browser.test.mjs)。
+实现入口：[后端日志](../../crates/coterm-driver/src/ssh/blocks.rs)、[前端适配](../../crates/coterm-driver/frontend/ssh/src/blocks.ts)、[数据契约](../architecture/ssh-driver.md#命令消息块)、[浏览器验收](../../tests/ssh-blocks-browser.test.mjs)。
 
-本次 Windows 验收：`cargo check --workspace`、`cargo fmt --package coterm-driver-ssh -- --check`、`cargo clippy -p coterm-driver-ssh --all-targets -- -D warnings` 通过；SSH Rust 测试 35 项通过，完整 `pnpm test` 57 项通过、0 失败、0 跳过。`pnpm build` 和 `pnpm driver:ssh:build` 通过，开发包已更新到驱动 `dist`。人工复核浅色 / 深色和 320px 窄窗口截图。SSH 端到端契约使用真实驱动进程和本地测试服务器，尚未连接用户实际远端；macOS / Linux 未在本轮运行。
+本次 Windows 验收：`cargo check --workspace`、`cargo fmt --package coterm-driver-ssh -- --check`、`cargo clippy -p coterm-driver --all-targets -- -D warnings` 通过；SSH Rust 测试 35 项通过，完整 `pnpm test` 57 项通过、0 失败、0 跳过。`pnpm build` 和 `pnpm driver:ssh:build` 通过，开发包已更新到驱动 `dist`。人工复核浅色 / 深色和 320px 窄窗口截图。SSH 端到端契约使用真实驱动进程和本地测试服务器，尚未连接用户实际远端；macOS / Linux 未在本轮运行。
 
 ## 2026-10-30：使用反馈修复
 
@@ -105,16 +105,16 @@
 - 任务以开始事件顺序从新到旧排列。选中后自动折叠，仅显示最新至选中项的区间，横向滚动至选中项；重新展开可访问更早任务。重复点击选中项保持输出视图，关闭视图仍由独立按钮处理。
 - 列表按操作 ID 复用节点，完成事件不会重排；实时新增、状态更新、语言切换和窗口缩放保持选中项或当前浏览锚点。移除选中项清空视图，空列表不占空间；折叠行也支持滚轮浏览。
 - 验证：SSH 前端与桌面 `pnpm build` 通过；真实浏览器验证 50 个任务的展开高度、滚轮、键盘选中、实时更新、320px 窄窗口、移除和卸载；终端快捷键相关 13 项测试、桌面布局与主题集成 5 项测试通过。
-- 继续入口：[任务 UI](../../drivers/driver-ssh/frontend/src/index.ts)、[浏览器验收](../../tests/ssh-jobs-browser.test.mjs)。回归命令：`pnpm --filter coterm-driver-ssh-ui build`，然后 `node --import ./scripts/test-ts-loader.mjs --test tests/ssh-jobs-browser.test.mjs tests/terminal-shortcuts.test.mjs tests/terminal-shortcuts-browser.test.mjs`。
+- 继续入口：[任务 UI](../../crates/coterm-driver/frontend/ssh/src/index.ts)、[浏览器验收](../../tests/ssh-jobs-browser.test.mjs)。回归命令：`pnpm --filter coterm-driver-ssh-ui build`，然后 `node --import ./scripts/test-ts-loader.mjs --test tests/ssh-jobs-browser.test.mjs tests/terminal-shortcuts.test.mjs tests/terminal-shortcuts-browser.test.mjs`。
 
 ## 验证与入口
 
 - 本轮本地结果：相关 82 项测试通过，工作区 check / Clippy 通过，SSH 开发包构建通过；未连接原反馈的真实远端。
-- 回归命令：`cargo test -p coterm-driver-ssh`、`cargo test -p coterm-mcp`、`cargo test -p coterm-core`。
+- 回归命令：`cargo test -p coterm-driver`、`cargo test -p coterm-mcp`、`cargo test -p coterm-core`。
 - 工作区检查：`cargo check --workspace`、`cargo clippy --workspace -- -D warnings`。
 - 驱动构建：`pnpm driver:ssh:build`；更新后重启驱动/桌面并让 MCP 客户端刷新工具列表。
-- 关键实现：[Backend](../../drivers/driver-ssh/src/backend.rs)、[PTY 边界](../../drivers/driver-ssh/src/command.rs)、[Session](../../drivers/driver-ssh/src/session.rs)、[MCP 摘要](../../drivers/driver-ssh/src/result.rs)。
-- 关键验收：[真实驱动进程与本地 SSH 服务](../../drivers/driver-ssh/tests/ssh.rs)、[Stdio 进程](../../crates/coterm-mcp/tests/stdio.rs)。sudo 测试使用真实 POSIX Shell 与测试认证策略，不修改本机管理员权限。
+- 关键实现：[Backend](../../crates/coterm-driver/src/ssh/backend.rs)、[PTY 边界](../../crates/coterm-driver/src/ssh/command.rs)、[Session](../../crates/coterm-driver/src/ssh/session.rs)、[MCP 摘要](../../crates/coterm-driver/src/ssh/result.rs)。
+- 关键验收：[真实驱动进程与本地 SSH 服务](../../crates/coterm-driver/tests/ssh.rs)、[Stdio 进程](../../crates/coterm-mcp/tests/stdio.rs)。sudo 测试使用真实 POSIX Shell 与测试认证策略，不修改本机管理员权限。
 - 契约见 [SSH 架构](../architecture/ssh-driver.md) 和 [显式提权设计](../architecture/ssh-driver.md#显式-sudo)。
 
 ## 限制与下次入口

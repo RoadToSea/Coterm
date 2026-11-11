@@ -73,4 +73,4 @@
 - 基座在所有驱动的内联创建表单提供可选实例名称；名称作为独立宿主元数据传递，不写入驱动配置或驱动运行时协议。
 - 运行时校验名称不超过 256 个 UTF-8 字节且无控制字符；去除首尾空白，冲突标签添加序号并保持长度限制。留空沿用驱动返回标签/基座默认名。
 - 工作区已有标签字段用于持久化；恢复时显式传回存储标签，确保自定义名称在退出后仍保留。
-- 继续入口：[统一配置表单](../../apps/desktop/src/components/drivers/DriverConfiguration.tsx)、[运行时创建](../../crates/coterm-core/src/driver_manager.rs)、[工作区恢复](../../apps/desktop/src-tauri/src/workspace_commands.rs)。
+- 继续入口：[统一配置表单](../../apps/desktop/src/components/drivers/DriverConfiguration.tsx)、[运行时创建](../../crates/coterm-core/src/runtime/mod.rs)、[工作区恢复](../../apps/desktop/src-tauri/src/workspace_commands.rs)。

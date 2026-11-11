@@ -1,5 +1,5 @@
 packages:
   - "apps/*"
-  - "drivers/*/frontend"
+  - "crates/coterm-driver/frontend/*"
 allowBuilds:
   esbuild: true

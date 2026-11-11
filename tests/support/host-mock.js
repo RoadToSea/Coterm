@@ -14,11 +14,11 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
-const sshFrontendBundlePath = path.join(rootDir, "drivers/driver-ssh/dist/frontend/index.js");
+const sshFrontendBundlePath = path.join(rootDir, "crates/coterm-driver/dist/ssh/frontend/index.js");
 const sshFrontendSource = fs.existsSync(sshFrontendBundlePath)
   ? fs.readFileSync(sshFrontendBundlePath, "utf8")
   : null;
-const serialFrontendBundlePath = path.join(rootDir, "drivers/driver-serial/dist/frontend/index.js");
+const serialFrontendBundlePath = path.join(rootDir, "crates/coterm-driver/dist/serial/frontend/index.js");
 const serialFrontendSource = fs.existsSync(serialFrontendBundlePath)
   ? fs.readFileSync(serialFrontendBundlePath, "utf8") : null;
 

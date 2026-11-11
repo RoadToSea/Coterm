@@ -93,7 +93,7 @@ function selectedBlocks() {
 
 ### SSH 实际接入
 
-[SSH 前端适配](../../../drivers/driver-ssh/frontend/src/blocks.ts) 直接导入该组件，通过实例绑定的 `ssh.blocks` 读取后端有界分页快照，由 `ssh.blocks.changed` 通知失效。驱动后端记录真实获批的 PTY / exec 操作及其回复，前端把后端字段转换为 `CommandBlock`，并用 `statusText` 展示通道和执行状态。完整数据契约和上限见 [SSH 消息块](../../../docs/architecture/ssh-driver.md#命令消息块)。
+[SSH 前端适配](../../../crates/coterm-driver/frontend/ssh/src/blocks.ts) 直接导入该组件，通过实例绑定的 `ssh.blocks` 读取后端有界分页快照，由 `ssh.blocks.changed` 通知失效。驱动后端记录真实获批的 PTY / exec 操作及其回复，前端把后端字段转换为 `CommandBlock`，并用 `statusText` 展示通道和执行状态。完整数据契约和上限见 [SSH 消息块](../../../docs/architecture/ssh-driver.md#命令消息块)。
 
 ## 预览与验证
 

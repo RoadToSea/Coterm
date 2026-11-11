@@ -6,7 +6,7 @@ import http from "node:http";
 import { evaluate, findBrowser, openSession, waitForValue } from "./support/browser-harness.mjs";
 
 async function serialSession(browserPath, { delayStatus = false } = {}) {
-  const artifact = new URL("../drivers/driver-serial/dist/frontend/index.js", import.meta.url);
+  const artifact = new URL("../crates/coterm-driver/dist/serial/frontend/index.js", import.meta.url);
   const server = http.createServer((request, response) => {
     if (request.url === "/serial.js") {
       response.setHeader("Content-Type", "text/javascript");

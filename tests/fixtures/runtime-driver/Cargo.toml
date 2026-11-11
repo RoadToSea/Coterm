@@ -5,10 +5,7 @@ edition.workspace = true
 publish = false
 
 [dependencies]
-coterm-proto.workspace = true
+coterm-core.workspace = true
 tokio.workspace = true
 serde_json.workspace = true
 uuid.workspace = true
-
-[dev-dependencies]
-coterm-core.workspace = true

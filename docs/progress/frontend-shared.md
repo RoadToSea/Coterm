@@ -27,7 +27,7 @@
 
 - `DriverAPI` 增加可选只读 `instanceConfigRef`，由桌面从工作区固定 `configRef` 取得；恢复实例或移动分组不改变它。旧宿主 / 未保存实例可缺省，驱动不得按设备地址或名称猜测替代值。
 - `driverInstanceId` / `sessionId` 继续表示本次运行，操作路由保持原绑定；固定标识只用于驱动自有显示偏好的归属，不新增 Tauri 或驱动进程消息、权限或依赖。
-- 串口显示偏好首先应用；宿主契约和真实桌面回归覆盖同 COM 多保存项、运行 ID 重建及名称变化，详见[驱动开发契约](../architecture/driver-development.md#前端)与[串口验收记录](../../drivers/driver-serial/docs/progress.md#2026-11-04显示偏好跨启动恢复与串口退格)。
+- 串口显示偏好首先应用；宿主契约和真实桌面回归覆盖同 COM 多保存项、运行 ID 重建及名称变化，详见[驱动开发契约](../architecture/driver-development.md#前端)与[串口验收记录](../../crates/coterm-driver/docs/serial/progress.md#2026-11-04显示偏好跨启动恢复与串口退格)。
 
 ## 2026-11-03：终端块边框与纯数字块号
 
@@ -64,7 +64,7 @@
 - 新增 `@coterm/driver-sdk/components/toasts`，驱动前端可直接引用 `mountToasts`，支持普通 DOM 与 Shadow DOM，无框架或新依赖。
 - 圆角矩形，error 红色、warning 黄色、info 主题强调色；默认 4 秒自动消失，不抢焦点、不遮挡背景操作。支持手动关闭、悬停 / 键盘聚焦暂停、相同消息合并和最多 5 条的有界提示。
 - 文案按纯文本渲染，可访问名称可随语言更新，卸载移除提示、样式和计时器；串口驱动已用于配置锁定、HEX 校验、队列与操作失败提示。
-- 接入、选项和示例见 [公共提示组件](../../apps/shared/docs/toasts.md)。首个实际接入见 [Serial 进度](../../drivers/driver-serial/docs/progress.md)。
+- 接入、选项和示例见 [公共提示组件](../../apps/shared/docs/toasts.md)。首个实际接入见 [Serial 进度](../../crates/coterm-driver/docs/serial/progress.md)。
 
 验收：`pnpm build`、`pnpm test:build` 通过；完整 `pnpm test` 为 58 项通过、0 失败、0 跳过。公共组件真实浏览器用例检查颜色、圆角、非模态、焦点、自动消失、暂停、去重、容量、纯文本、本地化及卸载；浅色错误 / 警告截图完成复核。
 

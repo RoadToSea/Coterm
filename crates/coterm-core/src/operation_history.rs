@@ -2,8 +2,8 @@
 
 use std::collections::{HashMap, VecDeque};
 
+use crate::model::operation::{OperationRecord, OperationStatus};
 use chrono::Utc;
-use coterm_proto::runtime::operation::{OperationRecord, OperationStatus};
 use thiserror::Error;
 use tokio::sync::{watch, Mutex};
 
@@ -243,7 +243,7 @@ impl OperationHistory {
         operation_id: &str,
         status: OperationStatus,
         output: Option<serde_json::Value>,
-        error: Option<coterm_proto::runtime::RuntimeError>,
+        error: Option<crate::model::RuntimeError>,
     ) -> Result<OperationRecord, OperationHistoryError> {
         let mut state = self.state.lock().await;
         let bucket = state
@@ -320,9 +320,7 @@ fn bound_value(value: &mut serde_json::Value, max_bytes: usize) {
     }
 }
 
-fn redact_error(
-    mut error: coterm_proto::runtime::RuntimeError,
-) -> coterm_proto::runtime::RuntimeError {
+fn redact_error(mut error: crate::model::RuntimeError) -> crate::model::RuntimeError {
     error.details = error.details.map(redact_value);
     if error.message.len() > 1024 {
         error.message.truncate(1024);
@@ -379,10 +377,10 @@ fn can_transition(from: OperationStatus, to: OperationStatus) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use chrono::Utc;
-    use coterm_proto::runtime::operation::{
+    use crate::model::operation::{
         OperationEffect, OperationRecord, OperationSource, OperationStatus,
     };
+    use chrono::Utc;
 
     use super::{OperationHistory, OperationHistoryError};
 

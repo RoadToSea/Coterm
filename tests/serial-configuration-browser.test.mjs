@@ -10,8 +10,8 @@ test("Serial creation lists COM6 from a stopped driver before any instance is su
   const browserPath = findBrowser();
   if (!browserPath) { t.skip("No Chrome/Edge binary"); return; }
   assertFreshBuild();
-  assert.ok(fs.statSync(new URL("../drivers/driver-serial/dist/frontend/index.js", import.meta.url)).mtimeMs >=
-    fs.statSync(new URL("../drivers/driver-serial/frontend/src/index.ts", import.meta.url)).mtimeMs, "build Serial first");
+  assert.ok(fs.statSync(new URL("../crates/coterm-driver/dist/serial/frontend/index.js", import.meta.url)).mtimeMs >=
+    fs.statSync(new URL("../crates/coterm-driver/frontend/serial/src/index.ts", import.meta.url)).mtimeMs, "build Serial first");
   const scenario = structuredClone(defaultScenario);
   scenario.catalog = {drivers:[{id:"serial",name:"Serial",version:"0.1.0",hasFrontend:true,running:false}],issues:[]};
   scenario.instances = [];

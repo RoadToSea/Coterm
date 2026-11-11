@@ -1,11 +1,11 @@
 # 串口驱动与基座集成
 
-Serial 的接口设计和使用说明维护在驱动自己的 [docs 目录](../../drivers/driver-serial/docs/README.md)。
+Serial 的接口设计和使用说明维护在驱动自己的 [docs 目录](../../crates/coterm-driver/docs/serial/README.md)。
 
 | 文档 | 内容 |
 |---|---|
-| [接口设计](../../drivers/driver-serial/docs/interfaces.md) | 操作总表、MCP 开放范围、参数、配置、结果、事件及容量限制 |
-| [使用说明](../../drivers/driver-serial/docs/usage.md) | 构建启动、人工操作、MCP 示例、审批查询、取消与硬件验证 |
+| [接口设计](../../crates/coterm-driver/docs/serial/interfaces.md) | 操作总表、MCP 开放范围、参数、配置、结果、事件及容量限制 |
+| [使用说明](../../crates/coterm-driver/docs/serial/usage.md) | 构建启动、人工操作、MCP 示例、审批查询、取消与硬件验证 |
 | [MCP 实施进度](../progress/mcp.md) | 已完成的反馈修复、验证结果和待确认项 |
 
 ## 基座与驱动的边界
@@ -18,9 +18,9 @@ Serial 的接口设计和使用说明维护在驱动自己的 [docs 目录](../.
 
 ## 串口界面
 
-终端 / UART 调试使用同一实例模式：终端对应 `mode:shell`，UART 对应 `mode:stream`，创建页不提供独立的数据模式选择。桌面新建默认终端，提示符在终端配置中维护；恢复时由保存的驱动配置决定模式。两种模式都提供后端 `read_lines`，只有终端模式支持 `read_selected_lines` 和 `read_dialogue_pairs`。切换通过 `serial.configure` 只更新 mode / prompt，保留连接与原始接收数据；执行中的命令队列会阻止切换，旧审批提案失效。切回终端需重新观察提示符，旧选区不恢复；已有对话记录保留，未完成的人工观察记录标为 unknown。Shell 每条命令各自等待提示符，匹配不代表成功，stderr 合并至 stdout，退出码保持 null。能力和边界见 [接口设计](../../drivers/driver-serial/docs/interfaces.md)。
+终端 / UART 调试使用同一实例模式：终端对应 `mode:shell`，UART 对应 `mode:stream`，创建页不提供独立的数据模式选择。桌面新建默认终端，提示符在终端配置中维护；恢复时由保存的驱动配置决定模式。两种模式都提供后端 `read_lines`，只有终端模式支持 `read_selected_lines` 和 `read_dialogue_pairs`。切换通过 `serial.configure` 只更新 mode / prompt，保留连接与原始接收数据；执行中的命令队列会阻止切换，旧审批提案失效。切回终端需重新观察提示符，旧选区不恢复；已有对话记录保留，未完成的人工观察记录标为 unknown。Shell 每条命令各自等待提示符，匹配不代表成功，stderr 合并至 stdout，退出码保持 null。能力和边界见 [接口设计](../../crates/coterm-driver/docs/serial/interfaces.md)。
 
-新建实例通过驱动级只读操作 `serial.driver_info` 获取本机 `ports`，不依赖已有实例。基座在配置页调用前启动驱动并完成握手；每次点击或键盘展开端口下拉框时重新枚举，保留仍存在的选择，不再提供独立刷新按钮。在途查询合并重复触发；支持原生 `showPicker` 的宿主读取新列表后再展开，避免弹出的菜单保留旧快照。只有成功返回空数组时显示「未检测到串口」；启动 / 查询失败、旧后端缺失 `ports` 等情况显示错误，再次点击下拉框可重试，加载中或无有效端口时不能提交。此过程不打开串口、不修改 DTR / RTS，也不发送设备数据。
+新建实例通过驱动级只读操作 `serial.driver_info` 获取本机 `ports`，不依赖已有实例。基座在配置页调用前启动已注册的驱动；每次点击或键盘展开端口下拉框时重新枚举，保留仍存在的选择，不再提供独立刷新按钮。在途查询合并重复触发；支持原生 `showPicker` 的宿主读取新列表后再展开，避免弹出的菜单保留旧快照。只有成功返回空数组时显示「未检测到串口」；启动 / 查询失败、旧后端缺失 `ports` 等情况显示错误，再次点击下拉框可重试，加载中或无有效端口时不能提交。此过程不打开串口、不修改 DTR / RTS，也不发送设备数据。
 
 界面与配置由驱动前端自行管理。终端保留原始按键语义；UART 使用 Enter 单次发送、Shift+Enter 换行，输入法组合期间 Enter 不发送。配置平铺，在接收区上方展开，不改变接收区与发送栏尺寸。断开后可编辑本地通信草稿，在下次人工连接前通过 `serial.configure` 应用，成功后才调用 `serial.connect`；固定端口不显示为可修改项，不保留应用按钮或端口列表。顶栏连接按钮同时表示状态：连接时绿色，断开时灰色。
 
@@ -36,6 +36,6 @@ UART 接收 ASCII / HEX、暂停、清空和保存放在快捷栏。配置右侧
 
 UART 发送行尾 `none/cr/lf/crlf` 随实例 `configRef` 保存，挂载时恢复，旧偏好缺少该字段时默认 CRLF；不改变终端原始按键或 MCP 命令的默认行尾。发送 ASCII / HEX、定时发送间隔和运行开关不持久化，恢复偏好不触发发送。
 
-文件导入使用用户选择的浏览器 File，只导入草稿，确认后发送；ASCII 按 UTF-8 读取，HEX 导入原始字节。接收保存是有界缓冲的快照下载，不开放任意路径文件代理。发送历史只驻留当前挂载内存，最近 50 项且总计最多 64 KiB，失败不录入。定时发送默认 100 ms、范围 20–60000 ms，等待上次完成再计时；改稿、切换视图、断线、失败或卸载后停止，不恢复旧队列。实现进度与限制见 [Serial 进度](../../drivers/driver-serial/docs/progress.md)。
+文件导入使用用户选择的浏览器 File，只导入草稿，确认后发送；ASCII 按 UTF-8 读取，HEX 导入原始字节。接收保存是有界缓冲的快照下载，不开放任意路径文件代理。发送历史只驻留当前挂载内存，最近 50 项且总计最多 64 KiB，失败不录入。定时发送默认 100 ms、范围 20–60000 ms，等待上次完成再计时；改稿、切换视图、断线、失败或卸载后停止，不恢复旧队列。实现进度与限制见 [Serial 进度](../../crates/coterm-driver/docs/serial/progress.md)。
 
 通用契约见 [驱动开发](driver-development.md)、[运行时通信](runtime-communication.md) 和 [MCP 接入](mcp-integration.md)。终端公共快捷键见 [终端快捷键](terminal-shortcuts.md)。

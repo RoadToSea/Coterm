@@ -6,8 +6,8 @@ import { findBrowser, openSession, evaluate, waitForValue } from "./support/brow
 test("Local starts explicitly on first mount and preserves running or exited shells on remount", async (t) => {
   const browserPath = findBrowser();
   if (!browserPath) { t.skip("No Chrome/Edge binary; Local terminal UI was not verified"); return; }
-  const artifact = new URL("../drivers/driver-local/dist/frontend/index.js", import.meta.url);
-  assert.ok(fs.statSync(artifact).mtimeMs >= fs.statSync(new URL("../drivers/driver-local/frontend/src/index.ts", import.meta.url)).mtimeMs,
+  const artifact = new URL("../crates/coterm-driver/dist/local/frontend/index.js", import.meta.url);
+  assert.ok(fs.statSync(artifact).mtimeMs >= fs.statSync(new URL("../crates/coterm-driver/frontend/local/src/index.ts", import.meta.url)).mtimeMs,
     "rebuild the Local frontend before this test");
   const moduleURL = `data:text/javascript;base64,${fs.readFileSync(artifact).toString("base64")}`;
   const session = await openSession({ browserPath, totalTimeoutMs: 30_000 });

@@ -9,9 +9,9 @@ import { findBrowser, openSession, evaluate, waitForValue } from "./support/brow
 test("receive newline settings update xterm, preserve raw bytes and persist per instance", async t => {
   const browserPath = findBrowser();
   if (!browserPath) { t.skip("No Chrome/Edge binary"); return; }
-  const artifact = new URL("../drivers/driver-serial/dist/frontend/index.js", import.meta.url);
+  const artifact = new URL("../crates/coterm-driver/dist/serial/frontend/index.js", import.meta.url);
   for (const file of ["index.ts", "i18n.ts", "receive-newlines.ts"]) {
-    assert.ok(fs.statSync(artifact).mtimeMs >= fs.statSync(new URL(`../drivers/driver-serial/frontend/src/${file}`, import.meta.url)).mtimeMs,
+    assert.ok(fs.statSync(artifact).mtimeMs >= fs.statSync(new URL(`../crates/coterm-driver/frontend/serial/src/${file}`, import.meta.url)).mtimeMs,
       "build the Serial frontend before testing");
   }
   const moduleURL = `data:text/javascript;base64,${fs.readFileSync(artifact).toString("base64")}`;
@@ -141,6 +141,7 @@ test("receive newline settings update xterm, preserve raw bytes and persist per 
 
     // Replay, clear and new connections do not inherit another stream's CR state.
     await change("both"); await emit("\r"); await clear(); await emit("\nZ");
+    await waitForValue(client, `root.querySelector('.xterm-rows > div:nth-child(2)')?.textContent.trim() === 'Z'`);
     assert.deepEqual((await rows()).slice(0, 2), ["", "Z"]);
     await emit("\r");
     await run(`(async()=>{window.replay='\\nR';window.gap=true;await window.event({name:'runtime.gap',payload:{}});})()`);
@@ -149,6 +150,7 @@ test("receive newline settings update xterm, preserve raw bytes and persist per 
     await emit("\r");
     await run(`(async()=>{window.gap=false;window.connection='new';window.replay='\\nN';window.cursor=1;
       await window.event({name:'serial.status',payload:{}});})()`);
+    await waitForValue(client, `root.querySelector('.xterm-rows > div:nth-child(2)')?.textContent.trim() === 'N'`);
     assert.deepEqual((await rows()).slice(0, 2), ["", "N"]);
     await run(`window.frontend.unmount()`);
   } finally {

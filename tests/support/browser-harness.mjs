@@ -75,9 +75,9 @@ export function assertFreshBuild() {
   if (!fs.existsSync(entry)) {
     throw new Error(`apps/desktop/dist is missing; run "pnpm build" before the browser suite`);
   }
-  const sshDist = path.join(rootDir, "drivers/driver-ssh/dist/frontend/index.js");
+  const sshDist = path.join(rootDir, "crates/coterm-driver/dist/ssh/frontend/index.js");
   if (!fs.existsSync(sshDist)) {
-    throw new Error(`drivers/driver-ssh/dist/frontend/index.js is missing; run "pnpm --filter coterm-driver-ssh-ui build"`);
+    throw new Error(`crates/coterm-driver/dist/ssh/frontend/index.js is missing; run "pnpm --filter coterm-driver-ssh-ui build"`);
   }
   assertNotStale(entry, [
     path.join(rootDir, "apps/desktop/src"),

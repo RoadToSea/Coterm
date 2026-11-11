@@ -8,12 +8,9 @@ license.workspace = true
 tauri-build = { version = "2.0", features = [] }
 
 [dependencies]
-coterm-proto.workspace = true
 coterm-core.workspace = true
 coterm-mcp.workspace = true
-coterm-driver-ssh = { path = "../../../drivers/driver-ssh" }
-coterm-driver-serial = { path = "../../../drivers/driver-serial" }
-coterm-driver-local = { path = "../../../drivers/driver-local" }
+coterm-driver.workspace = true
 tauri = { version = "2.0", features = [] }
 tauri-plugin-opener = "2.0"
 serde.workspace = true

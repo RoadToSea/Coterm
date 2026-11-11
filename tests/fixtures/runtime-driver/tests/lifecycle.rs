@@ -1,11 +1,10 @@
-use coterm_core::{
-    driver_manager::InProcessDriverRuntime,
-    driver_runtime::{CallerContext, DriverRuntime, Operations, SubmitOperation},
-};
-use coterm_proto::runtime::{
+use coterm_core::model::{
     lifecycle::{InstanceInfo, InstanceStatus, RuntimeLimits},
     operation::{OperationSource, OperationStatus},
-    stream::FlowWindow,
+};
+use coterm_core::{
+    runtime::Runtime,
+    runtime::{CallerContext, SubmitOperation},
 };
 use serde_json::json;
 use std::time::Duration;
@@ -13,17 +12,12 @@ use std::time::Duration;
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 const ID: &str = "coterm-runtime-fixture";
 
-fn runtime() -> InProcessDriverRuntime {
-    InProcessDriverRuntime::new(RuntimeLimits {
+fn runtime() -> Runtime {
+    Runtime::new(RuntimeLimits {
         max_control_bytes: 1024 * 1024,
-        max_data_chunk_bytes: 65536,
-        initial_window: FlowWindow {
-            chunks: 16,
-            bytes: 1024 * 1024,
-        },
     })
 }
-async fn register(runtime: &InProcessDriverRuntime) -> Result<()> {
+async fn register(runtime: &Runtime) -> Result<()> {
     let manifest = serde_json::from_value(json!({
         "manifestVersion":1,"id":ID,"name":"Fixture","version":"0.1.0",
         "runtime":{"interfaceMajor":2,"requires":["instances","backend-calls","operation-catalog","driver-events","async-operations","secret-delivery","deferred-interactions"]},
@@ -35,12 +29,12 @@ async fn register(runtime: &InProcessDriverRuntime) -> Result<()> {
     Ok(())
 }
 async fn submit(
-    runtime: &InProcessDriverRuntime,
+    runtime: &Runtime,
     instance: &InstanceInfo,
     operation: &str,
     source: OperationSource,
     driver_scope: bool,
-) -> Result<coterm_proto::runtime::operation::OperationReceipt> {
+) -> Result<coterm_core::model::operation::OperationReceipt> {
     Ok(runtime
         .submit(
             CallerContext {
@@ -307,7 +301,7 @@ async fn task_panic_converges_all_scopes_clears_attention_and_allows_restart_wit
 
 #[tokio::test]
 async fn early_completion_and_duplicate_approvals_preserve_operation_order() -> Result<()> {
-    use coterm_proto::runtime::operation::ApproveProposal;
+    use coterm_core::model::operation::ApproveProposal;
     let runtime = runtime();
     register(&runtime).await?;
     runtime.start(ID).await?;
@@ -711,24 +705,23 @@ async fn registration_rejects_invalid_metadata_without_mutating_catalog() -> Res
 #[derive(Default)]
 struct OtherBackend(coterm_runtime_fixture::Backend);
 
-impl coterm_proto::runtime::backend::DriverBackend for OtherBackend {
+impl coterm_core::driver::DriverBackend for OtherBackend {
+    fn definition() -> coterm_core::driver::DriverDefinition {
+        let mut definition =
+            <coterm_runtime_fixture::Backend as coterm_core::driver::DriverBackend>::definition();
+        definition.driver_id = "other-fixture".into();
+        definition
+    }
     async fn request(
         &mut self,
-        command: coterm_proto::runtime::message::HostCommand,
-    ) -> std::result::Result<serde_json::Value, coterm_proto::runtime::RuntimeError> {
-        use coterm_proto::runtime::{backend::DriverBackend, message::HostCommand};
-        let hello = matches!(&command, HostCommand::Hello(_));
-        let mut value = DriverBackend::request(&mut self.0, command).await?;
-        if hello {
-            value["driverId"] = json!("other-fixture");
-        }
-        Ok(value)
+        command: coterm_core::driver::HostCommand,
+    ) -> std::result::Result<serde_json::Value, coterm_core::model::RuntimeError> {
+        coterm_core::driver::DriverBackend::request(&mut self.0, command).await
     }
     fn take_notifications(
         &mut self,
-    ) -> Option<tokio::sync::mpsc::Receiver<coterm_proto::runtime::message::DriverNotification>>
-    {
-        coterm_proto::runtime::backend::DriverBackend::take_notifications(&mut self.0)
+    ) -> Option<tokio::sync::mpsc::Receiver<coterm_core::driver::DriverNotification>> {
+        coterm_core::driver::DriverBackend::take_notifications(&mut self.0)
     }
 }
 

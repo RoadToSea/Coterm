@@ -51,11 +51,11 @@ SSH 命令统一由 `coterm_ssh_command` 提交，默认 `mode=terminal`；预�
 
 串口的 `coterm_serial_read_lines` 同样无需游标；只有 `mode=shell` 的实例支持 `coterm_serial_read_selected_lines` 和 `coterm_serial_read_dialogue_pairs`。stream 不创建对话，专用读取会被目标实例拒绝；共享目录列出驱动能力并集，目标 `status.capabilities` 明确当前可用能力。Shell 逐条发送并等待完整字面提示符，超时停止余项、不自动重发，结果保留 `stdin/stdout/stderr`；串口输出合并、退出码未知。内部前端回放游标不向 MCP 开放，字段与限制见 [串口驱动](serial-driver.md)。
 
-工具名映射先去掉驱动 ID 的 `coterm-driver-` 前缀，再去掉原生工具名重复的 `<driver>.` 前缀，非 ASCII 字母数字统一替换为 `_`，最后添加 `coterm_`。例如 `coterm-driver-ssh` + `ssh.command` → `coterm_ssh_command`。`tools/list` 只发布新名称；旧 `<driverId>__<toolName>` 仍作为未列出的兼容别名接受，不重复发布。映射碰撞时目录明确报 `mcp_tool_name_conflict`，调用歧义名称也拒绝，绝不按注册顺序任选驱动。内部操作名与进程协议不变。
+工具名映射先去掉驱动 ID 的 `coterm-driver-` 前缀，再去掉原生工具名重复的 `<driver>.` 前缀，非 ASCII 字母数字统一替换为 `_`，最后添加 `coterm_`。例如 `coterm-driver-ssh` + `ssh.command` → `coterm_ssh_command`。`tools/list` 只发布新名称；旧 `<driverId>__<toolName>` 仍作为未列出的兼容别名接受，不重复发布。映射碰撞时目录明确报 `mcp_tool_name_conflict`，调用歧义名称也拒绝，绝不按注册顺序任选驱动。内部操作名与外部 MCP 契约不变。
 
 Bridge 保留驱动参数和原生 `CallToolResult`，仅处理命名空间、目标路由及操作元信息。不会自动把整个内部操作目录公开为 MCP。
 
-`tools/list` 保留驱动注册提供的 `inputSchema`；客户端导出界面中的 `parameters` 属于客户端转换结果。若客户端本地显示为 `null`，应对比同一连接的原始 `tools/list` 响应与客户端导出值，服务端集成测试会验证 schema 是否已发送。驱动工具目录由已启动驱动的握手注册；当前 manifest 只标识 MCP provider，不含静态工具 schema，因此未启动驱动的工具不会出现在目录中，也没有 MCP 自动恢复工作区实例的操作。
+`tools/list` 保留驱动注册提供的 `inputSchema`；客户端导出界面中的 `parameters` 属于客户端转换结果。若客户端本地显示为 `null`，应对比同一连接的原始 `tools/list` 响应与客户端导出值，服务端集成测试会验证 schema 是否已发送。驱动工具目录由已启动驱动的固定声明注册；当前 manifest 只标识 MCP provider，不含静态工具 schema，因此未启动驱动的工具不会出现在目录中，也没有 MCP 自动恢复工作区实例的操作。
 
 - 实例级工具的公共 schema 中 `name` 可选，显式传入时必须是 `coterm.list_instances` 返回的有效名称。仅目标驱动恰有一个确认已连接的实例、无未知状态且快照未截断时，省略 `name` 才能自动路由；第二个未连接实例不妨碍唯一已连接目标。零个 / 多个已连接、未知或超限时提示指定 `name`，不提交原操作。Bridge 兼容 `instance`、`instanceName`、`instance_name`，一个调用只能提供一种名称字段；空值、错误类型、冲突别名和显式无效名称不会退回默认目标。Bridge 仅在内部解析为 UUID，调用方不能传 `driverInstanceId`。
 - 驱动级工具不绑定实例；驱动授权域由已注册工具名称确定。

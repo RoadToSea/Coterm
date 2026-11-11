@@ -8,10 +8,10 @@ import { findBrowser, openSession, evaluate, waitForValue } from "./support/brow
 test("SSH integrates command blocks into the real terminal and publishes only human selection", async t => {
   const browserPath=findBrowser();
   if(!browserPath){t.skip("No browser; terminal blocks were not verified");return;}
-  const artifact=new URL("../drivers/driver-ssh/dist/frontend/index.js",import.meta.url);
+  const artifact=new URL("../crates/coterm-driver/dist/ssh/frontend/index.js",import.meta.url);
   const built=fs.statSync(artifact).mtimeMs;
   for(const file of ["index.ts","blocks.ts","jobs.ts","i18n.ts"]){
-    assert.ok(built>=fs.statSync(new URL("../drivers/driver-ssh/frontend/src/"+file,import.meta.url)).mtimeMs,"build SSH first");
+    assert.ok(built>=fs.statSync(new URL("../crates/coterm-driver/frontend/ssh/src/"+file,import.meta.url)).mtimeMs,"build SSH first");
   }
   const moduleURL="data:text/javascript;base64,"+fs.readFileSync(artifact).toString("base64");
   const session=await openSession({browserPath,totalTimeoutMs:60000});

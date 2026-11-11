@@ -741,8 +741,9 @@ dependencies = [
 name = "coterm-core"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "base64 0.22.1",
  "chrono",
- "coterm-proto",
  "jsonschema",
  "regex",
  "serde",
@@ -750,6 +751,7 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "uuid",
+ "zeroize",
 ]
 
 [[package]]
@@ -758,11 +760,8 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "coterm-core",
- "coterm-driver-local",
- "coterm-driver-serial",
- "coterm-driver-ssh",
+ "coterm-driver",
  "coterm-mcp",
- "coterm-proto",
  "serde",
  "serde_json",
  "tauri",
@@ -776,50 +775,20 @@ dependencies = [
 ]
 
 [[package]]
-name = "coterm-driver-local"
+name = "coterm-driver"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
+ "chrono",
  "coterm-core",
- "coterm-proto",
- "coterm-term",
+ "coterm-mcp",
  "portable-pty",
- "serde",
- "serde_json",
- "tokio",
-]
-
-[[package]]
-name = "coterm-driver-serial"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "chrono",
- "coterm-core",
- "coterm-mcp",
- "coterm-proto",
- "serde",
- "serde_json",
- "serialport",
- "tokio",
- "uuid",
-]
-
-[[package]]
-name = "coterm-driver-ssh"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "base64 0.22.1",
- "chrono",
- "coterm-core",
- "coterm-mcp",
- "coterm-proto",
  "rand",
  "russh",
  "serde",
  "serde_json",
+ "serialport",
  "tokio",
  "uuid",
  "zeroize",
@@ -831,21 +800,9 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "coterm-core",
- "coterm-proto",
  "serde",
  "serde_json",
  "tokio",
-]
-
-[[package]]
-name = "coterm-proto"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "serde",
- "serde_json",
- "tokio",
- "zeroize",
 ]
 
 [[package]]
@@ -853,19 +810,9 @@ name = "coterm-runtime-fixture"
 version = "0.1.0"
 dependencies = [
  "coterm-core",
- "coterm-proto",
  "serde_json",
  "tokio",
  "uuid",
-]
-
-[[package]]
-name = "coterm-term"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "base64 0.22.1",
- "serde_json",
 ]
 
 [[package]]

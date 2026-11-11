@@ -1,6 +1,6 @@
 # SSH 驱动
 
-实现位于 [driver-ssh](../../drivers/driver-ssh)。SSH 连接、指纹、认证、PTY、输出与界面均归内置 SSH 驱动，基座负责加载、实例路由和公共交互。
+实现位于 [driver-ssh](../../crates/coterm-driver/src/ssh)。SSH 连接、指纹、认证、PTY、输出与界面均归内置 SSH 驱动，基座负责加载、实例路由和公共交互。
 
 ## 使用
 
@@ -168,6 +168,6 @@ Exec 工具栏只保留名称、必要的运行 / 失败状态、停靠及关闭
 
 ## 验证
 
-`cargo test -p coterm-driver-ssh` 使用本地测试 SSH 服务，覆盖指纹/密码失败、多实例、真实进程内后端、审批、秘密隔离、共享 PTY、输出缺口和 MCP。远程服务器及真实桌面验收需单独执行，最近验证范围见 [SSH 开发进度](../progress/ssh-driver.md)。
+`cargo test -p coterm-driver` 使用本地测试 SSH 服务，覆盖指纹/密码失败、多实例、真实进程内后端、审批、秘密隔离、共享 PTY、输出缺口和 MCP。远程服务器及真实桌面验收需单独执行，最近验证范围见 [SSH 开发进度](../progress/ssh-driver.md)。
 
 块界面回归：先执行 `pnpm --filter coterm-driver-ssh-ui build`，再运行 `node --import ./scripts/test-ts-loader.mjs --test tests/ssh-blocks-browser.test.mjs tests/ssh-human-blocks-browser.test.mjs tests/ssh-jobs-browser.test.mjs`。真实 SSH 进程契约包含人工 Enter 观察与 MCP 选择、审批编辑、可信来源、原始按键隔离、事件、断开保留和重连恢复；内存日志测试覆盖 UTF-8 / ANSI 分片、截断、分页预算及慢消费者。

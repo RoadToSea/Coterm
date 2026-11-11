@@ -1,12 +1,11 @@
 //! Hardware-free test driver. Never included in application bundles or driver discovery.
-use coterm_proto::runtime::{
-    backend::DriverBackend,
+use coterm_core::driver::DriverBackend;
+use coterm_core::driver::{DeferredOperation, DriverNotification, HostCommand};
+use coterm_core::model::{
     interaction::{
         DeferredInteraction, InteractionKind, InteractionOutcome, InteractionRequest,
         InteractionValue,
     },
-    lifecycle::HelloResult,
-    message::{DeferredOperation, DriverNotification, HostCommand},
     operation::{DispatchMode, OperationDescriptor, OperationEffect, OperationScope},
     ErrorCategory, RuntimeError,
 };
@@ -47,75 +46,74 @@ fn descriptor(name: &str, scope: OperationScope, effect: OperationEffect) -> Ope
     }
 }
 impl DriverBackend for Backend {
+    fn definition() -> coterm_core::driver::DriverDefinition {
+        coterm_core::driver::DriverDefinition {
+            driver_id: ID.into(),
+            driver_version: "0.1.0".into(),
+            features: [
+                "instances",
+                "backend-calls",
+                "operation-catalog",
+                "secret-delivery",
+                "deferred-interactions",
+                "async-operations",
+                "driver-events",
+            ]
+            .into_iter()
+            .map(str::to_owned)
+            .collect(),
+            operations: vec![
+                descriptor(
+                    "fixture.info",
+                    OperationScope::Instance,
+                    OperationEffect::Read,
+                ),
+                descriptor(
+                    "fixture.flood",
+                    OperationScope::Instance,
+                    OperationEffect::Read,
+                ),
+                descriptor(
+                    "fixture.secret",
+                    OperationScope::Instance,
+                    OperationEffect::Read,
+                ),
+                descriptor(
+                    "fixture.block",
+                    OperationScope::Instance,
+                    OperationEffect::Read,
+                ),
+                descriptor(
+                    "fixture.hang",
+                    OperationScope::Instance,
+                    OperationEffect::Read,
+                ),
+                descriptor(
+                    "fixture.early_completion",
+                    OperationScope::Instance,
+                    OperationEffect::Read,
+                ),
+                descriptor(
+                    "fixture.driver_hang",
+                    OperationScope::Driver,
+                    OperationEffect::Read,
+                ),
+                descriptor(
+                    "fixture.commit",
+                    OperationScope::Instance,
+                    OperationEffect::Commit,
+                ),
+                descriptor(
+                    "fixture.crash",
+                    OperationScope::Instance,
+                    OperationEffect::Read,
+                ),
+            ],
+            mcp_tools: vec![],
+        }
+    }
     async fn request(&mut self, command: HostCommand) -> Result<Value, RuntimeError> {
         match command {
-            HostCommand::Hello(hello) => {
-                let features = hello.negotiate_features(&[
-                    "instances",
-                    "backend-calls",
-                    "operation-catalog",
-                    "secret-delivery",
-                    "deferred-interactions",
-                    "async-operations",
-                    "driver-events",
-                ])?;
-                serde_json::to_value(HelloResult {
-                    driver_id: ID.into(),
-                    driver_version: "0.1.0".into(),
-                    interface_minor: 0,
-                    enabled_features: features,
-                    limits: hello.control_limits(),
-                    operations: vec![
-                        descriptor(
-                            "fixture.info",
-                            OperationScope::Instance,
-                            OperationEffect::Read,
-                        ),
-                        descriptor(
-                            "fixture.flood",
-                            OperationScope::Instance,
-                            OperationEffect::Read,
-                        ),
-                        descriptor(
-                            "fixture.secret",
-                            OperationScope::Instance,
-                            OperationEffect::Read,
-                        ),
-                        descriptor(
-                            "fixture.block",
-                            OperationScope::Instance,
-                            OperationEffect::Read,
-                        ),
-                        descriptor(
-                            "fixture.hang",
-                            OperationScope::Instance,
-                            OperationEffect::Read,
-                        ),
-                        descriptor(
-                            "fixture.early_completion",
-                            OperationScope::Instance,
-                            OperationEffect::Read,
-                        ),
-                        descriptor(
-                            "fixture.driver_hang",
-                            OperationScope::Driver,
-                            OperationEffect::Read,
-                        ),
-                        descriptor(
-                            "fixture.commit",
-                            OperationScope::Instance,
-                            OperationEffect::Commit,
-                        ),
-                        descriptor(
-                            "fixture.crash",
-                            OperationScope::Instance,
-                            OperationEffect::Read,
-                        ),
-                    ],
-                    mcp_tools: vec![],
-                })
-                .map_err(|_| failure("encode_failed"))
-            }
             HostCommand::CreateInstance(request) => {
                 if self.instances.len() >= 128 {
                     return Err(failure("capacity"));
@@ -231,7 +229,6 @@ impl DriverBackend for Backend {
                 self.instances.clear();
                 Ok(json!({"ok":true}))
             }
-            _ => Err(failure("unsupported")),
         }
     }
     fn take_notifications(&mut self) -> Option<mpsc::Receiver<DriverNotification>> {

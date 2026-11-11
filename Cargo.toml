@@ -1,13 +1,9 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/coterm-proto",
     "crates/coterm-core",
     "crates/coterm-mcp",
-    "crates/coterm-term",
-    "drivers/driver-local",
-    "drivers/driver-ssh",
-    "drivers/driver-serial",
+    "crates/coterm-driver",
     "apps/desktop/src-tauri",
     "tests/fixtures/runtime-driver",
 ]
@@ -21,10 +17,9 @@ repository = "https://github.com/coterm/coterm"
 
 [workspace.dependencies]
 # Internal crates
-coterm-proto = { path = "crates/coterm-proto" }
 coterm-core = { path = "crates/coterm-core" }
 coterm-mcp = { path = "crates/coterm-mcp" }
-coterm-term = { path = "crates/coterm-term" }
+coterm-driver = { path = "crates/coterm-driver" }
 
 # Serialization & JSON
 serde = { version = "1.0", features = ["derive"] }

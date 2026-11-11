@@ -18,12 +18,12 @@
 
 ## 2026-11-01：P0 第一阶段（人工终端闭环）
 
-- 新增 `crates/coterm-term`：参数化块大小、容量、是否保存解码文本，吸收 SSH（4 KiB、无文本、有缺口计数）与串口（1 KiB、带 UTF-8 解码、`close` 冲尾）的差异。单元测试 11 项通过，`cargo clippy -p coterm-term -D warnings` 通过。
+- 新增 `crates/coterm-term`：参数化块大小、容量、是否保存解码文本，吸收 SSH（4 KiB、无文本、有缺口计数）与串口（1 KiB、带 UTF-8 解码、`close` 冲尾）的差异。单元测试 11 项通过，`cargo clippy -p coterm-core -D warnings` 通过。
 - `drivers/driver-local` 新增 `shell.rs`（家族识别、PATH 解析、home 兜底）与 `session.rs`（PTY 启动、读取/写入线程、退出轮询、`end_stream` 单次收敛）。
 - 操作目录扩到 6 个：`local.driver_info`（driver）、`local.status/read/input/resize/restart`（instance）。`local.input` 标记 `sensitiveInput`，账本不留按键。
 - 输入队列按 4 项 × 4 KiB 有界；队满、Shell 已退出、游标超前都返回明确错误，不阻塞控制循环。
 - 错误码：`local_shell_not_found`、`local_cwd_unavailable`、`local_domain_error`（兜底）。
-- 前端新增 `drivers/driver-local/frontend`（包名 `coterm-driver-local-ui`）：`tsc --noEmit` 通过，`vite build` 产出单文件 `index.js`（约 434 KB）。
+- 前端新增 `crates/coterm-driver/frontend/local`（包名 `coterm-driver-local-ui`）：`tsc --noEmit` 通过，`vite build` 产出单文件 `index.js`（约 434 KB）。
 - 构建脚本 `scripts/build-local.mjs` 与 `pnpm driver:local:build`；manifest 增加 `frontend.entry`，`requires` 仍为 4 项（`exec` 落地后再扩 `native-mcp-tools`/`async-operations`）。
 
 ## 2026-11-01：P0 第二阶段（Agent 命令与 MCP）
@@ -36,7 +36,7 @@
 
 ## 验证入口
 
-当前全量验证结果见 [项目进度](project.md)。定向回归：`cargo test -p coterm-driver-local`、`cargo test -p coterm-term`；前端入口为 [Local 浏览器回归](../../tests/local-terminal-browser.test.mjs)，原生链路运行 `pnpm test:native`。
+当前全量验证结果见 [项目进度](project.md)。定向回归：`cargo test -p coterm-driver`、`cargo test -p coterm-core`；前端入口为 [Local 浏览器回归](../../tests/local-terminal-browser.test.mjs)，原生链路运行 `pnpm test:native`。
 
 ConPTY 初始化可能请求光标位置，测试客户端需响应终端查询；真实 PowerShell 冷启动耗时与 profile 相关，测试应等待可交互状态。
 
@@ -49,7 +49,7 @@ ConPTY 初始化可能请求光标位置，测试客户端需响应终端查询�
 
 ## 关键文件
 
-- 后端：[backend.rs](../../drivers/driver-local/src/backend.rs)、[session.rs](../../drivers/driver-local/src/session.rs)、[exec.rs](../../drivers/driver-local/src/exec.rs)、[shell.rs](../../drivers/driver-local/src/shell.rs)、[result.rs](../../drivers/driver-local/src/result.rs)
-- 共享 crate：[coterm-term](../../crates/coterm-term/src/buffer.rs)
-- 前端：[index.ts](../../drivers/driver-local/frontend/src/index.ts)
+- 后端：[backend.rs](../../crates/coterm-driver/src/local/backend.rs)、[session.rs](../../crates/coterm-driver/src/local/session.rs)、[exec.rs](../../crates/coterm-driver/src/local/exec.rs)、[shell.rs](../../crates/coterm-driver/src/local/shell.rs)、[result.rs](../../crates/coterm-driver/src/local/result.rs)
+- 共享 crate：[coterm-term](../../crates/coterm-core/src/terminal/buffer.rs)
+- 前端：[index.ts](../../crates/coterm-driver/frontend/local/src/index.ts)
 - 稳定契约：[本地驱动](../architecture/local-driver.md)

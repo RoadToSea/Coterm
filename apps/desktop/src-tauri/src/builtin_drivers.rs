@@ -1,34 +1,36 @@
 //! 桌面应用的驱动组合入口；后端与前端都由构建时固定选择。
-use coterm_core::driver_manager::InProcessDriverRuntime;
-use coterm_proto::runtime::{manifest::DriverManifest, RuntimeError};
+use coterm_core::model::{manifest::DriverManifest, RuntimeError};
+use coterm_core::runtime::Runtime;
 
 /// 注册全部内置驱动；声明或前端无效时让启动失败，避免分发残缺安装包。
-pub async fn register(runtime: &InProcessDriverRuntime) -> Result<(), RuntimeError> {
+pub async fn register(runtime: &Runtime) -> Result<(), RuntimeError> {
     runtime
-        .register::<coterm_driver_ssh::backend::Backend>(
-            manifest(include_str!("../../../../drivers/driver-ssh/manifest.json"))?,
+        .register::<coterm_driver::ssh::backend::Backend>(
+            manifest(include_str!(
+                "../../../../crates/coterm-driver/manifests/ssh.json"
+            ))?,
             Some(include_str!(
-                "../../../../drivers/driver-ssh/dist/frontend/index.js"
+                "../../../../crates/coterm-driver/dist/ssh/frontend/index.js"
             )),
         )
         .await?;
     runtime
-        .register::<coterm_driver_serial::backend::Backend>(
+        .register::<coterm_driver::serial::backend::Backend>(
             manifest(include_str!(
-                "../../../../drivers/driver-serial/manifest.json"
+                "../../../../crates/coterm-driver/manifests/serial.json"
             ))?,
             Some(include_str!(
-                "../../../../drivers/driver-serial/dist/frontend/index.js"
+                "../../../../crates/coterm-driver/dist/serial/frontend/index.js"
             )),
         )
         .await?;
     runtime
-        .register::<coterm_driver_local::backend::Backend>(
+        .register::<coterm_driver::local::backend::Backend>(
             manifest(include_str!(
-                "../../../../drivers/driver-local/manifest.json"
+                "../../../../crates/coterm-driver/manifests/local.json"
             ))?,
             Some(include_str!(
-                "../../../../drivers/driver-local/dist/frontend/index.js"
+                "../../../../crates/coterm-driver/dist/local/frontend/index.js"
             )),
         )
         .await?;
@@ -37,7 +39,7 @@ pub async fn register(runtime: &InProcessDriverRuntime) -> Result<(), RuntimeErr
 
 fn manifest(source: &str) -> Result<DriverManifest, RuntimeError> {
     serde_json::from_str(source).map_err(|_| RuntimeError {
-        category: coterm_proto::runtime::ErrorCategory::Internal,
+        category: coterm_core::model::ErrorCategory::Internal,
         code: "builtin_manifest_invalid".into(),
         message: "Invalid built-in driver declaration".into(),
         details: None,

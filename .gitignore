@@ -10,7 +10,7 @@ node_modules/
 # Tauri
 apps/desktop/src-tauri/target/
 apps/desktop/dist/
-drivers/*/dist/
+crates/coterm-driver/dist/
 # 测试用的共享前端浏览器模块与交互挂载入口，由 pnpm test:build 生成
 apps/shared/dist/
 

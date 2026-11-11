@@ -1,5 +1,5 @@
 /**
- * 串口驱动真实 Tauri 界面验收（开发构建，加载 drivers/driver-serial/dist）。
+ * 串口驱动真实 Tauri 界面验收（开发构建，加载 crates/coterm-driver/dist/serial）。
  * 只在本机存在可枚举串口时运行；不写入物理设备，除非显式给出 COTERM_SERIAL_LIVE。
  */
 import assert from "node:assert/strict";

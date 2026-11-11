@@ -7,7 +7,7 @@
  * - `tests/host-interactions-component.test.mjs`：真实 HostInteractions 组件 + 真实 secret-input + 真实 IPC
  *   契约下的弹窗队列与凭据归属，在浏览器里跑。
  * - `tests/browser-layout.test.mjs`：真实构建产物的布局、真实共享前端组件与真实 SSH 前端。
- * - Rust 测试（`drivers/driver-ssh/tests/*`、`crates/*`）：协议核心与基座安全边界。
+ * - Rust 测试（`crates/coterm-driver/tests/ssh.rs`、`crates/*`）：协议核心与基座安全边界。
  *
  * 本文件不声称覆盖任何 UI 渲染或组件生命周期。
  */

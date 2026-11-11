@@ -1,9 +1,9 @@
-use coterm_core::driver_manager::InProcessDriverRuntime;
+use coterm_core::model::lifecycle::RuntimeLimits;
+use coterm_core::runtime::Runtime;
 use coterm_mcp::{
     server::BridgeServer,
     transport::{read_frame, write_frame},
 };
-use coterm_proto::runtime::{lifecycle::RuntimeLimits, stream::FlowWindow};
 use serde_json::{json, Value};
 use std::{process::Stdio, sync::Arc, time::Duration};
 use tokio::{
@@ -14,16 +14,9 @@ use tokio::{
 
 #[tokio::test]
 async fn real_stdio_adapter_routes_to_desktop_runtime() -> anyhow::Result<()> {
-    let runtime = Arc::new(InProcessDriverRuntime::new(
-        RuntimeLimits {
-            max_control_bytes: 1024 * 1024,
-            max_data_chunk_bytes: 8192,
-            initial_window: FlowWindow {
-                chunks: 16,
-                bytes: 1024 * 1024,
-            },
-        },
-    ));
+    let runtime = Arc::new(Runtime::new(RuntimeLimits {
+        max_control_bytes: 1024 * 1024,
+    }));
     let server = BridgeServer::bind_at(runtime, "127.0.0.1:0".parse()?).await?;
     let info = server.connection_info();
 

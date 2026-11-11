@@ -1,29 +1,22 @@
 //! 发布形态的 Stdio 适配器回归：用桌面可执行文件自身的 `mcp stdio` 子命令连接私有桥。
 //! 不创建窗口，也不依赖独立分发的 CLI。
-use coterm_core::driver_manager::InProcessDriverRuntime;
+use coterm_core::model::lifecycle::RuntimeLimits;
+use coterm_core::runtime::Runtime;
 use coterm_mcp::{
     server::BridgeServer,
     transport::{read_frame, write_frame},
 };
-use coterm_proto::runtime::{lifecycle::RuntimeLimits, stream::FlowWindow};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::{process::Stdio, sync::Arc, time::Duration};
 use tokio::{
     io::{AsyncWriteExt, BufReader},
     time::timeout,
 };
 
-fn runtime() -> Arc<InProcessDriverRuntime> {
-    Arc::new(InProcessDriverRuntime::new(
-        RuntimeLimits {
-            max_control_bytes: 1024 * 1024,
-            max_data_chunk_bytes: 8192,
-            initial_window: FlowWindow {
-                chunks: 16,
-                bytes: 1024 * 1024,
-            },
-        },
-    ))
+fn runtime() -> Arc<Runtime> {
+    Arc::new(Runtime::new(RuntimeLimits {
+        max_control_bytes: 1024 * 1024,
+    }))
 }
 
 async fn read_message(

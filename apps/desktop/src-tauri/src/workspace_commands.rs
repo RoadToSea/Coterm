@@ -2,8 +2,8 @@ use crate::{
     workspace::{self, Snapshot, WorkspaceGroup, WorkspaceStore},
     AppState,
 };
-use coterm_core::driver_runtime::DriverRuntime;
-use coterm_proto::runtime::{
+
+use coterm_core::model::{
     lifecycle::{InstanceInfo, InstanceStatus},
     RuntimeError,
 };

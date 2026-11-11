@@ -83,7 +83,7 @@ test("categorized settings search, apply live fonts, persist and preserve mounte
     await client.send('Page.reload');
     await wait(`document.getElementById('open-settings')&&document.documentElement.lang==='zh-CN'`);
     assert.equal(await run(`getComputedStyle(document.documentElement).getPropertyValue('--coterm-terminal-font-size').trim()`),'20px');
-    const artifact=fs.readFileSync(path.join(rootDir,'drivers/driver-serial/dist/frontend/index.js'));
+    const artifact=fs.readFileSync(path.join(rootDir,'crates/coterm-driver/dist/serial/frontend/index.js'));
     await run(`(async()=>{
       const container=document.createElement('div');container.style.cssText='position:fixed;inset:80px 20px 40px 80px';document.body.append(container);
       window.settingsSerialCalls=[];

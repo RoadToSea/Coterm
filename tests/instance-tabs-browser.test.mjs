@@ -10,8 +10,8 @@ test("inline protocol configuration and instance tabs preserve live frontends an
   if (!browserPath) { t.skip("No Chrome/Edge binary; instance tabs were not browser-verified"); return; }
   assertFreshBuild();
   for (const driver of ["ssh", "serial"]) {
-    assert.ok(fs.statSync(new URL(`../drivers/driver-${driver}/dist/frontend/index.js`, import.meta.url)).mtimeMs >=
-      fs.statSync(new URL(`../drivers/driver-${driver}/frontend/src/index.ts`, import.meta.url)).mtimeMs, "rebuild the actual driver frontend");
+    assert.ok(fs.statSync(new URL(`../crates/coterm-driver/dist/${driver}/frontend/index.js`, import.meta.url)).mtimeMs >=
+      fs.statSync(new URL(`../crates/coterm-driver/frontend/${driver}/src/index.ts`, import.meta.url)).mtimeMs, "rebuild the actual driver frontend");
   }
   const scenario = structuredClone(defaultScenario);
   scenario.installPreview = {token:"tab-refresh-test",id:"test.tabs",name:"Tabs test",version:"0.1.0",platform:"windows-x64"};

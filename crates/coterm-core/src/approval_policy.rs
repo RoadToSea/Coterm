@@ -1,5 +1,5 @@
 //! User-owned command approval rules. Drivers declare the text field in their schema.
-use coterm_proto::runtime::{
+use crate::model::{
     operation::{OperationDescriptor, OperationEffect, OperationSource},
     ErrorCategory, RuntimeError,
 };
@@ -246,7 +246,7 @@ mod tests {
     #[test]
     fn explicit_command_opt_in_is_required_even_for_redacted_operations() -> Result<(), RuntimeError>
     {
-        use coterm_proto::runtime::operation::{OperationEffect, OperationScope};
+        use crate::model::operation::{OperationEffect, OperationScope};
         let policy = ApprovalPolicy {
             mode: ApprovalMode::ApproveMatches,
             patterns: vec![],

@@ -1,5 +1,5 @@
 /** Explicit hardware benchmark through the opt-in serial diagnostic example.
- * Build with cargo build -p coterm-driver-serial --example serial-diagnostic.
+ * Build with cargo build -p coterm-driver --example serial-diagnostic.
  * Measures UART/backend throughput; excludes the desktop in-process dispatch path.
  * Requires a released port and a logged-in Linux Shell with Python 3. The temporary
  * peer runs in memory, restores its tty after 30 seconds without a command, and exits.

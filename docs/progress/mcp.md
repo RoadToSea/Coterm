@@ -11,14 +11,14 @@
 
 ## 2026-11-11：复用进程内驱动运行时
 
-- Bridge 与桌面使用同一个 InProcessDriverRuntime，外部 MCP 工具名、参数、实例路由、审批与结果结构保持不变。MCP stdio 适配器仍是桌面可执行文件的子命令，与驱动 Worker 无关。
+- Bridge 与桌面使用同一个 Runtime，外部 MCP 工具名、参数、实例路由、审批与结果结构保持不变。MCP stdio 适配器仍是桌面可执行文件的子命令，与驱动 Worker 无关。
 - 真实 MCP Stdio、审批面板与 PowerShell 环境延续在单个独立桌面 EXE 下验收通过；生命周期测试覆盖同宿主 PID、状态隔离、驱动任务 panic 后其他驱动继续工作、故障实例/待审批收敛和无自动重放。详情见[项目进度](project.md)。
 
 ## 2026-11-08：串口 Shell / stream 读取
 
 - 串口 Agent 读取改用后端 `read_lines`；Shell 实例还支持 `read_selected_lines` 与最近 `read_dialogue_pairs(count)`，原游标工具不再注册到 MCP。模式与提示符显式配置，不从 UART / 终端显示视图猜测设备语义。
 - Shell 列表逐条等待完整字面提示符，超时停止余项；保留输入及合并输出、空 stderr 与未知退出码，不把提示符当业务成功。stream 不创建对话，Shell 专用读取明确拒绝；共享目录的能力并集由实例 status 中的 `capabilities` 说明。
-- 实现、设备验收及后续入口集中维护在 [Serial 进度](../../drivers/driver-serial/docs/progress.md)，稳定字段见 [串口接口](../../drivers/driver-serial/docs/interfaces.md)。
+- 实现、设备验收及后续入口集中维护在 [Serial 进度](../../crates/coterm-driver/docs/serial/progress.md)，稳定字段见 [串口接口](../../crates/coterm-driver/docs/serial/interfaces.md)。
 
 ## 2026-11-08：每实例审批对象与独立配置
 
@@ -27,7 +27,7 @@
 - 规则写入已有工作区保存项，按 `configRef` 归属，文档版本升至 2；版本 1 的全局规则逐项复制到已有保存项，新实例保持正向空规则。继续使用已有 DPAPI、512 KiB 文件上限及原子替换，失败不发布新运行时规则。Bypass 不落盘、不跨实例或实例重建继承。
 - 验证通过：当前工作区的 80 项相关 Rust 测试、21 项前端测试及构建通过。隔离本次提交后，`cargo check --locked --workspace`、Core / SSH / Runtime fixture / Desktop 全目标 Clippy（`-D warnings`）、75 项相关 Rust 测试、22 项前端测试、桌面及 SSH / Serial 前端构建、格式与差异检查通过；Serial 测试目标编译通过，未连接真实远端或串口设备，未实测非 Windows 平台。
 - 当前工作区另有安装管理改动，使原有标签页测试仍查找已移除的安装按钮；该用例在隔离提交源码中通过，本阶段未混入安装管理修订。无新增依赖、权限或跨进程协议。
-- 继续入口：[审批对象](../../crates/coterm-core/src/approval_policy.rs)、[实例生命周期与派发](../../crates/coterm-core/src/driver_manager.rs)、[配置保存](../../apps/desktop/src-tauri/src/workspace.rs)、[稳定契约](../architecture/command-approval.md)。串口 Shell/stream 和本地终端 command / 快照已完成；原始字节传输仍由驱动管理。
+- 继续入口：[审批对象](../../crates/coterm-core/src/approval_policy.rs)、[实例生命周期与派发](../../crates/coterm-core/src/runtime/mod.rs)、[配置保存](../../apps/desktop/src-tauri/src/workspace.rs)、[稳定契约](../architecture/command-approval.md)。串口 Shell/stream 和本地终端 command / 快照已完成；原始字节传输仍由驱动管理。
 
 ## 2026-11-04：MCP 连接、启动方式与状态
 
@@ -70,9 +70,9 @@
 本轮 Windows 验证：
 
 - `cargo check --workspace` 通过。
-- `cargo test -p coterm-mcp -p coterm-driver-ssh -p coterm-driver-serial`：101 项通过；2 项原本要求显式设备的串口测试保持忽略。
+- `cargo test -p coterm-mcp -p coterm-driver -p coterm-driver`：101 项通过；2 项原本要求显式设备的串口测试保持忽略。
 - Core 完整测试出现 5 项驱动安装 fixture 失败：当前工作区 Local manifest 新增 frontend，而既有安装测试包仅写入 backend，触发 `driver_entry_unavailable`。没有改动该 manifest 或混入 Local 开发；明确排除这 5 项后，其余 37 项 Core 测试通过，合计 138 项相关测试通过。
-- `cargo clippy -p coterm-core -p coterm-mcp -p coterm-driver-ssh -p coterm-driver-serial --all-targets -- -D warnings` 通过。
+- `cargo clippy -p coterm-core -p coterm-mcp -p coterm-driver -p coterm-driver --all-targets -- -D warnings` 通过。
 - `pnpm driver:ssh:build` / `pnpm driver:serial:build` 通过，开发驱动包已重建；没有关闭运行中的桌面或驱动。启动修复版本需重启桌面，让 MCP 客户端重连并刷新目录。
 
 ## 2026-10-31：串口 MCP 使用反馈
@@ -90,7 +90,7 @@
 验证入口：
 
 ```bash
-cargo test -p coterm-core -p coterm-mcp -p coterm-driver-serial
+cargo test -p coterm-core -p coterm-mcp -p coterm-driver
 cargo check --workspace
 cargo test --workspace
 ```
@@ -102,9 +102,9 @@ cargo test --workspace
 - `cargo check --workspace` 通过。
 - `cargo test --workspace --exclude coterm-desktop` 通过，覆盖 Core、MCP、串口、SSH、Local 和协议契约；SSH 原有跨审批等待行为回归通过。
 - `cargo test -p coterm-desktop --bin coterm-desktop` 的 9 项桌面单元测试通过。
-- `cargo clippy -p coterm-core -p coterm-mcp -p coterm-driver-serial -- -D warnings` 通过。
+- `cargo clippy -p coterm-core -p coterm-mcp -p coterm-driver -- -D warnings` 通过。
 - `pnpm driver:serial:build` 通过，已重建串口后端和前端开发包。
-- `cargo fmt -p coterm-driver-serial -- --check` 和 `git diff --check` 通过。
+- `cargo fmt -p coterm-driver -- --check` 和 `git diff --check` 通过。
 - 完整 `cargo test --workspace` 因运行中的桌面应用锁定 `target/debug/coterm-desktop.exe`，无法完成桌面集成目标的重建；未关闭用户进程。退出旧桌面后需补跑该命令。
 
 启动修复版本时先退出旧桌面，再运行 `pnpm tauri:dev`；串口驱动开发包已生成，MCP 客户端需重新连接以刷新工具目录。
@@ -113,5 +113,5 @@ cargo test --workspace
 
 - 客户端导出 `parameters:null` 尚不能在服务端复现：服务端 `tools/list` 已提供标准 schema；仍需对比使用现场的原始响应与客户端转换结果，不能将客户端导出字段当作服务端缺失的证据。
 - Agent 使用无游标的 read_lines、read_selected_lines、read_dialogue_pairs；原始回放游标只供前端内部恢复。
-- 基座协议与边界见 [MCP 接入](../architecture/mcp-integration.md)；串口接口设计和使用说明已整理到驱动自己的 [docs 目录](../../drivers/driver-serial/docs/README.md)，[原架构入口](../architecture/serial-driver.md) 保留基座集成边界与导航。
-- 继续验收从 [待确认反馈](../feedback/serial_mcp_use_feedback.md) 及 `drivers/driver-serial/tests/serial.rs` 的真实进程回归入口开始。
+- 基座协议与边界见 [MCP 接入](../architecture/mcp-integration.md)；串口接口设计和使用说明已整理到驱动自己的 [docs 目录](../../crates/coterm-driver/docs/serial/README.md)，[原架构入口](../architecture/serial-driver.md) 保留基座集成边界与导航。
+- 继续验收从 [待确认反馈](../feedback/serial_mcp_use_feedback.md) 及 `crates/coterm-driver/tests/serial.rs` 的真实进程回归入口开始。

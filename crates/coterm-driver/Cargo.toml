@@ -1,0 +1,23 @@
+[package]
+name = "coterm-driver"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+coterm-core.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+chrono.workspace = true
+uuid.workspace = true
+base64.workspace = true
+russh = { version = "0.64.1", default-features = false, features = ["ring", "rsa"] }
+zeroize = "1"
+serialport = "4.6"
+portable-pty = "0.9"
+
+[dev-dependencies]
+rand = "0.10"
+coterm-mcp.workspace = true

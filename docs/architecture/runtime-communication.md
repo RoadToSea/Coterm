@@ -1,35 +1,29 @@
 # 运行时通信
 
-**控制数据契约 v2.0**。桌面使用进程内类型化请求、实例调用、审批、单轮秘密交互和通知；二进制流与后端扩展交互另行冻结。终端聚焦与内置驱动架构设计见[终端聚焦与内置驱动架构设计](../design/terminal-focus-and-in-tree-architecture.md)。类型见 [runtime](../../crates/coterm-proto/src/runtime)，诊断工具的 stdio 编解码入口为 [wire.rs](../../crates/coterm-proto/src/runtime/wire.rs)，可执行契约见 [control_contract.rs](../../crates/coterm-proto/tests/control_contract.rs)。
+桌面与内置驱动通过 Rust 类型和有界队列通信。类型见 [driver.rs](../../crates/coterm-core/src/driver.rs) 与 [model](../../crates/coterm-core/src/model)，调度见 [runtime](../../crates/coterm-core/src/runtime)。显式诊断工具的 JSON-RPC 适配见 [diagnostic](../../crates/coterm-core/src/diagnostic)，可执行契约见 [control_contract.rs](../../crates/coterm-core/tests/control_contract.rs)。
 
-## 评审结论与兼容规则
+## 模块与依赖
 
-现有分工适合 SSH、串口等不同协议：基座只管理实例、可信来源和公共交互，驱动保留领域 schema、结果与存储；MCP 与界面复用同一实例。控制与领域数据分离的方向保留。
+后端由三个 crate 组成：`coterm-core` 保存共享数据模型、运行时、审批、操作记录和终端工具；`coterm-driver` 的 `ssh/serial/local` 模块实现具体通信；`coterm-mcp` 处理 Agent 接入。桌面依赖三者，driver 和 MCP 依赖 core，core 不依赖具体驱动或 MCP。
 
-每种驱动的请求串行执行，通知独立消费；大结果和慢消费者仍受大小与队列上限约束。进程内任务不是安全沙箱。
+`coterm_core::driver` 定义 `DriverBackend`、`DriverDefinition`、`HostCommand` 和 `DriverNotification`；`coterm_core::model` 保存共享类型；`coterm_core::runtime::Runtime` 是桌面与 MCP 共用的操作入口。运行时方法直接返回异步 `Result`，不再经过单实现 trait 或 boxed future。
 
-- `interfaceMajor=2`、`interfaceMinor=0`；主版本不符拒绝。协商 minor 不超过双方支持值。
-- 同一 major 只增加可忽略的可选字段或需协商的特性；改变公开字段、枚举语义、审批规则或诊断线缆编码必须升级 major。新枚举/方法不能未协商就发送。
-- `enabledFeatures` 必须是双方能力交集，包含全部 required，不能重复或自行增项；未知 optional 忽略，未知 required 拒绝。
-- manifest 的 `id/version` 必须与握手一致；`runtime.requires` 必须全部启用。驱动版本与运行时接口版本独立。
-- `maxControlBytes` 协商为正数且不超过宿主报价和 1 MiB；首轮握手使用 1 MiB，成功后对请求、结果和通知的 JSON 大小投影应用（不生成 JSON-RPC 信封）。`maxDataChunkBytes/initialWindow` 原样回显，当前无流控语义。
-- `backend::DriverBackend` 是唯一 Rust 入口，旧 `transport::DriverBackend` 路径保留别名。`DriverEvent` 为内部类型，不能当作线缆通知；`stream_*` 明确返回不支持。
+驱动以 `definition()` 提供固定身份、能力、操作 schema 和 MCP 目录。注册时校验声明、身份、能力依赖、schema 和前端资源；桌面启动不执行 Hello、版本或容量协商。manifest 的版本及能力要求属于注册校验。请求到达后端后直接匹配 Rust 枚举，仅领域配置与参数按各自 schema 解析。
 
 ## 传输与生命周期
 
 - 桌面组合根注册固定后端工厂；运行时不扫描驱动目录、不读取外部可执行文件、不启动驱动进程。前端源码也嵌入桌面可执行文件。
 - 每种驱动一个后端任务，`HostCommand` 经容量 64 的 mpsc 队列送入，oneshot 返回 `Result<Value, RuntimeError>`；没有控制字节流、请求 ID 编解码或 stdio 管道。
 - 每驱动的控制门保证生命周期与操作派发顺序；队列满返回 `driver_request_queue_full`。请求应答限时 10 秒，超时取消该任务并收敛实例，不自动重试。任务取消依赖异步协作，阻塞底层调用不保证被强制打断。
-- 先 `Hello`，成功前只允许能力协商和 `Shutdown`；重复成功协商返回 conflict。失败可修正后重试，已启用能力不可原地重新协商。
-- 运行时在空闲时调用 `tick`，每 100 ms 清理过期状态。任务通知与控制应答独立：事件广播容量 64，完成通知队列容量 64；完成队列溢出或未协商的通知关闭任务，事件慢消费者显式报告缺口。
+- 驱动注册成功后可以启动任务并创建实例；控制数据大小由宿主配置，最大 1 MiB，零上限拒绝注册。请求、结果和通知的 JSON 大小计数不生成 JSON-RPC 信封。
+- 运行时在空闲时调用 `tick`，每 100 ms 清理过期状态。任务通知与控制应答独立：事件广播容量 64，完成通知队列容量 64；完成队列溢出或未声明能力的通知关闭任务，事件慢消费者显式报告缺口。
 - 停止先销毁实例并发送 `Shutdown`，总宽限期 2 秒；应用退出给各驱动 750 ms 的 `Shutdown` 宽限，然后取消任务并等待析构。后端析构必须关闭连接、停止命令与后台作业。
 - 普通 Rust panic 在 unwind 模式下由任务边界收敛，不提供进程级故障隔离。abort、原生库崩溃、内存损坏和不可取消的阻塞调用可能影响桌面宿主。
 
-下表使用诊断适配器的方法名对应类型化命令；桌面直接传递 Rust 类型。
+下表列出运行时支持的类型化命令；显式诊断适配器为其提供对应方法名。
 
 | 方法/通知 | 参数 → 成功结果 | 特性 |
 |---|---|---|
-| `initialize` | `RuntimeHello` → `HelloResult`（操作与 MCP 目录） | 首条 |
 | `create_instance` | `CreateInstance` → 成功 JSON，可带 `label` | instances |
 | `destroy_instance/shutdown` | `{driverInstanceId}` / `null` → 成功 JSON | instances / 基础 |
 | `invoke` | `InvokeRequest` → 领域结果、提案或保留信封 | backend-calls + operation-catalog |
@@ -49,11 +43,11 @@
 
 显式诊断适配器保留 stdio JSON-RPC：每行一个 UTF-8 对象，限制长度、拒绝 batch 和截断行，使用字符串请求 ID；stdout 只输出协议。解析/信封/方法/参数错误为 `-32700/-32600/-32601/-32602`，业务错误为 `-32000` 且 data 包含上述结构。该适配器不参与产品运行链路。
 
-公共控制错误包括 `runtime_not_initialized`、`runtime_already_initialized`、`runtime_feature_not_negotiated`、`driver_handshake_incompatible`、`driver_control_too_large`。驱动领域码由驱动独立维护；`transport` 表示执行结果可能未知，不表示操作可重试，也不单凭分类终止健康任务。
+公共控制错误包括 `driver_definition_invalid`、`runtime_feature_not_supported`、`driver_control_too_large`。初始化、版本与能力协商错误只属于显式诊断适配器。驱动领域码由驱动独立维护；`transport` 表示执行结果可能未知，不表示操作可重试，也不单凭分类终止健康任务。
 
 ## 操作与审批
 
-`requestId` 关联控制应答；`operationId` 关联完整操作；`proposalId` 关联审批；实例和驱动 ID 划定授权域，不能互相替代。
+oneshot 关联进程内控制应答；`operationId` 关联完整操作；`proposalId` 关联审批；实例和驱动 ID 划定授权域，不能互相替代。
 
 1. 基座从调用入口确定来源：桌面为 Human，MCP 为 Agent；按注册目录解析 scope/effect 并校验参数。
 2. 目标实例的独立审批对象接收已验证上下文；Agent commit 未被该实例的规则或 Bypass 放行时，调用驱动准备提案，不允许实际提交。驱动级提交不借用实例规则。
@@ -82,7 +76,7 @@
 
 桌面 `subscribeEvents` 安装订阅后返回；处理器完成后确认投递。宿主最多 32 个订阅，每订阅广播队列 64 项，30 秒未确认会关闭。慢消费者收到 `runtime.gap` 后按驱动游标回放；连接 ID 防止旧连接数据混入。
 
-取消订阅或卸载界面不销毁实例。正式流将使用 stream/subscription ID、序号、窗口信用和明确溢出策略；二进制帧、心跳、流恢复与编码规则需另行验证和冻结，不能把现有类型当成已实现接口。
+取消订阅或卸载界面不销毁实例。运行时不暴露未实现的 stream/subscription 类型或信用窗口；当前以有界事件、消费确认和驱动回放处理背压及恢复。
 
 ## 宿主待处理状态
 
@@ -118,8 +112,8 @@ Windows 首版将版本化工作区、初始配置及配置引用整体用当前
 
 ## 内置分发与配置保存
 
-桌面在编译期固定注册 SSH、Serial、Local 三种后端工厂，后端以 Cargo 路径依赖链接，声明与前端以 `include_str!` 嵌入。`pnpm drivers:build` 只构建前端模块，Tauri 构建不复制驱动 EXE，也不打包驱动资源目录。不扫描用户数据目录，不提供离线包安装 API。声明仅包含身份、能力、实例及前端信息，不包含平台可执行入口。
+桌面在编译期固定注册 SSH、Serial、Local 三种后端工厂，后端统一由 coterm-driver 库链接，声明与前端以 `include_str!` 嵌入。`pnpm drivers:build` 只构建前端模块，Tauri 构建不复制驱动 EXE，也不打包驱动资源目录。不扫描用户数据目录，不提供离线包安装 API。声明仅包含身份、能力、实例及前端信息，不包含平台可执行入口。
 
-运行时字段统一使用 `driverId/driverInstanceId`、操作作用域为 `driver|instance`、事件能力为 `driver-events`；主版本不匹配时拒绝启动后端。前端契约版本为 v2.0，共享类型位于 `apps/shared/`，MCP 的 `coterm_ssh_command` 等终端工具名保持稳定，实例列表字段使用 driver 命名。
+运行时字段统一使用 `driverId/driverInstanceId`、操作作用域为 `driver|instance`、事件能力为 `driver-events`；注册时验证固定声明，运行时不协商协议版本。前端契约版本为 v2.0，共享类型位于 `apps/shared/`，MCP 的 `coterm_ssh_command` 等终端工具名保持稳定，实例列表字段使用 driver 命名。
 
 前端通过绑定当前实例的 `saveConfiguration(config)` 保存驱动已验证的完整配置。桌面 `save_instance_configuration({driverInstanceId,config})` 与生命周期变更共用工作区锁，仅替换对应保存项配置，保留 configRef、名称、分组及审批组引用。拒绝失效实例、秘密句柄、超限配置与写盘失败；失败不覆盖原保存值。串口配置保存成功后才连接，恢复不自动连接。

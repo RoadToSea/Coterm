@@ -82,7 +82,7 @@ importers:
         specifier: ^5.4.9
         version: 5.4.21(@types/node@22.20.5)
 
-  drivers/driver-local/frontend:
+  crates/coterm-driver/frontend/local:
     dependencies:
       '@xterm/addon-fit':
         specifier: ^0.10.0
@@ -101,7 +101,7 @@ importers:
         specifier: ^5.4.9
         version: 5.4.21(@types/node@22.20.5)
 
-  drivers/driver-serial/frontend:
+  crates/coterm-driver/frontend/serial:
     dependencies:
       '@xterm/addon-fit':
         specifier: ^0.10.0
@@ -120,7 +120,7 @@ importers:
         specifier: ^5.4.9
         version: 5.4.21(@types/node@22.20.5)
 
-  drivers/driver-ssh/frontend:
+  crates/coterm-driver/frontend/ssh:
     dependencies:
       '@xterm/addon-fit':
         specifier: ^0.10.0

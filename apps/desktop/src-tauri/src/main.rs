@@ -8,20 +8,16 @@ mod mcp_settings;
 mod workspace;
 mod workspace_commands;
 
-use std::{
-    path::PathBuf,
-    sync::Arc,
-};
+use std::{path::PathBuf, sync::Arc};
 
-use coterm_core::{
-    driver_manager::{DriverLoadIssue, InProcessDriverRuntime},
-    driver_runtime::{CallerContext, Operations, DriverRuntime, SubmitOperation},
-};
-use coterm_proto::runtime::{
+use coterm_core::model::{
     lifecycle::{InstanceInfo, RuntimeLimits},
     manifest::DriverManifest,
     operation::{ApproveProposal, OperationDescriptor, OperationSource},
-    stream::FlowWindow,
+};
+use coterm_core::{
+    runtime::{CallerContext, SubmitOperation},
+    runtime::{DriverLoadIssue, Runtime},
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -50,14 +46,13 @@ struct InstanceEvent {
 }
 
 struct AppState {
-    workspace: Arc<
-        std::sync::Mutex<Result<workspace::WorkspaceStore, coterm_proto::runtime::RuntimeError>>,
-    >,
+    workspace:
+        Arc<std::sync::Mutex<Result<workspace::WorkspaceStore, coterm_core::model::RuntimeError>>>,
     workspace_actions: tokio::sync::Mutex<()>,
     workspace_path: PathBuf,
     exiting: std::sync::atomic::AtomicBool,
     event_subscriptions: EventSubscriptions,
-    driver_runtime: Arc<InProcessDriverRuntime>,
+    driver_runtime: Arc<Runtime>,
     stdio_bridge: mcp_commands::StdioBridge,
 }
 
@@ -103,7 +98,7 @@ async fn subscribe_driver_events(
     let task = tokio::spawn(async move {
         loop {
             let event = match events.recv().await {
-                Ok(coterm_proto::runtime::message::DriverNotification::Event {
+                Ok(coterm_core::driver::DriverNotification::Event {
                     driver_instance_id,
                     name,
                     payload,
@@ -204,8 +199,11 @@ async fn registered_driver_catalog(state: &AppState) -> Result<DriverCatalog, St
     for manifest in state.driver_runtime.loaded_manifests().await {
         drivers.push(summary(state, manifest).await);
     }
-    drivers.sort_by(|a,b| a.name.cmp(&b.name));
-    Ok(DriverCatalog {drivers, issues:Vec::new()})
+    drivers.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(DriverCatalog {
+        drivers,
+        issues: Vec::new(),
+    })
 }
 
 #[tauri::command]
@@ -292,7 +290,7 @@ async fn provide_secret(
     purpose: String,
     value: String,
     state: tauri::State<'_, AppState>,
-) -> Result<coterm_proto::runtime::interaction::SecretHandle, String> {
+) -> Result<coterm_core::model::interaction::SecretHandle, String> {
     state
         .driver_runtime
         .provide_secret(&driver_instance_id, purpose, value)
@@ -303,7 +301,7 @@ async fn provide_secret(
 #[tauri::command]
 async fn pending_interactions(
     state: tauri::State<'_, AppState>,
-) -> Result<Vec<coterm_proto::runtime::interaction::InteractionRequest>, String> {
+) -> Result<Vec<coterm_core::model::interaction::InteractionRequest>, String> {
     Ok(state.driver_runtime.pending_interactions().await)
 }
 
@@ -311,7 +309,7 @@ async fn pending_interactions(
 #[tauri::command]
 async fn host_attention(
     state: tauri::State<'_, AppState>,
-) -> Result<coterm_core::driver_manager::AttentionSnapshot, String> {
+) -> Result<coterm_core::runtime::AttentionSnapshot, String> {
     Ok(state.driver_runtime.attention_snapshot().await)
 }
 
@@ -320,7 +318,7 @@ async fn respond_secret(
     interaction_id: String,
     value: Option<String>,
     state: tauri::State<'_, AppState>,
-) -> Result<(), coterm_proto::runtime::RuntimeError> {
+) -> Result<(), coterm_core::model::RuntimeError> {
     state
         .driver_runtime
         .respond_secret(&interaction_id, value)
@@ -399,7 +397,7 @@ async fn invoke_operation(
     args: Value,
     wait_timeout_ms: Option<u64>,
     state: tauri::State<'_, AppState>,
-) -> Result<coterm_proto::runtime::operation::OperationReceipt, String> {
+) -> Result<coterm_core::model::operation::OperationReceipt, String> {
     let instance = state
         .driver_runtime
         .get_instance(&driver_instance_id)
@@ -432,7 +430,7 @@ async fn invoke_driver_operation(
     args: Value,
     wait_timeout_ms: Option<u64>,
     state: tauri::State<'_, AppState>,
-) -> Result<coterm_proto::runtime::operation::OperationReceipt, String> {
+) -> Result<coterm_core::model::operation::OperationReceipt, String> {
     state
         .driver_runtime
         .submit(
@@ -458,7 +456,7 @@ async fn recent_driver_operations(
     driver_id: String,
     limit: usize,
     state: tauri::State<'_, AppState>,
-) -> Result<Vec<coterm_proto::runtime::operation::OperationRecord>, String> {
+) -> Result<Vec<coterm_core::model::operation::OperationRecord>, String> {
     Ok(state
         .driver_runtime
         .recent_driver_operations(&driver_id, limit)
@@ -471,7 +469,7 @@ async fn approve_driver_proposal(
     proposal_id: String,
     args: Value,
     state: tauri::State<'_, AppState>,
-) -> Result<coterm_proto::runtime::operation::OperationReceipt, String> {
+) -> Result<coterm_core::model::operation::OperationReceipt, String> {
     let operation_id = state
         .driver_runtime
         .pending_driver_operation(&driver_id, &proposal_id)
@@ -527,7 +525,7 @@ async fn get_operation(
     operation_id: String,
     driver_instance_id: String,
     state: tauri::State<'_, AppState>,
-) -> Result<coterm_proto::runtime::operation::OperationRecord, String> {
+) -> Result<coterm_core::model::operation::OperationRecord, String> {
     let instance = state
         .driver_runtime
         .get_instance(&driver_instance_id)
@@ -552,7 +550,7 @@ async fn recent_operations(
     driver_instance_id: String,
     limit: usize,
     state: tauri::State<'_, AppState>,
-) -> Result<Vec<coterm_proto::runtime::operation::OperationRecord>, String> {
+) -> Result<Vec<coterm_core::model::operation::OperationRecord>, String> {
     let instance = state
         .driver_runtime
         .get_instance(&driver_instance_id)
@@ -579,7 +577,7 @@ async fn approve_proposal(
     proposal_id: String,
     args: Value,
     state: tauri::State<'_, AppState>,
-) -> Result<coterm_proto::runtime::operation::OperationReceipt, String> {
+) -> Result<coterm_core::model::operation::OperationReceipt, String> {
     let instance = state
         .driver_runtime
         .get_instance(&driver_instance_id)
@@ -645,7 +643,7 @@ async fn cancel_operation(
     driver_instance_id: String,
     operation_id: String,
     state: tauri::State<'_, AppState>,
-) -> Result<coterm_proto::runtime::operation::OperationReceipt, String> {
+) -> Result<coterm_core::model::operation::OperationReceipt, String> {
     let instance = state
         .driver_runtime
         .get_instance(&driver_instance_id)
@@ -670,7 +668,7 @@ async fn set_bypass(
     driver_instance_id: String,
     enabled: bool,
     state: tauri::State<'_, AppState>,
-) -> Result<(), coterm_proto::runtime::RuntimeError> {
+) -> Result<(), coterm_core::model::RuntimeError> {
     let _guard = state.workspace_actions.lock().await;
     state
         .driver_runtime
@@ -691,7 +689,7 @@ async fn set_bypass(
 async fn get_bypass(
     driver_instance_id: String,
     state: tauri::State<'_, AppState>,
-) -> Result<bool, coterm_proto::runtime::RuntimeError> {
+) -> Result<bool, coterm_core::model::RuntimeError> {
     state
         .driver_runtime
         .bypass_enabled(&driver_instance_id)
@@ -702,7 +700,7 @@ async fn get_bypass(
 fn preview_approval_policy(
     policy: coterm_core::approval_policy::ApprovalPolicy,
     text: String,
-) -> Result<bool, coterm_proto::runtime::RuntimeError> {
+) -> Result<bool, coterm_core::model::RuntimeError> {
     Ok(policy.compile()?.requires_approval(&[&text]))
 }
 
@@ -752,11 +750,6 @@ fn main() {
     }
     let runtime_limits = RuntimeLimits {
         max_control_bytes: 1024 * 1024,
-        max_data_chunk_bytes: 64 * 1024,
-        initial_window: FlowWindow {
-            chunks: 16,
-            bytes: 1024 * 1024,
-        },
     };
 
     let application = tauri::Builder::default()
@@ -766,7 +759,7 @@ fn main() {
             std::fs::create_dir_all(&app_data)?;
             let workspace_path = app_data.join("workspace.v1.dpapi");
             let workspace = workspace::WorkspaceStore::open(workspace_path.clone());
-            let driver_runtime = Arc::new(InProcessDriverRuntime::new(runtime_limits));
+            let driver_runtime = Arc::new(Runtime::new(runtime_limits));
             tauri::async_runtime::block_on(builtin_drivers::register(&driver_runtime))?;
 
             // 适配器就是本可执行文件的 `mcp stdio` 子命令：不搜索 PATH，也不依赖旁路文件。

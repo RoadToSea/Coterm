@@ -1,16 +1,16 @@
 //! Tools-only MCP MVP: explicit driver tools and host operation queries.
 use std::{collections::HashSet, net::SocketAddr, sync::Arc, time::Duration};
 
-use coterm_core::{
-    driver_manager::InProcessDriverRuntime,
-    driver_runtime::{CallerContext, Operations, DriverRuntime, SubmitOperation},
-};
-use coterm_proto::runtime::{
+use coterm_core::model::{
     lifecycle::{InstanceInfo, InstanceStatus},
     operation::{
         OperationEffect, OperationReceipt, OperationScope, OperationSource, OperationStatus,
     },
     ErrorCategory, RuntimeError,
+};
+use coterm_core::{
+    runtime::Runtime,
+    runtime::{CallerContext, SubmitOperation},
 };
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -38,7 +38,7 @@ pub struct BridgeServer {
 
 impl BridgeServer {
     /// Bind the production bridge to the stable local endpoint.
-    pub async fn bind(runtime: Arc<InProcessDriverRuntime>) -> std::io::Result<Self> {
+    pub async fn bind(runtime: Arc<Runtime>) -> std::io::Result<Self> {
         let address = DEFAULT_BRIDGE_ADDRESS
             .parse()
             .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidInput, error))?;
@@ -47,10 +47,7 @@ impl BridgeServer {
 
     /// Bind a bridge at an explicit address. Tests use port `0` to avoid
     /// competing with another bridge process.
-    pub async fn bind_at(
-        runtime: Arc<InProcessDriverRuntime>,
-        address: SocketAddr,
-    ) -> std::io::Result<Self> {
+    pub async fn bind_at(runtime: Arc<Runtime>, address: SocketAddr) -> std::io::Result<Self> {
         if !address.ip().is_loopback() {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::PermissionDenied,
@@ -89,7 +86,7 @@ impl Drop for BridgeServer {
     }
 }
 
-async fn serve_client(socket: TcpStream, runtime: Arc<InProcessDriverRuntime>) -> anyhow::Result<()> {
+async fn serve_client(socket: TcpStream, runtime: Arc<Runtime>) -> anyhow::Result<()> {
     let (reader, mut writer) = socket.into_split();
     let mut reader = BufReader::new(reader);
     let mut initialized = false;
@@ -224,7 +221,7 @@ pub(crate) fn initialize_result(params: &Value) -> Result<Value, (i32, String)> 
 }
 
 pub(crate) async fn ready_request(
-    runtime: &InProcessDriverRuntime,
+    runtime: &Runtime,
     method: &str,
     params: &Value,
 ) -> Result<Value, (i32, String)> {
@@ -253,7 +250,7 @@ pub(crate) fn rpc_error(id: Value, code: i32, message: &str) -> Value {
     json!({"jsonrpc":"2.0","id":id,"error":{"code":code,"message":message}})
 }
 
-pub async fn tools_list(runtime: &InProcessDriverRuntime) -> Result<Value, RuntimeError> {
+pub async fn tools_list(runtime: &Runtime) -> Result<Value, RuntimeError> {
     let mut tools = vec![
         json!({"name":"coterm.list_instances","description":"List existing shared driver instances. Each instance has a unique public name; internal UUIDs are not exposed.","inputSchema":{"type":"object","properties":{},"additionalProperties":false}}),
         json!({"name":"coterm.status","description":"Quick desktop/bridge health and instance connection snapshot (at most 64 instances, 1 second). connected=null means unknown; ready alone does not mean connected. Requires no SSH approval or authentication.","inputSchema":{"type":"object","properties":{},"additionalProperties":false}}),
@@ -334,7 +331,7 @@ struct ConnectionSnapshot {
 /// Connection knowledge is opt-in driver metadata, never guessed from a ready UI
 /// instance or a protocol-specific operation name. Probes cannot commit or prompt.
 async fn connection_snapshot(
-    runtime: &InProcessDriverRuntime,
+    runtime: &Runtime,
     driver: Option<&str>,
 ) -> anyhow::Result<ConnectionSnapshot> {
     let all = runtime.list_instances(driver).await?;
@@ -428,10 +425,7 @@ async fn connection_snapshot(
     Ok(ConnectionSnapshot { instances, total })
 }
 
-async fn default_instance(
-    runtime: &InProcessDriverRuntime,
-    driver: Option<&str>,
-) -> anyhow::Result<InstanceInfo> {
+async fn default_instance(runtime: &Runtime, driver: Option<&str>) -> anyhow::Result<InstanceInfo> {
     let snapshot = connection_snapshot(runtime, driver).await?;
     if snapshot.total != snapshot.instances.len()
         || snapshot
@@ -473,7 +467,7 @@ fn hide_internal_instance_ids(value: &mut Value) {
 }
 
 async fn resolve_instance_name(
-    runtime: &InProcessDriverRuntime,
+    runtime: &Runtime,
     driver_id: Option<&str>,
     name: &str,
 ) -> anyhow::Result<InstanceInfo> {
@@ -547,7 +541,7 @@ fn receipt_meta(receipt: &OperationReceipt) -> Value {
     value
 }
 
-pub async fn call_tool(runtime: &InProcessDriverRuntime, params: &Value) -> anyhow::Result<Value> {
+pub async fn call_tool(runtime: &Runtime, params: &Value) -> anyhow::Result<Value> {
     let wait_timeout_ms = params
         .pointer("/_meta/coterm~1waitTimeoutMs")
         .map(|value| {
@@ -691,8 +685,7 @@ pub async fn call_tool(runtime: &InProcessDriverRuntime, params: &Value) -> anyh
         .into_iter()
         .find(|op| op.name == tool.operation)
         .ok_or_else(|| anyhow::anyhow!("Operation descriptor not found"))?;
-    let instance_id = if descriptor.scope
-        == coterm_proto::runtime::operation::OperationScope::Instance
+    let instance_id = if descriptor.scope == coterm_core::model::operation::OperationScope::Instance
     {
         let target_fields = ["name", "instance", "instanceName", "instance_name"]
             .into_iter()
@@ -824,16 +817,9 @@ mod tests {
 
     #[tokio::test]
     async fn bridge_rejects_non_loopback_bind_addresses() {
-        let runtime = Arc::new(InProcessDriverRuntime::new(
-        coterm_proto::runtime::lifecycle::RuntimeLimits {
-                max_control_bytes: 1024,
-                max_data_chunk_bytes: 1024,
-                initial_window: coterm_proto::runtime::stream::FlowWindow {
-                    chunks: 1,
-                    bytes: 1024,
-                },
-            },
-        ));
+        let runtime = Arc::new(Runtime::new(coterm_core::model::lifecycle::RuntimeLimits {
+            max_control_bytes: 1024,
+        }));
         let address: SocketAddr = "192.0.2.1:51234".parse().expect("address");
         let result = BridgeServer::bind_at(runtime, address).await;
         assert!(

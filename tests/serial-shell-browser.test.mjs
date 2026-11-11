@@ -7,9 +7,9 @@ import { evaluate, findBrowser, openSession, waitForValue } from "./support/brow
 test("Serial view switches synchronize backend mode without reconnecting or losing output", async t => {
   const browserPath = findBrowser();
   if (!browserPath) { t.skip("No Chrome/Edge binary"); return; }
-  const artifact = new URL("../drivers/driver-serial/dist/frontend/index.js", import.meta.url);
+  const artifact = new URL("../crates/coterm-driver/dist/serial/frontend/index.js", import.meta.url);
   for (const name of ["index.ts", "i18n.ts", "console-settings.ts"]) {
-    assert.ok(fs.statSync(artifact).mtimeMs >= fs.statSync(new URL(`../drivers/driver-serial/frontend/src/${name}`, import.meta.url)).mtimeMs);
+    assert.ok(fs.statSync(artifact).mtimeMs >= fs.statSync(new URL(`../crates/coterm-driver/frontend/serial/src/${name}`, import.meta.url)).mtimeMs);
   }
   const moduleURL = `data:text/javascript;base64,${fs.readFileSync(artifact).toString("base64")}`;
   const session = await openSession({browserPath}); const {client} = session;

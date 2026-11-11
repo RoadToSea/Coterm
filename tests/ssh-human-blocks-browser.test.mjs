@@ -7,9 +7,9 @@ import { findBrowser, openSession, evaluate, waitForValue } from "./support/brow
 test("echoed human terminal commands create selectable blocks", async t => {
   const browserPath = findBrowser();
   if (!browserPath) { t.skip("No browser available"); return; }
-  const artifact = new URL("../drivers/driver-ssh/dist/frontend/index.js", import.meta.url);
+  const artifact = new URL("../crates/coterm-driver/dist/ssh/frontend/index.js", import.meta.url);
   for (const file of ["index.ts", "human-commands.ts", "observed-boundaries.ts"]) {
-    assert.ok(fs.statSync(artifact).mtimeMs >= fs.statSync(new URL("../drivers/driver-ssh/frontend/src/" + file, import.meta.url)).mtimeMs, "build SSH first");
+    assert.ok(fs.statSync(artifact).mtimeMs >= fs.statSync(new URL("../crates/coterm-driver/frontend/ssh/src/" + file, import.meta.url)).mtimeMs, "build SSH first");
   }
   const moduleURL = "data:text/javascript;base64," + fs.readFileSync(artifact).toString("base64");
   const session = await openSession({ browserPath, totalTimeoutMs: 30000 });

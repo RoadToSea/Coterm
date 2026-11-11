@@ -1,6 +1,6 @@
 use crate::{workspace_commands::access, AppState};
 use coterm_core::approval_policy::{ApprovalMode, ApprovalPolicy, ApprovalRuleGroup};
-use coterm_proto::runtime::RuntimeError;
+use coterm_core::model::RuntimeError;
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize)]

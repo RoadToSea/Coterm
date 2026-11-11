@@ -167,7 +167,7 @@ test("appearance switches live SSH and serial renderers, persists, and follows s
     await page.resize(1280, 800);
 
     // Mount the actual serial bundle in the same themed document, with a typed-contract mock only.
-    const artifact = path.join(rootDir, "drivers/driver-serial/dist/frontend/index.js");
+    const artifact = path.join(rootDir, "crates/coterm-driver/dist/serial/frontend/index.js");
     assert.ok(fs.statSync(artifact).mtimeMs >= fs.statSync(path.join(rootDir, "apps/shared/components/terminal-theme.ts")).mtimeMs);
     const serialURL = `data:text/javascript;base64,${fs.readFileSync(artifact).toString("base64")}`;
     await page.evaluate(`(async () => {

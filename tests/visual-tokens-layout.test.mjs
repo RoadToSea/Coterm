@@ -6,7 +6,7 @@ import path from "node:path";
 const rootDir = process.cwd();
 const indexCssPath = path.join(rootDir, "apps/desktop/src/index.css");
 const tailwindConfigPath = path.join(rootDir, "apps/desktop/tailwind.config.js");
-const sshDriverPath = path.join(rootDir, "drivers/driver-ssh/frontend/src/index.ts");
+const sshDriverPath = path.join(rootDir, "crates/coterm-driver/frontend/ssh/src/index.ts");
 const blockListPath = path.join(rootDir, "apps/shared/components/block-list.ts");
 const appTsxPath = path.join(rootDir, "apps/desktop/src/App.tsx");
 

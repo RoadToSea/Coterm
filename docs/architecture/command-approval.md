@@ -60,6 +60,6 @@ Bypass 由用户通过当前实例入口主动开启，保存成功再更新运�
 ## 验证入口
 
 - [策略模块](../../crates/coterm-core/src/approval_policy.rs)：正反向、列表、多行、组合文本、无效/超限规则、脱敏操作、缺失/错误字段。
-- [真实进程测试](../../tests/fixtures/runtime-driver/tests/lifecycle.rs)与 [SSH 回归](../../drivers/driver-ssh/tests/ssh.rs)：实际派发、等待审批、来源约束与旧提案保持。
+- [真实进程测试](../../tests/fixtures/runtime-driver/tests/lifecycle.rs)与 [SSH 回归](../../crates/coterm-driver/tests/ssh.rs)：实际派发、等待审批、来源约束与旧提案保持。
 - [工作区测试](../../apps/desktop/src-tauri/src/workspace_tests.rs)：同驱动规则隔离、旧记录逐项迁移、加密恢复、稳定身份绑定、Bypass 恢复、临时实例不落盘和写盘失败回滚。
 - [浏览器测试](../../tests/approval-settings-browser.test.mjs)：规则追加/删除、两种模式、失败保留、宿主试匹配、双实例规则与 Bypass、切换后的过期响应隔离和中文界面。

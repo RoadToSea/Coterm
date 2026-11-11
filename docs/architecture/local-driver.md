@@ -20,4 +20,4 @@ MCP 只公开 status、command、上述三种读取及驱动信息。原生 read
 
 前台取消发送 Ctrl-C，但不以此证明终止；未确认时返回 unknown，执行通道保持占用直至边界或用户重启。后台复用子进程取消与超时。历史只驻内存，不新增落盘日志；配置使用工作区安全保存项。
 
-实现：[领域路由](../../drivers/driver-local/src/backend.rs)、[命令与记录](../../drivers/driver-local/src/command.rs)、[PTY](../../drivers/driver-local/src/session.rs)、[后台作业](../../drivers/driver-local/src/exec.rs)。
+实现：[领域路由](../../crates/coterm-driver/src/local/backend.rs)、[命令与记录](../../crates/coterm-driver/src/local/command.rs)、[PTY](../../crates/coterm-driver/src/local/session.rs)、[后台作业](../../crates/coterm-driver/src/local/exec.rs)。

@@ -120,6 +120,7 @@ test("instance bypass writes and stale reads remain isolated from group configur
   const session=await harness(t,twoInstances());if(!session)return;
   const {client,run,wait}=session;
   try {
+    await wait(`!!document.getElementById('instance-tab-inst-1')`);
     await run(`document.getElementById('instance-tab-inst-1').click();window.confirm=()=>true`);
     await wait(`document.querySelector('button[aria-label="Enable approval bypass"]')?.disabled===false`);
     await run(`window.failedBypassSave=__cotermTest.gate('set_bypass');document.querySelector('button[aria-label="Enable approval bypass"]').click()`);
