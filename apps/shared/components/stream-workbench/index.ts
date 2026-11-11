@@ -37,6 +37,7 @@ interface HexOutput { hex: string; bytes: number; cursor: number; gap: boolean; 
 interface PushedOutput { text: string; bytes: number; cursor: number; connectionId: string }
 /** 回放缓冲是 256 KiB；调试台保留同样大小的可读日志，超出后丢弃最老的块。 */
 const LOG_LIMIT = 256 * 1024;
+const REPLAY_CHUNK_BYTES = 1024;
 /** 单次渲染最多保留的字符数，避免 HEX 视图把整段缓冲塞进 DOM。 */
 const RENDER_LIMIT = 400_000;
 const REPEAT_MIN_MS = 20;
@@ -792,7 +793,8 @@ export function mountStreamWorkbench<C extends StreamConfig>(container: HTMLElem
       }
       if (data.connectionId !== connectionId) await refreshSnapshot();
       if (data.connectionId !== connectionId || data.cursor <= cursor) return;
-      if (data.cursor !== cursor + 1) { await refreshSnapshot(); return; }
+      // One network read may append several replay chunks to a single output event.
+      if (data.cursor !== cursor + Math.ceil(data.bytes / REPLAY_CHUNK_BYTES)) { await refreshSnapshot(); return; }
       await write(data.text);
       appendOutput(data.text, data.bytes);
       cursor = data.cursor;

@@ -91,6 +91,7 @@ MCP 工具为 `coterm_tcp_{status,connect,disconnect,read_lines,read_selected_li
 ## 连接、缓冲与故障
 
 - 每实例 TCP 任务拥有 socket，输入队列 32 项；每驱动通知队列 128 项，输出事件过载可丢弃，前端按游标回放，不能无限堆积。
+- 每次 socket 读取最多 64 KiB，合并为一个输出事件，降低每字节的编码和广播开销；不会为了填满缓冲而额外等待。事件游标按本次追加的 1 KiB 回放块数推进，前端用 `ceil(bytes / 1024)` 判断连续性，不能假定每个事件只推进一个块。真实缺口仍从后端补读，过期历史明确报告 gap。
 - 后端接收缓冲上限 256 KiB，按 1 KiB 块回放，UTF-8 解码跨包保留不完整字符；Raw TCP 的 HEX 路径保持任意字节，包括 NUL／0x80／0xFF。文本读取是有损 UTF-8 展示，不是二进制协议解码。
 - Shell 最近 32 条记录，每条输出最多 16 KiB；行、对话、选区和错误结果均有返回大小限制，截断和淘汰显式标记。
 - `connect/command` 立即返回既有 DeferredOperation 信封，完成通过通知收敛，不占用整个控制等待期限。socket 写等待 2 秒，调用结果等待 3 秒；失败后不能据超时判断未发送。
@@ -114,7 +115,7 @@ cargo run --locked -p coterm-driver --release --example tcp-task-throughput -- 6
 node scripts/benchmark-tcp.mjs --seconds 60 --rates 1048576,5242880,10485760,unlimited --output .agent-debug/tcp-throughput/report.json
 ```
 
-`tcp-task-throughput` 使用桌面相同的 DriverTask 请求、通知和广播队列，省去 stdio；第二个脚本额外经过显式诊断适配器的 JSON/stdout 和 Node 消费者。两者不包含 WebView、xterm、MCP、审批或完整 Runtime 账本路径，不是桌面渲染速率保证。测试同时收发，每方向独立计量；`0/unlimited` 仅表示不主动限速，不能当作已验证的无损容量。
+`tcp-task-throughput` 使用桌面相同的 DriverTask 请求、通知和广播队列，省去 stdio；两个投放方向运行在独立 Tokio 任务中，避免持续就绪的生成器占用另一方向的投放时间。第二个脚本额外经过显式诊断适配器的 JSON/stdout 和 Node 消费者。两者不包含 WebView、xterm、MCP、审批或完整 Runtime 账本路径，不是桌面渲染速率保证。测试同时收发，每方向独立计量；`0/unlimited` 仅表示不主动限速，不能当作已验证的无损容量。
 
 固定 16 KiB ASCII 记录带序号并逐字节校验，Node 路径另比对整流 SHA-256；分别报告后端收发计数、消费字节、缺失／重复／乱序／异常帧和通知缺口。后端计数相等不证明每个消费者都收到了内容；`replayGap/readLinesDropped` 表示有界历史已淘汰。接收记录被通知缺口切断时的异常帧也不能直接归因为线路比特错误。
 

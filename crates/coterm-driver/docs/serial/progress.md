@@ -1,5 +1,16 @@
 # Serial 实施进度
 
+## 2026-11-11：系统读取与通知链路修复
+
+- 逐字节读取夹具先复现通知遗漏：8,209 字节后端数据完整，原 128 项通知队列仅留下前 128 字节。读取线程现独立合并 1 KiB／4 ms 批次，空闲时提交；队列满仅保留一个最新通知并空闲重试，停止或读错误提交尾部。连接收尾先等待读取线程提交，再关闭 UTF-8／Shell 状态；通知队列与 256 KiB 回放预算不扩大。
+- Windows 原先把 20 ms 读轮询同时设为系统写期限，实测 16 KiB 写入频繁短写。仅分离期限后，同步句柄仍发生 21 字节写入等待约 1.19 秒、16 KiB 写入最终成功却超过宿主 2 秒期限。改用 overlapped 句柄、每方向独立完成事件和实际完成计数；系统读取保持最多 1 KiB、1 ms 字节间隔／20 ms 总等待，系统写期限独立为 2 秒，不暂停对向读取。非 Windows 系统 IO 路径不变。
+- 测速支持显式 simultaneous duplex、不同方向独立负载和逐字节／SHA-256 校验。Python 3.9 的 tty.setraw 后仍保留 IXOFF，已捕获混入负载的 XOFF；测速期间显式清除 IXON／IXOFF／IXANY，采集前后输入标志，正常及 watchdog 退出均恢复完整 tty 属性。宿主不丢弃或过滤设备字节。
+- 最终代码连接 Windows 11／CH340／COM6 的 riscv64 Linux 开发板，在 115200 baud、8N1、每轮每方向 64 KiB 下同时收发 183.75 秒；共 31 轮，每方向逐字节／校验和确认 2,031,616 字节。每方向传输阶段速率 11.39 KB/s（十进制），事件缺口 0，UART frame／overrun／parity／brk／bufferOverrun 前后均为 0；这是正常速率基线，不是 10 分钟或高速无损认证。诊断路径不包含完整 Runtime、WebView、xterm、MCP 或审批。
+- 500000 baud 的最终全双工长测在 301.34 秒、第 97 轮失败，先前 96 轮每方向各 12,582,912 字节已核对，失败批次连续少 90 字节；该阶段与本机 TCP 负载及工作区验证并行。1500000 baud 最终路径第 26 轮连续少 28 字节；两者后端回放与事件一致、事件缺口 0，均未跑满计划 600 秒。独立 ctypes／Win32 路径也在 1500000 baud 连续少 668 字节。具体根因仍需板端、适配器及其他系统交叉对照，见[未解决反馈](../../../../docs/feedback/serial-high-baud-integrity.md)。原始字节缺失、通知遗漏、有界历史淘汰分别记录，不因短测通过或 UART 错误计数为 0 就宣称修复。
+- 已撤销“写入时暂停读取”和系统队列调大原型：前者在全双工对照中出现接收失败，后者仍在第 2 轮少 256 字节；中间版本交替 600 秒通过不作为最终验收。没有增加协调层、无限缓存、依赖、持久化结构或宿主接口。
+- 6 项新增 Rust 回归覆盖碎片合并／尾部、静默后的通知重试、独立期限／非法期限、Windows 结构布局和真实 pending read 下同对象并发写入。工作区全目标 check、280 项 Rust 测试、严格 Clippy 及示例 2 项校验器测试通过；3 项既有设备用例默认 ignored。五驱动前端、桌面前端构建及 105 项前端回归通过。首次并行 Rust 测试命中既有 workspace_write_failed，完整串行复跑通过，未修改持久化实现。
+- 收尾独立检查设备恢复 115200、ECHO／ICANON、Shell 可用，已断开释放 COM6。继续入口：[Windows IO](../../src/serial/windows_io.rs)、[独立期限](../../src/serial/serial_io.rs)、[读取与回收](../../src/serial/session.rs)、[测速](../../../../scripts/benchmark-serial.mjs)、[容量约定](interfaces.md#读取事件与容量)、[网络链路](../../../../docs/progress/network-drivers.md#2026-11-11输出批次与前端追赶修复)。
+
 ## 2026-11-11：长时间高速率完整性验收
 
 - 环境：Windows 11、CH340 / COM6、riscv64 Linux 开发板 `/dev/ttyS0`、Python 3.9.4；原设置 115200 / 8N1。使用 release `serial-diagnostic` 连接实际 Serial Backend，设备 Python 只驻留内存。测试路径额外包含诊断 JSON/stdout 和 Node 消费者，不包含生产 DriverTask、完整 Runtime、WebView、xterm、MCP 或审批。

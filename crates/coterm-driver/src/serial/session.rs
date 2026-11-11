@@ -7,7 +7,7 @@ use std::{
         Arc,
     },
     thread::JoinHandle as ThreadHandle,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use crate::serial::command::{CommandHandle, CommandJob, CommandList};
@@ -25,6 +25,7 @@ use coterm_core::driver::DriverNotification;
 use coterm_core::model::{ErrorCategory, RuntimeError};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use serialport::SerialPort as _;
 use tokio::{
     sync::{mpsc, oneshot, Mutex},
     task::JoinHandle,
@@ -33,8 +34,9 @@ use tokio::{
 
 const IO_TIMEOUT: Duration = Duration::from_secs(2);
 const OPEN_TIMEOUT: Duration = Duration::from_secs(5);
-/// 读取线程单次阻塞等待；只影响断开延迟，不影响数据完整性。
+/// 读取线程单次等待上限，兼顾小批接收和停止响应。
 const READ_POLL: Duration = Duration::from_millis(20);
+const READ_BATCH_DELAY: Duration = Duration::from_millis(4);
 /// 显式断开时等待读取线程回收的上限；超时后句柄分离，不阻塞断开。
 const READER_JOIN_TIMEOUT: Duration = Duration::from_secs(2);
 
@@ -256,6 +258,7 @@ impl Connection {
             events: task_events,
             connection_id: reader_connection_id,
             rx_bytes: reader_rx,
+            pending: None,
         };
         let reader = std::thread::Builder::new()
             .name("coterm-serial-reader".to_owned())
@@ -266,6 +269,7 @@ impl Connection {
             .map_err(|error| anyhow!("Serial reader thread could not start: {error}"))?;
 
         let task = tokio::spawn(async move {
+            let mut reader_finished = false;
             loop {
                 tokio::select! {
                     action = receiver.recv() => {
@@ -359,7 +363,7 @@ impl Connection {
                             break;
                         }
                     }
-                    _ = &mut reader_closed => break,
+                    _ = &mut reader_closed => { reader_finished = true; break; },
                 }
             }
             // 停止标志同时约束读取线程；断开或读写失败后都不能让它继续跑。
@@ -374,6 +378,10 @@ impl Connection {
                 )));
             }
             drop(writer);
+            // The reader must publish its final partial batch before UTF-8 and Shell state close.
+            if !reader_finished {
+                let _ = timeout(READER_JOIN_TIMEOUT, &mut reader_closed).await;
+            }
             task_output.lock().await.close();
             if let Some((instance, sender)) = &events {
                 let cursor = task_output.lock().await.cursor();
@@ -543,50 +551,105 @@ struct ReaderSource<R> {
     events: Option<(String, mpsc::Sender<DriverNotification>)>,
     connection_id: String,
     rx_bytes: Arc<AtomicU64>,
+    pending: Option<DriverNotification>,
 }
 
-/// 循环读取直到停止标志置位或端口出错。停止标志只在一次阻塞读之后检查，
-/// 因此最坏退出延迟是 `READ_POLL`。
+impl<R> ReaderSource<R> {
+    fn publish(&mut self, data: &[u8]) {
+        if data.is_empty() {
+            self.retry();
+            return;
+        }
+        let (cursor, text) = {
+            let mut output = self.output.blocking_lock();
+            let text = output.push(data);
+            (output.cursor(), text)
+        };
+        if let Some((instance, _)) = &self.events {
+            // Keep only the latest hint; skipped cursors recover from the bounded replay buffer.
+            self.pending = Some(DriverNotification::Event {
+                driver_instance_id: instance.clone(),
+                name: "serial.output".into(),
+                payload: json!({
+                    "connectionId": self.connection_id,
+                    "text": text,
+                    "bytes": data.len(),
+                    "cursor": cursor,
+                }),
+            });
+        }
+        self.retry();
+    }
+
+    fn retry(&mut self) {
+        if let (Some(event), Some((_, sender))) = (self.pending.take(), &self.events) {
+            if let Err(mpsc::error::TrySendError::Full(event)) = sender.try_send(event) {
+                self.pending = Some(event);
+            }
+        }
+    }
+}
+
+/// 循环读取直到停止标志置位或端口出错；读取等待受 `READ_POLL` 限制，
+/// 实际退出时间还受系统 IO 和调度影响。
 fn read_until_stopped<R: Read>(mut source: ReaderSource<R>) {
+    let mut incoming = vec![0u8; OUTPUT_CHUNK_BYTES];
     let mut buffer = vec![0u8; OUTPUT_CHUNK_BYTES];
+    let mut used = 0;
+    let mut published = Instant::now();
     while !source.stop.load(Ordering::Relaxed) {
-        match source.port.read(&mut buffer) {
-            Ok(0) => continue,
+        let mut idle = false;
+        // Notification boundaries must not change the size of OS read requests.
+        match source.port.read(&mut incoming) {
+            Ok(0) => idle = true,
             Ok(count) => {
                 source.rx_bytes.fetch_add(count as u64, Ordering::Relaxed);
-                let data = buffer[..count].to_vec();
-                let (pushed, text) = {
-                    let mut output = source.output.blocking_lock();
-                    let text = output.push(&data);
-                    (output.cursor(), text)
-                };
-                if let Some((instance, sender)) = &source.events {
-                    let notification = DriverNotification::Event {
-                        driver_instance_id: instance.clone(),
-                        name: "serial.output".into(),
-                        payload: json!({
-                            "connectionId": source.connection_id,
-                            "text": text,
-                            "bytes": data.len(),
-                            "cursor": pushed,
-                        }),
-                    };
-                    // 有界队列已满时丢弃推送：回放缓冲才是权威来源。
-                    if sender.try_send(notification).is_err() {
-                        continue;
+                let mut data = &incoming[..count];
+                while !data.is_empty() {
+                    let count = (buffer.len() - used).min(data.len());
+                    buffer[used..used + count].copy_from_slice(&data[..count]);
+                    used += count;
+                    data = &data[count..];
+                    if used == buffer.len() {
+                        source.publish(&buffer);
+                        used = 0;
+                        published = Instant::now();
                     }
                 }
             }
-            Err(error) if error.kind() == std::io::ErrorKind::TimedOut => continue,
-            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) if error.kind() == std::io::ErrorKind::TimedOut => idle = true,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
             Err(_) => break,
         }
+        // Small UART reads must not each allocate a replay chunk and a notification.
+        if used > 0 && (idle || published.elapsed() >= READ_BATCH_DELAY) {
+            source.publish(&buffer[..used]);
+            used = 0;
+            published = Instant::now();
+        } else if idle {
+            source.retry();
+        }
     }
+    source.publish(&buffer[..used]);
     source.stop.store(true, Ordering::SeqCst);
 }
 
 /// 阻塞打开端口并设置初始信号电平，返回读端和写端两个句柄。
-fn open_port(config: &Config) -> Result<(Box<dyn serialport::SerialPort>, SerialWriter)> {
+fn open_port(config: &Config) -> Result<(Box<dyn Read + Send>, SerialWriter)> {
+    #[cfg(windows)]
+    let mut port = super::windows_io::open(
+        config.port.trim(),
+        config.baud_rate,
+        config.data_bits,
+        config.stop_bits,
+        match config.parity {
+            Parity::None => serialport::Parity::None,
+            Parity::Odd => serialport::Parity::Odd,
+            Parity::Even => serialport::Parity::Even,
+        },
+    )
+    .map_err(|error| anyhow!("Serial port could not be opened: {error}"))?;
+    #[cfg(not(windows))]
     let mut port = serialport::new(config.port.trim(), config.baud_rate)
         .data_bits(match config.data_bits {
             5 => serialport::DataBits::Five,
@@ -605,20 +668,34 @@ fn open_port(config: &Config) -> Result<(Box<dyn serialport::SerialPort>, Serial
             Parity::Even => serialport::Parity::Even,
         })
         .timeout(READ_POLL)
-        .open()
+        .open_native()
         .map_err(|error| anyhow!("Serial port could not be opened: {error}"))?;
     port.write_data_terminal_ready(config.dtr)
         .map_err(|error| anyhow!("Serial DTR could not be set: {error}"))?;
     port.write_request_to_send(config.rts)
         .map_err(|error| anyhow!("Serial RTS could not be set: {error}"))?;
+    #[cfg(not(windows))]
     let writer = port
         .try_clone()
         .map_err(|error| anyhow!("Serial port write handle failed: {error}"))?;
+    #[cfg(windows)]
+    let writer = port
+        .try_clone_native()
+        .map_err(|error| anyhow!("Serial port write handle failed: {error}"))?;
+    #[cfg(windows)]
+    crate::serial::serial_io::configure_io_timeouts(&port, READ_POLL, IO_TIMEOUT)
+        .map_err(|error| anyhow!("Serial I/O timeouts could not be set: {error}"))?;
+    #[cfg(windows)]
+    let reader = super::windows_io::Reader::new(port)?;
+    #[cfg(not(windows))]
+    let reader = port;
     Ok((
-        port,
+        Box::new(reader),
         SerialWriter {
             port: writer,
             timeout: IO_TIMEOUT,
+            #[cfg(windows)]
+            operation: super::windows_io::Operation::new()?,
         },
     ))
 }
@@ -716,6 +793,7 @@ mod tests {
             events: None,
             connection_id: connection.id.clone(),
             rx_bytes: connection.rx_bytes.clone(),
+            pending: None,
         };
         tokio::task::spawn_blocking(move || read_until_stopped(source)).await?;
         assert!(
@@ -926,6 +1004,7 @@ mod tests {
             events: None,
             connection_id: "test".into(),
             rx_bytes: rx_bytes.clone(),
+            pending: None,
         };
         let reader = std::thread::spawn(move || read_until_stopped(source));
 
@@ -948,7 +1027,110 @@ mod tests {
         );
         // 每个字节都进入回放缓冲并计入接收计数，退出不能丢数据。
         assert_eq!(rx_bytes.load(Ordering::SeqCst), after_stop);
-        assert_eq!(output.blocking_lock().cursor(), after_stop);
+        assert_eq!(output.blocking_lock().bytes as u64, after_stop);
+    }
+
+    #[test]
+    fn fragmented_reads_do_not_exhaust_output_notifications_and_keep_the_tail() -> Result<()> {
+        struct Fragmented(std::io::Cursor<Vec<u8>>);
+        impl Read for Fragmented {
+            fn read(&mut self, bytes: &mut [u8]) -> std::io::Result<usize> {
+                let count = self.0.read(&mut bytes[..1])?;
+                if count == 0 {
+                    return Err(std::io::ErrorKind::BrokenPipe.into());
+                }
+                Ok(count)
+            }
+        }
+        let expected = vec![b'x'; OUTPUT_CHUNK_BYTES * 8 + 17];
+        let output = Arc::new(Mutex::new(OutputBuffer::default()));
+        let rx = Arc::new(AtomicU64::new(0));
+        let (events, mut notifications) = mpsc::channel(128);
+        read_until_stopped(ReaderSource {
+            port: Fragmented(std::io::Cursor::new(expected.clone())),
+            output: output.clone(),
+            stop: Arc::new(AtomicBool::new(false)),
+            events: Some(("fragmented".into(), events)),
+            connection_id: "epoch".into(),
+            rx_bytes: rx.clone(),
+            pending: None,
+        });
+        let mut received = Vec::new();
+        while let Ok(DriverNotification::Event { payload, .. }) = notifications.try_recv() {
+            let text = payload["text"]
+                .as_str()
+                .ok_or_else(|| anyhow!("Missing output"))?;
+            received.extend_from_slice(text.as_bytes());
+        }
+        assert_eq!(rx.load(Ordering::Relaxed), expected.len() as u64);
+        assert_eq!(output.blocking_lock().bytes, expected.len());
+        assert_eq!(
+            received.len(),
+            expected.len(),
+            "Small system reads must not lose notifications"
+        );
+        assert_eq!(received, expected);
+        Ok(())
+    }
+
+    #[test]
+    fn idle_reader_retries_the_last_full_queue_notification() {
+        struct Intermittent {
+            step: u8,
+            events: mpsc::Receiver<DriverNotification>,
+            observed: Arc<AtomicU64>,
+        }
+        impl Read for Intermittent {
+            fn read(&mut self, bytes: &mut [u8]) -> std::io::Result<usize> {
+                self.step += 1;
+                if self.step <= 2 {
+                    let count = if self.step == 1 {
+                        OUTPUT_CHUNK_BYTES
+                    } else {
+                        17
+                    };
+                    bytes[..count].fill(b'x');
+                    return Ok(count);
+                }
+                if self.step >= 4 {
+                    while let Ok(DriverNotification::Event { payload, .. }) = self.events.try_recv()
+                    {
+                        let text = payload["text"]
+                            .as_str()
+                            .ok_or_else(|| std::io::Error::other("Missing output"))?;
+                        assert!(text.bytes().all(|byte| byte == b'x'));
+                        self.observed
+                            .fetch_add(text.len() as u64, Ordering::Relaxed);
+                    }
+                }
+                Err(if self.step < 5 {
+                    std::io::ErrorKind::TimedOut
+                } else {
+                    std::io::ErrorKind::BrokenPipe
+                }
+                .into())
+            }
+        }
+        let (events, notifications) = mpsc::channel(1);
+        let observed = Arc::new(AtomicU64::new(0));
+        read_until_stopped(ReaderSource {
+            port: Intermittent {
+                step: 0,
+                events: notifications,
+                observed: observed.clone(),
+            },
+            output: Arc::new(Mutex::new(OutputBuffer::default())),
+            stop: Arc::new(AtomicBool::new(false)),
+            events: Some(("idle".into(), events)),
+            connection_id: "epoch".into(),
+            rx_bytes: Arc::new(AtomicU64::new(0)),
+            pending: None,
+        });
+        assert_eq!(
+            observed.load(Ordering::Relaxed),
+            (OUTPUT_CHUNK_BYTES + 17) as u64,
+            "The final output must be retried even when no later device data arrives"
+        );
     }
 
     #[test]

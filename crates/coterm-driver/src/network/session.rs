@@ -18,6 +18,8 @@ use tokio::{
     time::{sleep, timeout},
 };
 
+const READ_BATCH_BYTES: usize = 64 * 1024;
+
 #[derive(Default)]
 pub(crate) struct State {
     pub connected: bool,
@@ -318,7 +320,8 @@ impl Worker {
         let mut codec = self
             .telnet
             .then(|| Codec::new(&self.config.terminal_type, 80, 24));
-        let mut bytes = [0_u8; 4096];
+        // Bound each notification by bytes while amortizing serialization and broadcast work.
+        let mut bytes = vec![0_u8; READ_BATCH_BYTES];
         let mut login_tail = String::new();
         let mut username_sent = false;
         loop {

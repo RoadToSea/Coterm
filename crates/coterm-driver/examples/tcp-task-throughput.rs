@@ -179,22 +179,24 @@ async fn run(seconds: u64, rate: u64, pause_ms: u64) -> Result<Value> {
     });
     let start = Instant::now();
     let deadline = start + Duration::from_secs(seconds);
-    let produce = async {
+    // A continuously ready writer must not monopolize the other load generator's task.
+    let produce = tokio::spawn(async move {
         let mut count = 0_u64;
         while Instant::now() < deadline {
             writer.write_all(&frame(count)).await?;
             count += 1;
             pace(start, count * FRAME as u64, rate).await;
         }
-        Ok::<_, anyhow::Error>(count)
-    };
-    let transmit = async {
+        Ok::<_, anyhow::Error>((count, writer))
+    });
+    let send_task = task.clone();
+    let transmit = tokio::spawn(async move {
         let mut count = 0_u64;
         while Instant::now() < deadline {
             let bytes = frame(count);
             let text = String::from_utf8(bytes)?;
             let result = invoke(
-                &task,
+                &send_task,
                 "write",
                 json!({"connectionId":epoch,"text":text,"lineEnding":"none"}),
             )
@@ -204,8 +206,10 @@ async fn run(seconds: u64, rate: u64, pause_ms: u64) -> Result<Value> {
             pace(start, count * FRAME as u64, rate).await;
         }
         Ok::<_, anyhow::Error>(count)
-    };
-    let (rx_frames, tx_frames) = tokio::try_join!(produce, transmit)?;
+    });
+    let (produced, transmitted) = tokio::join!(produce, transmit);
+    let (rx_frames, mut writer) = produced??;
+    let tx_frames = transmitted??;
     let active = start.elapsed().as_secs_f64();
     writer.shutdown().await?;
     let peer = timeout(Duration::from_secs(5), peer).await???;
@@ -216,6 +220,7 @@ async fn run(seconds: u64, rate: u64, pause_ms: u64) -> Result<Value> {
     let _ = stop.send(true);
     let received = consumer.await?;
     let output = json!({"path":"production DriverTask request/notification/broadcast queues; no stdio or UI",
+        "loadScheduling":"independent Tokio tasks per direction",
         "offeredBytesPerSecondPerDirection":rate,"pauseConsumerMs":pause_ms,"activeSeconds":active,
         "rxBytesPerSecond":rx_frames as f64*FRAME as f64/active,"txBytesPerSecond":tx_frames as f64*FRAME as f64/active,
         "backendRxBytes":status["rxBytes"],"backendTxBytes":status["txBytes"],

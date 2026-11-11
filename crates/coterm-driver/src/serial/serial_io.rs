@@ -1,17 +1,94 @@
-//! 串口写端的驱动兼容；仅在 flush 明确不受支持时改为有界等待发送队列排空。
+//! 串口系统超时和写端兼容；仅在 flush 不受支持时有界等待发送队列排空。
+#[cfg(windows)]
+use serialport::SerialPort as _;
 use std::{
     io::{self, Write},
     time::{Duration, Instant},
 };
 
 pub struct SerialWriter {
+    #[cfg(not(windows))]
     pub port: Box<dyn serialport::SerialPort>,
+    #[cfg(windows)]
+    pub port: serialport::COMPort,
     pub timeout: Duration,
+    #[cfg(windows)]
+    pub(super) operation: super::windows_io::Operation,
+}
+
+/// 为 Windows 端口设置独立读写期限，避免短读轮询截断正常的高速写入。
+///
+/// `port` 必须是仍打开的原生串口；两个 Duration 均须为 1..u32::MAX 毫秒。
+/// 成功返回 `Ok(())`；非法期限或系统设置失败返回 `io::Error`。
+#[cfg(windows)]
+pub(super) fn configure_io_timeouts(
+    port: &serialport::COMPort,
+    read_poll: Duration,
+    write_timeout: Duration,
+) -> io::Result<()> {
+    use std::os::windows::io::AsRawHandle;
+
+    let timeouts = CommTimeouts::new(read_poll, write_timeout)?;
+    // serialport::set_timeout 同时修改读写期限；克隆句柄共享系统设置，不能在写端重设它。
+    // SAFETY: COMPort 持有有效句柄；repr(C) 对应 COMMTIMEOUTS，调用期间指针保持有效。
+    if unsafe { set_comm_timeouts(port.as_raw_handle(), &timeouts) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+#[repr(C)]
+struct CommTimeouts {
+    read_interval: u32,
+    read_multiplier: u32,
+    read_constant: u32,
+    write_multiplier: u32,
+    write_constant: u32,
+}
+
+#[cfg(windows)]
+impl CommTimeouts {
+    fn new(read_poll: Duration, write_timeout: Duration) -> io::Result<Self> {
+        let millis = |duration: Duration| {
+            u32::try_from(duration.as_millis())
+                .ok()
+                .filter(|&value| value > 0 && value < u32::MAX)
+                .ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::InvalidInput, "Invalid serial timeout")
+                })
+        };
+        Ok(Self {
+            // Complete a bounded batch instead of issuing a fresh request for every arriving byte.
+            read_interval: 1,
+            read_multiplier: 0,
+            read_constant: millis(read_poll)?,
+            write_multiplier: 0,
+            write_constant: millis(write_timeout)?,
+        })
+    }
+}
+
+#[cfg(windows)]
+#[link(name = "kernel32")]
+unsafe extern "system" {
+    #[link_name = "SetCommTimeouts"]
+    fn set_comm_timeouts(
+        handle: std::os::windows::io::RawHandle,
+        timeouts: *const CommTimeouts,
+    ) -> i32;
 }
 
 impl Write for SerialWriter {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-        self.port.write(bytes)
+        #[cfg(windows)]
+        {
+            self.operation.write(&self.port, bytes)
+        }
+        #[cfg(not(windows))]
+        {
+            self.port.write(bytes)
+        }
     }
 
     fn flush(&mut self) -> io::Result<()> {
@@ -62,6 +139,35 @@ fn finish_transmit(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[cfg(windows)]
+    fn windows_read_poll_does_not_shorten_write_deadline() -> io::Result<()> {
+        let timeouts = CommTimeouts::new(Duration::from_millis(20), Duration::from_secs(2))?;
+        assert_eq!(timeouts.read_interval, 1);
+        assert_eq!(timeouts.read_multiplier, 0);
+        assert_eq!(timeouts.read_constant, 20);
+        assert_eq!(timeouts.write_multiplier, 0);
+        assert_eq!(timeouts.write_constant, 2000);
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn windows_timeout_constants_reject_infinite_or_reserved_values() {
+        for invalid in [
+            Duration::ZERO,
+            Duration::from_nanos(1),
+            Duration::from_millis(u64::from(u32::MAX)),
+            Duration::MAX,
+        ] {
+            let valid = Duration::from_millis(20);
+            assert!(CommTimeouts::new(invalid, valid)
+                .is_err_and(|error| error.kind() == io::ErrorKind::InvalidInput));
+            assert!(CommTimeouts::new(valid, invalid)
+                .is_err_and(|error| error.kind() == io::ErrorKind::InvalidInput));
+        }
+    }
 
     #[test]
     fn successful_flush_does_not_query_the_queue() -> io::Result<()> {

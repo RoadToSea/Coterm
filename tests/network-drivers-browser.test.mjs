@@ -57,7 +57,7 @@ for (const protocol of ["tcp","telnet"]) {
             if(name==='configure'){Object.assign(config,args);return receipt(snapshot())}
             if(name==='connect'){connected=true;reconnecting=false;epoch='epoch-1';return receipt({connected:true,connectionId:epoch})}
             if(name==='disconnect'){connected=false;reconnecting=false;return receipt(snapshot())}
-            if(name==='read')return receipt({connectionId:epoch,text:args.cursor?'':'hello\\r\\nworld\\r\\nroot# ',bytes:args.cursor?0:20,cursor:1,gap:false,closed:!connected,more:false});
+            if(name==='read')return receipt({connectionId:epoch,text:args.cursor?'':'hello\\r\\nworld\\r\\nroot# ',bytes:args.cursor?0:20,cursor:Math.max(1,args.cursor??0),gap:false,closed:!connected,more:false});
             if(name==='read_hex')return receipt({connectionId:epoch,hex:args.cursor?'':'00ff80',bytes:args.cursor?0:3,cursor:1,gap:false,closed:!connected,more:false});
             if(name==='write'||name==='write_hex')return receipt({bytes:args.text?.length??args.hex.length/2});
             if(name==='resize'||name==='set_selection')return receipt({ok:true});
@@ -89,6 +89,25 @@ for (const protocol of ["tcp","telnet"]) {
         assert.equal(await run(`root.querySelector('.ssh-jobs')===null&&root.querySelector('[name=exec]')===null`),true);
       }
       await wait(`root.querySelector('.xterm-rows').textContent.includes('hello')`);
+      const batchReplayCalls = await run(`(async()=>{await event({name:'test.barrier',payload:{}});
+        const before=calls.filter(call=>call.operation===protocol+'.read').length;
+        const text='B'.repeat(2048)+'BATCH_END\\r\\n';await event({name:protocol+'.output',payload:{connectionId:'epoch-1',text,bytes:text.length,cursor:4}});
+        return calls.filter(call=>call.operation===protocol+'.read').length-before;})()`);
+      assert.equal(batchReplayCalls,0,
+        "A contiguous multi-chunk event must not trigger paginated replay");
+      await wait(`root.querySelector('.xterm-rows').textContent.includes('BATCH_END')`);
+      const recoveredCalls = await run(`(async()=>{await event({name:'test.barrier',payload:{}});
+        const original=api.invoke;api.invoke=async(operation,args)=>{
+          if(operation===protocol+'.read'&&args.cursor===4){calls.push({operation,args});const text='RECOVERED_BLOCK\\r\\nPUSH_ONLY\\r\\n';
+            return receipt({connectionId:epoch,text,bytes:text.length,cursor:6,gap:false,closed:false,more:false})}
+          return original(operation,args)};
+        const before=calls.filter(call=>call.operation===protocol+'.read').length;
+        const payload={connectionId:epoch,text:'PUSH_ONLY\\r\\n',bytes:11,cursor:6};
+        await event({name:protocol+'.output',payload});await event({name:protocol+'.output',payload});
+        return calls.filter(call=>call.operation===protocol+'.read').length-before;})()`);
+      assert.equal(recoveredCalls,1,"A real gap is replayed once; the duplicate event is ignored");
+      await wait(`root.querySelector('.xterm-rows').textContent.includes('RECOVERED_BLOCK')`);
+      assert.equal(await run(`root.querySelector('.xterm-rows').textContent.split('PUSH_ONLY').length-1`),1);
       await run(`root.querySelector('.xterm-helper-textarea').focus()`);
       await client.send("Input.insertText",{text:"X"});
       await wait(`calls.some(call=>call.operation===protocol+'.write'&&call.args.text==='X')`);
