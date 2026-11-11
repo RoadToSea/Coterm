@@ -1,6 +1,6 @@
-//! The host adapter and a real driver process must preserve the shared contract.
+//! 进程内任务与真实后端必须保留控制、超限和取消契约。
 use anyhow::Result;
-use coterm_core::{driver_process::JsonRpcDriverProcess, driver_runtime::DriverConnection};
+use coterm_core::driver_task::DriverTask;
 use coterm_proto::runtime::{
     lifecycle::{HelloResult, RuntimeHello},
     message::HostCommand,
@@ -9,12 +9,8 @@ use coterm_proto::runtime::{
 use serde_json::json;
 
 #[tokio::test]
-async fn structured_errors_and_rejected_oversize_requests_keep_process_usable() -> Result<()> {
-    let process = JsonRpcDriverProcess::spawn(
-        std::path::Path::new(env!("CARGO_BIN_EXE_coterm-driver-local")),
-        &[],
-    )
-    .await?;
+async fn structured_errors_and_rejected_oversize_requests_keep_task_usable() -> Result<()> {
+    let process = DriverTask::spawn(coterm_driver_local::backend::Backend::default());
     let hello: RuntimeHello = serde_json::from_value(json!({
         "interfaceMajor":2,"interfaceMinor":0,
         "requiredFeatures":["instances","backend-calls","operation-catalog"],"optionalFeatures":[],
@@ -49,11 +45,7 @@ async fn structured_errors_and_rejected_oversize_requests_keep_process_usable() 
 async fn a_running_job_stops_when_cancelled() -> Result<()> {
     use coterm_proto::runtime::message::CancelTarget;
 
-    let process = JsonRpcDriverProcess::spawn(
-        std::path::Path::new(env!("CARGO_BIN_EXE_coterm-driver-local")),
-        &[],
-    )
-    .await?;
+    let process = DriverTask::spawn(coterm_driver_local::backend::Backend::default());
     let hello: RuntimeHello = serde_json::from_value(json!({
         "interfaceMajor":2,"interfaceMinor":0,
         "requiredFeatures":["instances","backend-calls","operation-catalog","async-operations"],

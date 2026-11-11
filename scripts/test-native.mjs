@@ -1,4 +1,4 @@
-/** Windows WebView2 + bundled workers + real MCP Stdio, with an isolated smoke profile. */
+/** Windows WebView2 + in-process drivers + real MCP Stdio, with an isolated smoke profile. */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -81,9 +81,9 @@ try{
     const entry=(await invoke("workspace_snapshot")).entries.find(entry=>entry.instanceId===serial.driverInstanceId);
     await invoke("stop_driver",{driverId:"coterm-driver-serial"});const restored=await invoke("restore_saved_instance",{configRef:entry.configRef});
     const status=await operation(restored.driverInstanceId,"serial.status");assert.equal(status.config.mode,"shell");assert.equal(status.config.prompt,config.prompt);assert.equal(status.connected,false);
-    console.log("PASS physical Serial: MCP -> approval UI -> worker -> board -> backend reads; saved Shell restore without reconnect");
+    console.log("PASS physical Serial: MCP -> approval UI -> driver -> board -> backend reads; saved Shell restore without reconnect");
   }
-  console.log("PASS native bundled discovery, no installer, MCP Stdio, approval UI and shared PowerShell state");
+  console.log("PASS native in-process drivers, MCP Stdio, approval UI and shared PowerShell state");
 }finally{
   adapter?.kill();for(const call of calls.values()){clearTimeout(call.timer);call.reject(new Error("Acceptance ended"));}
   if(app.exitCode===null){

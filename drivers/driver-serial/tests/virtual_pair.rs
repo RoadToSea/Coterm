@@ -1,11 +1,11 @@
-//! 显式启用的虚拟串口配对验收：启动真实驱动进程，测试两端字节，不依赖设备 shell。
+//! 显式启用的虚拟串口配对验收：使用真实进程内驱动，测试两端字节，不依赖设备 shell。
 //! COTERM_SERIAL_PAIR_A / COTERM_SERIAL_PAIR_B 必须指向用户授权的相连端口。
-use std::{env, path::PathBuf, time::Duration};
+use std::{env, time::Duration};
 
 use anyhow::{anyhow, ensure, Context, Result};
 use coterm_core::{
-    driver_manager::ProcessDriverRuntime,
-    driver_runtime::{CallerContext, Operations, DriverRuntime, SubmitOperation},
+    driver_manager::InProcessDriverRuntime,
+    driver_runtime::{CallerContext, DriverRuntime, Operations, SubmitOperation},
 };
 use coterm_driver_serial::payload::{decode_hex, encode_hex};
 use coterm_proto::runtime::{
@@ -50,7 +50,12 @@ impl Endpoint {
         }
     }
 
-    async fn call(&self, runtime: &ProcessDriverRuntime, name: &str, args: Value) -> Result<Value> {
+    async fn call(
+        &self,
+        runtime: &InProcessDriverRuntime,
+        name: &str,
+        args: Value,
+    ) -> Result<Value> {
         let receipt = runtime
             .submit(
                 self.caller(OperationSource::Human),
@@ -66,7 +71,7 @@ impl Endpoint {
             .ok_or_else(|| anyhow!("{name}: missing output"))
     }
 
-    async fn queue(&self, runtime: &ProcessDriverRuntime, args: Value) -> Result<String> {
+    async fn queue(&self, runtime: &InProcessDriverRuntime, args: Value) -> Result<String> {
         let receipt = runtime
             .submit(
                 self.caller(OperationSource::Human),
@@ -89,7 +94,7 @@ impl Endpoint {
 
     async fn state(
         &self,
-        runtime: &ProcessDriverRuntime,
+        runtime: &InProcessDriverRuntime,
         id: &str,
         wanted: OperationStatus,
     ) -> Result<OperationRecord> {
@@ -117,7 +122,7 @@ impl Endpoint {
         .context("operation status timeout")?
     }
 
-    async fn read(&mut self, runtime: &ProcessDriverRuntime) -> Result<Vec<u8>> {
+    async fn read(&mut self, runtime: &InProcessDriverRuntime) -> Result<Vec<u8>> {
         let output = self
             .call(runtime, "serial.read_hex", json!({"cursor":self.cursor}))
             .await?;
@@ -137,7 +142,7 @@ impl Endpoint {
 
     async fn expect_bytes(
         &mut self,
-        runtime: &ProcessDriverRuntime,
+        runtime: &InProcessDriverRuntime,
         expected: &[u8],
     ) -> Result<()> {
         timeout(Duration::from_secs(5), async {
@@ -162,7 +167,7 @@ impl Endpoint {
 
     async fn expect_quiet(
         &mut self,
-        runtime: &ProcessDriverRuntime,
+        runtime: &InProcessDriverRuntime,
         duration: Duration,
     ) -> Result<()> {
         let until = Instant::now() + duration;
@@ -177,46 +182,18 @@ impl Endpoint {
     }
 }
 
-fn platform() -> Result<String> {
-    let os = match env::consts::OS {
-        "windows" => "windows",
-        "linux" => "linux",
-        "macos" => "macos",
-        _ => anyhow::bail!("unsupported OS"),
-    };
-    let arch = match env::consts::ARCH {
-        "x86_64" => "x64",
-        "aarch64" => "arm64",
-        _ => anyhow::bail!("unsupported architecture"),
-    };
-    Ok(format!("{os}-{arch}"))
+async fn register(
+    runtime: &InProcessDriverRuntime,
+) -> Result<coterm_proto::runtime::manifest::DriverManifest> {
+    Ok(runtime
+        .register::<coterm_driver_serial::backend::Backend>(
+            serde_json::from_str(include_str!("../manifest.json"))?,
+            Some("export function mount() { return { unmount() {} }; }"),
+        )
+        .await?)
 }
 
-fn package() -> Result<PathBuf> {
-    let directory = env::temp_dir().join(format!("coterm-serial-pair-{}", uuid::Uuid::new_v4()));
-    std::fs::create_dir_all(directory.join("backend"))?;
-    std::fs::create_dir_all(directory.join("frontend"))?;
-    let executable = PathBuf::from(env!("CARGO_BIN_EXE_coterm-driver-serial"));
-    std::fs::copy(
-        &executable,
-        directory.join("backend").join(
-            executable
-                .file_name()
-                .ok_or_else(|| anyhow!("missing executable"))?,
-        ),
-    )?;
-    std::fs::write(
-        directory.join("manifest.json"),
-        include_str!("../manifest.json"),
-    )?;
-    std::fs::write(
-        directory.join("frontend/index.js"),
-        "export function mount() {}",
-    )?;
-    Ok(directory)
-}
-
-async fn exercise(runtime: &ProcessDriverRuntime, a: &str, b: &str, baud: u32) -> Result<()> {
+async fn exercise(runtime: &InProcessDriverRuntime, a: &str, b: &str, baud: u32) -> Result<()> {
     let mut endpoints = Vec::new();
     for port in [a, b] {
         let instance = runtime
@@ -554,25 +531,20 @@ async fn virtual_pair_exercises_real_process_command_queue_and_approval() -> Res
     );
     let baud =
         env::var("COTERM_SERIAL_PAIR_BAUD").map_or(Ok(115200), |value| value.parse::<u32>())?;
-    let directory = package()?;
-    let runtime = ProcessDriverRuntime::new(
-        platform()?,
-        RuntimeLimits {
-            max_control_bytes: 1024 * 1024,
-            max_data_chunk_bytes: 64 * 1024,
-            initial_window: FlowWindow {
-                chunks: 16,
-                bytes: 1024 * 1024,
-            },
+    let runtime = InProcessDriverRuntime::new(RuntimeLimits {
+        max_control_bytes: 1024 * 1024,
+        max_data_chunk_bytes: 64 * 1024,
+        initial_window: FlowWindow {
+            chunks: 16,
+            bytes: 1024 * 1024,
         },
-    );
+    });
     let result = async {
-        runtime.load(&directory).await?;
+        register(&runtime).await?;
         runtime.start(DRIVER).await?;
         exercise(&runtime, &a, &b, baud).await
     }
     .await;
     runtime.shutdown().await;
-    std::fs::remove_dir_all(&directory).context("remove temporary test package")?;
     result
 }

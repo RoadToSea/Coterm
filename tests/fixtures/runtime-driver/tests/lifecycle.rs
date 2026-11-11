@@ -1,5 +1,5 @@
 use coterm_core::{
-    driver_manager::ProcessDriverRuntime,
+    driver_manager::InProcessDriverRuntime,
     driver_runtime::{CallerContext, DriverRuntime, Operations, SubmitOperation},
 };
 use coterm_proto::runtime::{
@@ -8,59 +8,34 @@ use coterm_proto::runtime::{
     stream::FlowWindow,
 };
 use serde_json::json;
-use std::{path::PathBuf, time::Duration};
+use std::time::Duration;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 const ID: &str = "coterm-runtime-fixture";
 
-fn runtime() -> ProcessDriverRuntime {
-    ProcessDriverRuntime::new(
-        format!(
-            "{}-{}",
-            std::env::consts::OS,
-            if cfg!(target_arch = "x86_64") {
-                "x64"
-            } else {
-                "arm64"
-            }
-        ),
-        RuntimeLimits {
-            max_control_bytes: 1024 * 1024,
-            max_data_chunk_bytes: 65536,
-            initial_window: FlowWindow {
-                chunks: 16,
-                bytes: 1024 * 1024,
-            },
+fn runtime() -> InProcessDriverRuntime {
+    InProcessDriverRuntime::new(RuntimeLimits {
+        max_control_bytes: 1024 * 1024,
+        max_data_chunk_bytes: 65536,
+        initial_window: FlowWindow {
+            chunks: 16,
+            bytes: 1024 * 1024,
         },
-    )
+    })
 }
-fn package() -> Result<PathBuf> {
-    let root = std::env::temp_dir().join(format!("coterm-lifecycle-{}", uuid::Uuid::new_v4()));
-    std::fs::create_dir_all(&root)?;
-    let binary = std::path::Path::new(env!("CARGO_BIN_EXE_coterm-runtime-fixture"));
-    let filename = binary.file_name().ok_or("binary filename")?;
-    std::fs::copy(binary, root.join(filename))?;
-    let platform = format!(
-        "{}-{}",
-        std::env::consts::OS,
-        if cfg!(target_arch = "x86_64") {
-            "x64"
-        } else {
-            "arm64"
-        }
-    );
-    std::fs::write(
-        root.join("manifest.json"),
-        serde_json::to_vec(&json!({
-            "manifestVersion":1,"id":ID,"name":"Fixture","version":"0.1.0",
-            "runtime":{"interfaceMajor":2,"requires":["instances","backend-calls","operation-catalog","driver-events","async-operations","secret-delivery","deferred-interactions"]},
-            "backend":{platform:filename.to_string_lossy()},"mcp":{"provider":"backend"},"instances":{"type":"test","multiple":true},"capabilities":["secret-input"]
-        }))?,
-    )?;
-    Ok(root)
+async fn register(runtime: &InProcessDriverRuntime) -> Result<()> {
+    let manifest = serde_json::from_value(json!({
+        "manifestVersion":1,"id":ID,"name":"Fixture","version":"0.1.0",
+        "runtime":{"interfaceMajor":2,"requires":["instances","backend-calls","operation-catalog","driver-events","async-operations","secret-delivery","deferred-interactions"]},
+        "mcp":{"provider":"backend"},"instances":{"type":"test","multiple":true},"capabilities":["secret-input"]
+    }))?;
+    runtime
+        .register::<coterm_runtime_fixture::Backend>(manifest, None)
+        .await?;
+    Ok(())
 }
 async fn submit(
-    runtime: &ProcessDriverRuntime,
+    runtime: &InProcessDriverRuntime,
     instance: &InstanceInfo,
     operation: &str,
     source: OperationSource,
@@ -90,9 +65,8 @@ async fn submit(
 
 #[tokio::test]
 async fn custom_instance_names_override_driver_labels_and_are_validated() -> Result<()> {
-    let root = package()?;
     let runtime = runtime();
-    runtime.load(&root).await?;
+    register(&runtime).await?;
     runtime.start(ID).await?;
 
     let first = runtime
@@ -122,9 +96,8 @@ async fn custom_instance_names_override_driver_labels_and_are_validated() -> Res
 #[tokio::test]
 async fn command_rules_control_real_agent_dispatch_and_preserve_pending_approvals() -> Result<()> {
     use coterm_core::approval_policy::{ApprovalMode, ApprovalPolicy};
-    let root = package()?;
     let runtime = runtime();
-    runtime.load(&root).await?;
+    register(&runtime).await?;
     runtime.start(ID).await?;
     let instance = runtime.create_instance(ID, json!({})).await?;
     let allow = ApprovalPolicy {
@@ -214,11 +187,10 @@ async fn command_rules_control_real_agent_dispatch_and_preserve_pending_approval
 }
 
 #[tokio::test]
-async fn crash_converges_all_scopes_clears_attention_and_allows_restart_without_replay(
+async fn task_panic_converges_all_scopes_clears_attention_and_allows_restart_without_replay(
 ) -> Result<()> {
-    let root = package()?;
     let runtime = runtime();
-    runtime.load(&root).await?;
+    register(&runtime).await?;
     runtime.start(ID).await?;
     let first = runtime
         .create_instance(ID, json!({"label":"First"}))
@@ -325,21 +297,19 @@ async fn crash_converges_all_scopes_clears_attention_and_allows_restart_without_
     )
     .await?;
     assert_eq!(info.output.ok_or("output")?["writes"], 0);
-    // Deleting a failed instance must not send its obsolete ID to the new process.
+    // Deleting a failed instance must not send its obsolete ID to the new backend.
     runtime.destroy_instance(&second.driver_instance_id).await?;
     runtime.shutdown().await;
     assert!(!runtime.is_running(ID).await);
     assert!(runtime.list_instances(None).await?.is_empty());
-    std::fs::remove_dir_all(root)?;
     Ok(())
 }
 
 #[tokio::test]
 async fn early_completion_and_duplicate_approvals_preserve_operation_order() -> Result<()> {
     use coterm_proto::runtime::operation::ApproveProposal;
-    let root = package()?;
     let runtime = runtime();
-    runtime.load(&root).await?;
+    register(&runtime).await?;
     runtime.start(ID).await?;
     let instance = runtime.create_instance(ID, json!({})).await?;
     let caller = CallerContext {
@@ -393,15 +363,13 @@ async fn early_completion_and_duplicate_approvals_preserve_operation_order() -> 
     .await?;
     assert_eq!(info.output.ok_or("missing info")?["writes"], 1);
     runtime.shutdown().await;
-    std::fs::remove_dir_all(root)?;
     Ok(())
 }
 
 #[tokio::test]
 async fn blocked_control_keeps_runtime_queries_responsive() -> Result<()> {
-    let root = package()?;
     let runtime = runtime();
-    runtime.load(&root).await?;
+    register(&runtime).await?;
     runtime.start(ID).await?;
     let instance = runtime.create_instance(ID, json!({})).await?;
     let blocked = submit(
@@ -416,7 +384,6 @@ async fn blocked_control_keeps_runtime_queries_responsive() -> Result<()> {
     let queried =
         tokio::time::timeout(Duration::from_millis(250), runtime.list_instances(None)).await;
     tokio::time::timeout(Duration::from_secs(3), runtime.shutdown()).await?;
-    std::fs::remove_dir_all(root)?;
     assert_eq!(
         queried
             .map_err(|_| "Blocked control held the runtime state lock")??
@@ -427,10 +394,9 @@ async fn blocked_control_keeps_runtime_queries_responsive() -> Result<()> {
 }
 
 #[tokio::test]
-async fn shutdown_reaps_a_child_even_when_control_holds_the_routing_lock() -> Result<()> {
-    let root = package()?;
+async fn shutdown_drops_backend_even_when_control_holds_the_routing_lock() -> Result<()> {
     let runtime = runtime();
-    runtime.load(&root).await?;
+    register(&runtime).await?;
     runtime.start(ID).await?;
     let instance = runtime.create_instance(ID, json!({})).await?;
     let receipt = submit(
@@ -453,16 +419,14 @@ async fn shutdown_reaps_a_child_even_when_control_holds_the_routing_lock() -> Re
             .code,
         "runtime_shutting_down"
     );
-    std::fs::remove_dir_all(root)?;
     Ok(())
 }
 
 #[tokio::test]
 async fn instance_approvals_isolate_rules_bypass_and_lifetime() -> Result<()> {
     use coterm_core::approval_policy::{ApprovalMode, ApprovalPolicy};
-    let root = package()?;
     let runtime = runtime();
-    runtime.load(&root).await?;
+    register(&runtime).await?;
     runtime.start(ID).await?;
     let first = runtime.create_instance(ID, json!({})).await?;
     let second = runtime.create_instance(ID, json!({})).await?;
@@ -554,9 +518,8 @@ async fn instance_approvals_isolate_rules_bypass_and_lifetime() -> Result<()> {
 async fn shared_group_publication_updates_new_submissions_and_preserves_bypass_and_proposals(
 ) -> Result<()> {
     use coterm_core::approval_policy::ApprovalPolicy;
-    let root = package()?;
     let runtime = runtime();
-    runtime.load(&root).await?;
+    register(&runtime).await?;
     runtime.start(ID).await?;
     let one = runtime.create_instance(ID, json!({})).await?;
     let two = runtime.create_instance(ID, json!({})).await?;
@@ -638,6 +601,181 @@ async fn shared_group_publication_updates_new_submissions_and_preserves_bypass_a
         OperationStatus::Completed
     );
     runtime.stop(ID).await?;
-    std::fs::remove_dir_all(root)?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn backends_share_the_host_pid_but_not_state_and_registration_is_explicit() -> Result<()> {
+    let first = runtime();
+    let second = runtime();
+    register(&first).await?;
+    register(&second).await?;
+    assert!(register(&first).await.is_err());
+    assert_eq!(first.loaded_manifests().await.len(), 1);
+    assert_eq!(
+        first.start("missing").await.unwrap_err().code,
+        "driver_not_loaded"
+    );
+    first.start(ID).await?;
+    second.start(ID).await?;
+    let one = first.create_instance(ID, json!({})).await?;
+    let two = second.create_instance(ID, json!({})).await?;
+    submit(
+        &first,
+        &one,
+        "fixture.commit",
+        OperationSource::Human,
+        false,
+    )
+    .await?;
+    let info = submit(&first, &one, "fixture.info", OperationSource::Human, false)
+        .await?
+        .output
+        .ok_or("info")?;
+    assert_eq!(info["pid"], std::process::id());
+    assert_eq!(info["writes"], 1);
+    let info = submit(&second, &two, "fixture.info", OperationSource::Human, false)
+        .await?
+        .output
+        .ok_or("info")?;
+    assert_eq!(info["pid"], std::process::id());
+    assert_eq!(info["writes"], 0);
+    first.shutdown().await;
+    assert!(second.is_running(ID).await);
+    assert!(
+        submit(&second, &two, "fixture.info", OperationSource::Human, false)
+            .await
+            .is_ok()
+    );
+    assert!(register(&first).await.is_err());
+    second.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn registration_rejects_invalid_metadata_without_mutating_catalog() -> Result<()> {
+    let runtime = runtime();
+    let valid = serde_json::json!({
+        "manifestVersion":1,"id":ID,"name":"Fixture","version":"0.1.0",
+        "runtime":{"interfaceMajor":2,"requires":["instances"]},
+        "mcp":{"provider":"backend"},"instances":{"type":"test","multiple":true},"capabilities":[]
+    });
+    for (pointer, value, expected) in [
+        (
+            "/id",
+            json!("invalid/id"),
+            "driver_manifest_identity_invalid",
+        ),
+        (
+            "/manifestVersion",
+            json!(99),
+            "driver_manifest_version_unsupported",
+        ),
+        (
+            "/runtime/interfaceMajor",
+            json!(99),
+            "driver_runtime_version_unsupported",
+        ),
+        (
+            "/runtime/requires",
+            json!(["unknown-feature"]),
+            "driver_required_feature_unsupported",
+        ),
+        (
+            "/instances/multiple",
+            json!(false),
+            "driver_instance_declaration_invalid",
+        ),
+        (
+            "/frontend",
+            json!({"entry":"frontend/index.js"}),
+            "driver_frontend_invalid",
+        ),
+    ] {
+        let mut manifest = valid.clone();
+        if pointer == "/frontend" {
+            manifest["frontend"] = value;
+        } else {
+            *manifest.pointer_mut(pointer).ok_or("pointer")? = value;
+        }
+        let error = runtime
+            .register::<coterm_runtime_fixture::Backend>(serde_json::from_value(manifest)?, None)
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, expected);
+        assert!(runtime.loaded_manifests().await.is_empty());
+    }
+    Ok(())
+}
+
+#[derive(Default)]
+struct OtherBackend(coterm_runtime_fixture::Backend);
+
+impl coterm_proto::runtime::backend::DriverBackend for OtherBackend {
+    async fn request(
+        &mut self,
+        command: coterm_proto::runtime::message::HostCommand,
+    ) -> std::result::Result<serde_json::Value, coterm_proto::runtime::RuntimeError> {
+        use coterm_proto::runtime::{backend::DriverBackend, message::HostCommand};
+        let hello = matches!(&command, HostCommand::Hello(_));
+        let mut value = DriverBackend::request(&mut self.0, command).await?;
+        if hello {
+            value["driverId"] = json!("other-fixture");
+        }
+        Ok(value)
+    }
+    fn take_notifications(
+        &mut self,
+    ) -> Option<tokio::sync::mpsc::Receiver<coterm_proto::runtime::message::DriverNotification>>
+    {
+        coterm_proto::runtime::backend::DriverBackend::take_notifications(&mut self.0)
+    }
+}
+
+#[tokio::test]
+async fn a_panicking_driver_does_not_stop_other_drivers_in_the_same_runtime() -> Result<()> {
+    let runtime = runtime();
+    register(&runtime).await?;
+    let mut other = runtime.loaded_manifests().await.remove(0);
+    other.id = "other-fixture".into();
+    runtime.register::<OtherBackend>(other, None).await?;
+    runtime.start(ID).await?;
+    runtime.start("other-fixture").await?;
+    let first = runtime.create_instance(ID, json!({})).await?;
+    let second = runtime.create_instance("other-fixture", json!({})).await?;
+    let _ = submit(
+        &runtime,
+        &first,
+        "fixture.crash",
+        OperationSource::Human,
+        false,
+    )
+    .await;
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while runtime.is_running(ID).await {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await?;
+    assert!(runtime.is_running("other-fixture").await);
+    let result = runtime
+        .submit(
+            CallerContext {
+                source: OperationSource::Human,
+                session_id: second.session_id.clone(),
+                driver_id: Some("other-fixture".into()),
+            },
+            SubmitOperation {
+                driver_id: "other-fixture".into(),
+                driver_instance_id: Some(second.driver_instance_id),
+                operation: "fixture.info".into(),
+                args: json!({}),
+                wait_timeout_ms: Some(1000),
+            },
+        )
+        .await?;
+    assert_eq!(result.status, OperationStatus::Completed);
+    assert_eq!(result.output.ok_or("info")?["pid"], std::process::id());
+    runtime.shutdown().await;
     Ok(())
 }

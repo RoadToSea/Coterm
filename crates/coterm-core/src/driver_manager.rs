@@ -1,8 +1,7 @@
-//! Minimal process-backed driver lifecycle manager for control requests.
+//! 内置驱动生命周期、实例路由与操作审批。
 
 use std::{
     collections::{HashMap, HashSet},
-    path::{Path, PathBuf},
     sync::Arc,
 };
 
@@ -30,11 +29,8 @@ use tokio::sync::Mutex;
 
 use crate::{
     approval_policy::{ApprovalContext, ApprovalPolicy, InstanceApproval},
-    driver_process::{
-        resolve_backend_entry, resolve_package_file, validate_manifest, JsonRpcDriverProcess,
-        MAX_FRONTEND_BYTES, MAX_MANIFEST_BYTES,
-    },
-    driver_runtime::{CallerContext, DriverConnection, DriverRuntime, Operations, SubmitOperation},
+    driver_runtime::{CallerContext, DriverRuntime, Operations, SubmitOperation},
+    driver_task::DriverTask,
     operation_history::{OperationHistory, OperationHistoryError},
 };
 
@@ -43,8 +39,8 @@ struct State {
     mcp_tools: HashMap<String, Vec<McpToolRegistration>>,
     features: HashMap<String, Vec<String>>,
     interactions: HashMap<String, (InteractionRequest, tokio::time::Instant)>,
-    packages: HashMap<String, super::driver_process::DriverPackage>,
-    processes: HashMap<String, Arc<JsonRpcDriverProcess>>,
+    drivers: HashMap<String, BuiltinDriver>,
+    running: HashMap<String, Arc<DriverTask>>,
     instances: HashMap<String, InstanceInfo>,
     instance_approvals: HashMap<String, InstanceApproval>,
     operation_catalog: HashMap<String, HashMap<String, OperationDescriptor>>,
@@ -109,7 +105,7 @@ pub struct AttentionSnapshot {
     pub interactions: Vec<PendingInteraction>,
 }
 
-/// 单个驱动包加载失败的可序列化诊断。
+/// 驱动目录诊断的兼容返回类型；编译期注册失败时应用直接拒绝启动。
 /// 只含驱动目录名、驱动 ID（能解析时）和错误码，不含绝对路径或内部错误明文。
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -122,204 +118,35 @@ pub struct DriverLoadIssue {
     pub message: String,
 }
 
-/// `list_drivers` 的结果：有效驱动与逐包诊断分开返回，单个包失败不影响其余包。
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DriverList {
-    pub drivers: Vec<DriverManifest>,
-    pub issues: Vec<DriverLoadIssue>,
-}
-
-/// 启动扫描发现的一个 `<root>/<package>` 目录。只保存目录名和包根，
-/// 诊断和错误消息都不回显绝对路径。
-#[derive(Debug, Clone)]
-pub struct DiscoveredPackage {
-    pub directory: String,
-    /// 包根，通常等于扫描根下的 `directory`；开发包可能指向 `drivers/<dir>/dist`。
-    pub root: PathBuf,
-    /// 已安装包优先于开发包；两个来源声明同一 ID 时较矮的优先级被忽略并记诊断。
-    pub priority: u8,
-    pub origin: PackageOrigin,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PackageOrigin {
-    /// 开发搜索到的 `drivers/<dir>/dist`。
-    Development,
-    /// 应用数据目录下的已安装包。
-    Installed,
-}
-
-impl DiscoveredPackage {
-    fn issue(&self, code: &str, message: &str) -> DriverLoadIssue {
-        DriverLoadIssue {
-            directory: self.directory.clone(),
-            driver_id: None,
-            code: code.to_owned(),
-            message: message.to_owned(),
-        }
-    }
-
-    /// 读取并校验 manifest 与包内入口；任何失败都转成不含绝对路径的诊断。
-    async fn load_into(
-        &self,
-        runtime: &ProcessDriverRuntime,
-    ) -> Result<DriverManifest, DriverLoadIssue> {
-        let missing_manifest = match self.origin {
-            PackageOrigin::Development => {
-                "Package has no built manifest; run the package build to produce dist/manifest.json"
-            }
-            PackageOrigin::Installed => "Package has no manifest.json",
-        };
-        let metadata = tokio::fs::metadata(self.root.join("manifest.json"))
-            .await
-            .map_err(|_| self.issue("driver_manifest_unavailable", missing_manifest))?;
-        if !metadata.is_file() || metadata.len() > MAX_MANIFEST_BYTES {
-            return Err(self.issue("driver_manifest_unavailable", missing_manifest));
-        }
-        let bytes = tokio::fs::read(self.root.join("manifest.json"))
-            .await
-            .map_err(|_| {
-                self.issue(
-                    "driver_manifest_read_failed",
-                    "Package manifest could not be read",
-                )
-            })?;
-        let value: Value = serde_json::from_slice(&bytes).map_err(|_| {
-            self.issue(
-                "driver_manifest_invalid",
-                "Package manifest is not valid JSON",
-            )
-        })?;
-        // 旧格式包缺少 manifestVersion：给出可定位诊断，不静默当成有效驱动。
-        if value.get("manifestVersion").is_none() {
-            return Err(DriverLoadIssue {
-                directory: self.directory.clone(),
-                driver_id: value
-                    .get("id")
-                    .and_then(Value::as_str)
-                    .filter(|id| is_manifest_id(id))
-                    .map(str::to_owned),
-                code: "driver_manifest_legacy".to_owned(),
-                message: issue_message("driver_manifest_legacy").to_owned(),
-            });
-        }
-        let manifest: DriverManifest = serde_json::from_value(value).map_err(|_| {
-            self.issue(
-                "driver_manifest_invalid",
-                "Package manifest does not match the manifest schema",
-            )
-        })?;
-        let id = manifest.id.clone();
-        let diagnose = |code: &str| DriverLoadIssue {
-            directory: self.directory.clone(),
-            driver_id: Some(id.clone()),
-            code: code.to_owned(),
-            message: issue_message(code).to_owned(),
-        };
-        validate_manifest(&manifest).map_err(|error| diagnose(&error.code))?;
-        // 同 ID 冲突：先扫描到的来源胜出，其余包得到可定位诊断而不是静默消失。
-        let root = self
-            .root
-            .canonicalize()
-            .map_err(|_| diagnose("driver_package_unavailable"))?;
-        if runtime
-            .state
-            .lock()
-            .await
-            .packages
-            .get(&id)
-            .is_some_and(|package| package.root != root)
-        {
-            return Err(DriverLoadIssue {
-                directory: self.directory.clone(),
-                driver_id: Some(id),
-                code: "driver_id_conflict".to_owned(),
-                message: issue_message("driver_id_conflict").to_owned(),
-            });
-        }
-        // 逐平台入口缺失是包的问题，不是本次平台的限制：全部校验后才允许加载。
-        for relative in manifest.backend.values() {
-            resolve_package_file(&root, relative, "driver_entry_invalid")
-                .map_err(|error| diagnose(&error.code))?;
-        }
-        if let Some(frontend) = &manifest.frontend {
-            resolve_package_file(&root, &frontend.entry, "driver_frontend_entry_invalid")
-                .map_err(|error| diagnose(&error.code))?;
-        }
-        // 此时已确认本平台入口存在；完整包校验仍在这里跑一次，失败按稳定 code 报出。
-        runtime
-            .insert_validated(manifest, root, &runtime.platform)
-            .await
-            .map_err(|error| diagnose(&error.code))
-    }
-}
-
-fn issue_message(code: &str) -> &'static str {
-    match code {
-        "driver_manifest_legacy" => {
-            "Legacy manifest format is not supported; rebuild the package with the current manifest schema"
-        }
-        "driver_manifest_version_unsupported" => {
-            "Package manifest version is not supported by this host"
-        }
-        "driver_manifest_identity_invalid" => "Package manifest has an invalid ID, name, or version",
-        "driver_runtime_version_unsupported" => {
-            "Package targets an incompatible runtime interface version"
-        }
-        "driver_required_feature_unsupported" => {
-            "Package requires a runtime feature this host does not provide"
-        }
-        "driver_instance_declaration_invalid" => {
-            "Package does not declare a valid multi-instance contract"
-        }
-        "driver_platform_unsupported" => "Package has no backend entry for this platform",
-        "driver_entry_invalid" => "Package backend entry is missing or outside the package",
-        "driver_frontend_entry_invalid" => "Package frontend entry is missing or outside the package",
-        "driver_package_unavailable" => "Package directory is no longer available",
-        "cannot_replace_running_driver" => {
-            "A running driver cannot be replaced by another package with the same ID"
-        }
-        "driver_id_conflict" => {
-            "Another package with the same driver ID was found first; this one was ignored"
-        }
-        _ => "Package could not be loaded",
-    }
-}
-
-fn is_manifest_id(id: &str) -> bool {
-    !id.is_empty()
-        && id.len() <= 128
-        && id
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
-}
-
-/// Process-backed lifecycle support for the synchronous control MVP.
 #[derive(Clone)]
-pub struct ProcessDriverRuntime {
-    platform: String,
+struct BuiltinDriver {
+    manifest: DriverManifest,
+    frontend: Option<&'static str>,
+    spawn: fn() -> DriverTask,
+}
+
+/// 一个宿主运行时；每种内置驱动独享一个后端任务，各实例状态由驱动分别保存。
+#[derive(Clone)]
+pub struct InProcessDriverRuntime {
     limits: RuntimeLimits,
     state: Arc<Mutex<State>>,
-    /// Serialize one driver's control/lifecycle changes without locking global routing.
     control_gates: Arc<std::sync::Mutex<HashMap<String, Arc<Mutex<()>>>>>,
     history: Arc<OperationHistory>,
-    /// 仅承载版本号；快照内容以 `state` 为准，二者在同一把锁内推进。
     attention: Arc<std::sync::Mutex<u64>>,
-    children: Arc<std::sync::Mutex<HashMap<String, std::sync::Weak<JsonRpcDriverProcess>>>>,
+    tasks: Arc<std::sync::Mutex<HashMap<String, std::sync::Weak<DriverTask>>>>,
     shutting_down: Arc<std::sync::atomic::AtomicBool>,
 }
 
-impl ProcessDriverRuntime {
-    pub fn new(platform: impl Into<String>, limits: RuntimeLimits) -> Self {
+impl InProcessDriverRuntime {
+    /// 创建尚未注册/启动后端的运行时；limits 在能力协商时校验，不进行 IO。
+    pub fn new(limits: RuntimeLimits) -> Self {
         Self {
-            platform: platform.into(),
             limits,
             state: Arc::new(Mutex::new(State::default())),
             control_gates: Arc::new(std::sync::Mutex::new(HashMap::new())),
             history: Arc::new(OperationHistory::new(100, 16 * 1024).with_output_limit(192 * 1024)),
             attention: Arc::new(std::sync::Mutex::new(0)),
-            children: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            tasks: Arc::new(std::sync::Mutex::new(HashMap::new())),
             shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
     }
@@ -346,18 +173,18 @@ impl ProcessDriverRuntime {
         let _control = self.control_gate(driver_id).lock_owned().await;
         let state = self.state.lock().await;
         self.ensure_accepting()?;
-        let package = state
-            .packages
+        let driver = state
+            .drivers
             .get(driver_id)
             .ok_or_else(|| runtime_error(ErrorCategory::NotFound, "driver_not_loaded"))?;
-        if !package.manifest.instances.multiple {
+        if !driver.manifest.instances.multiple {
             return Err(runtime_error(
                 ErrorCategory::Unsupported,
                 "driver_multi_instance_unsupported",
             ));
         }
-        let process = state
-            .processes
+        let task = state
+            .running
             .get(driver_id)
             .cloned()
             .ok_or_else(|| runtime_error(ErrorCategory::Conflict, "driver_not_started"))?;
@@ -366,18 +193,18 @@ impl ProcessDriverRuntime {
             driver_id: driver_id.to_owned(),
             driver_instance_id: instance_id.clone(),
             session_id: uuid::Uuid::new_v4().to_string(),
-            label: format!("{} {instance_id}", package.manifest.name),
+            label: format!("{} {instance_id}", driver.manifest.name),
             status: InstanceStatus::Starting,
         };
         drop(state);
-        let created = process
+        let created = task
             .request(HostCommand::CreateInstance(CreateInstance {
                 instance: instance.clone(),
                 config,
             }))
             .await?;
         let mut state = self.state.lock().await;
-        ensure_current_process(&state, driver_id, &process)?;
+        ensure_current_task(&state, driver_id, &task)?;
         self.ensure_accepting()?;
         let requested_label = name
             .or_else(|| {
@@ -452,34 +279,34 @@ impl ProcessDriverRuntime {
         *version += 1;
     }
 
-    /// Stop every child within a bounded deadline, without replaying any operation.
+    /// Stop every driver task within a bounded deadline, without replaying any operation.
     pub async fn shutdown(&self) {
         self.shutting_down
             .store(true, std::sync::atomic::Ordering::Release);
         // This registry is independent of the routing lock: an unresponsive control
-        // request may hold that lock, but must never prevent killing its child.
-        let processes = self
-            .children
+        // request may hold that lock, but must never prevent cancelling its backend.
+        let backends = self
+            .tasks
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .values()
             .filter_map(std::sync::Weak::upgrade)
             .collect::<Vec<_>>();
         let mut tasks = tokio::task::JoinSet::new();
-        for process in processes {
+        for task in backends {
             tasks.spawn(async move {
                 let _ = tokio::time::timeout(
                     std::time::Duration::from_millis(750),
-                    process.request(HostCommand::Shutdown),
+                    task.request(HostCommand::Shutdown),
                 )
                 .await;
-                let _ = process.close().await;
+                let _ = task.close().await;
             });
         }
         while tasks.join_next().await.is_some() {}
         let mut state = self.state.lock().await;
-        let ids = state.processes.keys().cloned().collect::<Vec<_>>();
-        state.processes.clear();
+        let ids = state.running.keys().cloned().collect::<Vec<_>>();
+        state.running.clear();
         for id in ids {
             settle_closed_driver(&mut state, &self.history, &id).await;
         }
@@ -562,63 +389,45 @@ impl ProcessDriverRuntime {
     }
 
     pub async fn is_running(&self, driver_id: &str) -> bool {
-        self.state.lock().await.processes.contains_key(driver_id)
+        self.state.lock().await.running.contains_key(driver_id)
     }
 
-    /// 发现路径已经校验过 manifest 与包内入口；这里补上目标平台的入口装配。
-    async fn insert_validated(
+    /// 注册编译进宿主的驱动工厂和自包含前端源码；不访问文件系统或启动程序。
+    /// 重复 ID、无效声明、前端缺失/超限或运行时已停止时返回错误，旧注册保持不变。
+    pub async fn register<B: coterm_proto::runtime::backend::DriverBackend + Default + 'static>(
         &self,
         manifest: DriverManifest,
-        root: PathBuf,
-        platform: &str,
+        frontend: Option<&'static str>,
     ) -> Result<DriverManifest, RuntimeError> {
-        let backend_entry = resolve_backend_entry(&root, &manifest, platform)?;
-        let frontend_entry = manifest
-            .frontend
-            .as_ref()
-            .map(|frontend| {
-                resolve_package_file(&root, &frontend.entry, "driver_frontend_entry_invalid")
-            })
-            .transpose()?;
-        self.insert_package(super::driver_process::DriverPackage {
-            root,
-            manifest,
-            backend_entry,
-            frontend_entry,
-        })
-        .await
-    }
-
-    /// 运行中的包不能被另一个目录的同 ID 包替换；否则以目录为权威来源。
-    async fn insert_package(
-        &self,
-        package: super::driver_process::DriverPackage,
-    ) -> Result<DriverManifest, RuntimeError> {
-        let manifest = package.manifest.clone();
+        validate_manifest(&manifest)?;
+        if manifest.frontend.is_some() != frontend.is_some()
+            || frontend.is_some_and(|source| source.is_empty() || source.len() > 2 * 1024 * 1024)
+        {
+            return Err(runtime_error(
+                ErrorCategory::InvalidRequest,
+                "driver_frontend_invalid",
+            ));
+        }
         let _control = self.control_gate(&manifest.id).lock_owned().await;
         let mut state = self.state.lock().await;
-        if state.processes.contains_key(&manifest.id) {
-            let Some(loaded) = state.packages.get(&manifest.id) else {
-                return Err(runtime_error(
-                    ErrorCategory::Internal,
-                    "running_driver_package_missing",
-                ));
-            };
-            if loaded.root != package.root {
-                return Err(runtime_error(
-                    ErrorCategory::Conflict,
-                    "cannot_replace_running_driver",
-                ));
-            }
-            return Ok(loaded.manifest.clone());
+        self.ensure_accepting()?;
+        if state.drivers.contains_key(&manifest.id) {
+            return Err(runtime_error(ErrorCategory::Conflict, "driver_id_conflict"));
         }
-        state.packages.insert(manifest.id.clone(), package);
+        state.drivers.insert(
+            manifest.id.clone(),
+            BuiltinDriver {
+                manifest: manifest.clone(),
+                frontend,
+                spawn: || DriverTask::spawn(B::default()),
+            },
+        );
         Ok(manifest)
     }
 
     pub async fn loaded_manifests(&self) -> Vec<DriverManifest> {
         let state = self.state.lock().await;
-        Self::sorted_manifests(state.packages.values().map(|package| &package.manifest))
+        Self::sorted_manifests(state.drivers.values().map(|driver| &driver.manifest))
     }
 
     /// 确定性排序：先驱动名，再驱动 ID；同名不同 ID 也不会因遍历顺序抖动。
@@ -632,30 +441,6 @@ impl ProcessDriverRuntime {
                 .then_with(|| left.id.cmp(&right.id))
         });
         manifests
-    }
-
-    /// 按稳定顺序加载启动扫描到的目录；单个包失败只产出一条诊断，不影响其余包。
-    /// 每个目录都是一个 `<root>/<package>` 包根，manifest 位于包根下的 `dist/manifest.json`。
-    pub async fn load_discovered(&self, scanned: Vec<DiscoveredPackage>) -> Vec<DriverLoadIssue> {
-        let mut issues = Vec::new();
-        for package in scanned {
-            if let Err(issue) = package.load_into(self).await {
-                issues.push(issue);
-            }
-        }
-        issues.sort_by(|left, right| {
-            left.directory
-                .cmp(&right.directory)
-                .then_with(|| left.code.cmp(&right.code))
-        });
-        issues
-    }
-
-    /// 一次调用返回可列出的驱动和逐包诊断；任一包失败都不会让整次发现失败。
-    pub async fn discover(&self, scanned: Vec<DiscoveredPackage>) -> DriverList {
-        let issues = self.load_discovered(scanned).await;
-        let drivers = self.loaded_manifests().await;
-        DriverList { drivers, issues }
     }
 
     /// Changes one live instance's bypass; unknown IDs return driver_instance_not_found.
@@ -743,11 +528,11 @@ impl ProcessDriverRuntime {
             .instances
             .get(instance_id)
             .ok_or_else(|| runtime_error(ErrorCategory::NotFound, "driver_instance_not_found"))?;
-        let process = state
-            .processes
+        let task = state
+            .running
             .get(&instance.driver_id)
             .ok_or_else(|| runtime_error(ErrorCategory::Conflict, "driver_not_started"))?;
-        Ok(process.events.subscribe())
+        Ok(task.events.subscribe())
     }
 
     pub async fn pending_operation(&self, instance_id: &str, proposal_id: &str) -> Option<String> {
@@ -793,32 +578,14 @@ impl ProcessDriverRuntime {
             .collect()
     }
 
-    /// Only returns the package's validated, self-contained frontend entry.
+    /// 返回编译期注册的前端源码；未知驱动返回 NotFound，不读取外部文件。
     pub async fn frontend_source(&self, driver_id: &str) -> Result<Option<String>, RuntimeError> {
         let state = self.state.lock().await;
-        let entry = state
-            .packages
+        state
+            .drivers
             .get(driver_id)
-            .ok_or_else(|| runtime_error(ErrorCategory::NotFound, "driver_not_loaded"))?
-            .frontend_entry
-            .clone();
-        let Some(entry) = entry else {
-            return Ok(None);
-        };
-        let size = tokio::fs::metadata(&entry)
-            .await
-            .map_err(|_| runtime_error(ErrorCategory::Transport, "frontend_unavailable"))?
-            .len();
-        if size > MAX_FRONTEND_BYTES {
-            return Err(runtime_error(
-                ErrorCategory::InvalidRequest,
-                "frontend_too_large",
-            ));
-        }
-        tokio::fs::read_to_string(entry)
-            .await
-            .map(Some)
-            .map_err(|_| runtime_error(ErrorCategory::Transport, "frontend_read_failed"))
+            .map(|driver| driver.frontend.map(str::to_owned))
+            .ok_or_else(|| runtime_error(ErrorCategory::NotFound, "driver_not_loaded"))
     }
 
     /// Human-only adapter entry: sends no ordinary operation and creates no history.
@@ -845,11 +612,11 @@ impl ProcessDriverRuntime {
             .instances
             .get(instance_id)
             .ok_or_else(|| runtime_error(ErrorCategory::NotFound, "driver_instance_not_found"))?;
-        let package = state
-            .packages
+        let driver = state
+            .drivers
             .get(&instance.driver_id)
             .ok_or_else(|| runtime_error(ErrorCategory::NotFound, "driver_not_loaded"))?;
-        if !package
+        if !driver
             .manifest
             .capabilities
             .iter()
@@ -860,8 +627,8 @@ impl ProcessDriverRuntime {
                 "secret_input_not_declared",
             ));
         }
-        let process = state
-            .processes
+        let task = state
+            .running
             .get(&instance.driver_id)
             .ok_or_else(|| runtime_error(ErrorCategory::Conflict, "driver_not_started"))?;
         let handle = SecretHandle {
@@ -870,19 +637,18 @@ impl ProcessDriverRuntime {
             purpose,
             expires_at: Utc::now() + chrono::Duration::seconds(30),
         };
-        let process = process.clone();
+        let task = task.clone();
         drop(state);
-        process
-            .request(HostCommand::ProvideSecret(SecretDelivery {
-                handle: handle.clone(),
-                value,
-            }))
-            .await?;
+        task.request(HostCommand::ProvideSecret(SecretDelivery {
+            handle: handle.clone(),
+            value,
+        }))
+        .await?;
         Ok(handle)
     }
 }
 
-impl ProcessDriverRuntime {
+impl InProcessDriverRuntime {
     pub async fn native_mcp_tools(&self) -> Vec<(String, McpToolRegistration)> {
         let state = self.state.lock().await;
         let mut tools: Vec<_> = state
@@ -968,7 +734,7 @@ impl ProcessDriverRuntime {
                                 .is_some_and(|features| {
                                     features.iter().any(|f| f == "deferred-interactions")
                                 });
-                        let allowed = state.packages.get(&record.driver_id).is_some_and(|p| {
+                        let allowed = state.drivers.get(&record.driver_id).is_some_and(|p| {
                             p.manifest.capabilities.iter().any(|c| c == "secret-input")
                         });
                         if !supported
@@ -1156,13 +922,13 @@ impl ProcessDriverRuntime {
             ));
         }
         let cancelled = !matches!(outcome, InteractionOutcome::Submitted(_));
-        let process = state
-            .processes
+        let task = state
+            .running
             .get(&record.driver_id)
             .cloned()
             .ok_or_else(|| runtime_error(ErrorCategory::Conflict, "driver_not_started"))?;
         drop(state);
-        let result = process
+        let result = task
             .request(HostCommand::InteractionResult(InteractionResult {
                 interaction_id: request.interaction_id,
                 driver_instance_id: request.driver_instance_id,
@@ -1309,7 +1075,7 @@ async fn settle_closed_driver(state: &mut State, history: &OperationHistory, dri
     }
 }
 
-impl ProcessDriverRuntime {
+impl InProcessDriverRuntime {
     async fn start_inner(&self, driver_id: &str) -> Result<(), RuntimeError> {
         let _control = self.control_gate(driver_id).lock_owned().await;
         let state = self.state.lock().await;
@@ -1322,25 +1088,25 @@ impl ProcessDriverRuntime {
                 "runtime_shutting_down",
             ));
         }
-        if state.processes.contains_key(driver_id) {
+        if state.running.contains_key(driver_id) {
             return Ok(());
         }
-        let package = state
-            .packages
+        let driver = state
+            .drivers
             .get(driver_id)
             .cloned()
             .ok_or_else(|| runtime_error(ErrorCategory::NotFound, "driver_not_loaded"))?;
         drop(state);
-        let process = Arc::new(JsonRpcDriverProcess::spawn(&package.backend_entry, &[]).await?);
-        self.children
+        let task = Arc::new((driver.spawn)());
+        self.tasks
             .lock()
             .unwrap_or_else(|error| error.into_inner())
-            .insert(driver_id.to_owned(), Arc::downgrade(&process));
+            .insert(driver_id.to_owned(), Arc::downgrade(&task));
         if self
             .shutting_down
             .load(std::sync::atomic::Ordering::Acquire)
         {
-            let _ = process.close().await;
+            let _ = task.close().await;
             return Err(runtime_error(
                 ErrorCategory::Conflict,
                 "runtime_shutting_down",
@@ -1359,7 +1125,7 @@ impl ProcessDriverRuntime {
                 .collect(),
             limits: self.limits.clone(),
         };
-        let result = process
+        let result = task
             .request(HostCommand::Hello(handshake.clone()))
             .await
             .and_then(|value| {
@@ -1375,13 +1141,13 @@ impl ProcessDriverRuntime {
         let result = match result {
             Ok(result) => result,
             Err(error) => {
-                let _ = process.close().await;
+                let _ = task.close().await;
                 return Err(error);
             }
         };
-        if result.driver_id != package.manifest.id
-            || result.driver_version != package.manifest.version
-            || !package
+        if result.driver_id != driver.manifest.id
+            || result.driver_version != driver.manifest.version
+            || !driver
                 .manifest
                 .runtime
                 .requires
@@ -1389,13 +1155,13 @@ impl ProcessDriverRuntime {
                 .all(|f| result.enabled_features.contains(f))
             || handshake.validate_result(&result).is_err()
         {
-            let _ = process.close().await;
+            let _ = task.close().await;
             return Err(runtime_error(
                 ErrorCategory::Unsupported,
                 "driver_handshake_incompatible",
             ));
         }
-        process.set_control_limit(result.limits.max_control_bytes);
+        task.set_control_limit(result.limits.max_control_bytes);
         let mut catalog = HashMap::new();
         let mut names = HashSet::new();
         for descriptor in result.operations {
@@ -1409,7 +1175,7 @@ impl ProcessDriverRuntime {
                     .as_ref()
                     .is_some_and(|schema| jsonschema::validator_for(schema).is_err())
             {
-                let _ = process.close().await;
+                let _ = task.close().await;
                 return Err(runtime_error(
                     ErrorCategory::InvalidRequest,
                     "driver_operation_catalog_invalid",
@@ -1452,18 +1218,18 @@ impl ProcessDriverRuntime {
                 || schema.and_then(|s| s.get("type")).and_then(Value::as_str) != Some("object")
                 || schema.is_none_or(|schema| jsonschema::validator_for(schema).is_err())
             {
-                let _ = process.close().await;
+                let _ = task.close().await;
                 return Err(runtime_error(
                     ErrorCategory::InvalidRequest,
                     "driver_mcp_catalog_invalid",
                 ));
             }
         }
-        let notifications = process.take_completions().await;
+        let notifications = task.take_completions().await;
         let mut state = self.state.lock().await;
         if let Err(error) = self.ensure_accepting() {
             drop(state);
-            let _ = process.close().await;
+            let _ = task.close().await;
             return Err(error);
         }
         state
@@ -1475,8 +1241,8 @@ impl ProcessDriverRuntime {
         state
             .operation_catalog
             .insert(driver_id.to_owned(), catalog);
-        let process_ref = Arc::downgrade(&process);
-        state.processes.insert(driver_id.to_owned(), process);
+        let task_ref = Arc::downgrade(&task);
+        state.running.insert(driver_id.to_owned(), task);
         if let Some(mut notifications) = notifications {
             let control_gate = self.control_gate(driver_id);
             let state_ref = Arc::downgrade(&self.state);
@@ -1491,11 +1257,11 @@ impl ProcessDriverRuntime {
                     };
                     let _control = control_gate.lock().await;
                     let _state = state.lock().await;
-                    if !process_ref.upgrade().is_some_and(|process| {
+                    if !task_ref.upgrade().is_some_and(|task| {
                         _state
-                            .processes
+                            .running
                             .get(&driver_id)
-                            .is_some_and(|current| Arc::ptr_eq(current, &process))
+                            .is_some_and(|current| Arc::ptr_eq(current, &task))
                     }) {
                         continue;
                     }
@@ -1548,21 +1314,21 @@ impl ProcessDriverRuntime {
                 if let (Some(state), Some(history)) = (state_ref.upgrade(), history_ref.upgrade()) {
                     let _control = control_gate.lock().await;
                     let mut state = state.lock().await;
-                    if !state.processes.get(&driver_id).is_some_and(|current| {
-                        process_ref
+                    if !state.running.get(&driver_id).is_some_and(|current| {
+                        task_ref
                             .upgrade()
-                            .is_some_and(|process| Arc::ptr_eq(current, &process))
+                            .is_some_and(|task| Arc::ptr_eq(current, &task))
                     }) {
                         return;
                     }
-                    let process = state.processes.remove(&driver_id);
+                    let task = state.running.remove(&driver_id);
                     settle_closed_driver(&mut state, &history, &driver_id).await;
                     if let Some(attention) = attention_ref.upgrade() {
                         *attention.lock().unwrap_or_else(|error| error.into_inner()) += 1;
                     }
                     drop(state);
-                    if let Some(process) = process {
-                        let _ = process.close().await;
+                    if let Some(task) = task {
+                        let _ = task.close().await;
                     }
                 }
             });
@@ -1571,15 +1337,7 @@ impl ProcessDriverRuntime {
     }
 }
 
-impl DriverRuntime for ProcessDriverRuntime {
-    fn load<'a>(&'a self, package_path: &'a Path) -> RuntimeFuture<'a, DriverManifest> {
-        Box::pin(async move {
-            let package =
-                super::driver_process::load_driver_package(package_path, &self.platform).await?;
-            self.insert_package(package).await
-        })
-    }
-
+impl DriverRuntime for InProcessDriverRuntime {
     fn start<'a>(&'a self, driver_id: &'a str) -> RuntimeFuture<'a, ()> {
         Box::pin(self.start_inner(driver_id))
     }
@@ -1588,7 +1346,7 @@ impl DriverRuntime for ProcessDriverRuntime {
         Box::pin(async move {
             let _control = self.control_gate(driver_id).lock_owned().await;
             let mut state = self.state.lock().await;
-            let Some(process) = state.processes.remove(driver_id) else {
+            let Some(task) = state.running.remove(driver_id) else {
                 return Ok(());
             };
             state.operation_catalog.remove(driver_id);
@@ -1626,17 +1384,16 @@ impl DriverRuntime for ProcessDriverRuntime {
             // One deadline for the entire driver, including many instances.
             let graceful = async {
                 for instance_id in &instance_ids {
-                    process
-                        .request(HostCommand::DestroyInstance {
-                            driver_instance_id: instance_id.clone(),
-                        })
-                        .await?;
+                    task.request(HostCommand::DestroyInstance {
+                        driver_instance_id: instance_id.clone(),
+                    })
+                    .await?;
                 }
-                process.request(HostCommand::Shutdown).await?;
+                task.request(HostCommand::Shutdown).await?;
                 Ok::<(), RuntimeError>(())
             };
             let _ = tokio::time::timeout(std::time::Duration::from_secs(2), graceful).await;
-            process.close().await
+            task.close().await
         })
     }
 
@@ -1661,13 +1418,12 @@ impl DriverRuntime for ProcessDriverRuntime {
                 runtime_error(ErrorCategory::NotFound, "driver_instance_not_found")
             })?;
             if instance.status != InstanceStatus::Failed {
-                if let Some(process) = state.processes.get(&instance.driver_id).cloned() {
+                if let Some(task) = state.running.get(&instance.driver_id).cloned() {
                     drop(state);
-                    process
-                        .request(HostCommand::DestroyInstance {
-                            driver_instance_id: instance_id.to_owned(),
-                        })
-                        .await?;
+                    task.request(HostCommand::DestroyInstance {
+                        driver_instance_id: instance_id.to_owned(),
+                    })
+                    .await?;
                     state = self.state.lock().await;
                 }
             }
@@ -1701,7 +1457,7 @@ impl DriverRuntime for ProcessDriverRuntime {
     }
 }
 
-impl ProcessDriverRuntime {
+impl InProcessDriverRuntime {
     /// MCP adapters may return once a validated proposal is ready for human review.
     /// Other callers retain the normal wait-until-completed behavior.
     pub fn submit_until_approval<'a>(
@@ -1757,7 +1513,7 @@ impl ProcessDriverRuntime {
                 &request.operation,
                 &request.args,
             )?;
-            if !state.processes.contains_key(&request.driver_id) {
+            if !state.running.contains_key(&request.driver_id) {
                 return Err(runtime_error(ErrorCategory::Conflict, "driver_not_started"));
             }
             let operation_id = uuid::Uuid::new_v4().to_string();
@@ -1838,7 +1594,7 @@ impl ProcessDriverRuntime {
                         .await;
                     return;
                 }
-                let Some(process) = state.processes.get(&request.driver_id).cloned() else {
+                let Some(task) = state.running.get(&request.driver_id).cloned() else {
                     let _ = runtime
                         .history
                         .transition(
@@ -1865,7 +1621,7 @@ impl ProcessDriverRuntime {
                 let mut driver_instance_id = request.driver_instance_id;
                 let operation_name = request.operation.clone();
                 drop(state);
-                let result = process
+                let result = task
                     .request(HostCommand::Invoke(InvokeRequest {
                         operation_id: operation_id.clone(),
                         driver_instance_id: driver_instance_id.clone(),
@@ -1877,7 +1633,7 @@ impl ProcessDriverRuntime {
                     }))
                     .await;
                 let mut state = runtime.state.lock().await;
-                if ensure_current_process(&state, &driver_id, &process).is_err()
+                if ensure_current_task(&state, &driver_id, &task).is_err()
                     || runtime.ensure_accepting().is_err()
                 {
                     return;
@@ -1972,7 +1728,7 @@ impl ProcessDriverRuntime {
     }
 }
 
-impl Operations for ProcessDriverRuntime {
+impl Operations for InProcessDriverRuntime {
     fn submit<'a>(
         &'a self,
         caller: CallerContext,
@@ -2062,8 +1818,8 @@ impl Operations for ProcessDriverRuntime {
                 .await
                 .map_err(map_history_error)?;
             validate_operation_args(&state, &pending.0, &record.operation, &request.args)?;
-            let process = state
-                .processes
+            let task = state
+                .running
                 .get(&pending.0)
                 .cloned()
                 .ok_or_else(|| runtime_error(ErrorCategory::Conflict, "driver_not_started"))?;
@@ -2101,7 +1857,7 @@ impl Operations for ProcessDriverRuntime {
                 self.bump_attention();
             }
             drop(state);
-            let result = process.request(HostCommand::Approve(request.clone())).await;
+            let result = task.request(HostCommand::Approve(request.clone())).await;
             let mut state = self.state.lock().await;
             let record = self
                 .finish_reply(&mut state, &request.operation_id, result)
@@ -2144,19 +1900,18 @@ impl Operations for ProcessDriverRuntime {
             } else {
                 validate_driver_authority(&caller, &pending.0)?;
             }
-            let process = state
-                .processes
+            let task = state
+                .running
                 .get(&pending.0)
                 .cloned()
                 .ok_or_else(|| runtime_error(ErrorCategory::Conflict, "driver_not_started"))?;
             drop(state);
-            process
-                .request(HostCommand::Reject {
-                    operation_id: operation_id.to_owned(),
-                    proposal_id: proposal_id.to_owned(),
-                    reason: None,
-                })
-                .await?;
+            task.request(HostCommand::Reject {
+                operation_id: operation_id.to_owned(),
+                proposal_id: proposal_id.to_owned(),
+                reason: None,
+            })
+            .await?;
             let mut state = self.state.lock().await;
             state.pending_approvals.remove(operation_id);
             state.approval_drafts.remove(operation_id);
@@ -2203,12 +1958,12 @@ impl Operations for ProcessDriverRuntime {
             } else if let Some((driver_id, _, proposal_id, _)) =
                 state.pending_approvals.get(operation_id).cloned()
             {
-                let process =
-                    state.processes.get(&driver_id).cloned().ok_or_else(|| {
+                let task =
+                    state.running.get(&driver_id).cloned().ok_or_else(|| {
                         runtime_error(ErrorCategory::Conflict, "driver_not_started")
                     })?;
                 drop(state);
-                let result = process
+                let result = task
                     .request(HostCommand::Reject {
                         operation_id: operation_id.to_owned(),
                         proposal_id,
@@ -2231,13 +1986,13 @@ impl Operations for ProcessDriverRuntime {
                 record.status,
                 OperationStatus::Accepted | OperationStatus::Dispatched | OperationStatus::Running
             ) {
-                let process = state
-                    .processes
+                let task = state
+                    .running
                     .get(&record.driver_id)
                     .cloned()
                     .ok_or_else(|| runtime_error(ErrorCategory::Conflict, "driver_not_started"))?;
                 drop(state);
-                let response = process
+                let response = task
                     .request(HostCommand::Cancel(
                         coterm_proto::runtime::message::CancelTarget::Operation(
                             operation_id.to_owned(),
@@ -2283,21 +2038,21 @@ impl Operations for ProcessDriverRuntime {
     }
 }
 
-fn ensure_current_process(
+fn ensure_current_task(
     state: &State,
     driver_id: &str,
-    process: &Arc<JsonRpcDriverProcess>,
+    task: &Arc<DriverTask>,
 ) -> Result<(), RuntimeError> {
     if state
-        .processes
+        .running
         .get(driver_id)
-        .is_some_and(|current| Arc::ptr_eq(current, process))
+        .is_some_and(|current| Arc::ptr_eq(current, task))
     {
         Ok(())
     } else {
         Err(runtime_error(
             ErrorCategory::Conflict,
-            "driver_process_changed",
+            "driver_task_changed",
         ))
     }
 }
@@ -2503,6 +2258,43 @@ fn runtime_error_with(category: ErrorCategory, code: &str, message: String) -> R
     }
 }
 
+pub(crate) fn validate_manifest(manifest: &DriverManifest) -> Result<(), RuntimeError> {
+    if manifest.manifest_version != 1 {
+        return Err(registration_error("driver_manifest_version_unsupported"));
+    }
+    if !is_valid_driver_id(&manifest.id)
+        || manifest.name.trim().is_empty()
+        || manifest.version.trim().is_empty()
+    {
+        return Err(registration_error("driver_manifest_identity_invalid"));
+    }
+    if manifest.runtime.interface_major != coterm_proto::runtime::lifecycle::INTERFACE_MAJOR {
+        return Err(registration_error("driver_runtime_version_unsupported"));
+    }
+    if manifest.runtime.requires.iter().any(|feature| {
+        !coterm_proto::runtime::lifecycle::REQUIRED_FEATURES.contains(&feature.as_str())
+            && !coterm_proto::runtime::lifecycle::OPTIONAL_FEATURES.contains(&feature.as_str())
+    }) {
+        return Err(registration_error("driver_required_feature_unsupported"));
+    }
+    if manifest.instances.instance_type.trim().is_empty() || !manifest.instances.multiple {
+        return Err(registration_error("driver_instance_declaration_invalid"));
+    }
+    Ok(())
+}
+
+fn is_valid_driver_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 128
+        && id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+}
+
+fn registration_error(code: &str) -> RuntimeError {
+    runtime_error(ErrorCategory::InvalidRequest, code)
+}
+
 #[cfg(test)]
 mod tests {
     use coterm_proto::runtime::operation::{
@@ -2511,7 +2303,7 @@ mod tests {
 
     use super::{
         failure_status, operation_args_error, schema_is_valid, unique_instance_label,
-        validate_driver_authority, validate_scope_target, ProcessDriverRuntime,
+        validate_driver_authority, validate_scope_target, InProcessDriverRuntime,
     };
     use crate::approval_policy::{ApprovalContext, InstanceApproval};
     use coterm_proto::runtime::interaction::{InteractionKind, InteractionRequest};
@@ -2529,18 +2321,15 @@ mod tests {
         assert!(label.is_char_boundary(label.len()));
     }
 
-    fn runtime() -> ProcessDriverRuntime {
-        ProcessDriverRuntime::new(
-            "windows-x64",
-            RuntimeLimits {
-                max_control_bytes: 1024 * 1024,
-                max_data_chunk_bytes: 64 * 1024,
-                initial_window: coterm_proto::runtime::stream::FlowWindow {
-                    chunks: 16,
-                    bytes: 1024 * 1024,
-                },
+    fn runtime() -> InProcessDriverRuntime {
+        InProcessDriverRuntime::new(RuntimeLimits {
+            max_control_bytes: 1024 * 1024,
+            max_data_chunk_bytes: 64 * 1024,
+            initial_window: coterm_proto::runtime::stream::FlowWindow {
+                chunks: 16,
+                bytes: 1024 * 1024,
             },
-        )
+        })
     }
 
     #[tokio::test]
@@ -2931,315 +2720,5 @@ mod tests {
         assert!(message.contains("line_ending"));
         assert!(message.contains("commands"));
         assert!(!message.contains("private-value"));
-    }
-
-    mod discovery {
-        use super::super::{DiscoveredPackage, DriverLoadIssue, PackageOrigin};
-        use super::runtime;
-        use std::path::{Path, PathBuf};
-        use std::time::{SystemTime, UNIX_EPOCH};
-        use tokio::fs;
-
-        /// 每个测试一个独立目录；扫描根就是该目录。
-        fn scratch(name: &str) -> PathBuf {
-            let unique = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .expect("clock")
-                .as_nanos();
-            let root = std::env::temp_dir().join(format!("coterm-discovery-{name}-{unique}"));
-            std::fs::create_dir_all(&root).expect("scratch root");
-            root
-        }
-
-        fn valid_manifest(id: &str, name: &str) -> String {
-            serde_json::json!({
-                "manifestVersion": 1,
-                "id": id,
-                "name": name,
-                "version": "0.1.0",
-                "runtime": {"interfaceMajor": 2, "requires": ["instances"]},
-                // 入口文件在这些测试里都真实存在，只做声明校验。
-                "backend": {"windows-x64": "backend/agent", "linux-x64": "backend/agent"},
-                "mcp": {"provider": "backend"},
-                "instances": {"type": "agent", "multiple": true},
-                "capabilities": []
-            })
-            .to_string()
-        }
-
-        async fn write_package(root: &Path, directory: &str, manifest: Option<&str>) {
-            let package = root.join(directory);
-            fs::create_dir_all(package.join("backend"))
-                .await
-                .expect("package dir");
-            // 两个平台入口都写成普通文件，避免测试依赖宿主机平台。
-            fs::write(package.join("backend/agent"), b"")
-                .await
-                .expect("entry");
-            if let Some(manifest) = manifest {
-                fs::write(package.join("manifest.json"), manifest)
-                    .await
-                    .expect("manifest");
-            }
-        }
-
-        fn discovered(root: &Path, directory: &str, priority: u8) -> DiscoveredPackage {
-            DiscoveredPackage {
-                directory: directory.to_owned(),
-                root: root.join(directory),
-                priority,
-                origin: PackageOrigin::Installed,
-            }
-        }
-
-        fn codes(issues: &[DriverLoadIssue]) -> Vec<(&str, &str)> {
-            issues
-                .iter()
-                .map(|issue| (issue.directory.as_str(), issue.code.as_str()))
-                .collect()
-        }
-
-        #[tokio::test]
-        async fn one_broken_package_does_not_hide_healthy_drivers() {
-            let root = scratch("mixed");
-            write_package(
-                &root,
-                "alpha",
-                Some(&valid_manifest("com.example.alpha", "Alpha")),
-            )
-            .await;
-            write_package(&root, "broken", Some("{ not json")).await;
-            write_package(
-                &root,
-                "omega",
-                Some(&valid_manifest("com.example.omega", "Omega")),
-            )
-            .await;
-            // 缺少 manifest.json 的包应有诊断，而不是静默当成有效驱动。
-            write_package(&root, "unbuilt", None).await;
-
-            let runtime = runtime();
-            let catalog = runtime
-                .discover(vec![
-                    discovered(&root, "omega", 0),
-                    discovered(&root, "broken", 0),
-                    discovered(&root, "unbuilt", 0),
-                    discovered(&root, "alpha", 0),
-                ])
-                .await;
-
-            assert_eq!(
-                catalog
-                    .drivers
-                    .iter()
-                    .map(|driver| driver.id.as_str())
-                    .collect::<Vec<_>>(),
-                ["com.example.alpha", "com.example.omega"]
-            );
-            assert_eq!(
-                codes(&catalog.issues),
-                [
-                    ("broken", "driver_manifest_invalid"),
-                    ("unbuilt", "driver_manifest_unavailable"),
-                ]
-            );
-            // 诊断消息不含绝对路径或原始解析错误。
-            for issue in &catalog.issues {
-                assert!(!issue.message.contains(&root.to_string_lossy().to_string()));
-                assert!(!issue.message.contains('{'));
-            }
-            fs::remove_dir_all(&root).await.ok();
-        }
-
-        #[tokio::test]
-        async fn legacy_manifest_is_diagnosed_not_listed() {
-            let root = scratch("legacy");
-            // 旧格式：有 protocol/entry_point，没有 manifestVersion。
-            let legacy = serde_json::json!({
-                "id": "coterm-driver-serial",
-                "name": "Serial Port",
-                "version": "0.1.0",
-                "protocol": "serial",
-                "entry_point": "coterm-driver-serial"
-            })
-            .to_string();
-            write_package(&root, "serial", Some(&legacy)).await;
-
-            let catalog = runtime()
-                .discover(vec![discovered(&root, "serial", 0)])
-                .await;
-            assert!(catalog.drivers.is_empty());
-            assert_eq!(catalog.issues.len(), 1);
-            assert_eq!(catalog.issues[0].code, "driver_manifest_legacy");
-            // 能解析出 ID 时给出，便于用户定位是哪个驱动。
-            assert_eq!(
-                catalog.issues[0].driver_id.as_deref(),
-                Some("coterm-driver-serial")
-            );
-            fs::remove_dir_all(&root).await.ok();
-        }
-
-        #[tokio::test]
-        async fn unsupported_schema_is_isolated_with_a_stable_code() {
-            let root = scratch("schema");
-            let mismatched = serde_json::json!({
-                "manifestVersion": 2,
-                "id": "com.example.future",
-                "name": "Future",
-                "version": "0.1.0",
-                "runtime": {"interfaceMajor": 2, "requires": []},
-                "backend": {"linux-x64": "backend/agent"},
-                "mcp": {"provider": "backend"},
-                "instances": {"type": "future", "multiple": true},
-                "capabilities": []
-            })
-            .to_string();
-            write_package(&root, "future", Some(&mismatched)).await;
-            write_package(
-                &root,
-                "alpha",
-                Some(&valid_manifest("com.example.alpha", "Alpha")),
-            )
-            .await;
-
-            let catalog = runtime()
-                .discover(vec![
-                    discovered(&root, "future", 0),
-                    discovered(&root, "alpha", 0),
-                ])
-                .await;
-            assert_eq!(catalog.drivers.len(), 1);
-            assert_eq!(catalog.drivers[0].id, "com.example.alpha");
-            assert_eq!(
-                codes(&catalog.issues),
-                [("future", "driver_manifest_version_unsupported")]
-            );
-            assert_eq!(
-                catalog.issues[0].driver_id.as_deref(),
-                Some("com.example.future")
-            );
-            fs::remove_dir_all(&root).await.ok();
-        }
-
-        #[tokio::test]
-        async fn duplicate_ids_keep_the_first_package_and_diagnose_the_rest() {
-            let root = scratch("duplicate");
-            // 同一个 ID 出现在两个目录：两者都有效，后者必须被诊断为冲突。
-            write_package(
-                &root,
-                "alpha-a",
-                Some(&valid_manifest("com.example.alpha", "Alpha")),
-            )
-            .await;
-            write_package(
-                &root,
-                "alpha-b",
-                Some(&valid_manifest("com.example.alpha", "Alpha Again")),
-            )
-            .await;
-
-            let catalog = runtime()
-                .discover(vec![
-                    discovered(&root, "alpha-a", 0),
-                    discovered(&root, "alpha-b", 0),
-                ])
-                .await;
-            assert_eq!(catalog.drivers.len(), 1);
-            assert_eq!(catalog.drivers[0].name, "Alpha");
-            assert_eq!(codes(&catalog.issues), [("alpha-b", "driver_id_conflict")]);
-            fs::remove_dir_all(&root).await.ok();
-        }
-
-        #[tokio::test]
-        async fn listing_is_deterministic_regardless_of_scan_order() {
-            let root = scratch("order");
-            for (directory, id, name) in [
-                ("zeta", "com.example.zeta", "Zeta"),
-                ("alpha", "com.example.alpha", "Alpha"),
-                ("mid", "com.example.beta", "Beta"),
-            ] {
-                write_package(&root, directory, Some(&valid_manifest(id, name))).await;
-            }
-            let forward = runtime()
-                .discover(vec![
-                    discovered(&root, "zeta", 0),
-                    discovered(&root, "alpha", 0),
-                    discovered(&root, "mid", 0),
-                ])
-                .await;
-            let reverse = {
-                let runtime = runtime();
-                runtime
-                    .discover(vec![
-                        discovered(&root, "mid", 0),
-                        discovered(&root, "alpha", 0),
-                        discovered(&root, "zeta", 0),
-                    ])
-                    .await
-            };
-            let names = |catalog: &super::super::DriverList| {
-                catalog
-                    .drivers
-                    .iter()
-                    .map(|driver| driver.name.clone())
-                    .collect::<Vec<_>>()
-            };
-            assert_eq!(names(&forward), ["Alpha", "Beta", "Zeta"]);
-            assert_eq!(names(&forward), names(&reverse));
-            fs::remove_dir_all(&root).await.ok();
-        }
-
-        #[tokio::test]
-        async fn empty_directory_lists_nothing_and_reports_no_errors() {
-            let root = scratch("empty");
-            let catalog = runtime().discover(Vec::new()).await;
-            assert!(catalog.drivers.is_empty());
-            assert!(catalog.issues.is_empty());
-            fs::remove_dir_all(&root).await.ok();
-        }
-
-        #[tokio::test]
-        async fn entry_outside_the_package_is_rejected() {
-            let root = scratch("escape");
-            let escaping = serde_json::json!({
-                "manifestVersion": 1,
-                "id": "com.example.escape",
-                "name": "Escape",
-                "version": "0.1.0",
-                "runtime": {"interfaceMajor": 2, "requires": []},
-                "backend": {"windows-x64": "../../outside/agent"},
-                "mcp": {"provider": "backend"},
-                "instances": {"type": "escape", "multiple": true},
-                "capabilities": []
-            })
-            .to_string();
-            write_package(&root, "escape", Some(&escaping)).await;
-
-            let catalog = runtime()
-                .discover(vec![discovered(&root, "escape", 0)])
-                .await;
-            assert!(catalog.drivers.is_empty());
-            assert_eq!(codes(&catalog.issues), [("escape", "driver_entry_invalid")]);
-            fs::remove_dir_all(&root).await.ok();
-        }
-
-        #[test]
-        fn diagnostics_serialize_without_paths() {
-            let issue = DriverLoadIssue {
-                directory: "broken".to_owned(),
-                driver_id: None,
-                code: "driver_manifest_invalid".to_owned(),
-                message: "Package manifest is not valid JSON".to_owned(),
-            };
-            let value = serde_json::to_value(&issue).expect("issue serializes");
-            let keys = value
-                .as_object()
-                .expect("object")
-                .keys()
-                .cloned()
-                .collect::<Vec<_>>();
-            assert_eq!(keys, ["code", "directory", "driverId", "message"]);
-            assert_eq!(value["driverId"], serde_json::Value::Null);
-        }
     }
 }

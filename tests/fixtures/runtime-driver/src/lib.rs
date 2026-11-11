@@ -6,7 +6,7 @@ use coterm_proto::runtime::{
         InteractionValue,
     },
     lifecycle::HelloResult,
-    message::{DeferredOperation, HostCommand, DriverNotification},
+    message::{DeferredOperation, DriverNotification, HostCommand},
     operation::{DispatchMode, OperationDescriptor, OperationEffect, OperationScope},
     ErrorCategory, RuntimeError,
 };
@@ -16,23 +16,7 @@ use tokio::sync::mpsc;
 
 const ID: &str = "coterm-runtime-fixture";
 
-fn console_attached() -> Option<bool> {
-    #[cfg(windows)]
-    {
-        #[link(name = "kernel32")]
-        extern "system" {
-            fn GetConsoleWindow() -> *mut std::ffi::c_void;
-        }
-        // SAFETY: This parameterless Win32 query only reads this process's console handle.
-        Some(unsafe { !GetConsoleWindow().is_null() })
-    }
-    #[cfg(not(windows))]
-    {
-        None
-    }
-}
-
-struct Backend {
+pub struct Backend {
     instances: HashMap<String, Value>,
     writes: usize,
     tx: mpsc::Sender<DriverNotification>,
@@ -163,17 +147,22 @@ impl DriverBackend for Backend {
                 match request.operation.as_str() {
                     "fixture.block" => std::future::pending::<Result<Value, RuntimeError>>().await,
                     "fixture.info" => Ok(
-                        json!({"pid":std::process::id(),"instanceId":instance,"writes":self.writes,"consoleAttached":console_attached()}),
+                        json!({"pid":std::process::id(),"instanceId":instance,"writes":self.writes}),
                     ),
-                    "fixture.crash" => std::process::exit(23),
+                    "fixture.crash" => panic!("fixture task panic"),
                     "fixture.early_completion" => {
-                        self.tx.send(DriverNotification::OperationCompleted {
-                            operation_id: request.operation_id.clone(),
-                            result: json!({"completedBeforeAck":true}),
-                        }).await.map_err(|_| failure("notification_closed"))?;
+                        self.tx
+                            .send(DriverNotification::OperationCompleted {
+                                operation_id: request.operation_id.clone(),
+                                result: json!({"completedBeforeAck":true}),
+                            })
+                            .await
+                            .map_err(|_| failure("notification_closed"))?;
                         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-                        serde_json::to_value(DeferredOperation { operation_id: request.operation_id })
-                            .map_err(|_| failure("encode_failed"))
+                        serde_json::to_value(DeferredOperation {
+                            operation_id: request.operation_id,
+                        })
+                        .map_err(|_| failure("encode_failed"))
                     }
                     "fixture.hang" | "fixture.driver_hang" => {
                         serde_json::to_value(DeferredOperation {
@@ -249,16 +238,15 @@ impl DriverBackend for Backend {
         self.rx.take()
     }
 }
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let (tx, rx) = mpsc::channel(64);
-    coterm_proto::runtime::transport::serve(Backend {
-        instances: HashMap::new(),
-        writes: 0,
-        tx,
-        rx: Some(rx),
-        secret: None,
-    })
-    .await?;
-    Ok(())
+impl Default for Backend {
+    fn default() -> Self {
+        let (tx, rx) = mpsc::channel(64);
+        Self {
+            instances: HashMap::new(),
+            writes: 0,
+            tx,
+            rx: Some(rx),
+            secret: None,
+        }
+    }
 }

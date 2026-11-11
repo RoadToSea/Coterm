@@ -16,6 +16,8 @@ try {
     if ($install.ExitCode -ne 0) { throw "Installer failed: $($install.ExitCode)" }
     $application = Join-Path $installRoot 'coterm-desktop.exe'
     if (-not (Test-Path -LiteralPath $application)) { throw 'Installed application is missing.' }
+    if (Get-ChildItem -LiteralPath $installRoot -Recurse -Filter 'coterm-driver-*.exe') { throw 'Installation must not contain standalone driver executables.' }
+    if (Test-Path -LiteralPath (Join-Path $installRoot 'drivers')) { throw 'Installation must use embedded drivers, not a drivers resource directory.' }
     Push-Location $repo
     try {
         if (-not $Production) {

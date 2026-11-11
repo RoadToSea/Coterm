@@ -5,18 +5,26 @@
   "version": "0.1.0",
   "runtime": {
     "interfaceMajor": 2,
-    "requires": ["instances", "backend-calls", "operation-catalog", "driver-events", "async-operations", "native-mcp-tools"]
+    "requires": [
+      "instances",
+      "backend-calls",
+      "operation-catalog",
+      "driver-events",
+      "async-operations",
+      "native-mcp-tools"
+    ]
   },
-  "backend": {
-    "windows-x64": "backend/coterm-driver-local.exe",
-    "windows-arm64": "backend/coterm-driver-local.exe",
-    "linux-x64": "backend/coterm-driver-local",
-    "linux-arm64": "backend/coterm-driver-local",
-    "macos-x64": "backend/coterm-driver-local",
-    "macos-arm64": "backend/coterm-driver-local"
+  "frontend": {
+    "entry": "frontend/index.js"
   },
-  "frontend": { "entry": "frontend/index.js" },
-  "mcp": { "provider": "backend" },
-  "instances": { "type": "local-shell", "multiple": true },
-  "capabilities": ["confirmation"]
+  "mcp": {
+    "provider": "backend"
+  },
+  "instances": {
+    "type": "local-shell",
+    "multiple": true
+  },
+  "capabilities": [
+    "confirmation"
+  ]
 }

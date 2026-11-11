@@ -147,6 +147,12 @@ impl Jobs {
     }
 }
 
+impl Drop for Jobs {
+    fn drop(&mut self) {
+        self.cancel_all();
+    }
+}
+
 pub struct ExecRequest {
     pub instance_id: String,
     pub shell: std::path::PathBuf,

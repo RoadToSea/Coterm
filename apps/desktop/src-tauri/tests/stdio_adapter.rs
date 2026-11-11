@@ -1,6 +1,6 @@
 //! 发布形态的 Stdio 适配器回归：用桌面可执行文件自身的 `mcp stdio` 子命令连接私有桥。
 //! 不创建窗口，也不依赖独立分发的 CLI。
-use coterm_core::driver_manager::ProcessDriverRuntime;
+use coterm_core::driver_manager::InProcessDriverRuntime;
 use coterm_mcp::{
     server::BridgeServer,
     transport::{read_frame, write_frame},
@@ -13,9 +13,8 @@ use tokio::{
     time::timeout,
 };
 
-fn runtime() -> Arc<ProcessDriverRuntime> {
-    Arc::new(ProcessDriverRuntime::new(
-        "test",
+fn runtime() -> Arc<InProcessDriverRuntime> {
+    Arc::new(InProcessDriverRuntime::new(
         RuntimeLimits {
             max_control_bytes: 1024 * 1024,
             max_data_chunk_bytes: 8192,

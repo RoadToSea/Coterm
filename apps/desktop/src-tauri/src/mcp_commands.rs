@@ -5,7 +5,7 @@
 
 use std::{net::SocketAddr, path::PathBuf, sync::Arc};
 
-use coterm_core::driver_manager::ProcessDriverRuntime;
+use coterm_core::driver_manager::InProcessDriverRuntime;
 use coterm_mcp::{config::StdioClientConfiguration, server::BridgeServer};
 use serde::{Deserialize, Serialize};
 
@@ -41,7 +41,7 @@ struct BridgeState {
 
 /// 按需存活的本机桥。修改端口时先绑定并保存新设置，失败保留旧监听。
 pub struct StdioBridge {
-    runtime: Arc<ProcessDriverRuntime>,
+    runtime: Arc<InProcessDriverRuntime>,
     command: Option<String>,
     settings_path: Option<PathBuf>,
     state: tokio::sync::Mutex<BridgeState>,
@@ -50,7 +50,7 @@ pub struct StdioBridge {
 impl StdioBridge {
     /// `executable` 必须是不经 PATH 解析的绝对路径，客户端才能从任意工作目录启动。
     pub fn new(
-        runtime: Arc<ProcessDriverRuntime>,
+        runtime: Arc<InProcessDriverRuntime>,
         executable: Option<PathBuf>,
         settings_path: PathBuf,
     ) -> Self {
@@ -68,7 +68,7 @@ impl StdioBridge {
     }
 
     fn with_address(
-        runtime: Arc<ProcessDriverRuntime>,
+        runtime: Arc<InProcessDriverRuntime>,
         executable: Option<std::path::PathBuf>,
         bind_address: SocketAddr,
     ) -> Self {
@@ -263,10 +263,9 @@ mod tests {
     use coterm_proto::runtime::{lifecycle::RuntimeLimits, stream::FlowWindow};
     use std::path::PathBuf;
 
-    fn runtime() -> Arc<ProcessDriverRuntime> {
-        Arc::new(ProcessDriverRuntime::new(
-            "test",
-            RuntimeLimits {
+    fn runtime() -> Arc<InProcessDriverRuntime> {
+        Arc::new(InProcessDriverRuntime::new(
+        RuntimeLimits {
                 max_control_bytes: 1024 * 1024,
                 max_data_chunk_bytes: 8192,
                 initial_window: FlowWindow {

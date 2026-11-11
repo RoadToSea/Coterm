@@ -758,6 +758,9 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "coterm-core",
+ "coterm-driver-local",
+ "coterm-driver-serial",
+ "coterm-driver-ssh",
  "coterm-mcp",
  "coterm-proto",
  "serde",

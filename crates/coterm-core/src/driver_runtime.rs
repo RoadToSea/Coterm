@@ -1,9 +1,7 @@
-//! 基座内部接口；进程与路由实现在 driver_process / driver_manager。
+//! 基座内部接口；进程内调度与路由实现在 driver_task / driver_manager。
 
 use coterm_proto::runtime::{
     lifecycle::InstanceInfo,
-    manifest::DriverManifest,
-    message::{DriverEvent, HostMessage},
     operation::{ApproveProposal, OperationReceipt, OperationRecord, OperationSource},
     DriverId, RuntimeFuture,
 };
@@ -28,9 +26,8 @@ pub struct SubmitOperation {
     pub wait_timeout_ms: Option<u64>,
 }
 
-/// 负责加载/握手/停止进程以及实例索引。卸载前端不调用 destroy_instance。
+/// 负责启动/停止已注册后端以及实例索引。卸载前端不调用 destroy_instance。
 pub trait DriverRuntime: Send + Sync {
-    fn load<'a>(&'a self, package_path: &'a std::path::Path) -> RuntimeFuture<'a, DriverManifest>;
     fn start<'a>(&'a self, driver_id: &'a str) -> RuntimeFuture<'a, ()>;
     fn stop<'a>(&'a self, driver_id: &'a str) -> RuntimeFuture<'a, ()>;
     fn create_instance<'a>(
@@ -81,13 +78,4 @@ pub trait Operations: Send + Sync {
         caller: CallerContext,
         operation_id: &'a str,
     ) -> RuntimeFuture<'a, OperationReceipt>;
-}
-
-/// 绑定某次握手连接；单一接收任务读取，EOF 使用 None，异常返回错误。
-/// receive 不能独占整个连接，等待接收时仍须允许并发 send/close。
-/// 控制帧编解码由 coterm-proto::runtime::wire 处理。
-pub trait DriverConnection: Send + Sync {
-    fn send<'a>(&'a self, message: HostMessage) -> RuntimeFuture<'a, ()>;
-    fn receive<'a>(&'a self) -> RuntimeFuture<'a, Option<DriverEvent>>;
-    fn close<'a>(&'a self) -> RuntimeFuture<'a, ()>;
 }

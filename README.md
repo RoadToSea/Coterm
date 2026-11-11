@@ -14,7 +14,7 @@ pnpm drivers:build
 pnpm tauri:dev
 ```
 
-Windows 安装包：`pnpm tauri:build --bundles nsis`。核心终端驱动随应用直接分发，打开应用即可直接创建 SSH 或串口会话，开箱即用。开发版读取仓库 `target/bundled-drivers/{ssh,serial,local}`。
+Windows 安装包：`pnpm tauri:build --bundles nsis`。核心终端驱动随应用直接分发，打开应用即可直接创建 SSH 或串口会话，开箱即用。三个驱动后端及前端模块直接编入桌面 EXE，无需附带独立 driver.exe 或驱动资源目录。
 
 **设置 → 通用 → 语言 / Language** 支持简体中文、English，首次跟随系统语言，选择后自动保存；切换语言保留已打开的实例与 SSH 连接。
 

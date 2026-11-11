@@ -1,14 +1,11 @@
-//! 本地驱动在真实基座运行时里的端到端验证：包加载、握手、实例、PTY 读写与重启。
-use std::{
-    sync::atomic::{AtomicUsize, Ordering},
-    time::{Duration, Instant},
-};
+//! 本地驱动在真实基座运行时里的端到端验证：注册、能力协商、实例、PTY 读写与重启。
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use base64::{engine::general_purpose::STANDARD, Engine};
 use coterm_core::{
-    driver_manager::ProcessDriverRuntime,
-    driver_runtime::{CallerContext, Operations, DriverRuntime, SubmitOperation},
+    driver_manager::InProcessDriverRuntime,
+    driver_runtime::{CallerContext, DriverRuntime, Operations, SubmitOperation},
 };
 use coterm_proto::runtime::{
     lifecycle::RuntimeLimits,
@@ -18,19 +15,6 @@ use coterm_proto::runtime::{
 use serde_json::{json, Value};
 
 const DRIVER_ID: &str = "coterm-driver-local";
-static NEXT_PACKAGE: AtomicUsize = AtomicUsize::new(0);
-
-fn platform() -> Result<&'static str> {
-    Ok(match (std::env::consts::OS, std::env::consts::ARCH) {
-        ("windows", "x86_64") => "windows-x64",
-        ("windows", "aarch64") => "windows-arm64",
-        ("linux", "x86_64") => "linux-x64",
-        ("linux", "aarch64") => "linux-arm64",
-        ("macos", "x86_64") => "macos-x64",
-        ("macos", "aarch64") => "macos-arm64",
-        _ => anyhow::bail!("Unsupported test platform"),
-    })
-}
 
 /// 端到端测试固定用一个启动快、行为确定的 Shell。
 ///
@@ -44,51 +28,26 @@ fn test_shell() -> &'static str {
     }
 }
 
-/// 按发行布局组装驱动包：backend/ + frontend/ + manifest.json。
-///
-/// 前端的真实产物由 `pnpm driver:local:build` 生成；这里放一个最小的 ES 模块桩，
-/// 让 Rust 侧测试不依赖前端构建，同时验证 manifest 的前端入口契约。
-fn package() -> Result<std::path::PathBuf> {
-    let directory = std::env::temp_dir().join(format!(
-        "coterm-local-test-{}-{}",
-        std::process::id(),
-        NEXT_PACKAGE.fetch_add(1, Ordering::Relaxed),
-    ));
-    std::fs::create_dir(&directory)?;
-    std::fs::create_dir_all(directory.join("backend"))?;
-    std::fs::create_dir_all(directory.join("frontend"))?;
-    let executable = std::path::Path::new(env!("CARGO_BIN_EXE_coterm-driver-local"));
-    std::fs::copy(
-        executable,
-        directory.join("backend").join(
-            executable
-                .file_name()
-                .ok_or_else(|| anyhow::anyhow!("Missing executable name"))?,
-        ),
-    )?;
-    std::fs::write(
-        directory.join("frontend/index.js"),
-        "export function mount() { return { unmount() {} }; }\n",
-    )?;
-    std::fs::write(
-        directory.join("manifest.json"),
-        include_str!("../manifest.json"),
-    )?;
-    Ok(directory)
+async fn register(
+    runtime: &InProcessDriverRuntime,
+) -> Result<coterm_proto::runtime::manifest::DriverManifest> {
+    Ok(runtime
+        .register::<coterm_driver_local::backend::Backend>(
+            serde_json::from_str(include_str!("../manifest.json"))?,
+            Some("export function mount() { return { unmount() {} }; }"),
+        )
+        .await?)
 }
 
-fn runtime(platform: &str) -> ProcessDriverRuntime {
-    ProcessDriverRuntime::new(
-        platform,
-        RuntimeLimits {
-            max_control_bytes: 1024 * 1024,
-            max_data_chunk_bytes: 64 * 1024,
-            initial_window: FlowWindow {
-                chunks: 16,
-                bytes: 1024 * 1024,
-            },
+fn runtime() -> InProcessDriverRuntime {
+    InProcessDriverRuntime::new(RuntimeLimits {
+        max_control_bytes: 1024 * 1024,
+        max_data_chunk_bytes: 64 * 1024,
+        initial_window: FlowWindow {
+            chunks: 16,
+            bytes: 1024 * 1024,
         },
-    )
+    })
 }
 
 fn operation(name: &str, instance: Option<&str>, args: Value) -> SubmitOperation {
@@ -102,7 +61,7 @@ fn operation(name: &str, instance: Option<&str>, args: Value) -> SubmitOperation
 }
 
 async fn call(
-    runtime: &ProcessDriverRuntime,
+    runtime: &InProcessDriverRuntime,
     caller: &CallerContext,
     name: &str,
     instance: Option<&str>,
@@ -129,7 +88,7 @@ async fn call(
 /// PSReadLine 启动时会先探测光标位置，这期间到达的按键会被丢弃；真实用户也是等提示符
 /// 出现后才输入，所以测试同样先空转一小段时间。
 async fn settle(
-    runtime: &ProcessDriverRuntime,
+    runtime: &InProcessDriverRuntime,
     caller: &CallerContext,
     instance: &str,
     cursor: &str,
@@ -176,7 +135,7 @@ async fn settle(
 /// 同时替终端回答光标位置查询（`ESC[6n`）：真实前端由 xterm 自动回应，PowerShell 的
 /// PSReadLine 会一直等这个答复，不回应就看不到提示符与回显。
 async fn read_until(
-    runtime: &ProcessDriverRuntime,
+    runtime: &InProcessDriverRuntime,
     caller: &CallerContext,
     instance: &str,
     start_cursor: &str,
@@ -226,7 +185,7 @@ async fn read_until(
 
 /// 等一个延迟操作收敛到终态，返回它的领域结果。
 async fn wait_completed(
-    runtime: &ProcessDriverRuntime,
+    runtime: &InProcessDriverRuntime,
     caller: &CallerContext,
     operation_id: &str,
 ) -> Result<Value> {
@@ -258,11 +217,9 @@ fn slow_script() -> &'static str {
 }
 
 #[tokio::test]
-async fn process_host_runs_a_local_shell_through_the_runtime() -> Result<()> {
-    let platform = platform()?;
-    let directory = package()?;
-    let runtime = runtime(platform);
-    let manifest = runtime.load(&directory).await?;
+async fn in_process_host_runs_a_local_shell_through_the_runtime() -> Result<()> {
+    let runtime = runtime();
+    let manifest = register(&runtime).await?;
     assert_eq!(manifest.id, DRIVER_ID);
     assert_eq!(manifest.manifest_version, 1);
     assert_eq!(manifest.instances.instance_type, "local-shell");
@@ -291,7 +248,12 @@ async fn process_host_runs_a_local_shell_through_the_runtime() -> Result<()> {
         "local.resize",
         "local.restart",
         "local.exec",
-        "local.output", "local.command", "local.read_dialogue_pairs", "local.read_lines", "local.read_selected_lines", "local.select_lines",
+        "local.output",
+        "local.command",
+        "local.read_dialogue_pairs",
+        "local.read_lines",
+        "local.read_selected_lines",
+        "local.select_lines",
     ];
     expected.sort_unstable();
     assert_eq!(names, expected);
@@ -429,16 +391,13 @@ async fn process_host_runs_a_local_shell_through_the_runtime() -> Result<()> {
         .await?;
     assert!(runtime.list_instances(Some(DRIVER_ID)).await?.is_empty());
     runtime.stop(DRIVER_ID).await?;
-    std::fs::remove_dir_all(directory)?;
     Ok(())
 }
 
 #[tokio::test]
 async fn agent_commands_run_in_isolated_child_processes() -> Result<()> {
-    let platform = platform()?;
-    let directory = package()?;
-    let runtime = runtime(platform);
-    runtime.load(&directory).await?;
+    let runtime = runtime();
+    register(&runtime).await?;
     runtime.start(DRIVER_ID).await?;
     let instance = runtime
         .create_instance(DRIVER_ID, json!({"shell": test_shell()}))
@@ -557,7 +516,6 @@ async fn agent_commands_run_in_isolated_child_processes() -> Result<()> {
         .destroy_instance(&instance.driver_instance_id)
         .await?;
     runtime.stop(DRIVER_ID).await?;
-    std::fs::remove_dir_all(directory)?;
     Ok(())
 }
 
@@ -566,9 +524,8 @@ async fn mcp_commands_preserve_approval_results_and_idle_terminal() -> Result<()
     use coterm_core::approval_policy::{ApprovalMode, ApprovalPolicy};
     use coterm_proto::runtime::operation::ApproveProposal;
 
-    let directory = package()?;
-    let runtime = runtime(platform()?);
-    runtime.load(&directory).await?;
+    let runtime = runtime();
+    register(&runtime).await?;
     runtime.start(DRIVER_ID).await?;
     let instance = runtime
         .create_instance(DRIVER_ID, json!({"shell":test_shell()}))
@@ -682,15 +639,13 @@ async fn mcp_commands_preserve_approval_results_and_idle_terminal() -> Result<()
     assert_eq!(idle["running"], false);
     assert!(runtime.attention_snapshot().await.approvals.is_empty());
     runtime.shutdown().await;
-    std::fs::remove_dir_all(directory)?;
     Ok(())
 }
 
 #[tokio::test]
 async fn runtime_cancels_local_jobs_before_their_timeout() -> Result<()> {
-    let directory = package()?;
-    let runtime = runtime(platform()?);
-    runtime.load(&directory).await?;
+    let runtime = runtime();
+    register(&runtime).await?;
     runtime.start(DRIVER_ID).await?;
     let instance = runtime
         .create_instance(DRIVER_ID, json!({"shell":test_shell()}))
@@ -734,7 +689,6 @@ async fn runtime_cancels_local_jobs_before_their_timeout() -> Result<()> {
         OperationStatus::Cancelled
     );
     runtime.shutdown().await;
-    std::fs::remove_dir_all(directory)?;
     Ok(())
 }
 
@@ -921,65 +875,12 @@ async fn backend_rejects_requests_that_break_the_runtime_contract() -> Result<()
     Ok(())
 }
 
-/// 传输层契约：stdout 只写协议，回复与请求 id 一一对应。
-#[tokio::test]
-async fn process_speaks_the_shared_transport_envelope() -> Result<()> {
-    use std::io::Write;
-    use std::process::{Command, Stdio};
-
-    let executable = env!("CARGO_BIN_EXE_coterm-driver-local");
-    let mut child = Command::new(executable)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()?;
-    let hello = json!({
-        "jsonrpc": "2.0",
-        "id": "req-hello",
-        "method": "initialize",
-        "params": {
-            "interfaceMajor": 2,
-            "interfaceMinor": 0,
-            "requiredFeatures": ["instances"],
-            "optionalFeatures": [],
-            "limits": {"maxControlBytes": 1048576, "maxDataChunkBytes": 65536,
-                       "initialWindow": {"chunks": 16, "bytes": 1048576}},
-        },
-    });
-    let stdin = child
-        .stdin
-        .as_mut()
-        .ok_or_else(|| anyhow::anyhow!("Missing stdin"))?;
-    writeln!(stdin, "{hello}")?;
-    writeln!(
-        stdin,
-        "{}",
-        json!({"jsonrpc":"2.0","id":"req-shutdown","method":"shutdown","params":null})
-    )?;
-    stdin.flush()?;
-    drop(child.stdin.take());
-    let output = child.wait_with_output()?;
-    assert!(output.status.success(), "{output:?}");
-    let lines: Vec<Value> = String::from_utf8(output.stdout)?
-        .lines()
-        .map(|line| serde_json::from_str(line).expect("stdout must stay protocol-only"))
-        .collect();
-    assert_eq!(lines.len(), 2, "{lines:?}");
-    assert_eq!(lines[0]["id"], "req-hello");
-    assert_eq!(lines[0]["result"]["driverId"], DRIVER_ID);
-    assert_eq!(lines[1]["id"], "req-shutdown");
-    assert!(lines.iter().all(|line| line.get("error").is_none()));
-    Ok(())
-}
-
 #[tokio::test]
 async fn health_check_within_the_handshake_deadline() -> Result<()> {
     // 基座要求控制命令 10 秒内应答；这里用更紧的 2 秒守住回归。
-    let platform = platform()?;
-    let directory = package()?;
-    let runtime = runtime(platform);
+    let runtime = runtime();
     let started = tokio::time::Instant::now();
-    runtime.load(&directory).await?;
+    register(&runtime).await?;
     runtime.start(DRIVER_ID).await?;
     assert!(
         started.elapsed() < Duration::from_secs(2),
@@ -987,6 +888,5 @@ async fn health_check_within_the_handshake_deadline() -> Result<()> {
         started.elapsed()
     );
     runtime.stop(DRIVER_ID).await?;
-    std::fs::remove_dir_all(directory)?;
     Ok(())
 }

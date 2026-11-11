@@ -20,10 +20,10 @@ use tokio::{
 };
 
 #[tokio::test]
-async fn process_host_routes_approval_snapshot_and_hides_terminal_input() -> Result<()> {
+async fn in_process_host_routes_approval_snapshot_and_hides_terminal_input() -> Result<()> {
     use coterm_core::{
-        driver_manager::ProcessDriverRuntime,
-        driver_runtime::{CallerContext, Operations, DriverRuntime, SubmitOperation},
+        driver_manager::InProcessDriverRuntime,
+        driver_runtime::{CallerContext, DriverRuntime, Operations, SubmitOperation},
     };
     use coterm_proto::runtime::{
         lifecycle::RuntimeLimits,
@@ -31,49 +31,15 @@ async fn process_host_routes_approval_snapshot_and_hides_terminal_input() -> Res
         stream::FlowWindow,
     };
     let server = server().await?;
-    let directory = std::env::temp_dir().join(format!(
-        "coterm-ssh-test-{}-{}",
-        std::process::id(),
-        server.config.port
-    ));
-    std::fs::create_dir_all(directory.join("backend"))?;
-    std::fs::create_dir_all(directory.join("frontend"))?;
-    let executable = std::path::Path::new(env!("CARGO_BIN_EXE_coterm-driver-ssh"));
-    let destination = directory.join("backend").join(
-        executable
-            .file_name()
-            .ok_or_else(|| anyhow::anyhow!("Missing executable name"))?,
-    );
-    std::fs::copy(executable, destination)?;
-    std::fs::write(
-        directory.join("manifest.json"),
-        include_str!("../manifest.json"),
-    )?;
-    std::fs::write(
-        directory.join("frontend/index.js"),
-        "export function mount() {}",
-    )?;
-    let platform = match (std::env::consts::OS, std::env::consts::ARCH) {
-        ("windows", "x86_64") => "windows-x64",
-        ("windows", "aarch64") => "windows-arm64",
-        ("linux", "x86_64") => "linux-x64",
-        ("linux", "aarch64") => "linux-arm64",
-        ("macos", "x86_64") => "macos-x64",
-        ("macos", "aarch64") => "macos-arm64",
-        _ => anyhow::bail!("Unsupported test platform"),
-    };
-    let runtime = ProcessDriverRuntime::new(
-        platform,
-        RuntimeLimits {
-            max_control_bytes: 1024 * 1024,
-            max_data_chunk_bytes: 64 * 1024,
-            initial_window: FlowWindow {
-                chunks: 16,
-                bytes: 1024 * 1024,
-            },
+    let runtime = InProcessDriverRuntime::new(RuntimeLimits {
+        max_control_bytes: 1024 * 1024,
+        max_data_chunk_bytes: 64 * 1024,
+        initial_window: FlowWindow {
+            chunks: 16,
+            bytes: 1024 * 1024,
         },
-    );
-    runtime.load(&directory).await?;
+    });
+    register(&runtime).await?;
     runtime.start("coterm-driver-ssh").await?;
     let instance = runtime
         .create_instance("coterm-driver-ssh", serde_json::to_value(&server.config)?)
@@ -261,7 +227,6 @@ async fn process_host_routes_approval_snapshot_and_hides_terminal_input() -> Res
         Some("operation_cancellation_unconfirmed")
     );
     runtime.stop("coterm-driver-ssh").await?;
-    std::fs::remove_dir_all(directory)?;
     Ok(())
 }
 
@@ -680,7 +645,7 @@ fn create(id: &str, config: &Config) -> Value {
 
 #[tokio::test]
 async fn message_blocks_follow_approved_commands_and_remain_instance_bound() -> Result<()> {
-    use coterm_core::driver_runtime::{CallerContext, Operations, DriverRuntime, SubmitOperation};
+    use coterm_core::driver_runtime::{CallerContext, DriverRuntime, Operations, SubmitOperation};
     use coterm_proto::runtime::{
         message::DriverNotification,
         operation::{ApproveProposal, OperationSource, OperationStatus},
@@ -972,7 +937,7 @@ async fn message_blocks_follow_approved_commands_and_remain_instance_bound() -> 
 #[tokio::test]
 async fn human_enter_observations_reach_selected_agent_context_without_recording_raw_keys(
 ) -> Result<()> {
-    use coterm_core::driver_runtime::{CallerContext, Operations, DriverRuntime, SubmitOperation};
+    use coterm_core::driver_runtime::{CallerContext, DriverRuntime, Operations, SubmitOperation};
     use coterm_proto::runtime::operation::{OperationSource, OperationStatus};
     let ssh = server().await?;
     let (runtime, instance) = load_runtime(&ssh, "human-blocks").await?;
@@ -1330,8 +1295,8 @@ impl McpWire {
 #[tokio::test]
 async fn external_mcp_uses_shared_ssh_and_host_secret_and_approval_paths() -> Result<()> {
     use coterm_core::{
-        driver_manager::ProcessDriverRuntime,
-        driver_runtime::{CallerContext, Operations, DriverRuntime, SubmitOperation},
+        driver_manager::InProcessDriverRuntime,
+        driver_runtime::{CallerContext, DriverRuntime, Operations, SubmitOperation},
     };
     use coterm_proto::runtime::{
         lifecycle::RuntimeLimits,
@@ -1339,52 +1304,15 @@ async fn external_mcp_uses_shared_ssh_and_host_secret_and_approval_paths() -> Re
         stream::FlowWindow,
     };
     let ssh = server().await?;
-    let directory = std::env::temp_dir().join(format!(
-        "coterm-mcp-ssh-{}-{}",
-        std::process::id(),
-        ssh.config.port
-    ));
-    std::fs::create_dir_all(directory.join("backend"))?;
-    std::fs::create_dir_all(directory.join("frontend"))?;
-    let executable = std::path::Path::new(env!("CARGO_BIN_EXE_coterm-driver-ssh"));
-    std::fs::copy(
-        executable,
-        directory.join("backend").join(
-            executable
-                .file_name()
-                .ok_or_else(|| anyhow::anyhow!("Missing binary name"))?,
-        ),
-    )?;
-    std::fs::write(
-        directory.join("manifest.json"),
-        include_str!("../manifest.json"),
-    )?;
-    std::fs::write(
-        directory.join("frontend/index.js"),
-        "export function mount() {}",
-    )?;
-    let os = if cfg!(target_os = "macos") {
-        "macos"
-    } else {
-        std::env::consts::OS
-    };
-    let arch = if cfg!(target_arch = "aarch64") {
-        "arm64"
-    } else {
-        "x64"
-    };
-    let runtime = Arc::new(ProcessDriverRuntime::new(
-        format!("{os}-{arch}"),
-        RuntimeLimits {
-            max_control_bytes: 1024 * 1024,
-            max_data_chunk_bytes: 8192,
-            initial_window: FlowWindow {
-                chunks: 16,
-                bytes: 1024 * 1024,
-            },
+    let runtime = Arc::new(InProcessDriverRuntime::new(RuntimeLimits {
+        max_control_bytes: 1024 * 1024,
+        max_data_chunk_bytes: 8192,
+        initial_window: FlowWindow {
+            chunks: 16,
+            bytes: 1024 * 1024,
         },
-    ));
-    runtime.load(&directory).await?;
+    }));
+    register(&runtime).await?;
     runtime.start("coterm-driver-ssh").await?;
     let instance = runtime
         .create_instance("coterm-driver-ssh", serde_json::to_value(&ssh.config)?)
@@ -1908,66 +1836,28 @@ async fn external_mcp_uses_shared_ssh_and_host_secret_and_approval_paths() -> Re
         "notifications/tools/list_changed"
     );
     drop(bridge);
-    std::fs::remove_dir_all(directory)?;
     Ok(())
 }
 
-/// Builds one driver package directory for a test and returns its path.
+/// Registers a real backend for the test server and creates an isolated instance.
 async fn load_runtime(
     server: &TestServer,
-    tag: &str,
+    _tag: &str,
 ) -> Result<(
-    std::sync::Arc<coterm_core::driver_manager::ProcessDriverRuntime>,
+    std::sync::Arc<coterm_core::driver_manager::InProcessDriverRuntime>,
     coterm_proto::runtime::lifecycle::InstanceInfo,
 )> {
-    use coterm_core::{driver_manager::ProcessDriverRuntime, driver_runtime::DriverRuntime};
+    use coterm_core::{driver_manager::InProcessDriverRuntime, driver_runtime::DriverRuntime};
     use coterm_proto::runtime::{lifecycle::RuntimeLimits, stream::FlowWindow};
-    let directory = std::env::temp_dir().join(format!(
-        "coterm-ssh-{tag}-{}-{}",
-        std::process::id(),
-        server.config.port
-    ));
-    std::fs::create_dir_all(directory.join("backend"))?;
-    std::fs::create_dir_all(directory.join("frontend"))?;
-    let executable = std::path::Path::new(env!("CARGO_BIN_EXE_coterm-driver-ssh"));
-    std::fs::copy(
-        executable,
-        directory.join("backend").join(
-            executable
-                .file_name()
-                .ok_or_else(|| anyhow::anyhow!("Missing binary name"))?,
-        ),
-    )?;
-    std::fs::write(
-        directory.join("manifest.json"),
-        include_str!("../manifest.json"),
-    )?;
-    std::fs::write(
-        directory.join("frontend/index.js"),
-        "export function mount() {}",
-    )?;
-    let os = if cfg!(target_os = "macos") {
-        "macos"
-    } else {
-        std::env::consts::OS
-    };
-    let arch = if cfg!(target_arch = "aarch64") {
-        "arm64"
-    } else {
-        "x64"
-    };
-    let runtime = std::sync::Arc::new(ProcessDriverRuntime::new(
-        format!("{os}-{arch}"),
-        RuntimeLimits {
-            max_control_bytes: 1024 * 1024,
-            max_data_chunk_bytes: 8192,
-            initial_window: FlowWindow {
-                chunks: 16,
-                bytes: 1024 * 1024,
-            },
+    let runtime = std::sync::Arc::new(InProcessDriverRuntime::new(RuntimeLimits {
+        max_control_bytes: 1024 * 1024,
+        max_data_chunk_bytes: 8192,
+        initial_window: FlowWindow {
+            chunks: 16,
+            bytes: 1024 * 1024,
         },
-    ));
-    runtime.load(&directory).await?;
+    }));
+    register(&runtime).await?;
     runtime.start("coterm-driver-ssh").await?;
     let instance = runtime
         .create_instance("coterm-driver-ssh", serde_json::to_value(&server.config)?)
@@ -1976,7 +1866,7 @@ async fn load_runtime(
 }
 
 async fn connect_instance(
-    runtime: &std::sync::Arc<coterm_core::driver_manager::ProcessDriverRuntime>,
+    runtime: &std::sync::Arc<coterm_core::driver_manager::InProcessDriverRuntime>,
     instance: &coterm_proto::runtime::lifecycle::InstanceInfo,
     server: &TestServer,
 ) -> Result<()> {
@@ -2012,7 +1902,7 @@ async fn connect_instance(
 
 #[tokio::test]
 async fn unified_command_snapshots_are_instance_bound_and_survive_disconnect() -> Result<()> {
-    use coterm_core::driver_runtime::{CallerContext, Operations, DriverRuntime, SubmitOperation};
+    use coterm_core::driver_runtime::{CallerContext, DriverRuntime, Operations, SubmitOperation};
     use coterm_proto::runtime::{lifecycle::InstanceInfo, operation::OperationSource};
     let ssh = server().await?;
     let (runtime, instance) = load_runtime(&ssh, "command-snapshots").await?;
@@ -2124,7 +2014,7 @@ async fn unified_command_snapshots_are_instance_bound_and_survive_disconnect() -
 
 #[tokio::test]
 async fn selected_lines_are_exact_human_owned_and_connection_bound() -> Result<()> {
-    use coterm_core::driver_runtime::{CallerContext, Operations, DriverRuntime, SubmitOperation};
+    use coterm_core::driver_runtime::{CallerContext, DriverRuntime, Operations, SubmitOperation};
     use coterm_proto::runtime::{
         lifecycle::InstanceInfo,
         operation::{OperationSource, OperationStatus},
@@ -2297,7 +2187,7 @@ async fn running_command_output_is_readable_without_cursors_or_resubmission() ->
 
 #[tokio::test]
 async fn syntax_errors_are_rejected_without_killing_the_shared_shell() -> Result<()> {
-    use coterm_core::driver_runtime::{CallerContext, Operations, DriverRuntime, SubmitOperation};
+    use coterm_core::driver_runtime::{CallerContext, DriverRuntime, Operations, SubmitOperation};
     use coterm_proto::runtime::operation::{OperationSource, OperationStatus};
     let ssh = server().await?;
     let (runtime, instance) = load_runtime(&ssh, "syntax").await?;
@@ -2374,7 +2264,7 @@ async fn agent_feedback_approval_returns_without_waiting_for_the_human() -> Resu
 
 #[tokio::test]
 async fn agent_feedback_exec_keeps_32k_in_one_result() -> Result<()> {
-    use coterm_core::driver_runtime::{CallerContext, Operations, DriverRuntime, SubmitOperation};
+    use coterm_core::driver_runtime::{CallerContext, DriverRuntime, Operations, SubmitOperation};
     use coterm_proto::runtime::operation::OperationSource;
     let ssh = server().await?;
     let (runtime, instance) = load_runtime(&ssh, "agent-output").await?;
@@ -2538,7 +2428,7 @@ async fn agent_feedback_health_default_routing_and_legacy_aliases() -> Result<()
 
 #[tokio::test]
 async fn exec_is_isolated_from_the_shared_pty_and_streams_output() -> Result<()> {
-    use coterm_core::driver_runtime::{CallerContext, Operations, DriverRuntime, SubmitOperation};
+    use coterm_core::driver_runtime::{CallerContext, DriverRuntime, Operations, SubmitOperation};
     use coterm_proto::runtime::operation::{OperationSource, OperationStatus};
     let ssh = server().await?;
     let (runtime, instance) = load_runtime(&ssh, "exec").await?;
@@ -2629,7 +2519,7 @@ async fn exec_is_isolated_from_the_shared_pty_and_streams_output() -> Result<()>
 
 #[tokio::test]
 async fn read_only_queries_use_fixed_scripts_outside_the_pty() -> Result<()> {
-    use coterm_core::driver_runtime::{CallerContext, Operations, DriverRuntime, SubmitOperation};
+    use coterm_core::driver_runtime::{CallerContext, DriverRuntime, Operations, SubmitOperation};
     use coterm_proto::runtime::operation::{OperationSource, OperationStatus};
     let ssh = server().await?;
     let (runtime, instance) = load_runtime(&ssh, "readonly").await?;
@@ -2859,7 +2749,7 @@ async fn explicit_reset_abandons_an_unknown_command_and_keeps_exec_available() -
 
 #[tokio::test]
 async fn command_regex_rules_control_approval_without_changing_effect_or_checks() -> Result<()> {
-    use coterm_core::driver_runtime::{CallerContext, Operations, DriverRuntime, SubmitOperation};
+    use coterm_core::driver_runtime::{CallerContext, DriverRuntime, Operations, SubmitOperation};
     use coterm_proto::runtime::operation::{OperationSource, OperationStatus};
     let ssh = server().await?;
     let (runtime, instance) = load_runtime(&ssh, "allow").await?;
@@ -2968,7 +2858,7 @@ async fn command_regex_rules_control_approval_without_changing_effect_or_checks(
 }
 
 async fn wait_for_test_operation(
-    runtime: &coterm_core::driver_manager::ProcessDriverRuntime,
+    runtime: &coterm_core::driver_manager::InProcessDriverRuntime,
     caller: coterm_core::driver_runtime::CallerContext,
     id: &str,
 ) -> Result<coterm_proto::runtime::operation::OperationRecord> {
@@ -2995,7 +2885,7 @@ async fn wait_for_test_operation(
 #[tokio::test]
 async fn real_mcp_file_tools_and_multiline_exec_preserve_content_and_stop_on_failure() -> Result<()>
 {
-    use coterm_core::driver_runtime::{CallerContext, Operations, DriverRuntime};
+    use coterm_core::driver_runtime::{CallerContext, DriverRuntime, Operations};
     use coterm_proto::runtime::operation::{ApproveProposal, OperationSource, OperationStatus};
     let ssh = server_mode(true).await?;
     let (runtime, instance) = load_runtime(&ssh, "scripts").await?;
@@ -3117,7 +3007,7 @@ async fn real_mcp_file_tools_and_multiline_exec_preserve_content_and_stop_on_fai
 #[tokio::test]
 async fn sudo_uses_one_desktop_secret_after_approval_without_leaking_or_replaying_writes(
 ) -> Result<()> {
-    use coterm_core::driver_runtime::{CallerContext, Operations, DriverRuntime, SubmitOperation};
+    use coterm_core::driver_runtime::{CallerContext, DriverRuntime, Operations, SubmitOperation};
     use coterm_proto::runtime::{
         interaction::InteractionKind,
         operation::{ApproveProposal, OperationSource, OperationStatus},
@@ -3356,4 +3246,14 @@ async fn sudo_uses_one_desktop_secret_after_approval_without_leaking_or_replayin
     runtime.stop("coterm-driver-ssh").await?;
     std::fs::remove_dir_all(&directory)?;
     Ok(())
+}
+async fn register(
+    runtime: &coterm_core::driver_manager::InProcessDriverRuntime,
+) -> Result<coterm_proto::runtime::manifest::DriverManifest> {
+    Ok(runtime
+        .register::<coterm_driver_ssh::backend::Backend>(
+            serde_json::from_str(include_str!("../manifest.json"))?,
+            Some("export function mount() { return { unmount() {} }; }"),
+        )
+        .await?)
 }

@@ -1,4 +1,4 @@
-use coterm_core::driver_manager::ProcessDriverRuntime;
+use coterm_core::driver_manager::InProcessDriverRuntime;
 use coterm_mcp::{
     server::BridgeServer,
     transport::{read_frame, write_frame},
@@ -14,8 +14,7 @@ use tokio::{
 
 #[tokio::test]
 async fn real_stdio_adapter_routes_to_desktop_runtime() -> anyhow::Result<()> {
-    let runtime = Arc::new(ProcessDriverRuntime::new(
-        "test",
+    let runtime = Arc::new(InProcessDriverRuntime::new(
         RuntimeLimits {
             max_control_bytes: 1024 * 1024,
             max_data_chunk_bytes: 8192,

@@ -6,7 +6,7 @@ Coterm 面向人类与 Agent 协同，支持 SSH、串口与本地终端。非�
 
 SSH、Serial、Local 作为第一方内置驱动随桌面应用分发。普通用户直接创建实例，无需安装离线驱动包；构建与发布约束见 [内置驱动开发](../architecture/driver-development.md) 和 [发行说明](../release/alpha-release.md)。
 
-驱动保留独立 Worker 进程，同一驱动管理多个隔离实例。进程隔离限制驱动崩溃对宿主的直接影响；同一 Worker 退出会影响其承载的实例，不能等同于每实例独立进程或无故障保证。
+驱动以 Rust 库链接进桌面主进程，每种驱动由一个独立异步任务串行处理控制请求，同一驱动管理多个状态隔离的实例。任务退出影响该驱动承载的全部实例；普通 panic 可按任务收敛，原生崩溃、abort 与阻塞底层调用不具备进程级隔离。
 
 ## 主要数据链路
 
@@ -14,8 +14,8 @@ SSH、Serial、Local 作为第一方内置驱动随桌面应用分发。普通�
 人工界面 / MCP
       ↓
 基座：来源识别 → 实例路由 → 每实例审批 → 操作记录
-      ↓ stdio JSON-RPC
-SSH / Serial / Local Worker → 远端、设备或本地 Shell
+      ↓ 类型化请求 / 有界队列
+SSH / Serial / Local 后端任务 → 远端、设备或本地 Shell
       ↓
 后端有界记录 → MCP 快照读取
       ↓ 事件与内部回放

@@ -1,5 +1,11 @@
 # Serial 实施进度
 
+## 2026-11-11：进程内运行与诊断入口
+
+- 桌面直接链接 Serial Backend，实例、模式切换、缓冲、提示符及读取接口不变；宿主/MCP 契约测试改用真实进程内后端，移除独立驱动程序与测试包装配。
+- 测速脚本使用显式 serial-diagnostic example：先执行 `cargo build -p coterm-driver-serial --example serial-diagnostic`，再运行 benchmark-serial.mjs；自定义可执行路径参数改为 `--diagnostic`。该示例不随桌面分发，测试不包含桌面任务派发和 xterm。
+- 原 Worker 的设备测速记录作为历史结果保留，本轮未打开物理串口；不能把旧吞吐值当作新桌面链路验收。硬件/虚拟配对用例仍需显式选择端口。整体验证见[项目进度](../../../docs/progress/project.md)。
+
 ## 2026-11-11：终端与 UART 统一模式入口
 
 - 创建页移除数据模式和提示符字段，新建默认终端；运行页的终端 / UART 按钮同步后端 shell / stream 能力，完整提示符在断开后的终端配置中编辑。恢复时以驱动配置为准，切换后通过宿主既有配置保存入口落盘。

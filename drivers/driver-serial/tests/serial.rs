@@ -105,41 +105,15 @@ async fn disconnected_configuration_is_validated_and_keeps_the_instance_port() -
     Ok(())
 }
 
-fn platform() -> Result<&'static str> {
-    Ok(match (std::env::consts::OS, std::env::consts::ARCH) {
-        ("windows", "x86_64") => "windows-x64",
-        ("windows", "aarch64") => "windows-arm64",
-        ("linux", "x86_64") => "linux-x64",
-        ("linux", "aarch64") => "linux-arm64",
-        ("macos", "x86_64") => "macos-x64",
-        ("macos", "aarch64") => "macos-arm64",
-        _ => anyhow::bail!("Unsupported test platform"),
-    })
-}
-
-fn package(platform: &str) -> Result<std::path::PathBuf> {
-    let directory = std::env::temp_dir().join(format!("coterm-serial-test-{}", std::process::id()));
-    std::fs::create_dir_all(directory.join("backend"))?;
-    std::fs::create_dir_all(directory.join("frontend"))?;
-    let executable = std::path::Path::new(env!("CARGO_BIN_EXE_coterm-driver-serial"));
-    std::fs::copy(
-        executable,
-        directory.join("backend").join(
-            executable
-                .file_name()
-                .ok_or_else(|| anyhow::anyhow!("Missing executable name"))?,
-        ),
-    )?;
-    std::fs::write(
-        directory.join("manifest.json"),
-        include_str!("../manifest.json"),
-    )?;
-    std::fs::write(
-        directory.join("frontend/index.js"),
-        "export function mount() {}",
-    )?;
-    let _ = platform;
-    Ok(directory)
+async fn register(
+    runtime: &coterm_core::driver_manager::InProcessDriverRuntime,
+) -> Result<coterm_proto::runtime::manifest::DriverManifest> {
+    Ok(runtime
+        .register::<coterm_driver_serial::backend::Backend>(
+            serde_json::from_str(include_str!("../manifest.json"))?,
+            Some("export function mount() { return { unmount() {} }; }"),
+        )
+        .await?)
 }
 
 /// 后端直接驱动的契约测试：不需要打开物理端口。
@@ -372,31 +346,26 @@ async fn backend_rejects_requests_that_break_the_runtime_contract() -> Result<()
 }
 
 #[tokio::test]
-async fn process_host_loads_the_serial_package_and_validates_mcp_tools() -> Result<()> {
+async fn in_process_host_registers_serial_and_validates_mcp_tools() -> Result<()> {
     use coterm_core::{
-        driver_manager::ProcessDriverRuntime,
-        driver_runtime::{CallerContext, Operations, DriverRuntime, SubmitOperation},
+        driver_manager::InProcessDriverRuntime,
+        driver_runtime::{CallerContext, DriverRuntime, Operations, SubmitOperation},
     };
     use coterm_proto::runtime::{
         lifecycle::RuntimeLimits,
         operation::{OperationSource, OperationStatus},
         stream::FlowWindow,
     };
-    let platform = platform()?;
-    let directory = package(platform)?;
-    let runtime = ProcessDriverRuntime::new(
-        platform,
-        RuntimeLimits {
-            max_control_bytes: 1024 * 1024,
-            max_data_chunk_bytes: 64 * 1024,
-            initial_window: FlowWindow {
-                chunks: 16,
-                bytes: 1024 * 1024,
-            },
+    let runtime = InProcessDriverRuntime::new(RuntimeLimits {
+        max_control_bytes: 1024 * 1024,
+        max_data_chunk_bytes: 64 * 1024,
+        initial_window: FlowWindow {
+            chunks: 16,
+            bytes: 1024 * 1024,
         },
-    );
+    });
     // 基座握手会校验实例作用域的 MCP 工具必须要求 driverInstanceId。
-    runtime.load(&directory).await?;
+    register(&runtime).await?;
     runtime.start(DRIVER_ID).await?;
     assert!(runtime.frontend_source(DRIVER_ID).await?.is_some());
     let instance = runtime
@@ -736,6 +705,5 @@ async fn process_host_loads_the_serial_package_and_validates_mcp_tools() -> Resu
     );
 
     runtime.stop(DRIVER_ID).await?;
-    std::fs::remove_dir_all(directory)?;
     Ok(())
 }

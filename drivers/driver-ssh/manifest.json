@@ -5,18 +5,29 @@
   "version": "0.1.0",
   "runtime": {
     "interfaceMajor": 2,
-    "requires": ["instances", "backend-calls", "operation-catalog", "secret-delivery", "native-mcp-tools", "deferred-interactions", "async-operations", "driver-events"]
+    "requires": [
+      "instances",
+      "backend-calls",
+      "operation-catalog",
+      "secret-delivery",
+      "native-mcp-tools",
+      "deferred-interactions",
+      "async-operations",
+      "driver-events"
+    ]
   },
-  "backend": {
-    "windows-x64": "backend/coterm-driver-ssh.exe",
-    "windows-arm64": "backend/coterm-driver-ssh.exe",
-    "linux-x64": "backend/coterm-driver-ssh",
-    "linux-arm64": "backend/coterm-driver-ssh",
-    "macos-x64": "backend/coterm-driver-ssh",
-    "macos-arm64": "backend/coterm-driver-ssh"
+  "frontend": {
+    "entry": "frontend/index.js"
   },
-  "frontend": { "entry": "frontend/index.js" },
-  "mcp": { "provider": "backend" },
-  "instances": { "type": "ssh-connection", "multiple": true },
-  "capabilities": ["secret-input", "confirmation"]
+  "mcp": {
+    "provider": "backend"
+  },
+  "instances": {
+    "type": "ssh-connection",
+    "multiple": true
+  },
+  "capabilities": [
+    "secret-input",
+    "confirmation"
+  ]
 }

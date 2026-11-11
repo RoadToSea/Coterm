@@ -9,6 +9,11 @@
 - 规则组由宿主独立保存，实例各自绑定一个组并管理 Bypass；组更新同步影响所有绑定实例的新提交，保存项恢复时解析当前组和自身 Bypass；临时实例的 Bypass 仅在内存保留。
 - Agent 命令审批支持用户自定义正则：正向放行匹配命令，反向拦截匹配命令；编辑器支持追加/删除、试匹配和显式保存。规则作用于实际命令文本，旧接口级放行不再生效。
 
+## 2026-11-11：复用进程内驱动运行时
+
+- Bridge 与桌面使用同一个 InProcessDriverRuntime，外部 MCP 工具名、参数、实例路由、审批与结果结构保持不变。MCP stdio 适配器仍是桌面可执行文件的子命令，与驱动 Worker 无关。
+- 真实 MCP Stdio、审批面板与 PowerShell 环境延续在单个独立桌面 EXE 下验收通过；生命周期测试覆盖同宿主 PID、状态隔离、驱动任务 panic 后其他驱动继续工作、故障实例/待审批收敛和无自动重放。详情见[项目进度](project.md)。
+
 ## 2026-11-08：串口 Shell / stream 读取
 
 - 串口 Agent 读取改用后端 `read_lines`；Shell 实例还支持 `read_selected_lines` 与最近 `read_dialogue_pairs(count)`，原游标工具不再注册到 MCP。模式与提示符显式配置，不从 UART / 终端显示视图猜测设备语义。

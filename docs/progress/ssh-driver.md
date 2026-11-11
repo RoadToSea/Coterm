@@ -12,6 +12,12 @@
 - Exec 胶囊有 LED 状态、右侧 / 底部停靠、可拖动尺寸；历史选择暂停跟随，关闭面板时新任务不自动展开。
 - Agent 使用 read_lines、read_selected_lines、read_dialogue_pairs 读取后端快照，无需维护游标。xterm 文本选区由仅 Human 可用的 select_lines 同步；块号选择仍用于前端高亮。
 
+## 2026-11-11：进程内运行
+
+- SSH Backend 作为 Rust 库由桌面注册，不再启动独立驱动程序。保留连接对象、会话 actor、命令块、后台通道和秘密交互；停止时依靠连接析构取消任务。
+- 宿主/MCP 集成测试改为注册真实 Backend 与本地 SSH 测试服务器，保留审批、认证、前后台命令、文件与 sudo 测试，不再复制 EXE 或组装测试包。
+- 工作区测试与严格 Clippy 通过；本轮未连接外部真实 SSH 服务器。整体迁移及故障隔离边界见[项目进度](project.md)。
+
 ## 2026-11-08：统一命令与后端快照
 
 - command 的 mode 默认为 terminal；显式 exec 复用独立后台通道和秘密交互。两种路径复用审批，mode 和命令一起保留在参数快照中。MCP 不再发布独立 exec、output、read 和 selected_blocks 工具。

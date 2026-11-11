@@ -1,4 +1,6 @@
-/** Explicit hardware benchmark through the real serial Worker and JSON event transport.
+/** Explicit hardware benchmark through the opt-in serial diagnostic example.
+ * Build with cargo build -p coterm-driver-serial --example serial-diagnostic.
+ * Measures UART/backend throughput; excludes the desktop in-process dispatch path.
  * Requires a released port and a logged-in Linux Shell with Python 3. The temporary
  * peer runs in memory, restores its tty after 30 seconds without a command, and exits.
  * Fails on missing/corrupt bytes, event gaps, unsupported speeds or unavailable ports.
@@ -16,8 +18,8 @@ const root = fileURLToPath(new URL("../", import.meta.url));
 const flags = new Map();
 for (let index = 2; index < process.argv.length; index += 2) {
   const key = process.argv[index], value = process.argv[index + 1];
-  if (!['--port', '--baud', '--rates', '--bytes', '--repeats', '--output', '--worker'].includes(key) || !value)
-    throw new Error("Usage: node scripts/benchmark-serial.mjs --port PORT [--baud 115200] [--rates 115200,230400] [--bytes 65536] [--repeats 3] [--output FILE] [--worker FILE]");
+  if (!['--port', '--baud', '--rates', '--bytes', '--repeats', '--output', '--diagnostic'].includes(key) || !value)
+    throw new Error("Usage: node scripts/benchmark-serial.mjs --port PORT [--baud 115200] [--rates 115200,230400] [--bytes 65536] [--repeats 3] [--output FILE] [--diagnostic FILE]");
   flags.set(key, value);
 }
 const port = flags.get('--port');
@@ -33,13 +35,13 @@ const repeats = integer('--repeats', 3, 1, 10);
 const rates = (flags.get('--rates') ?? String(baud)).split(',').map(Number);
 assert.ok(rates.length <= 12 && rates.every(rate => Number.isSafeInteger(rate) && rate >= 9600 && rate <= 4_000_000), 'invalid --rates');
 assert.ok(bytes * 10 / Math.min(...rates) < 20, 'reduce --bytes: each transfer must finish before the peer watchdog');
-const worker = path.resolve(flags.get('--worker') ?? path.join(root, 'target/debug', `coterm-driver-serial${process.platform === 'win32' ? '.exe' : ''}`));
-const child = spawn(worker, [], { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+const diagnostic = path.resolve(flags.get('--diagnostic') ?? path.join(root, 'target/debug/examples', `serial-diagnostic${process.platform === 'win32' ? '.exe' : ''}`));
+const child = spawn(diagnostic, [], { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
 const pending = new Map();
 let sequence = 0, stderr = '';
 child.stderr.on('data', data => { stderr = (stderr + data).slice(-4096); });
 child.on('error', error => { for (const item of pending.values()) item.reject(error); });
-child.on('exit', code => { for (const item of pending.values()) item.reject(new Error(`Worker exited ${code}: ${stderr}`)); });
+child.on('exit', code => { for (const item of pending.values()) item.reject(new Error(`Diagnostic exited ${code}: ${stderr}`)); });
 let received = Buffer.alloc(0), changed, connectionId = null, cursor = 0, gaps = 0;
 createInterface({ input: child.stdout }).on('line', line => {
   const message = JSON.parse(line);
@@ -155,7 +157,7 @@ const payload = Buffer.from(Array.from({ length: Math.ceil(bytes / 64) }, (_, in
   createHash('sha256').update(String(index)).digest('hex')).join('').slice(0, bytes));
 const hash = createHash('sha256').update(payload).digest('hex');
 const report = { port, originalBaud: baud, framing: '8N1', mode: 'stream', bytes, repeats, chunkBytes: 16384,
-  path: 'physical UART -> Serial Worker -> JSON stdout events -> Node consumer; reverse uses serial.write',
+  path: 'physical UART -> serial diagnostic example -> JSON events -> Node consumer; reverse uses serial.write; excludes desktop dispatch',
   excludes: 'desktop rendering, MCP Bridge and approval', rates: [], restored: false };
 let activePeer = false;
 try {

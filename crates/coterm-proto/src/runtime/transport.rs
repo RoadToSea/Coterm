@@ -7,13 +7,13 @@
 
 use std::{sync::Arc, time::Duration};
 
-use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
-use super::lifecycle::{HelloResult, RuntimeHello, INTERFACE_MAJOR};
-use super::message::{HostCommand, DriverNotification};
+use super::backend::{dispatch, rejected};
+use super::lifecycle::{HelloResult, RuntimeHello};
+use super::message::{DriverNotification, HostCommand};
 use super::wire::{decode_request, encode_line, reply};
-use super::{ErrorCategory, RuntimeError};
+use super::ErrorCategory;
 
 pub use super::backend::DriverBackend;
 pub use super::wire::{MAX_CONTROL_BYTES, NOTIFICATION_METHOD};
@@ -162,51 +162,6 @@ where
     // 任一端失败都会取消另一端；输出失败时不继续接收有副作用的请求。
     tokio::try_join!(read, write)?;
     Ok(())
-}
-
-fn rejected(category: ErrorCategory, code: &str) -> RuntimeError {
-    RuntimeError {
-        category,
-        code: code.to_owned(),
-        message: code.replace('_', " "),
-        details: None,
-    }
-}
-
-async fn dispatch<B: DriverBackend>(
-    backend: &mut B,
-    command: HostCommand,
-    state: Option<&HelloResult>,
-) -> Result<Value, RuntimeError> {
-    if let HostCommand::Hello(ref hello) = command {
-        if state.is_some() {
-            return Err(rejected(
-                ErrorCategory::Conflict,
-                "runtime_already_initialized",
-            ));
-        }
-        if hello.interface_major != INTERFACE_MAJOR || hello.limits.max_control_bytes == 0 {
-            return Err(rejected(
-                ErrorCategory::Unsupported,
-                "driver_handshake_incompatible",
-            ));
-        }
-    } else if !matches!(command, HostCommand::Shutdown) {
-        let state =
-            state.ok_or_else(|| rejected(ErrorCategory::Conflict, "runtime_not_initialized"))?;
-        let required = match command {
-            HostCommand::ProvideSecret(_) => Some("secret-delivery"),
-            HostCommand::InteractionResult(_) => Some("deferred-interactions"),
-            _ => None,
-        };
-        if required.is_some_and(|feature| !state.enabled_features.iter().any(|f| f == feature)) {
-            return Err(rejected(
-                ErrorCategory::Unsupported,
-                "runtime_feature_not_negotiated",
-            ));
-        }
-    }
-    backend.request(command).await
 }
 
 async fn read_loop<B: DriverBackend, R: tokio::io::AsyncBufRead + Unpin>(

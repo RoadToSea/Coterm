@@ -2,7 +2,7 @@
 use std::{collections::HashSet, net::SocketAddr, sync::Arc, time::Duration};
 
 use coterm_core::{
-    driver_manager::ProcessDriverRuntime,
+    driver_manager::InProcessDriverRuntime,
     driver_runtime::{CallerContext, Operations, DriverRuntime, SubmitOperation},
 };
 use coterm_proto::runtime::{
@@ -38,7 +38,7 @@ pub struct BridgeServer {
 
 impl BridgeServer {
     /// Bind the production bridge to the stable local endpoint.
-    pub async fn bind(runtime: Arc<ProcessDriverRuntime>) -> std::io::Result<Self> {
+    pub async fn bind(runtime: Arc<InProcessDriverRuntime>) -> std::io::Result<Self> {
         let address = DEFAULT_BRIDGE_ADDRESS
             .parse()
             .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidInput, error))?;
@@ -48,7 +48,7 @@ impl BridgeServer {
     /// Bind a bridge at an explicit address. Tests use port `0` to avoid
     /// competing with another bridge process.
     pub async fn bind_at(
-        runtime: Arc<ProcessDriverRuntime>,
+        runtime: Arc<InProcessDriverRuntime>,
         address: SocketAddr,
     ) -> std::io::Result<Self> {
         if !address.ip().is_loopback() {
@@ -89,7 +89,7 @@ impl Drop for BridgeServer {
     }
 }
 
-async fn serve_client(socket: TcpStream, runtime: Arc<ProcessDriverRuntime>) -> anyhow::Result<()> {
+async fn serve_client(socket: TcpStream, runtime: Arc<InProcessDriverRuntime>) -> anyhow::Result<()> {
     let (reader, mut writer) = socket.into_split();
     let mut reader = BufReader::new(reader);
     let mut initialized = false;
@@ -224,7 +224,7 @@ pub(crate) fn initialize_result(params: &Value) -> Result<Value, (i32, String)> 
 }
 
 pub(crate) async fn ready_request(
-    runtime: &ProcessDriverRuntime,
+    runtime: &InProcessDriverRuntime,
     method: &str,
     params: &Value,
 ) -> Result<Value, (i32, String)> {
@@ -253,7 +253,7 @@ pub(crate) fn rpc_error(id: Value, code: i32, message: &str) -> Value {
     json!({"jsonrpc":"2.0","id":id,"error":{"code":code,"message":message}})
 }
 
-pub async fn tools_list(runtime: &ProcessDriverRuntime) -> Result<Value, RuntimeError> {
+pub async fn tools_list(runtime: &InProcessDriverRuntime) -> Result<Value, RuntimeError> {
     let mut tools = vec![
         json!({"name":"coterm.list_instances","description":"List existing shared driver instances. Each instance has a unique public name; internal UUIDs are not exposed.","inputSchema":{"type":"object","properties":{},"additionalProperties":false}}),
         json!({"name":"coterm.status","description":"Quick desktop/bridge health and instance connection snapshot (at most 64 instances, 1 second). connected=null means unknown; ready alone does not mean connected. Requires no SSH approval or authentication.","inputSchema":{"type":"object","properties":{},"additionalProperties":false}}),
@@ -334,7 +334,7 @@ struct ConnectionSnapshot {
 /// Connection knowledge is opt-in driver metadata, never guessed from a ready UI
 /// instance or a protocol-specific operation name. Probes cannot commit or prompt.
 async fn connection_snapshot(
-    runtime: &ProcessDriverRuntime,
+    runtime: &InProcessDriverRuntime,
     driver: Option<&str>,
 ) -> anyhow::Result<ConnectionSnapshot> {
     let all = runtime.list_instances(driver).await?;
@@ -429,7 +429,7 @@ async fn connection_snapshot(
 }
 
 async fn default_instance(
-    runtime: &ProcessDriverRuntime,
+    runtime: &InProcessDriverRuntime,
     driver: Option<&str>,
 ) -> anyhow::Result<InstanceInfo> {
     let snapshot = connection_snapshot(runtime, driver).await?;
@@ -473,7 +473,7 @@ fn hide_internal_instance_ids(value: &mut Value) {
 }
 
 async fn resolve_instance_name(
-    runtime: &ProcessDriverRuntime,
+    runtime: &InProcessDriverRuntime,
     driver_id: Option<&str>,
     name: &str,
 ) -> anyhow::Result<InstanceInfo> {
@@ -547,7 +547,7 @@ fn receipt_meta(receipt: &OperationReceipt) -> Value {
     value
 }
 
-pub async fn call_tool(runtime: &ProcessDriverRuntime, params: &Value) -> anyhow::Result<Value> {
+pub async fn call_tool(runtime: &InProcessDriverRuntime, params: &Value) -> anyhow::Result<Value> {
     let wait_timeout_ms = params
         .pointer("/_meta/coterm~1waitTimeoutMs")
         .map(|value| {
@@ -824,9 +824,8 @@ mod tests {
 
     #[tokio::test]
     async fn bridge_rejects_non_loopback_bind_addresses() {
-        let runtime = Arc::new(ProcessDriverRuntime::new(
-            "test",
-            coterm_proto::runtime::lifecycle::RuntimeLimits {
+        let runtime = Arc::new(InProcessDriverRuntime::new(
+        coterm_proto::runtime::lifecycle::RuntimeLimits {
                 max_control_bytes: 1024,
                 max_data_chunk_bytes: 1024,
                 initial_window: coterm_proto::runtime::stream::FlowWindow {

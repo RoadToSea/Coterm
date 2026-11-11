@@ -2,6 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod approval_commands;
+mod builtin_drivers;
 mod mcp_commands;
 mod mcp_settings;
 mod workspace;
@@ -13,7 +14,7 @@ use std::{
 };
 
 use coterm_core::{
-    driver_manager::{DiscoveredPackage, PackageOrigin, DriverLoadIssue, ProcessDriverRuntime},
+    driver_manager::{DriverLoadIssue, InProcessDriverRuntime},
     driver_runtime::{CallerContext, Operations, DriverRuntime, SubmitOperation},
 };
 use coterm_proto::runtime::{
@@ -56,8 +57,7 @@ struct AppState {
     workspace_path: PathBuf,
     exiting: std::sync::atomic::AtomicBool,
     event_subscriptions: EventSubscriptions,
-    driver_runtime: Arc<ProcessDriverRuntime>,
-    drivers_root: PathBuf,
+    driver_runtime: Arc<InProcessDriverRuntime>,
     stdio_bridge: mcp_commands::StdioBridge,
 }
 
@@ -75,7 +75,7 @@ struct DriverSummary {
 #[serde(rename_all = "camelCase")]
 struct DriverCatalog {
     drivers: Vec<DriverSummary>,
-    /// 逐包诊断：多个坏包不会让整次发现失败，也不会隐藏其余有效驱动。
+    /// 保留目录接口的诊断字段；内置驱动在启动前校验，此处为空。
     issues: Vec<DriverLoadIssue>,
 }
 
@@ -196,20 +196,16 @@ fn get_version() -> String {
 #[tauri::command]
 async fn list_drivers(state: tauri::State<'_, AppState>) -> Result<DriverCatalog, String> {
     let _guard = state.workspace_actions.lock().await;
-    discover_drivers(&state).await
+    registered_driver_catalog(&state).await
 }
 
-async fn discover_drivers(state: &AppState) -> Result<DriverCatalog, String> {
-    // The distribution owns this allowlist; user data directories cannot add executables.
-    let packages = ["ssh", "serial", "local"].into_iter().map(|name| DiscoveredPackage {
-        directory:name.into(), root:state.drivers_root.join(name), priority:0,
-        origin:PackageOrigin::Installed,
-    }).collect();
-    let catalog = state.driver_runtime.discover(packages).await;
+async fn registered_driver_catalog(state: &AppState) -> Result<DriverCatalog, String> {
     let mut drivers = Vec::new();
-    for manifest in catalog.drivers { drivers.push(summary(state,manifest).await); }
+    for manifest in state.driver_runtime.loaded_manifests().await {
+        drivers.push(summary(state, manifest).await);
+    }
     drivers.sort_by(|a,b| a.name.cmp(&b.name));
-    Ok(DriverCatalog {drivers, issues:catalog.issues})
+    Ok(DriverCatalog {drivers, issues:Vec::new()})
 }
 
 #[tauri::command]
@@ -770,14 +766,8 @@ fn main() {
             std::fs::create_dir_all(&app_data)?;
             let workspace_path = app_data.join("workspace.v1.dpapi");
             let workspace = workspace::WorkspaceStore::open(workspace_path.clone());
-            #[cfg(not(debug_assertions))]
-            let drivers_root = app.path().resource_dir()?.join("drivers");
-            #[cfg(debug_assertions)]
-            let drivers_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../target/bundled-drivers");
-            let driver_runtime = Arc::new(ProcessDriverRuntime::new(
-                current_platform(),
-                runtime_limits,
-            ));
+            let driver_runtime = Arc::new(InProcessDriverRuntime::new(runtime_limits));
+            tauri::async_runtime::block_on(builtin_drivers::register(&driver_runtime))?;
 
             // 适配器就是本可执行文件的 `mcp stdio` 子命令：不搜索 PATH，也不依赖旁路文件。
             let stdio_bridge = mcp_commands::StdioBridge::new(
@@ -818,7 +808,6 @@ fn main() {
                 )),
                 driver_runtime,
                 stdio_bridge,
-                drivers_root,
             });
             Ok(())
         })
@@ -905,31 +894,4 @@ fn main() {
             });
         }
     });
-}
-
-fn current_platform() -> &'static str {
-    #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
-    {
-        "windows-x64"
-    }
-    #[cfg(all(target_os = "windows", target_arch = "aarch64"))]
-    {
-        "windows-arm64"
-    }
-    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-    {
-        "linux-x64"
-    }
-    #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
-    {
-        "linux-arm64"
-    }
-    #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
-    {
-        "macos-x64"
-    }
-    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-    {
-        "macos-arm64"
-    }
 }

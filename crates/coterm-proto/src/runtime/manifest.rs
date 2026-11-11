@@ -1,6 +1,4 @@
-//! 驱动包声明。只描述装配信息，不规定协议配置和领域数据。
-
-use std::collections::BTreeMap;
+//! 编译期内置驱动声明，不规定协议配置和领域数据。
 
 use serde::{Deserialize, Serialize};
 
@@ -14,8 +12,6 @@ pub struct DriverManifest {
     pub name: String,
     pub version: String,
     pub runtime: RuntimeRequirement,
-    /// 平台标识 -> 包内相对入口路径；不得越出驱动包。
-    pub backend: BTreeMap<String, String>,
     pub frontend: Option<FrontendEntry>,
     pub mcp: McpEntry,
     pub instances: InstanceDeclaration,
@@ -49,6 +45,6 @@ pub enum McpProvider {
 pub struct InstanceDeclaration {
     #[serde(rename = "type")]
     pub instance_type: String,
-    /// 社区驱动须支持多实例；保留此字段用于校验清单。
+    /// 每个内置驱动必须支持多个独立实例。
     pub multiple: bool,
 }

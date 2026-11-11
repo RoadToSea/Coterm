@@ -2,11 +2,21 @@
 
 ## 当前能力
 
-- 三个内置驱动随桌面资源分发，保留独立 Worker 和多实例隔离，普通用户安装管理已移除。
+- 三个内置驱动后端及前端编入桌面可执行文件，使用独立异步任务和多实例状态隔离，无旁路驱动 EXE；不提供进程级故障隔离。
 - 每实例审批对象、独立规则组和单组绑定；已保存实例同时保存和恢复 Bypass，临时实例仅内存保留。
 - SSH、Local command 默认前台，显式 exec 后台；后端保留 stdin/stdout/stderr，PTY 合并输出。
 - Serial 终端 / UART 切换同步 Shell / stream 读取能力，模式由驱动配置保存与恢复；在线切换保留连接及原始接收缓冲，通信参数修改仍在下次连接前应用与保存。
 - Agent 三类读取不使用游标；原始 stream 仅支持 read_lines。
+
+## 2026-11-11：进程内驱动
+
+- 桌面直接链接 SSH、Serial、Local 三个 Rust 库，由组合入口注册后端工厂、声明和嵌入的前端源码。移除驱动主程序、文件系统包发现、stdio 进程适配和 Worker 打包；构建与 CI 同步调整，不新增第三方依赖或修改工作区持久化结构。
+- `InProcessDriverRuntime` 保留实例路由、每实例审批、规则组、Bypass、秘密交互及账本；`DriverTask` 提供有界请求/完成队列、独立事件广播、10 秒应答期限、任务取消及退出收敛。Local 后台作业在后端析构时主动取消。
+- 串口测速保留显式 `serial-diagnostic` 示例，只在指定 example 时构建，不随桌面分发；此前 Worker 测速结果不代表进程内桌面吞吐。历史 driver/plugin EXE、驱动资源目录及旧暂存包已移除，编译缓存保留。
+- 验证：工作区 257 项 Rust 测试通过、3 项硬件用例忽略；全目标严格 Clippy 与工作区 check 通过。101 项前端回归完成，新增构建断言修正匹配范围后单独复跑通过。独立导出待提交源码，四个前端构建与全目标 Rust check 通过；302 处文档链接有效。
+- Windows 真实 WebView2/MCP/审批/PowerShell 环境延续通过；桌面 EXE 单独复制到空目录后同样通过，证明不依赖旁路驱动或前端资源。Release EXE 与 NSIS 安装包已生成，生成的安装脚本无驱动 EXE/资源条目；未执行本轮安装/卸载、串口硬件或 macOS/Linux 实机验收。
+- 原有界面、工作区和文档未提交改动未合入本次提交；串口构建脚本原有的 Worker/release 分支随旧链路移除。继续入口：[任务调度](../../crates/coterm-core/src/driver_task.rs)、[运行时](../../crates/coterm-core/src/driver_manager.rs)、[桌面组合](../../apps/desktop/src-tauri/src/builtin_drivers.rs)、[运行时契约](../architecture/runtime-communication.md)。
+- 限制：任务隔离不能承诺进程级故障隔离；native fault、abort、内存损坏和不可取消的阻塞调用可能影响整个宿主。停止和销毁仍需跨平台实机验收。
 
 ## 2026-11-11：串口模式统一入口
 

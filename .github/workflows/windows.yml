@@ -22,13 +22,12 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@v2
       - run: pnpm install --frozen-lockfile
+      - run: pnpm drivers:build
       - run: cargo check --workspace --locked
       - run: cargo test --workspace --locked
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: pnpm build
-      - run: pnpm drivers:build
       - run: pnpm test
-      - run: cargo build -p coterm-runtime-fixture --locked
       - run: pnpm tauri:build --config ../../tests/fixtures/tauri-smoke.conf.json --bundles nsis
       - name: Install and exercise real Tauri
         shell: pwsh
