@@ -1,13 +1,14 @@
 /** Explicit hardware benchmark through the opt-in serial diagnostic example.
  * Build with cargo build -p coterm-driver --example serial-diagnostic.
  * Measures UART/backend throughput; excludes the desktop in-process dispatch path.
+ * --seconds keeps alternating verified transfers running for at least that duration per baud.
  * Requires a released port and a logged-in Linux Shell with Python 3. The temporary
  * peer runs in memory, restores its tty after 30 seconds without a command, and exits.
  * Fails on missing/corrupt bytes, event gaps, unsupported speeds or unavailable ports.
  */
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { createInterface } from "node:readline";
 import path from "node:path";
@@ -18,8 +19,8 @@ const root = fileURLToPath(new URL("../", import.meta.url));
 const flags = new Map();
 for (let index = 2; index < process.argv.length; index += 2) {
   const key = process.argv[index], value = process.argv[index + 1];
-  if (!['--port', '--baud', '--rates', '--bytes', '--repeats', '--output', '--diagnostic'].includes(key) || !value)
-    throw new Error("Usage: node scripts/benchmark-serial.mjs --port PORT [--baud 115200] [--rates 115200,230400] [--bytes 65536] [--repeats 3] [--output FILE] [--diagnostic FILE]");
+  if (!['--port', '--baud', '--rates', '--bytes', '--repeats', '--seconds', '--output', '--diagnostic'].includes(key) || !value)
+    throw new Error("Usage: node scripts/benchmark-serial.mjs --port PORT [--baud 115200] [--rates 115200,230400] [--bytes 65536] [--repeats 3] [--seconds 600] [--output FILE] [--diagnostic FILE]");
   flags.set(key, value);
 }
 const port = flags.get('--port');
@@ -32,6 +33,7 @@ const integer = (name, fallback, min, max) => {
 const baud = integer('--baud', 115200, 1, 4_000_000);
 const bytes = integer('--bytes', 65536, 1024, 131072);
 const repeats = integer('--repeats', 3, 1, 10);
+const seconds = integer('--seconds', 0, 0, 3600);
 const rates = (flags.get('--rates') ?? String(baud)).split(',').map(Number);
 assert.ok(rates.length <= 12 && rates.every(rate => Number.isSafeInteger(rate) && rate >= 9600 && rate <= 4_000_000), 'invalid --rates');
 assert.ok(bytes * 10 / Math.min(...rates) < 20, 'reduce --bytes: each transfer must finish before the peer watchdog');
@@ -42,7 +44,7 @@ let sequence = 0, stderr = '';
 child.stderr.on('data', data => { stderr = (stderr + data).slice(-4096); });
 child.on('error', error => { for (const item of pending.values()) item.reject(error); });
 child.on('exit', code => { for (const item of pending.values()) item.reject(new Error(`Diagnostic exited ${code}: ${stderr}`)); });
-let received = Buffer.alloc(0), changed, connectionId = null, cursor = 0, gaps = 0;
+let received = Buffer.alloc(0), changed, connectionId = null, cursor = 0, gaps = 0, eventBytes = 0;
 createInterface({ input: child.stdout }).on('line', line => {
   const message = JSON.parse(line);
   if (message.id != null) {
@@ -56,6 +58,7 @@ createInterface({ input: child.stdout }).on('line', line => {
     if (connectionId && data.connectionId !== connectionId) return;
     if (data.cursor !== cursor + 1) gaps++;
     cursor = data.cursor;
+    eventBytes += data.bytes;
     received = Buffer.concat([received, Buffer.from(data.text, 'utf8')]);
     if (received.length > 1024 * 1024) throw new Error('Benchmark receive buffer exceeded 1 MiB');
     changed?.();
@@ -102,7 +105,7 @@ async function read(count) {
 async function reconnect(rate) {
   await invoke('serial.disconnect');
   await invoke('serial.configure', { baudRate: rate });
-  received = Buffer.alloc(0); cursor = 0; connectionId = null;
+  received = Buffer.alloc(0); cursor = 0; eventBytes = 0; connectionId = null;
   await invoke('serial.connect');
   connectionId = (await invoke('serial.status')).connectionId;
 }
@@ -138,7 +141,7 @@ try:
   if c[0]=='P': out('BENCH_READY\\n'); continue
   n=int(c[1])
   if n<1 or n>131072: raise ValueError('invalid count')
-  data=b''.join(hashlib.sha256(str(i).encode()).hexdigest().encode() for i in range((n+63)//64))[:n]
+  data=b''.join(hashlib.sha256((c[2]+':'+str(i)).encode()).hexdigest().encode() for i in range((n+63)//64))[:n]
   if c[0]=='R':
    out('BENCH_BEGIN\\n'); out(data); termios.tcdrain(1); out('\\nBENCH_END\\n')
   elif c[0]=='W':
@@ -153,10 +156,11 @@ finally:
  signal.alarm(0); termios.tcsetattr(fd,termios.TCSANOW,old); out('\\nBENCH_RESTORED\\n')
 `;
 const encoded = Buffer.from(peer).toString('base64');
-const payload = Buffer.from(Array.from({ length: Math.ceil(bytes / 64) }, (_, index) =>
-  createHash('sha256').update(String(index)).digest('hex')).join('').slice(0, bytes));
-const hash = createHash('sha256').update(payload).digest('hex');
-const report = { port, originalBaud: baud, framing: '8N1', mode: 'stream', bytes, repeats, chunkBytes: 16384,
+const nonce = randomBytes(4).toString('hex');
+const payloadFor = seed => Buffer.from(Array.from({ length: Math.ceil(bytes / 64) }, (_, index) =>
+  createHash('sha256').update(`${seed}:${index}`).digest('hex')).join('').slice(0, bytes));
+const report = { startedAt:new Date().toISOString(), port, originalBaud: baud, framing: '8N1', mode: 'stream', bytes, repeats, chunkBytes: 16384,
+  secondsPerRate: seconds, payload: 'per-transfer nonce, direction and cycle; ordered SHA-256 blocks',
   path: 'physical UART -> serial diagnostic example -> JSON events -> Node consumer; reverse uses serial.write; excludes desktop dispatch',
   excludes: 'desktop rendering, MCP Bridge and approval', rates: [], restored: false };
 let activePeer = false;
@@ -173,6 +177,7 @@ try {
   await until('# ', 5000);
   for (const rate of rates) {
     const row = { baud: rate, theoreticalBytesPerSecond: rate / 10, samples: [] };
+    let soakStarted = null;
     report.rates.push(row);
     console.log(`Testing ${rate} baud (${bytes} bytes, ${repeats} repeats per direction)`);
     try {
@@ -188,39 +193,66 @@ try {
       if (rate !== baud) await reconnect(rate);
       await until('BENCH_READY\n', 5000);
       const initialGaps = gaps;
-      for (let repeat = 0; repeat < repeats; repeat++) {
-        await send(`R ${bytes}\n`);
+      row.initialGaps = initialGaps;
+      soakStarted = performance.now();
+      for (let repeat = 0; repeat < repeats || performance.now() - soakStarted < seconds * 1000; repeat++) {
+        const rxSeed = `${nonce}r${repeat}`, rxPayload = payloadFor(rxSeed);
+        const rxHash = createHash('sha256').update(rxPayload).digest('hex');
+        row.current = {direction:'rx',cycle:repeat,stage:'begin',seed:rxSeed};
+        await send(`R ${bytes} ${rxSeed}\n`);
         await until('BENCH_BEGIN\n');
+        row.current.stage = 'payload';
         const start = performance.now();
         const data = await read(bytes);
         const milliseconds = performance.now() - start;
-        assert.deepEqual(data, payload, 'device-to-host payload is corrupted');
+        assert.ok(data.equals(rxPayload), `device-to-host payload is missing, duplicated, reordered or corrupted in cycle ${repeat}`);
+        row.current.stage = 'end';
         await until('\nBENCH_END\n');
-        row.samples.push({ direction: 'rx', milliseconds, bytesPerSecond: bytes * 1000 / milliseconds, sha256: hash });
-        await send(`W ${bytes}\n`);
+        row.samples.push({ direction: 'rx', cycle: repeat, milliseconds, bytesPerSecond: bytes * 1000 / milliseconds, sha256: rxHash });
+        const txSeed = `${nonce}t${repeat}`, payload = payloadFor(txSeed);
+        const hash = createHash('sha256').update(payload).digest('hex');
+        row.current = {direction:'tx',cycle:repeat,stage:'ready',seed:txSeed};
+        await send(`W ${bytes} ${txSeed}\n`);
         await until('BENCH_SEND\n');
+        row.current.stage = 'payload';
         const txStart = performance.now();
         for (let offset = 0; offset < bytes; offset += 16384) await send(payload.subarray(offset, offset + 16384).toString());
+        row.current.stage = 'acknowledgement';
         const reply = await until('\n');
         const txMs = performance.now() - txStart;
         const match = /^BENCH_OK (\d+) ([a-f0-9]+) ([\d.]+)\n$/.exec(reply);
         assert.ok(match, 'invalid device acknowledgement');
         assert.equal(Number(match[1]), bytes); assert.equal(match[2], hash, 'host-to-device checksum mismatch');
-        row.samples.push({ direction: 'tx', milliseconds: txMs, bytesPerSecond: bytes * 1000 / txMs,
+        row.samples.push({ direction: 'tx', cycle: repeat, milliseconds: txMs, bytesPerSecond: bytes * 1000 / txMs,
           deviceReceiveMilliseconds: Number(match[3]) * 1000, sha256: hash });
+        if ((repeat + 1) % 10 === 0) console.log(JSON.stringify({baud:rate,cycles:repeat+1,
+          elapsedSeconds:(performance.now()-soakStarted)/1000,verifiedBytesPerDirection:(repeat+1)*bytes}));
       }
+      row.elapsedSeconds = (performance.now() - soakStarted) / 1000;
+      row.summary = Object.fromEntries(['rx','tx'].map(direction => {
+        const samples = row.samples.filter(sample => sample.direction === direction);
+        return [direction,{transfers:samples.length,verifiedBytes:samples.length*bytes,
+          bytesPerSecond:samples.length*bytes*1000/samples.reduce((sum,sample)=>sum+sample.milliseconds,0),
+          minBytesPerSecond:Math.min(...samples.map(sample=>sample.bytesPerSecond)),
+          maxBytesPerSecond:Math.max(...samples.map(sample=>sample.bytesPerSecond))}];
+      }));
       row.eventGaps = gaps - initialGaps;
+      delete row.current;
       assert.equal(row.eventGaps, 0, 'serial.output events were dropped');
       row.verified = true;
       await send('Q\n'); await until('BENCH_BYE\n');
       if (rate !== baud) await reconnect(baud);
       await until('BENCH_RESTORED\r\n', 5000); activePeer = false;
       await until('# ', 5000);
-      console.log(JSON.stringify(row));
+      console.log(JSON.stringify({...row,samples:undefined}));
     } catch (error) {
       row.verified = false; row.error = error.message;
+      if (soakStarted !== null) row.elapsedSeconds = (performance.now() - soakStarted) / 1000;
+      row.eventGaps = gaps - (row.initialGaps ?? gaps);
+      row.failure = {current:row.current,bufferedBytes:received.length,eventBytes,cursor,
+        backend:await invoke('serial.status').catch(() => null),containsEnd:received.includes(Buffer.from('\nBENCH_END\n'))};
       row.diagnosticTail = received.subarray(-800).toString();
-      console.log(JSON.stringify({ baud: rate, error: error.message, tail: row.diagnosticTail }));
+      console.log(JSON.stringify({ baud: rate, error: error.message, eventGaps:row.eventGaps, failure:row.failure }));
       // Do not send Shell/control bytes at an unknown speed: let the peer's watchdog restore it.
       await delay(32000);
       await reconnect(baud); activePeer = false;
@@ -243,4 +275,4 @@ try {
   }
 }
 console.log(JSON.stringify({ restored: report.restored, passedRates: report.rates.filter(rate => rate.verified).map(rate => rate.baud) }));
-if (!report.rates.some(rate => rate.verified)) process.exitCode = 1;
+if (!report.restored || report.rates.some(rate => !rate.verified)) process.exitCode = 1;

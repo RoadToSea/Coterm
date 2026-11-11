@@ -103,3 +103,19 @@ Telnet 支持 BINARY、ECHO、SGA、NAWS 和 TTYPE 的服务端发起协商；�
 协议依据：[RFC 854](https://www.rfc-editor.org/rfc/rfc854)、[ECHO](https://www.rfc-editor.org/rfc/rfc857)、[NAWS](https://www.rfc-editor.org/rfc/rfc1073)、[TTYPE](https://www.rfc-editor.org/rfc/rfc1091)、[SOCKS5](https://www.rfc-editor.org/rfc/rfc1928)。
 
 回环、协议、浏览器和原生验收入口及未覆盖环境见 [网络驱动进度](../progress/network-drivers.md)。
+
+## 性能与完整性测试
+
+在仓库根目录显式运行，不接触外部目标：
+
+```bash
+cargo build --locked -p coterm-driver --release --example tcp-task-throughput --example network-diagnostic
+cargo run --locked -p coterm-driver --release --example tcp-task-throughput -- 60 1048576,5242880,10485760,0
+node scripts/benchmark-tcp.mjs --seconds 60 --rates 1048576,5242880,10485760,unlimited --output .agent-debug/tcp-throughput/report.json
+```
+
+`tcp-task-throughput` 使用桌面相同的 DriverTask 请求、通知和广播队列，省去 stdio；第二个脚本额外经过显式诊断适配器的 JSON/stdout 和 Node 消费者。两者不包含 WebView、xterm、MCP、审批或完整 Runtime 账本路径，不是桌面渲染速率保证。测试同时收发，每方向独立计量；`0/unlimited` 仅表示不主动限速，不能当作已验证的无损容量。
+
+固定 16 KiB ASCII 记录带序号并逐字节校验，Node 路径另比对整流 SHA-256；分别报告后端收发计数、消费字节、缺失／重复／乱序／异常帧和通知缺口。后端计数相等不证明每个消费者都收到了内容；`replayGap/readLinesDropped` 表示有界历史已淘汰。接收记录被通知缺口切断时的异常帧也不能直接归因为线路比特错误。
+
+`tcp-task-throughput` 第三个位置参数可指定消费者暂停毫秒数（0–5000），验证主动慢消费时的广播缺口和历史淘汰。任何完整性检查失败均返回非零，已知过载用例也不伪装为测试成功。示例只作为开发验收入口，不随桌面分发；具体环境与结果见[网络进度](../progress/network-drivers.md)。

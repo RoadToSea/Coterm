@@ -181,11 +181,13 @@ cargo test --locked -p coterm-driver --test serial_shell_live -- --ignored --noc
 先在设备上完成登录并释放端口。设备须提供 Python 3、POSIX tty 和 `# ` 提示符；脚本不接收或保存密码。指定实际端口和当前波特率后执行：
 
 ```bash
-cargo build --locked -p coterm-driver
-node scripts/benchmark-serial.mjs --port <实际端口> --baud 115200 --rates 115200,230400,460800,921600 --bytes 65536 --repeats 3 --output .agent-debug/serial-throughput/report.json
+cargo build --locked -p coterm-driver --release --example serial-diagnostic
+node scripts/benchmark-serial.mjs --port <实际端口> --baud 115200 --rates 115200,500000,1500000 --bytes 131072 --repeats 3 --diagnostic target/release/examples/serial-diagnostic.exe --output .agent-debug/serial-throughput/report.json
 ```
 
-测速以 stream 模式通过真实 Worker 的 JSON 控制协议、`serial.output` 事件和 `serial.write`，不包含桌面渲染、MCP 或审批耗时。每档双向发送由块序号 SHA-256 文本拼成的定长 ASCII 数据，接收逐字节校验，设备接收用 SHA-256 校验；事件游标缺口、校验失败或握手超时均不能算通过。发送按每块 16 KiB 调用接口，报告字节/秒与耗时；8N1 理论上限为波特率除以 10，不能把配置接受的波特率当成实测吞吐。
+上述为 Windows 命令，其他平台将诊断程序路径改为不带 `.exe` 的对应产物。测速以 stream 模式通过真实 Serial Backend 的显式诊断适配器、`serial.output` 事件和 `serial.write`，不包含桌面运行时派发、渲染、MCP 或审批耗时。每次传输使用独立随机前缀、方向和轮次生成有序 SHA-256 文本块，避免固定数据掩盖丢失／重复；接收逐字节校验，设备接收用 SHA-256 校验。事件游标缺口、校验失败或握手超时均不能算通过。发送按每块 16 KiB 调用接口，报告字节/秒与耗时；8N1 理论上限为波特率除以 10，不能把配置接受的波特率当成实测吞吐。
+
+增加 `--seconds 600 --repeats 1` 可在每档持续至少 600 秒，收发交替进行，完整一轮结束后才检查期限，并非双向同时发送。报告包含每轮校验、每方向总量／平均／范围、事件缺口以及失败时的方向、阶段、后端计数和已投递事件字节数。历史缓存淘汰不算传输失败，但实时通知缺失仍算失败；任一档失败时脚本返回非零。接收吞吐从 BEGIN 标记后计时，发送包含调用和设备确认，整轮时间另含设备生成数据及握手。
 
 临时 Python 程序只驻留设备内存，调速前保存 tty 属性；30 秒内无后续命令时退出并恢复属性，正常结束同样恢复。主机切回原波特率后确认 Shell 提示符并释放端口。失败恢复会额外等待 32 秒；测试期间不要通过其他串口工具发送数据。结果中的 `restored` 表示所有恢复确认完成，`verified` 表示该档收发及恢复均通过；高档位握手失败只表示当前组合未验证通过，不证明是软件吞吐瓶颈。
 
