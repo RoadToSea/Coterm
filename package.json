@@ -12,6 +12,7 @@
     "debug:clean": "node scripts/clean-agent-debug.mjs",
     "driver:ssh:build": "node scripts/build-ssh.mjs",
     "driver:serial:build": "node scripts/build-serial.mjs",
+    "driver:local:build": "node scripts/build-local.mjs",
     "dev": "pnpm --filter coterm-desktop dev",
     "build": "pnpm --filter coterm-desktop build",
     "tauri": "pnpm --filter coterm-desktop tauri",

@@ -3,4 +3,5 @@ import { fileURLToPath } from "node:url";
 
 // A direct CLI call preserves Cargo's argument separator across pnpm wrappers.
 process.chdir(fileURLToPath(new URL("../apps/desktop/", import.meta.url)));
-await run(["build", ...process.argv.slice(2), "--", "--locked"], "pnpm tauri:build");
+const args = process.argv.slice(2).filter((arg) => arg !== "--release");
+await run(["build", ...args, "--", "--locked"], "pnpm tauri:build");
