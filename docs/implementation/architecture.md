@@ -120,7 +120,7 @@ InstanceApproval 持有编译策略和实例 Bypass，接收 ApprovalContext，�
 
 SSH 前台使用同一 POSIX Shell 的语法检查和随机边界包装；后台独立通道。Local 按 POSIX、PowerShell、cmd 分别处理命令，不能直接复制 SSH 包装方式。
 
-Serial 使用阻塞工作线程；Windows 的 [windows_io.rs](../../crates/coterm-driver/src/serial/windows_io.rs) 使用 overlapped IO，每方向独立完成事件和期限。读取以有界批次通知，满队列保留最新重试线索，关闭提交尾部。不是暂停接收后写入。
+Serial 使用阻塞工作线程和 `serialport` 跨平台接口；读写句柄通过库提供的克隆能力分开使用。读取以有界批次通知，满队列保留最新重试线索，关闭提交尾部。不是暂停接收后写入。
 
 网络按每实例任务维护 socket、连接身份、重连与有界输入。Telnet codec 在正文进入 stream 之前处理 IAC／NVT；Raw TCP 不经过这层协议解释。
 

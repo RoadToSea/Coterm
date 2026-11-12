@@ -6,7 +6,7 @@
 
 环境：Windows 11、CH340／COM6、riscv64 Linux 开发板、Python 3.9.4，8N1，无软硬件流控。本机 wch.cn 驱动版本 3.9.2024.9，驱动日期 2024-09-16；未升级或替换系统驱动。端口和设备节点仅为这次实测对象，不是项目默认连接要求。
 
-最终代码使用独立 Windows overlapped 读写、有界通知合并和尾部提交。设备程序仅在内存运行，显式关闭 IXON／IXOFF／IXANY，两个方向使用独立负载并逐字节／校验和验证。
+该次长测版本使用 Windows overlapped 读写、有界通知合并和尾部提交；当前实现已恢复为 `serialport` 跨平台读写接口，因此该结果不能代表当前代码版本。设备程序仅在内存运行，显式关闭 IXON／IXOFF／IXANY，两个方向使用独立负载并逐字节／校验和验证。
 
 | 波特率 | 负载／持续情况 | 实际结论 |
 |---|---|---|
@@ -22,7 +22,7 @@ Python 3.9 的 raw 模式曾留下 IXOFF，捕获过混入的 XOFF；测试已�
 
 **下一步**：相同负载更换适配器或系统交叉对照，继续区分原始缺字节、通知遗漏和历史淘汰。不能用短测、零 UART 错误或中间原型的通过替代最终长测。
 
-范围不含完整 Runtime、WebView、xterm、MCP 和审批。上次退出已恢复 115200、ECHO／ICANON，确认 Shell 可用并释放端口；这不保证以后端口仍空闲。入口：[串口会话](../../crates/coterm-driver/src/serial/session.rs)、[Windows IO](../../crates/coterm-driver/src/serial/windows_io.rs)、[测速](../../scripts/benchmark-serial.mjs)。
+范围不含完整 Runtime、WebView、xterm、MCP 和审批。上次退出已恢复 115200、ECHO／ICANON，确认 Shell 可用并释放端口；这不保证以后端口仍空闲。入口：[串口会话](../../crates/coterm-driver/src/serial/session.rs)、[测速](../../scripts/benchmark-serial.mjs)。
 
 ## TCP 吞吐与消费者缺口
 

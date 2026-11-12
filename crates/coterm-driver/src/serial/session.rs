@@ -25,7 +25,6 @@ use coterm_core::driver::DriverNotification;
 use coterm_core::model::{ErrorCategory, RuntimeError};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use serialport::SerialPort as _;
 use tokio::{
     sync::{mpsc, oneshot, Mutex},
     task::JoinHandle,
@@ -636,20 +635,6 @@ fn read_until_stopped<R: Read>(mut source: ReaderSource<R>) {
 
 /// 阻塞打开端口并设置初始信号电平，返回读端和写端两个句柄。
 fn open_port(config: &Config) -> Result<(Box<dyn Read + Send>, SerialWriter)> {
-    #[cfg(windows)]
-    let mut port = super::windows_io::open(
-        config.port.trim(),
-        config.baud_rate,
-        config.data_bits,
-        config.stop_bits,
-        match config.parity {
-            Parity::None => serialport::Parity::None,
-            Parity::Odd => serialport::Parity::Odd,
-            Parity::Even => serialport::Parity::Even,
-        },
-    )
-    .map_err(|error| anyhow!("Serial port could not be opened: {error}"))?;
-    #[cfg(not(windows))]
     let mut port = serialport::new(config.port.trim(), config.baud_rate)
         .data_bits(match config.data_bits {
             5 => serialport::DataBits::Five,
@@ -668,34 +653,20 @@ fn open_port(config: &Config) -> Result<(Box<dyn Read + Send>, SerialWriter)> {
             Parity::Even => serialport::Parity::Even,
         })
         .timeout(READ_POLL)
-        .open_native()
+        .open()
         .map_err(|error| anyhow!("Serial port could not be opened: {error}"))?;
     port.write_data_terminal_ready(config.dtr)
         .map_err(|error| anyhow!("Serial DTR could not be set: {error}"))?;
     port.write_request_to_send(config.rts)
         .map_err(|error| anyhow!("Serial RTS could not be set: {error}"))?;
-    #[cfg(not(windows))]
     let writer = port
         .try_clone()
         .map_err(|error| anyhow!("Serial port write handle failed: {error}"))?;
-    #[cfg(windows)]
-    let writer = port
-        .try_clone_native()
-        .map_err(|error| anyhow!("Serial port write handle failed: {error}"))?;
-    #[cfg(windows)]
-    crate::serial::serial_io::configure_io_timeouts(&port, READ_POLL, IO_TIMEOUT)
-        .map_err(|error| anyhow!("Serial I/O timeouts could not be set: {error}"))?;
-    #[cfg(windows)]
-    let reader = super::windows_io::Reader::new(port)?;
-    #[cfg(not(windows))]
-    let reader = port;
     Ok((
-        Box::new(reader),
+        port,
         SerialWriter {
             port: writer,
             timeout: IO_TIMEOUT,
-            #[cfg(windows)]
-            operation: super::windows_io::Operation::new()?,
         },
     ))
 }
