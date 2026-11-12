@@ -8,13 +8,15 @@ Coterm 是面向人类与 Agent 协同的终端交互基座。支持 SSH、串�
 
 驱动以 Rust 库链接到桌面主进程；每种驱动使用独立异步任务，同一驱动支持多个实例。任务隔离不提供进程级崩溃隔离。
 
-架构和接口设计以以下文档为准：
+架构和需求从 `docs/README.md` 进入，按以下顺序阅读：
 
-- `docs/SPEC.md`：总技术路线
-- `docs/design/terminal-focus-and-in-tree-architecture.md`：终端聚焦与内置驱动架构设计
-- `docs/architecture/`：运行时、通信和 MCP 设计
+1. `docs/01-modules.md`：整体模块划分，不涉及代码。
+2. `docs/02-requirements/`：各模块需求和验收条件，不涉及代码。
+3. `docs/03-common-requirements.md`：跨模块公共需求。
+4. `docs/04-module-interactions.md`：模块职责、信息所有权和交互要求。
+5. `docs/05-code-architecture.md`：整体代码依赖、公共复用和模块内部实现。
 
-这些接口仍在设计阶段，修改实现时同步更新相关文档。
+当前技术契约见 `docs/reference/interfaces.md`，验收入口见 `docs/development.md`，有效验证和未解决问题见 `docs/status.md`。实现现状与后续建议必须区分，修改行为时同步相关需求、交互与实现说明。
 
 ## 目录
 
@@ -25,7 +27,7 @@ apps/desktop/src-tauri Tauri Rust 后端
 crates/coterm-core     共享类型、实例运行时、审批、操作记录和终端工具
 crates/coterm-mcp      MCP Bridge 相关类型和逻辑
 crates/coterm-driver   进程内驱动，src/{ssh,serial,local,tcp,telnet}；network/stream 复用内部逻辑
-docs/                  架构和阶段技术方案
+docs/                  模块、需求、交互、代码架构与验收的集中入口
 ```
 
 ## 常用命令
@@ -62,7 +64,7 @@ pnpm tauri:build
 
 - Agent 的临时脚本、日志、截图、抓包、测速结果、源码副本和备份统一放在仓库根目录的 `.agent-debug/<任务名>/`；创建时使用相对路径。可配置的测试输出目录也指向这里。
 - 正式源码、测试夹具和文档仍放在对应模块；编译器缓存与构建产物沿用工具链目录。浏览器配置等工具要求的系统临时目录由创建者在退出时回收。
-- 调试结束先把必要结论写入对应进度或反馈文档，再停止调试进程。确认没有其他任务使用该目录后，Agent 必须调用 `pnpm debug:clean` 并确认目录为空；用户要求保留现场时说明保留内容，不执行清理。
+- 调试结束先把必要验收结论和未解决问题归入 `docs/status.md`，再停止调试进程。确认没有其他任务使用该目录后，Agent 必须调用 `pnpm debug:clean` 并确认目录为空；用户要求保留现场时说明保留内容，不执行清理。
 - `pnpm debug:clean --dry-run` 用于预览。清理只使用此脚本，范围固定为 `.agent-debug/` 内容并保留目录本身；清理失败时报告残留与原因，不扩大删除范围。日志和截图先脱敏，凭据不写入调试文件。
 
 ## 修改边界
@@ -71,9 +73,9 @@ pnpm tauri:build
 
 ## 文档维护
 
-- `docs/` 根目录只保留 `SPEC.md`；整体架构和稳定接口以 `SPEC.md` 与 `docs/architecture/` 为准，修改实现时同步更新相关架构文档。
-- `docs/design/` 记录复杂业务实现前的方案、取舍、接口草案和验收条件。方案落地后，将仍有效的约束同步到 `architecture/`，实施状态记录到 `progress/`。
-- `docs/feedback/` 保存外部用户、Agent 和现场使用后的反馈、复现条件及观察结果。反馈确认后，把产品决策写入 `design/` 或 `architecture/`，把实施进度写入 `progress/`；已解决的问题从 `feedback/` 删除。
-- `docs/progress/` 按长期模块维护，不按日期或单次任务新建文件。模块文件至少记录当前能力、限制、重要实现/验收结果和下次继续开发的入口；同一模块已有文件时追加日期章节并合并维护。项目级状态集中在 `docs/progress/project.md`。
-- `docs/release/` 记录发布范围、构建步骤、发布前验收和已知限制；开发过程仍记录在 `progress/`。
-- 整理或移动文档后，修复所有相对链接，检查 `docs/` 根目录内容，并运行 `git diff --check`。文档变更完成后按常规新建分支、提交并推送。
+- 文档按“模块 → 模块需求 → 公共需求 → 职责与交互 → 代码架构”组织；前四层不放源码路径、类定义、实现示例或消息编码。
+- 每项稳定要求只在所属需求文件定义，公共要求集中维护。代码架构先写模块间依赖，再写公共复用，最后写模块内部实现；逻辑模块不等于新 crate 或转发层。
+- 当前具体工具、参数、错误和容量集中在 `docs/reference/interfaces.md`，构建、测试、硬件和发布命令集中在 `docs/development.md`。
+- `docs/status.md` 只保留当前能力、必要验收证据、未解决问题和继续入口；不按日期或任务增加文件，不逐次累积开发过程，历史由 Git 保存。
+- 长篇项目说明统一放在 `docs/`；其他模块只保留必要的接口注释和可执行示例，不另建大量需求、架构、使用及进度文档。
+- 整理或移动文档后修复所有相对链接，检查旧路径残留，并运行 `git diff --check`。文档变更完成后按常规新建分支、提交并推送。

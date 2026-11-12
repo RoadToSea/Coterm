@@ -2,11 +2,11 @@
 
 面向人类与 Agent 协同的终端交互基座。支持 SSH、串口（Serial）、本地终端、Telnet 与 Raw TCP，以内置驱动提供终端连接、字节调试与 Agent 写操作审批。底层连续信号采集、波形分析与数学计算划归专用的虚拟仪器上位机（如 Lissio）。
 
-当前目标为 Windows 上运行可信本地驱动的基座首版；SSH、串口与跨平台发布独立迭代。完成情况和已知缺口统一维护在 [项目进度](docs/progress/project.md)。
+五个驱动均以 Rust 库链接到桌面主进程，前端直接嵌入应用，无需旁路 driver.exe。当前主要验收平台为 Windows；已验证范围和未解决问题见[状态](docs/status.md)。
 
 ## 开发
 
-使用兼容 Tauri v2 的 Rust 工具链；已验证 Node.js 22.22.2、pnpm 11.0.8。测试脚本需要 Node 的类型剥离与 `registerHooks` 支持。
+使用兼容 Tauri v2 的 Rust 工具链，Node.js 22.22.2、pnpm 11.0.8。完整构建、测试、硬件测速与发布步骤见[开发与验收](docs/development.md)。
 
 ```bash
 pnpm install --frozen-lockfile
@@ -14,29 +14,7 @@ pnpm drivers:build
 pnpm tauri:dev
 ```
 
-Windows 安装包：`pnpm tauri:build --bundles nsis`。五个驱动后端及前端模块直接编入桌面 EXE，无需附带独立 driver.exe 或驱动资源目录。创建会话后显式连接；Telnet 默认端口 23，Raw TCP 默认 8080，均可修改。
-
-Telnet 支持终端协商与可选用户名预填；Raw TCP 共用串口的终端／字节工作台，支持文本和 HEX 收发。两者支持连接超时、可选自动重连、无认证 SOCKS5／HTTP CONNECT 代理、回显、接收换行和退格设置。Telnet 与 Raw TCP 均不加密，重连不重放输入；详细边界见[网络驱动](docs/architecture/network-drivers.md)。
-
-**设置 → 通用 → 语言 / Language** 支持简体中文、English，首次跟随系统语言，选择后自动保存；切换语言保留已打开的实例与 SSH 连接。
-
-Windows 工作区自动加密保存；下次启动点击 **Restore workspace** 重建实例，再主动连接。历史仅保留本次启动；已保存实例恢复自身的审批组引用与 Bypass，临时实例的 Bypass 仅保留在内存中。
-
-## 检查
-
-```bash
-cargo check --workspace --locked
-cargo test --workspace --locked
-cargo clippy --workspace --all-targets --locked -- -D warnings
-pnpm build
-pnpm test
-```
-
-Windows CI 执行检查、浏览器与真实安装验收，并上传 NSIS 安装包；`v*` 标签发布安装产物。跨平台安装另行验收。
-
-浏览器测试前需构建桌面与五个驱动前端，并安装 Chrome/Edge/Chromium；可用 `CHROME_BIN` 或 `EDGE_BIN` 指定。串口硬件测试默认 ignored，启用方式见串口说明。
-
-临时调试内容统一放在本地忽略目录 `.agent-debug/<任务名>/`。`pnpm debug:clean --dry-run` 预览待清理内容，`pnpm debug:clean` 清空内容并保留目录；执行前停止调试进程，确认其他任务未使用该目录。脚本不接受其他目录参数。
+Windows 安装包：`pnpm tauri:build --bundles nsis`。创建或恢复实例后显式连接，不重放命令。Agent 写操作复用实例审批，密码通过桌面交互提供。工作区与保存项配置在 Windows 加密保存，数据历史仅驻留有界内存。
 
 ## 目录与文档
 
@@ -47,18 +25,17 @@ Windows CI 执行检查、浏览器与真实安装验收，并上传 NSIS 安装
 - `apps/shared`：桌面与内置驱动共用的前端类型和交互组件。
 - `scripts`：构建、打包和本机验收脚本。
 - `tests`：跨模块测试、测试夹具与浏览器验收；布局截图输出到忽略目录 `.agent-debug/layout/`。
-- `docs`：技术规范、架构、方案、反馈、进度与发布文档。
+- `docs`：集中维护模块、需求、交互、代码架构及验收。
 
 | 文档 | 用途 |
 |---|---|
-| [SPEC](docs/SPEC.md) | 架构原则与模块边界 |
-| [终端架构](docs/design/terminal-focus-and-in-tree-architecture.md) | 终端聚焦与内置驱动架构决策 |
-| [项目进度](docs/progress/project.md) | 已完成、待办与最近验证 |
-| [Design](docs/design/README.md) | 复杂业务实现前的方案与验收条件 |
-| [Feedback](docs/feedback/README.md) | 外部使用反馈与现场观察 |
-| [Release](docs/release/README.md) | 构建、发行与发布前验收 |
-| [运行时通信](docs/architecture/runtime-communication.md) | 操作、审批、交互与事件契约 |
-| [MCP](docs/architecture/mcp-integration.md) | 客户端连接、工具和调用语义 |
-| [SSH](docs/architecture/ssh-driver.md) | SSH 使用与协议限制 |
-| [串口](docs/architecture/serial-driver.md) | 串口使用、限制与硬件验证 |
-| [Telnet 与 Raw TCP](docs/architecture/network-drivers.md) | 网络配置、协议、读取与重连边界 |
+| [文档入口](docs/README.md) | 按五步阅读和维护 |
+| [模块架构](docs/01-modules.md) | 整体职责划分 |
+| [模块需求](docs/02-requirements/) | 各模块细致需求 |
+| [公共需求](docs/03-common-requirements.md) | 共同约束 |
+| [模块交互](docs/04-module-interactions.md) | 数据所有权与交接 |
+| [代码架构](docs/05-code-architecture.md) | 整体依赖、公共复用、内部实现 |
+| [接口参考](docs/reference/interfaces.md) | 当前 MCP 工具与内部契约 |
+| [状态](docs/status.md) | 有效验收与未解决问题 |
+
+调试产物只放 `.agent-debug/<任务名>/`；结束后按 [AGENTS.md](AGENTS.md) 调用 `pnpm debug:clean` 清理。
