@@ -28,17 +28,24 @@ git diff --check
 
 修改 Rust 至少执行工作区 check 与相关测试；修改前端执行生产构建和对应浏览器回归。文档变更检查本地链接、锚点、源码定位、命令名称和差异空白；不把历史软件验收写成这次重新执行。
 
+测试支持按模块定向执行：
+- 纯内存单测（毫秒级，无浏览器依赖）：`pnpm test:unit`
+- 定向驱动回归：`pnpm test serial`、`pnpm test ssh`、`pnpm test local`、`pnpm test network`
+- 定向桌面与工作区回归：`pnpm test workspace`、`pnpm test approval`、`pnpm test desktop`
+- 共享组件与样式回归：`pnpm test shared`、`pnpm test ui`
+- 单文件测试：`pnpm test <用例相对路径>`（例如 `pnpm test tests/shared/tokens/theme.test.mjs`）
+
 浏览器测试需要 Chrome／Edge／Chromium，可用 CHROME_BIN 或 EDGE_BIN 指定。跳过浏览器或真实硬件用例不等于通过。pnpm test 会构建共享测试入口，但不能替代五个驱动前端和桌面前端构建。
 
 | 需求范围 | 定向入口 |
 |---|---|
 | 实例、控制与故障 | [core 控制测试](../../crates/coterm-core/tests/control_contract.rs)、[运行时夹具](../../tests/fixtures/runtime-driver/tests/lifecycle.rs) |
-| 工作区、保存、迁移、Bypass | [workspace_tests.rs](../../apps/desktop/src-tauri/src/workspace_tests.rs)、[工作区浏览器](../../tests/workspace-browser.test.mjs) |
-| 审批组与界面 | [规则实现与单元测试](../../crates/coterm-core/src/approval_policy.rs)、[审批浏览器](../../tests/approval-settings-browser.test.mjs) |
-| SSH、Local、Serial | [driver/tests](../../crates/coterm-driver/tests)、[tests](../../tests) 中对应驱动浏览器用例 |
-| Telnet／Raw TCP | [网络测试](../../crates/coterm-driver/src/network/tests.rs)、[codec](../../crates/coterm-driver/src/telnet/codec.rs)、[网络浏览器](../../tests/network-drivers-browser.test.mjs) |
+| 工作区、保存、迁移、Bypass | [workspace_tests.rs](../../apps/desktop/src-tauri/src/workspace_tests.rs)、[工作区浏览器](../../tests/desktop/workspace/workspace-browser.test.mjs) |
+| 审批组与界面 | [规则实现与单元测试](../../crates/coterm-core/src/approval_policy.rs)、[审批浏览器](../../tests/desktop/approval/approval-settings-browser.test.mjs) |
+| SSH、Local、Serial | [driver/tests](../../crates/coterm-driver/tests)、[tests/drivers/](../../tests/drivers) 中对应驱动用例 |
+| Telnet／Raw TCP | [网络测试](../../crates/coterm-driver/src/network/tests.rs)、[codec](../../crates/coterm-driver/src/telnet/codec.rs)、[网络浏览器](../../tests/drivers/network/network-drivers-browser.test.mjs) |
 | MCP Stdio 与目录 | [coterm-mcp/tests](../../crates/coterm-mcp/tests)、各驱动目录与 MCP 集成测试 |
-| 前端公共交互 | tests 下 terminal-shortcuts、command-blocks、toasts、theme、serial-display-preferences 等用例 |
+| 前端公共交互 | tests/shared 下 terminal-shortcuts、command-blocks、toasts、tokens 等用例 |
 
 ## 原生与发行验收
 

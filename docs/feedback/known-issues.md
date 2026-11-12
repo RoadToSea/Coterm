@@ -42,7 +42,7 @@ Python 3.9 的 raw 模式曾留下 IXOFF，捕获过混入的 XOFF；测试已�
 
 已修复 socket 小块输出导致的通知压力，以及前端把多块事件误判为缺口后逐页追赶的问题。无节流或消费者落后仍会失败，不能把 TCP 的可靠传输等同于应用通知无损保证。
 
-**下一步**：若需要提高上限，先分开测生产／消费／显示路径并复现失败负载；不要只看 RX 计数或无限扩大队列。入口：[生产队列压测](../../crates/coterm-driver/examples/tcp-task-throughput.rs)、[网络浏览器回归](../../tests/network-drivers-browser.test.mjs)、[Node 校验器](../../tests/throughput-frames.test.mjs)。
+**下一步**：若需要提高上限，先分开测生产／消费／显示路径并复现失败负载；不要只看 RX 计数或无限扩大队列。入口：[生产队列压测](../../crates/coterm-driver/examples/tcp-task-throughput.rs)、[网络浏览器回归](../../tests/drivers/network/network-drivers-browser.test.mjs)、[Node 校验器](../../tests/system/throughput-frames.test.mjs)。
 
 ## 其他未解决问题
 
