@@ -48,7 +48,7 @@ async fn real_stdio_adapter_routes_to_desktop_runtime() -> anyhow::Result<()> {
     assert_eq!(initialized["result"]["protocolVersion"], "2025-06-18");
     assert_eq!(
         initialized["result"]["capabilities"],
-        json!({"tools":{"listChanged":true}})
+        json!({"tools":{"listChanged":false}})
     );
     write_frame(
         &mut input,
@@ -66,15 +66,16 @@ async fn real_stdio_adapter_routes_to_desktop_runtime() -> anyhow::Result<()> {
             .ok_or_else(|| anyhow::anyhow!("No tools response"))?,
     )?;
     assert_eq!(tools["id"], "list");
-    assert_eq!(tools["result"]["tools"][0]["name"], "coterm.list_instances");
-    write_frame(&mut input, &json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"coterm.list_instances","arguments":{}}})).await?;
+    assert_eq!(tools["result"]["tools"][0]["name"], "coterm_instances");
+    assert_eq!(tools["result"]["tools"].as_array().map(Vec::len), Some(8));
+    write_frame(&mut input, &json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"coterm_instances","arguments":{}}})).await?;
     let instances: Value = serde_json::from_slice(
         &timeout(Duration::from_secs(5), read_frame(&mut output))
             .await??
             .ok_or_else(|| anyhow::anyhow!("No instances response"))?,
     )?;
     assert_eq!(
-        instances["result"]["structuredContent"],
+        json!({"instances":instances["result"]["structuredContent"]["instances"]}),
         json!({"instances":[]})
     );
     write_frame(&mut input, &json!({"jsonrpc":"2.0","id":"health","method":"tools/call","params":{"name":"coterm.status","arguments":{}}})).await?;

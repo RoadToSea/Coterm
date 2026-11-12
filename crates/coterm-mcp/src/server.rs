@@ -1,12 +1,12 @@
-//! Tools-only MCP MVP: explicit driver tools and host operation queries.
-use std::{collections::HashSet, net::SocketAddr, sync::Arc, time::Duration};
+//! Semantic MCP tools backed by driver operations and host approval.
+use std::{net::SocketAddr, sync::Arc, time::Duration};
 
 use coterm_core::model::{
     lifecycle::{InstanceInfo, InstanceStatus},
     operation::{
         OperationEffect, OperationReceipt, OperationScope, OperationSource, OperationStatus,
     },
-    ErrorCategory, RuntimeError,
+    RuntimeError,
 };
 use coterm_core::{
     runtime::Runtime,
@@ -91,13 +91,11 @@ async fn serve_client(socket: TcpStream, runtime: Arc<Runtime>) -> anyhow::Resul
     let mut reader = BufReader::new(reader);
     let mut initialized = false;
     let mut ready = false;
-    let mut last_tools = Value::Null;
-    let mut catalog_poll = tokio::time::interval(Duration::from_secs(1));
     let (responses, mut completed) = tokio::sync::mpsc::channel::<Value>(16);
     let slots = Arc::new(tokio::sync::Semaphore::new(16));
     let mut calls = JoinSet::new();
     loop {
-        // Keep the read future alive across timer ticks: cancelling a partial
+        // Keep the read future alive across responses: cancelling a partial
         // newline frame would otherwise discard its prefix and corrupt the wire.
         let incoming = read_frame(&mut reader);
         tokio::pin!(incoming);
@@ -106,13 +104,6 @@ async fn serve_client(socket: TcpStream, runtime: Arc<Runtime>) -> anyhow::Resul
                 frame = &mut incoming => break frame?,
                 Some(response) = completed.recv() => { write_frame(&mut writer, &response).await?; }
                 _ = calls.join_next(), if !calls.is_empty() => {}
-                _ = catalog_poll.tick(), if ready => {
-                    let tools = tools_list(&runtime).await?;
-                    if tools != last_tools {
-                        last_tools = tools;
-                        write_frame(&mut writer, &json!({"jsonrpc":"2.0","method":"notifications/tools/list_changed"})).await?;
-                    }
-                }
             }
         };
         let Some(frame) = frame else { break };
@@ -143,7 +134,6 @@ async fn serve_client(socket: TcpStream, runtime: Arc<Runtime>) -> anyhow::Resul
         if id.is_none() {
             if method == "notifications/initialized" && initialized {
                 ready = true;
-                last_tools = tools_list(&runtime).await?;
             }
             // Waiting calls do not block reading; operation cancellation is explicit.
             continue;
@@ -214,9 +204,9 @@ pub(crate) fn initialize_result(params: &Value) -> Result<Value, (i32, String)> 
     };
     Ok(json!({
         "protocolVersion": version,
-        "capabilities": {"tools": {"listChanged": true}},
+        "capabilities": {"tools": {"listChanged": false}},
         "serverInfo": {"name": "Coterm", "version": env!("CARGO_PKG_VERSION")},
-        "instructions": "Use coterm.status for quick desktop and connection health. Driver tools use flat names such as coterm_ssh_command. Instance name is optional only with exactly one confirmed connected instance of the target driver and no unknown connection states; otherwise use name from coterm.list_instances. UUIDs are internal and must not be supplied. SSH, Serial and Local command tools return as soon as a write enters approval, with status pending_approval; use coterm.get_operation to query its final result. Set tools/call.params._meta['coterm/waitTimeoutMs'] to 0 for an immediate receipt, or 1..300000 to bound waiting. Only query coterm.get_operation after a pending/expired receipt; never pass credentials or replay writes automatically. Agent commit operations require approval unless the user has enabled Bypass or an explicit allowlist entry."
+        "instructions": "Start with coterm_instances for connection state and capabilities. Use coterm_terminal_command for SSH/Local, coterm_stream_command for Serial/TCP/Telnet, and coterm_read_output for lines, dialogues or human selections. Omit name only with one globally confirmed connected instance and no unknown states. Credentials stay in the desktop. Writes may return pending_approval; query the same operation with coterm_operation instead of resubmitting. Waiting expires without cancellation or replay. Choose exec only for expected long tasks or an explicit background request."
     }))
 }
 
@@ -250,31 +240,10 @@ pub(crate) fn rpc_error(id: Value, code: i32, message: &str) -> Value {
     json!({"jsonrpc":"2.0","id":id,"error":{"code":code,"message":message}})
 }
 
-pub async fn tools_list(runtime: &Runtime) -> Result<Value, RuntimeError> {
-    let mut tools = vec![
-        json!({"name":"coterm.list_instances","description":"List existing shared driver instances. Each instance has a unique public name; internal UUIDs are not exposed.","inputSchema":{"type":"object","properties":{},"additionalProperties":false}}),
-        json!({"name":"coterm.status","description":"Quick desktop/bridge health and instance connection snapshot (at most 64 instances, 1 second). connected=null means unknown; ready alone does not mean connected. Requires no SSH approval or authentication.","inputSchema":{"type":"object","properties":{},"additionalProperties":false}}),
-        json!({"name":"coterm.get_operation","description":"Query an operation using name or driverId; omit both only for one confirmed connected default instance.","inputSchema":{"type":"object","properties":{"name":{"type":"string","minLength":1},"driverId":{"type":"string","minLength":1},"operationId":{"type":"string","minLength":1}},"required":["operationId"],"not":{"required":["name","driverId"]},"additionalProperties":false}}),
-        json!({"name":"coterm.cancel_operation","description":"Request cancellation using name or driverId; omit both only for one confirmed connected default instance. The result can be cancelled, unknown, or unsupported depending on protocol confirmation.","inputSchema":{"type":"object","properties":{"name":{"type":"string","minLength":1},"driverId":{"type":"string","minLength":1},"operationId":{"type":"string","minLength":1}},"required":["operationId"],"not":{"required":["name","driverId"]},"additionalProperties":false}}),
-    ];
-    let mut names = HashSet::new();
-    for (driver, registration) in runtime.native_mcp_tools().await {
-        let mut descriptor = public_tool_descriptor(registration.descriptor);
-        if let Some(name) = descriptor["name"].as_str() {
-            let name = public_tool_name(&driver, name);
-            if !names.insert(name.clone()) {
-                return Err(RuntimeError {
-                    category: ErrorCategory::Conflict,
-                    code: "mcp_tool_name_conflict".into(),
-                    message: "Driver MCP tool names conflict after normalization".into(),
-                    details: None,
-                });
-            }
-            descriptor["name"] = json!(name);
-        }
-        tools.push(descriptor);
-    }
-    Ok(json!({"tools":tools}))
+/// Return the eight public semantic tool schemas; no device IO or credentials are required.
+/// The Runtime parameter is retained for callers; this fixed catalog currently cannot fail.
+pub async fn tools_list(_runtime: &Runtime) -> Result<Value, RuntimeError> {
+    Ok(json!({"tools":crate::unified::tools()}))
 }
 
 fn public_tool_name(driver: &str, native: &str) -> String {
@@ -289,32 +258,6 @@ fn public_tool_name(driver: &str, native: &str) -> String {
     format!("coterm_{}_{}", normalize(driver), normalize(native))
 }
 
-/// Hide the runtime routing key from the MCP contract. The bridge resolves `name`
-/// before forwarding the request, while drivers continue to receive their internal ID.
-fn public_tool_descriptor(mut descriptor: Value) -> Value {
-    let Some(schema) = descriptor.get_mut("inputSchema") else {
-        return descriptor;
-    };
-    let Some(properties) = schema.get_mut("properties").and_then(Value::as_object_mut) else {
-        return descriptor;
-    };
-    if properties.remove("driverInstanceId").is_none() {
-        return descriptor;
-    }
-    properties.insert(
-        "name".to_owned(),
-        json!({
-            "type":"string",
-            "minLength":1,
-            "description":"Public instance name from coterm.list_instances. Optional only when this driver has exactly one confirmed connected instance and no unknown connection states. Otherwise specify name. Also accepts instance, instanceName, or instance_name as compatibility aliases."
-        }),
-    );
-    if let Some(required) = schema.get_mut("required").and_then(Value::as_array_mut) {
-        required.retain(|entry| entry.as_str() != Some("driverInstanceId"));
-    }
-    descriptor
-}
-
 fn public_instance(instance: &InstanceInfo) -> Value {
     json!({
         "name": instance.label,
@@ -323,14 +266,15 @@ fn public_instance(instance: &InstanceInfo) -> Value {
     })
 }
 
-struct ConnectionSnapshot {
-    instances: Vec<(InstanceInfo, Option<bool>)>,
-    total: usize,
+pub(crate) struct ConnectionSnapshot {
+    pub(crate) instances: Vec<(InstanceInfo, Option<bool>)>,
+    pub(crate) details: std::collections::HashMap<String, Value>,
+    pub(crate) total: usize,
 }
 
 /// Connection knowledge is opt-in driver metadata, never guessed from a ready UI
 /// instance or a protocol-specific operation name. Probes cannot commit or prompt.
-async fn connection_snapshot(
+pub(crate) async fn connection_snapshot(
     runtime: &Runtime,
     driver: Option<&str>,
 ) -> anyhow::Result<ConnectionSnapshot> {
@@ -383,7 +327,7 @@ async fn connection_snapshot(
         let slots = slots.clone();
         probes.spawn(async move {
             let Ok(_permit) = slots.acquire_owned().await else {
-                return (index, None);
+                return (index, None, None);
             };
             let receipt = runtime
                 .submit(
@@ -401,31 +345,41 @@ async fn connection_snapshot(
                     },
                 )
                 .await;
-            let connected = receipt
+            let detail = receipt
                 .ok()
                 .filter(|receipt| receipt.status == OperationStatus::Completed)
                 .and_then(|receipt| receipt.output)
-                .and_then(|output| {
-                    output
-                        .pointer("/structuredContent/connected")
-                        .and_then(Value::as_bool)
-                });
-            (index, connected)
+                .and_then(|mut output| output.as_object_mut()?.remove("structuredContent"));
+            let connected = detail
+                .as_ref()
+                .and_then(|detail| detail["connected"].as_bool());
+            (index, connected, detail)
         });
     }
+    let mut details = std::collections::HashMap::new();
     let _ = tokio::time::timeout(Duration::from_secs(1), async {
         while let Some(result) = probes.join_next().await {
-            if let Ok((index, connected)) = result {
+            if let Ok((index, connected, detail)) = result {
                 instances[index].1 = connected;
+                if let Some(detail) = detail {
+                    details.insert(instances[index].0.driver_instance_id.clone(), detail);
+                }
             }
         }
     })
     .await;
     // Dropping the JoinSet cancels only our read waiters, never user operations.
-    Ok(ConnectionSnapshot { instances, total })
+    Ok(ConnectionSnapshot {
+        instances,
+        details,
+        total,
+    })
 }
 
-async fn default_instance(runtime: &Runtime, driver: Option<&str>) -> anyhow::Result<InstanceInfo> {
+pub(crate) async fn default_instance(
+    runtime: &Runtime,
+    driver: Option<&str>,
+) -> anyhow::Result<InstanceInfo> {
     let snapshot = connection_snapshot(runtime, driver).await?;
     if snapshot.total != snapshot.instances.len()
         || snapshot
@@ -433,7 +387,7 @@ async fn default_instance(runtime: &Runtime, driver: Option<&str>) -> anyhow::Re
             .iter()
             .any(|(_, connected)| connected.is_none())
     {
-        anyhow::bail!("Connection state is unavailable; specify name from coterm.list_instances");
+        anyhow::bail!("Connection state is unavailable; specify name from coterm_instances");
     }
     let mut connected = snapshot
         .instances
@@ -441,10 +395,10 @@ async fn default_instance(runtime: &Runtime, driver: Option<&str>) -> anyhow::Re
         .filter(|(_, connected)| *connected == Some(true))
         .map(|(instance, _)| instance);
     let Some(instance) = connected.next() else {
-        anyhow::bail!("No connected default instance; specify name from coterm.list_instances and connect it first");
+        anyhow::bail!("No connected default instance; specify name from coterm_instances and connect it first");
     };
     if connected.next().is_some() {
-        anyhow::bail!("Multiple connected instances; specify name from coterm.list_instances");
+        anyhow::bail!("Multiple connected instances; specify name from coterm_instances");
     }
     Ok(instance)
 }
@@ -466,7 +420,7 @@ fn hide_internal_instance_ids(value: &mut Value) {
     }
 }
 
-async fn resolve_instance_name(
+pub(crate) async fn resolve_instance_name(
     runtime: &Runtime,
     driver_id: Option<&str>,
     name: &str,
@@ -490,7 +444,7 @@ async fn resolve_instance_name(
 
 /// Structured content is the machine-readable copy. The text block is a bounded digest,
 /// so a large operation result is not serialized twice in one response.
-fn text_result(value: Value) -> Value {
+pub(crate) fn text_result(value: Value) -> Value {
     let text = digest(&value);
     json!({"content":[{"type":"text","text":text}],"structuredContent":value,"isError":false})
 }
@@ -541,8 +495,19 @@ fn receipt_meta(receipt: &OperationReceipt) -> Value {
     value
 }
 
+/// Dispatch a tools/call parameter object to public tools or hidden compatibility names.
+/// Returns a CallToolResult; malformed arguments and unavailable targets return an error.
+/// Caller identity, approval, waiting and cancellation are enforced by the existing Runtime.
 pub async fn call_tool(runtime: &Runtime, params: &Value) -> anyhow::Result<Value> {
-    let wait_timeout_ms = params
+    validate_wait(params)?;
+    if crate::unified::is_tool(params["name"].as_str().unwrap_or_default()) {
+        return crate::unified::call(runtime, params).await;
+    }
+    call_legacy_tool(runtime, params).await
+}
+
+fn validate_wait(params: &Value) -> anyhow::Result<Option<u64>> {
+    params
         .pointer("/_meta/coterm~1waitTimeoutMs")
         .map(|value| {
             value
@@ -550,7 +515,11 @@ pub async fn call_tool(runtime: &Runtime, params: &Value) -> anyhow::Result<Valu
                 .filter(|n| *n <= 300_000)
                 .ok_or_else(|| anyhow::anyhow!("Invalid coterm/waitTimeoutMs (expected 0..300000)"))
         })
-        .transpose()?;
+        .transpose()
+}
+
+pub(crate) async fn call_legacy_tool(runtime: &Runtime, params: &Value) -> anyhow::Result<Value> {
+    let wait_timeout_ms = validate_wait(params)?;
     let name = params["name"]
         .as_str()
         .ok_or_else(|| anyhow::anyhow!("Tool name required"))?;
@@ -882,30 +851,27 @@ mod tests {
     }
 
     #[test]
-    fn public_tool_schema_uses_name_for_instance_routing() {
-        let descriptor = public_tool_descriptor(json!({
-            "name": "serial.status",
-            "inputSchema": {
-                "type": "object",
-                "properties": {"driverInstanceId": {"type": "string"}},
-                "required": ["driverInstanceId"],
+    fn public_catalog_has_eight_unique_tools_and_no_internal_routing_keys() {
+        let tools = crate::unified::tools();
+        assert_eq!(tools.len(), 8);
+        let names: std::collections::HashSet<_> = tools
+            .iter()
+            .map(|tool| tool["name"].clone().to_string())
+            .collect();
+        assert_eq!(names.len(), 8);
+        for tool in tools {
+            assert_eq!(tool["inputSchema"]["additionalProperties"], false);
+            assert_eq!(tool["inputSchema"]["properties"]["name"]["type"], "string");
+            for key in [
+                "driverInstanceId",
+                "driverId",
+                "source",
+                "bypass",
+                "password",
+                "cursor",
+            ] {
+                assert!(tool["inputSchema"]["properties"].get(key).is_none());
             }
-        }));
-        assert!(descriptor["inputSchema"]["properties"]
-            .get("driverInstanceId")
-            .is_none());
-        assert_eq!(descriptor["inputSchema"]["required"], json!([]));
-        assert_eq!(
-            descriptor["inputSchema"]["properties"]["name"]["type"],
-            "string"
-        );
-        assert!(
-            descriptor["inputSchema"]["properties"]["name"]["description"]
-                .as_str()
-                .is_some_and(|description| {
-                    description.contains("coterm.list_instances")
-                        && description.contains("instanceName")
-                })
-        );
+        }
     }
 }

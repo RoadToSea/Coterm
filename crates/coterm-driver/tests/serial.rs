@@ -376,7 +376,7 @@ async fn in_process_host_registers_serial_and_validates_mcp_tools() -> Result<()
         .and_then(|tools| {
             tools
                 .iter()
-                .find(|tool| tool["name"] == "coterm_serial_command_hex")
+                .find(|tool| tool["name"] == "coterm_stream_command")
         })
         .ok_or_else(|| anyhow::anyhow!("Missing public HEX tool"))?;
     assert!(tool["inputSchema"]["properties"]
@@ -390,7 +390,7 @@ async fn in_process_host_registers_serial_and_validates_mcp_tools() -> Result<()
         .and_then(|tools| {
             tools
                 .iter()
-                .find(|tool| tool["name"] == "coterm_serial_command")
+                .find(|tool| tool["name"] == "coterm_stream_command")
         })
         .ok_or_else(|| anyhow::anyhow!("Missing public text tool"))?;
     assert_eq!(
@@ -402,24 +402,24 @@ async fn in_process_host_registers_serial_and_validates_mcp_tools() -> Result<()
         "string"
     );
     assert_eq!(
-        command_tool["inputSchema"]["properties"]["lineEnding"]["default"],
-        "cr"
+        command_tool["inputSchema"]["properties"]["encoding"]["default"],
+        "utf-8"
     );
     assert!(
         command_tool["inputSchema"]["properties"]["name"]["description"]
             .as_str()
-            .is_some_and(|description| description.contains("coterm.list_instances"))
+            .is_some_and(|description| description.contains("coterm_instances"))
     );
     let listed = tools["tools"]
         .as_array()
         .ok_or_else(|| anyhow::anyhow!("Missing tools"))?;
     let read_tool = listed
         .iter()
-        .find(|tool| tool["name"] == "coterm_serial_read_lines")
+        .find(|tool| tool["name"] == "coterm_read_output")
         .ok_or_else(|| anyhow::anyhow!("Missing public line-read tool"))?;
     assert_eq!(
-        read_tool["inputSchema"]["properties"]["lines"]["default"],
-        100
+        read_tool["inputSchema"]["properties"]["mode"]["default"],
+        "lines"
     );
     assert!(read_tool["inputSchema"]["properties"]
         .get("cursor")
@@ -431,10 +431,7 @@ async fn in_process_host_registers_serial_and_validates_mcp_tools() -> Result<()
     ] {
         assert!(!listed.iter().any(|tool| tool["name"] == removed));
     }
-    for name in [
-        "coterm_serial_read_selected_lines",
-        "coterm_serial_read_dialogue_pairs",
-    ] {
+    for name in ["coterm_instances", "coterm_connection", "coterm_operation"] {
         assert!(listed.iter().any(|tool| tool["name"] == name));
     }
     let missing_name = coterm_mcp::server::call_tool(

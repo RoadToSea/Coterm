@@ -68,10 +68,10 @@ try{
   createInterface({input:adapter.stdout}).on("line",line=>{const message=JSON.parse(line),call=calls.get(message.id);if(!call)return;calls.delete(message.id);clearTimeout(call.timer);message.error?call.reject(new Error(JSON.stringify(message.error))):call.resolve(message.result);});
   await rpc("initialize",{protocolVersion:"2024-11-05",capabilities:{},clientInfo:{name:"native-acceptance",version:"1"}});
   adapter.stdin.write(JSON.stringify({jsonrpc:"2.0",method:"notifications/initialized"})+"\n");
-  const tools=(await rpc("tools/list")).tools.map(tool=>tool.name);assert.ok(tools.includes("coterm_local_command"));assert.ok(!tools.includes("coterm_local_exec"));
-  await approve("Native local",local.driverInstanceId,"coterm_local_command",["$env:COTERM_ACCEPTANCE='retained'; Write-Output 'native-local-first'"]);
-  await approve("Native local",local.driverInstanceId,"coterm_local_command",["Write-Output $env:COTERM_ACCEPTANCE"]);
-  const pairs=await tool("coterm_local_read_dialogue_pairs",{name:"Native local",count:2});assert.equal(pairs.structuredContent.pairs.length,2);assert.ok(pairs.structuredContent.pairs[0].stdout.includes("retained"));
+  const tools=(await rpc("tools/list")).tools.map(tool=>tool.name);assert.equal(tools.length,8);assert.ok(tools.includes("coterm_terminal_command"));assert.ok(!tools.includes("coterm_local_command"));
+  await approve("Native local",local.driverInstanceId,"coterm_terminal_command",["$env:COTERM_ACCEPTANCE='retained'; Write-Output 'native-local-first'"]);
+  await approve("Native local",local.driverInstanceId,"coterm_terminal_command",["Write-Output $env:COTERM_ACCEPTANCE"]);
+  const pairs=await tool("coterm_read_output",{name:"Native local",mode:"dialogue",count:2});assert.equal(pairs.structuredContent.pairs.length,2);assert.ok(pairs.structuredContent.pairs[0].stdout.includes("retained"));
   for(const protocol of ["tcp","telnet"]){
     const server=net.createServer(socket=>{
       networkPeers.add(socket);socket.on("close",()=>networkPeers.delete(socket));socket.on("error",()=>{});
@@ -87,9 +87,9 @@ try{
     await operation(instance.driverInstanceId,`${protocol}.connect`);
     for(let attempt=0;attempt<100;attempt++){if((await operation(instance.driverInstanceId,`${protocol}.status`)).shellReady)break;await delay(20);}
     const networkTools=(await rpc("tools/list")).tools.map(tool=>tool.name);
-    assert.ok(networkTools.includes(`coterm_${protocol}_command`));assert.ok(!networkTools.includes(`coterm_${protocol}_exec`));
-    await approve(name,instance.driverInstanceId,`coterm_${protocol}_command`,["native-loopback"]);
-    const result=await tool(`coterm_${protocol}_read_dialogue_pairs`,{name,count:1});
+    assert.ok(networkTools.includes("coterm_stream_command"));assert.ok(!networkTools.includes(`coterm_${protocol}_command`));
+    await approve(name,instance.driverInstanceId,"coterm_stream_command",["native-loopback"]);
+    const result=await tool("coterm_read_output",{name,mode:"dialogue",count:1});
     assert.ok(result.structuredContent.pairs[0].stdout.includes(`${protocol}-native-result`));
     assert.equal(result.structuredContent.pairs[0].stderr,"");assert.equal(result.structuredContent.pairs[0].exitCode,null);
     const entry=(await invoke("workspace_snapshot")).entries.find(entry=>entry.instanceId===instance.driverInstanceId);
@@ -106,8 +106,8 @@ try{
     try{
       await operation(serial.driverInstanceId,"serial.write",{text:"\r"});let ready=false;
       for(let i=0;i<100;i++){ready=(await operation(serial.driverInstanceId,"serial.status")).shellReady;if(ready)break;await delay(50);}assert.equal(ready,true,"Board must already be logged in at its prompt");
-      await approve("Native board",serial.driverInstanceId,"coterm_serial_command",["printf '__COTERM_FULL_CHAIN__\\n'"]);
-      const data=await tool("coterm_serial_read_dialogue_pairs",{name:"Native board",count:1});assert.ok(data.structuredContent.pairs[0].stdout.includes("__COTERM_FULL_CHAIN__"));assert.equal(data.structuredContent.pairs[0].stderr,"");assert.equal(data.structuredContent.pairs[0].exitCode,null);
+      await approve("Native board",serial.driverInstanceId,"coterm_stream_command",["printf '__COTERM_FULL_CHAIN__\\n'"]);
+      const data=await tool("coterm_read_output",{name:"Native board",mode:"dialogue",count:1});assert.ok(data.structuredContent.pairs[0].stdout.includes("__COTERM_FULL_CHAIN__"));assert.equal(data.structuredContent.pairs[0].stderr,"");assert.equal(data.structuredContent.pairs[0].exitCode,null);
     }finally{await operation(serial.driverInstanceId,"serial.disconnect");}
     const entry=(await invoke("workspace_snapshot")).entries.find(entry=>entry.instanceId===serial.driverInstanceId);
     await invoke("stop_driver",{driverId:"coterm-driver-serial"});const restored=await invoke("restore_saved_instance",{configRef:entry.configRef});

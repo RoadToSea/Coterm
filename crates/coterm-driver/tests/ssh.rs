@@ -1315,9 +1315,10 @@ async fn external_mcp_uses_shared_ssh_and_host_secret_and_approval_paths() -> Re
     let tools = tools["tools"]
         .as_array()
         .ok_or_else(|| anyhow::anyhow!("Missing tools"))?;
-    assert!(tools.iter().any(|t| t["name"] == "coterm_ssh_command"));
-    assert!(tools.iter().any(|t| t["name"] == "coterm_ssh_driver_info"));
-    for name in ["coterm_ssh_read_file", "coterm_ssh_write_file"] {
+    assert_eq!(tools.len(), 8);
+    assert!(tools.iter().any(|t| t["name"] == "coterm_terminal_command"));
+    assert!(tools.iter().any(|t| t["name"] == "coterm_instances"));
+    for name in ["coterm_file_read", "coterm_file_write"] {
         let tool = tools
             .iter()
             .find(|tool| tool["name"] == name)
@@ -1332,6 +1333,15 @@ async fn external_mcp_uses_shared_ssh_and_host_secret_and_approval_paths() -> Re
     let driver_info = client.tool("coterm_ssh_driver_info", json!({})).await?;
     let driver_info = &driver_info["structuredContent"];
     assert_eq!(driver_info["instanceCount"], 2);
+    let probe = client
+        .tool(
+            "coterm_connection",
+            json!({"name":instance.label,"action":"probe"}),
+        )
+        .await?;
+    assert_eq!(probe["structuredContent"]["fingerprint"], ssh.fingerprint);
+    assert_eq!(probe["_meta"]["coterm/operation"]["status"], "completed");
+    assert!(runtime.pending_interactions().await.is_empty());
     let connect_args =
         json!({"driverInstanceId":instance.driver_instance_id,"fingerprint":ssh.fingerprint});
     let proposed = client
@@ -1811,16 +1821,8 @@ async fn external_mcp_uses_shared_ssh_and_host_secret_and_approval_paths() -> Re
     );
     assert_eq!(interrupted["result"]["isError"], true);
     runtime.stop("coterm-driver-ssh").await?;
-    let changed = timeout(
-        Duration::from_secs(3),
-        coterm_mcp::transport::read_frame(&mut client.reader),
-    )
-    .await??
-    .ok_or_else(|| anyhow::anyhow!("Missing tool directory notification"))?;
-    assert_eq!(
-        serde_json::from_slice::<Value>(&changed)?["method"],
-        "notifications/tools/list_changed"
-    );
+    let stopped_catalog = client.rpc("tools/list", json!({})).await?;
+    assert_eq!(stopped_catalog["tools"].as_array(), Some(tools));
     drop(bridge);
     Ok(())
 }
@@ -2363,9 +2365,9 @@ async fn agent_feedback_health_default_routing_and_legacy_aliases() -> Result<()
         .ok_or_else(|| anyhow::anyhow!("missing tools"))?;
     let exec = tools
         .iter()
-        .find(|tool| tool["name"] == "coterm_ssh_command")
+        .find(|tool| tool["name"] == "coterm_terminal_command")
         .ok_or_else(|| anyhow::anyhow!("missing exec"))?;
-    assert_eq!(exec["_meta"]["coterm/returnOnApproval"], true);
+    assert_eq!(exec["annotations"]["readOnlyHint"], false);
     assert!(!exec["inputSchema"]["required"]
         .as_array()
         .is_some_and(|required| required.contains(&json!("name"))));
@@ -2883,7 +2885,7 @@ async fn real_mcp_file_tools_and_multiline_exec_preserve_content_and_stop_on_fai
     let content = "setting='hello world'\n".repeat(260);
     let args =
         json!({"driverInstanceId":instance.driver_instance_id,"path":path,"content":content});
-    let proposal = client.tool("coterm_ssh_write_file", args.clone()).await?;
+    let proposal = client.tool("coterm_file_write", args.clone()).await?;
     assert_eq!(
         proposal["_meta"]["coterm/operation"]["status"], "awaiting_approval",
         "{proposal}"
@@ -2916,12 +2918,30 @@ async fn real_mcp_file_tools_and_multiline_exec_preserve_content_and_stop_on_fai
         .rpc(
             "tools/call",
             json!({
-                "name":"coterm_ssh_read_file", "arguments":{"name":instance.label,"path":path},
+                "name":"coterm_file_read", "arguments":{"name":instance.label,"path":path},
                 "_meta":{"coterm/waitTimeoutMs":5000}
             }),
         )
         .await?;
     assert_eq!(read["structuredContent"]["text"], content, "{read}");
+    let queried = client
+        .tool(
+            "coterm_operation",
+            json!({"name":instance.label,"operationId":operation["operationId"]}),
+        )
+        .await?;
+    assert_eq!(queried["structuredContent"]["status"], "completed");
+    assert_eq!(
+        queried["structuredContent"]["output"]["structuredContent"]["bytes"],
+        content.len()
+    );
+    let metadata = client
+        .rpc(
+            "tools/call",
+            json!({"name":"coterm_file_read","arguments":{"name":instance.label,"path":path,"metadataOnly":true},"_meta":{"coterm/waitTimeoutMs":5000}}),
+        )
+        .await?;
+    assert_eq!(metadata["structuredContent"]["exists"], "1", "{metadata}");
     runtime
         .set_approval_policy(
             &instance.driver_instance_id,
@@ -2935,7 +2955,7 @@ async fn real_mcp_file_tools_and_multiline_exec_preserve_content_and_stop_on_fai
         .rpc(
             "tools/call",
             json!({
-                "name":"coterm_ssh_command",
+                "name":"coterm_terminal_command",
                 "arguments":{"name":instance.label,"mode":"exec","commands":[
                     format!("cd '{}'\nexport COTERM_VALUE='a b'", remote.replace('\'', "'\\''")),
                     format!("cat <<'EOF' > composed.conf\n{content}EOF"),
@@ -2967,7 +2987,7 @@ async fn real_mcp_file_tools_and_multiline_exec_preserve_content_and_stop_on_fai
         .rpc(
             "tools/call",
             json!({
-                "name":"coterm_ssh_command",
+                "name":"coterm_terminal_command",
                 "arguments":{"name":instance.label,"mode":"exec","commands":[script]},
                 "_meta":{"coterm/waitTimeoutMs":5000}
             }),

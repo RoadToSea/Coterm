@@ -151,8 +151,8 @@ apps/shared 是内部源码，不是外部 SDK。当前前端契约 2.0 绑定�
 
 [coterm-mcp](../../crates/coterm-mcp/src) 只承担 MCP 会话、工具映射、目标名称解析和操作结果包装，直接复用 Runtime，不再增加独立操作服务。
 
-桌面 EXE 的 mcp stdio 模式不创建窗口或驱动运行时，只转发本机私有 Bridge。工具由驱动明确注册，公开 schema 将内部 driverInstanceId 替换为 name；Agent 始终以 Agent 来源提交。
+桌面 EXE 的 mcp stdio 模式不创建窗口或驱动运行时，只转发本机私有 Bridge。[unified.rs](../../crates/coterm-mcp/src/unified.rs) 固定公开八个语义工具，校验参数、解析全局目标，并映射到驱动已经注册的 MCP 操作；Agent 始终以 Agent 来源提交。驱动工具名保留为隐藏兼容入口，不出现在公开目录；兼容入口保留原有按驱动选择默认目标的规则。
 
 ## 四、实现变更的约束
 
-本次文档整理不移动源码、不改变协议、权限、持久化结构或依赖。后续代码调整以[模块交互验收](../requirements/interactions.md)和[开发验收](development.md)为依据，保持原调用入口与失败语义；需要改变共享接口或保存格式时另行确认。
+代码调整以[模块交互验收](../requirements/interactions.md)和[开发验收](development.md)为依据，保持权限校验和失败语义，不增加无必要的转发层；需要改变共享接口或保存格式时先确认变更范围。

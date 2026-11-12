@@ -12,9 +12,17 @@
 | 通信驱动 | SSH／Local 前台与显式后台，Serial Shell／stream，Telnet 与 Raw TCP | SSH 认证和 Shell 范围有限；Telnet／TCP 明文，代理无认证 |
 | 数据记录与读取 | 后端有界正文、操作摘要、三种无游标读取、前端回放 | 数据不跨启动；字节流无对话；长期慢消费可产生不可恢复缺口 |
 | 桌面交互 | 分组、标签、主题语言、终端、字节工作台、横向块分隔、审批设置 | 原生跨平台、完整后代进程回收和现场协议兼容仍需验收 |
-| Agent 接入 | 桌面 Stdio 适配、本机 Bridge、严格工具目录、名称路由和操作查询 | 无 Resources／Prompts／事件订阅／MCP cancellation notification |
+| Agent 接入 | 桌面 Stdio 适配、本机 Bridge、8 个统一语义工具、全局唯一默认目标、名称路由与操作查询 | 旧工具名仅隐藏兼容；无 Resources／Prompts／事件订阅／MCP cancellation notification |
 
 ## 最近有效的软件验收
+
+统一 MCP 接口已通过以下软件验收：
+
+- `cargo check --workspace`；MCP 与驱动的全目标严格 Clippy；原生验收脚本的 Node 语法检查。
+- `cargo test -p coterm-mcp -p coterm-driver -- --test-threads=1`：183 项通过，3 项设备／虚拟串口用例按默认设置 ignored。
+- 5 项统一入口集成测试覆盖固定目录、实例当前能力、无游标读取、审批／查询／取消、实例归属、未知参数与内部身份拒绝、Serial／TCP 参数边界和 Telnet HEX 拒绝；Local 与 TCP 同时连接时，省略名称不能按驱动偷偷选择目标。
+- 本机 SSH 软件服务夹具验证统一文件写入仍经审批、读取使用独立通道、多行 exec 保留内容并在首错停止；旧工具名仍可调用但不出现在公开目录。真实 Stdio 适配进程验证固定 8 项目录和实例概览。
+- 本轮没有连接开发板、做吞吐测速或重跑原生 WebView2／远端设备验收；修改的原生验收脚本只做语法检查。
 
 2026-11-11 的性能修复版本记录了以下结果，属于当时实际执行的验收，不表示整理文档时重新运行：
 
