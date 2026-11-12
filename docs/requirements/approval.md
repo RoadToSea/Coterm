@@ -40,4 +40,4 @@
 
 驱动级写操作不借用某个实例的规则或 Bypass。人工操作与 Agent 操作的来源必须由可信入口确定，不能由调用参数自报。
 
-公共约束见[来源、秘密与异步状态](../03-common-requirements.md)；批准与秘密交接见[模块交互](../04-module-interactions.md)。
+公共约束见[来源、秘密与异步状态](common.md)；批准与秘密交接见[模块交互](interactions.md)。

@@ -1,31 +1,6 @@
-# 状态与未解决问题
+# 未解决反馈与现场证据
 
-本文件记录当前能力、最近有效验收及仍需继续调查的问题。需求与行为约束以[模块需求](02-requirements/)为准，复测命令见[开发与验收](development.md)。历史过程由 Git 保存，不在这里逐次累积。
-
-## 文档验收
-
-2026-11-12 校验：15 篇集中式文档、135 个本地链接、2 个 JSON 示例、7 个 Cargo 测试／示例目标通过；前四层未包含源码路径或实现代码，旧文档路径引用已清除，差异空白检查通过。独立读者复核覆盖身份、保存责任、审批生效、对话粒度、读取能力、两类超时、已知失败与方案状态；已修正规则空列表和在线控制线的歧义。本次只调整文档及入口，未重新执行软件构建、GUI 或硬件验收。
-
-## 当前能力
-
-| 模块 | 已有能力 | 主要边界 |
-|---|---|---|
-| 工作区与配置 | 保存项、分组、布局、恢复、规则组引用与实例 Bypass | Windows 加密保存；其他平台工作区仅内存；恢复不连接 |
-| 实例运行 | 五种进程内驱动、多实例、类型化调度、异步状态与故障收敛 | 每驱动任务隔离，不是进程崩溃隔离 |
-| 审批与交互 | 独立规则组、实例单组绑定、正反向规则、独立 Bypass 和秘密交互 | 已待审批提案不随规则更新自动执行；通用多轮认证未完成 |
-| 通信驱动 | SSH／Local 前台与显式后台，Serial Shell／stream，Telnet 与 Raw TCP | SSH 认证和 Shell 范围有限；Telnet／TCP 明文，代理无认证 |
-| 数据记录与读取 | 后端有界正文、操作摘要、三种无游标读取、前端回放 | 数据不跨启动；字节流无对话；长期慢消费可产生不可恢复缺口 |
-| 桌面交互 | 分组、标签、主题语言、终端、字节工作台、横向块分隔、审批设置 | 原生跨平台、完整后代进程回收和现场协议兼容仍需验收 |
-| Agent 接入 | 桌面 Stdio 适配、本机 Bridge、严格工具目录、名称路由和操作查询 | 无 Resources／Prompts／事件订阅／MCP cancellation notification |
-
-## 最近有效的软件验收
-
-2026-11-11 的性能修复版本记录了以下结果，属于当时实际执行的验收，不表示整理文档时重新运行：
-
-- 工作区全目标 check、280 项 Rust 测试及严格 Clippy 通过；3 项既有真实设备用例按默认设置 ignored。
-- 五个驱动前端、桌面前端构建及 105 项前端回归通过；吞吐校验器另有 2 项 Rust 和 2 项 Node 用例。
-- Windows 原生 WebView2 → MCP Stdio → 审批 → 本机网络 Shell 的链路、Local PowerShell 及保存后恢复保持断开已有验收。
-- 浏览器／本机测试不等于原远端 SSH、实际代理部署、真实 Telnet 设备、NSIS 干净安装或 macOS／Linux 验收。
+本文件集中保留待解决的使用反馈、复现条件、失败证据和调查入口。正常能力及已通过验收见[实现与验收状态](../implementation/verification.md)，复测命令见[开发与验收](../implementation/development.md)。已解决的问题转入相应需求或技术实现，不在此累积开发历史。
 
 ## 串口全双工与完整性
 
@@ -47,7 +22,7 @@ Python 3.9 的 raw 模式曾留下 IXOFF，捕获过混入的 XOFF；测试已�
 
 **下一步**：相同负载更换适配器或系统交叉对照，继续区分原始缺字节、通知遗漏和历史淘汰。不能用短测、零 UART 错误或中间原型的通过替代最终长测。
 
-范围不含完整 Runtime、WebView、xterm、MCP 和审批。上次退出已恢复 115200、ECHO／ICANON，确认 Shell 可用并释放端口；这不保证以后端口仍空闲。入口：[串口会话](../crates/coterm-driver/src/serial/session.rs)、[Windows IO](../crates/coterm-driver/src/serial/windows_io.rs)、[测速](../scripts/benchmark-serial.mjs)。
+范围不含完整 Runtime、WebView、xterm、MCP 和审批。上次退出已恢复 115200、ECHO／ICANON，确认 Shell 可用并释放端口；这不保证以后端口仍空闲。入口：[串口会话](../../crates/coterm-driver/src/serial/session.rs)、[Windows IO](../../crates/coterm-driver/src/serial/windows_io.rs)、[测速](../../scripts/benchmark-serial.mjs)。
 
 ## TCP 吞吐与消费者缺口
 
@@ -67,7 +42,7 @@ Python 3.9 的 raw 模式曾留下 IXOFF，捕获过混入的 XOFF；测试已�
 
 已修复 socket 小块输出导致的通知压力，以及前端把多块事件误判为缺口后逐页追赶的问题。无节流或消费者落后仍会失败，不能把 TCP 的可靠传输等同于应用通知无损保证。
 
-**下一步**：若需要提高上限，先分开测生产／消费／显示路径并复现失败负载；不要只看 RX 计数或无限扩大队列。入口：[生产队列压测](../crates/coterm-driver/examples/tcp-task-throughput.rs)、[网络浏览器回归](../tests/network-drivers-browser.test.mjs)、[Node 校验器](../tests/throughput-frames.test.mjs)。
+**下一步**：若需要提高上限，先分开测生产／消费／显示路径并复现失败负载；不要只看 RX 计数或无限扩大队列。入口：[生产队列压测](../../crates/coterm-driver/examples/tcp-task-throughput.rs)、[网络浏览器回归](../../tests/network-drivers-browser.test.mjs)、[Node 校验器](../../tests/throughput-frames.test.mjs)。
 
 ## 其他未解决问题
 
@@ -80,4 +55,4 @@ Python 3.9 的 raw 模式曾留下 IXOFF，捕获过混入的 XOFF；测试已�
 | 网络现场兼容 | Windows 回环与协议夹具已验收，未覆盖实际代理部署和远程 Telnet 设备 | 真设备、代理和断线重连现场复测 |
 | 非 Windows 与发行 | 工作区无明文回退，macOS／Linux 原生、安装与安全存储未完整验收 | 按发行检查执行，不能以浏览器测试替代 |
 
-SSH 现场入口为[命令边界](../crates/coterm-driver/src/ssh/command.rs)和[SSH 集成测试](../crates/coterm-driver/tests/ssh.rs)；MCP 目录现场入口为[工具映射](../crates/coterm-mcp/src/server.rs)和[串口工具测试](../crates/coterm-driver/tests/serial.rs)。
+SSH 现场入口为[命令边界](../../crates/coterm-driver/src/ssh/command.rs)和[SSH 集成测试](../../crates/coterm-driver/tests/ssh.rs)；MCP 目录现场入口为[工具映射](../../crates/coterm-mcp/src/server.rs)和[串口工具测试](../../crates/coterm-driver/tests/serial.rs)。

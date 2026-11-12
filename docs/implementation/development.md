@@ -1,6 +1,6 @@
 # 开发与验收
 
-本文件集中构建、测试、硬件与发布入口。模块行为见[需求](02-requirements/)，代码关系见[代码架构](05-code-architecture.md)，最近结果见[状态](status.md)。
+本文件集中构建、测试、硬件与发布入口。模块行为见[需求](../requirements/)，代码关系见[代码架构](architecture.md)，已验证能力见[实现与验收状态](verification.md)，未解决现场问题见[feedback](../feedback/known-issues.md)。
 
 ## 环境与构建
 
@@ -32,12 +32,12 @@ git diff --check
 
 | 需求范围 | 定向入口 |
 |---|---|
-| 实例、控制与故障 | [core 控制测试](../crates/coterm-core/tests/control_contract.rs)、[运行时夹具](../tests/fixtures/runtime-driver/tests/lifecycle.rs) |
-| 工作区、保存、迁移、Bypass | [workspace_tests.rs](../apps/desktop/src-tauri/src/workspace_tests.rs)、[工作区浏览器](../tests/workspace-browser.test.mjs) |
-| 审批组与界面 | [规则实现与单元测试](../crates/coterm-core/src/approval_policy.rs)、[审批浏览器](../tests/approval-settings-browser.test.mjs) |
-| SSH、Local、Serial | [driver/tests](../crates/coterm-driver/tests)、[tests](../tests) 中对应驱动浏览器用例 |
-| Telnet／Raw TCP | [网络测试](../crates/coterm-driver/src/network/tests.rs)、[codec](../crates/coterm-driver/src/telnet/codec.rs)、[网络浏览器](../tests/network-drivers-browser.test.mjs) |
-| MCP Stdio 与目录 | [coterm-mcp/tests](../crates/coterm-mcp/tests)、各驱动目录与 MCP 集成测试 |
+| 实例、控制与故障 | [core 控制测试](../../crates/coterm-core/tests/control_contract.rs)、[运行时夹具](../../tests/fixtures/runtime-driver/tests/lifecycle.rs) |
+| 工作区、保存、迁移、Bypass | [workspace_tests.rs](../../apps/desktop/src-tauri/src/workspace_tests.rs)、[工作区浏览器](../../tests/workspace-browser.test.mjs) |
+| 审批组与界面 | [规则实现与单元测试](../../crates/coterm-core/src/approval_policy.rs)、[审批浏览器](../../tests/approval-settings-browser.test.mjs) |
+| SSH、Local、Serial | [driver/tests](../../crates/coterm-driver/tests)、[tests](../../tests) 中对应驱动浏览器用例 |
+| Telnet／Raw TCP | [网络测试](../../crates/coterm-driver/src/network/tests.rs)、[codec](../../crates/coterm-driver/src/telnet/codec.rs)、[网络浏览器](../../tests/network-drivers-browser.test.mjs) |
+| MCP Stdio 与目录 | [coterm-mcp/tests](../../crates/coterm-mcp/tests)、各驱动目录与 MCP 集成测试 |
 | 前端公共交互 | tests 下 terminal-shortcuts、command-blocks、toasts、theme、serial-display-preferences 等用例 |
 
 ## 原生与发行验收
@@ -49,7 +49,7 @@ pnpm tauri:build --config ../../tests/fixtures/tauri-smoke.conf.json --bundles n
 pnpm test:native target/release/coterm-desktop.exe
 ```
 
-脚本不传路径时默认 debug 产物，但仍要求 smoke 配置，不能用普通桌面 EXE 代替。细节见[原生脚本](../scripts/test-native.mjs)和[Windows CI](../.github/workflows/windows.yml)。
+脚本不传路径时默认 debug 产物，但仍要求 smoke 配置，不能用普通桌面 EXE 代替。细节见[原生脚本](../../scripts/test-native.mjs)和[Windows CI](../../.github/workflows/windows.yml)。
 
 Windows 安装包：
 
@@ -66,7 +66,7 @@ pnpm tauri:build --bundles nsis
 5. 真实 MCP 客户端、审批编辑、实例隔离、配置恢复和无秘密泄露。
 6. 语言主题、窄窗口、标签、终端底行、慢消费者缺口、退出和资源回收。
 
-CI 在 main／develop 推送、PR 或手动触发时检查并产出 NSIS，v* 标签发布安装产物。测试安装器见[scripts/test-installer.ps1](../scripts/test-installer.ps1)，实际分发前仍需确认[未解决问题](status.md)。macOS／Linux 安装和原生行为独立验收。
+CI 在 main／develop 推送、PR 或手动触发时检查并产出 NSIS，v* 标签发布安装产物。测试安装器见[scripts/test-installer.ps1](../../scripts/test-installer.ps1)，实际分发前仍需确认[未解决问题](../feedback/known-issues.md)。macOS／Linux 安装和原生行为独立验收。
 
 ## 真实串口
 
@@ -98,7 +98,7 @@ $env:COTERM_SERIAL_PAIR_BAUD = "115200"
 cargo test --locked -p coterm-driver --test serial_virtual_pair -- --ignored --nocapture
 ```
 
-测试范围以[实际用例](../crates/coterm-driver/tests)为准；物理线路、提示符识别和真实桌面不是同一验收路径。
+测试范围以[实际用例](../../crates/coterm-driver/tests)为准；物理线路、提示符识别和真实桌面不是同一验收路径。
 
 ## 性能与完整性
 
@@ -135,7 +135,7 @@ node scripts/benchmark-serial.mjs --port <实际端口> --baud 115200 --rates 11
 
 脚本、日志、截图、测速报告和备份放在相对目录 .agent-debug/<任务名>/，不写入模块源码目录。日志先脱敏，不写密码。构建缓存与编译产物仍留工具链目录。
 
-调试结束将必要结果归入[状态](status.md)，停止自己启动的进程并确认没有其他任务使用该目录，再执行：
+调试结束将已验证能力归入[实现与验收状态](verification.md)，将未解决现象和证据归入[feedback](../feedback/known-issues.md)，停止自己启动的进程并确认没有其他任务使用该目录，再执行：
 
 ```powershell
 pnpm debug:clean --dry-run

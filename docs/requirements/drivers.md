@@ -88,4 +88,4 @@
 - NET-07：Shell 采用完整提示符观察，不虚构退出码或错误流；字节流及 HEX 发送只确认发送，设备完成仍未知。
 - NET-08：事件遗漏后能重新查询连接状态，避免最后一条断线事件丢失造成界面一直显示开启。
 
-公共需求见[公共需求](../03-common-requirements.md)，数据语义见[数据记录与读取](data.md)，当前能力限制与现场证据见[状态](../status.md)。
+公共需求见[公共需求](common.md)，数据语义见[数据记录与读取](data.md)；已有能力见[验收状态](../implementation/verification.md)，未解决现场证据见[feedback](../feedback/known-issues.md)。
