@@ -4,6 +4,7 @@ use anyhow::{anyhow, bail, Result};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use chrono::Utc;
 use coterm_core::driver::{CancelTarget, DeferredOperation, DriverNotification, HostCommand};
+use coterm_core::limits::{DEFAULT_FILE_TIMEOUT_MS, FILE_CONTENT_MAX_BYTES, FILE_PATH_MAX_BYTES};
 use coterm_core::model::{
     interaction::{
         DeferredInteraction, InteractionKind, InteractionOutcome, InteractionRequest,
@@ -172,19 +173,19 @@ pub fn catalog() -> Vec<OperationDescriptor> {
             "ssh.file_info",
             OperationEffect::Read,
             false,
-            json!({"path":{"type":"string","minLength":1,"maxLength":4096}}),
+            json!({"path":{"type":"string","minLength":1,"maxLength":FILE_PATH_MAX_BYTES}}),
         ),
         (
             "ssh.read_file",
             OperationEffect::Read,
             false,
-            json!({"path":{"type":"string","minLength":1,"maxLength":4096},"sudo":{"type":"boolean","default":false}}),
+            json!({"path":{"type":"string","minLength":1,"maxLength":FILE_PATH_MAX_BYTES},"sudo":{"type":"boolean","default":false}}),
         ),
         (
             "ssh.write_file",
             OperationEffect::Commit,
             true,
-            json!({"path":{"type":"string","minLength":1,"maxLength":4096},"content":{"type":"string","maxLength":65536},"mode":{"type":"string","enum":["0600","0640","0644","0700","0750","0755"],"default":"0644"},"sudo":{"type":"boolean","default":false}}),
+            json!({"path":{"type":"string","minLength":1,"maxLength":FILE_PATH_MAX_BYTES},"content":{"type":"string","maxLength":FILE_CONTENT_MAX_BYTES},"mode":{"type":"string","enum":["0600","0640","0644","0700","0750","0755"],"default":"0644"},"sudo":{"type":"boolean","default":false}}),
         ),
         (
             "ssh.resize",
@@ -196,7 +197,11 @@ pub fn catalog() -> Vec<OperationDescriptor> {
     let mut operations: Vec<_> = definitions
         .into_iter()
         .map(
-            |(name, effect, sensitive_input, properties)| OperationDescriptor {
+            |(name, effect, sensitive_input, mut properties)| {
+                if matches!(name, "ssh.read_file" | "ssh.write_file" | "ssh.file_info") {
+                    properties["timeoutMs"] = file_timeout_schema();
+                }
+                OperationDescriptor {
                 name: name.to_owned(),
                 scope: OperationScope::Instance,
                 effect,
@@ -207,7 +212,7 @@ pub fn catalog() -> Vec<OperationDescriptor> {
                     name,
                     "ssh.read" | "ssh.read_file" | "ssh.status" | "ssh.resize" | "ssh.input" | "ssh.output" | "ssh.blocks" | "ssh.select_blocks" | "ssh.selected_blocks" | "ssh.read_lines" | "ssh.read_selected_lines" | "ssh.read_dialogue_pairs" | "ssh.select_lines"
                 ),
-            },
+            }},
         )
         .collect();
     operations.push(OperationDescriptor {
@@ -259,11 +264,18 @@ pub fn mcp_tools() -> Vec<McpToolRegistration> {
         ("ssh.reset", "Replace the shared interactive shell after a stuck or malformed command. Running commands become unknown; exec jobs are unaffected.", json!({}), vec![]),
         ("ssh.command", "Run 1-64 commands/scripts sequentially, stopping on the first nonzero exit. Default mode=terminal executes in the shared PTY and displays in xterm, preserving cd/export and interactive identity. Choose mode=exec before submission only for expected long-running tasks or an explicit background request; it uses an independent shell and does not inherit PTY directory, environment or sudo/su identity. Both modes support multiline scripts up to 65536 UTF-8 source bytes total. Never rerun or switch mode because a wait expires. Results always include stdin/stdout/stderr; streamMode tells whether output is separated or merged into stdout. Empty streams remain empty strings. Approval may be required; query the same operation instead of resubmitting. Use read_lines or read_dialogue_pairs for backend snapshots.", json!({"commands":{"type":"array","minItems":1,"maxItems":64,"items":{"type":"string","minLength":1,"maxLength":65536}},"mode":{"type":"string","enum":["terminal","exec"],"default":"terminal"}}), vec!["commands"]),
         ("ssh.system_info", "Read basic host, user, kernel and OS information with a fixed read-only query. No approval and no arbitrary shell.", json!({}), vec![]),
-        ("ssh.file_info", "Read metadata for one existing path (type, size, mode, owner, mtime, symlink target). No file content and no arbitrary shell.", json!({"path":{"type":"string","minLength":1,"maxLength":4096}}), vec!["path"]),
-        ("ssh.read_file", "Read a UTF-8 text file up to 8192 bytes from the remote host. No sudo or arbitrary shell.", json!({"path":{"type":"string","minLength":1,"maxLength":4096}}), vec!["path"]),
-        ("ssh.write_file", "Write a UTF-8 text file up to 65536 bytes to the remote host with an explicit mode. This is a commit and requires approval unless the user allowlists it. No sudo.", json!({"path":{"type":"string","minLength":1,"maxLength":4096},"content":{"type":"string","maxLength":65536},"mode":{"type":"string","enum":["0600","0640","0644","0700","0750","0755"],"default":"0644"}}), vec!["path","content"]),
+        ("ssh.file_info", "Read metadata for one path without arbitrary shell or content.", json!({"path":{"type":"string","minLength":1,"maxLength":FILE_PATH_MAX_BYTES}}), vec!["path"]),
+        ("ssh.read_file", "Read a UTF-8 text file within the shared file capacity policy. No sudo or arbitrary shell.", json!({"path":{"type":"string","minLength":1,"maxLength":FILE_PATH_MAX_BYTES}}), vec!["path"]),
+        ("ssh.write_file", "Atomically write a UTF-8 text file within the shared file capacity policy. This commit uses the instance approval policy. No sudo.", json!({"path":{"type":"string","minLength":1,"maxLength":FILE_PATH_MAX_BYTES},"content":{"type":"string","maxLength":FILE_CONTENT_MAX_BYTES},"mode":{"type":"string","enum":["0600","0640","0644","0700","0750","0755"],"default":"0644"}}), vec!["path","content"]),
     ].into_iter().map(|(name, description, mut properties, required)| {
         let mut description = description.to_owned();
+        if matches!(name, "ssh.read_file" | "ssh.write_file" | "ssh.file_info") {
+            properties["timeoutMs"] = file_timeout_schema();
+            description.push_str(" timeoutMs controls execution independently of the host wait. Query the same operation after waiting expires; never replay automatically.");
+        }
+        if matches!(name, "ssh.read_file" | "ssh.write_file") {
+            description.push_str(&format!(" Content limit: {FILE_CONTENT_MAX_BYTES} UTF-8 bytes."));
+        }
         if matches!(name, "ssh.command" | "ssh.read_file" | "ssh.write_file") {
             properties["sudo"] = json!({"type":"boolean","default":false,"description":"Explicitly run this operation with sudo. The desktop asks for a one-use password; never pass credentials in tool arguments."});
             description = description.replace("No sudo or arbitrary shell.", "No arbitrary shell.").replace("No sudo.", "");
@@ -304,7 +316,9 @@ fn validate_mcp_args(operation: &str, args: &Value) -> Result<()> {
             Some("string") => !value.is_string(),
             Some("boolean") => !value.is_boolean(),
             Some("array") => !value.is_array(),
-            Some("integer") => value.as_u64().is_none_or(|n| n == 0 || n > u32::MAX as u64),
+            Some("integer") => value
+                .as_u64()
+                .is_none_or(|n| n == 0 || (name != "timeoutMs" && n > u32::MAX as u64)),
             _ => true,
         }
     }) {
@@ -318,19 +332,11 @@ fn validate_mcp_args(operation: &str, args: &Value) -> Result<()> {
     }) {
         bail!("Missing required SSH MCP argument");
     }
-    if operation.ends_with("ssh.write_file")
-        && (object
-            .get("content")
-            .and_then(Value::as_str)
-            .is_none_or(|content| content.len() > 65_536)
-            || object
-                .get("mode")
-                .and_then(Value::as_str)
-                .is_some_and(|mode| {
-                    !matches!(mode, "0600" | "0640" | "0644" | "0700" | "0750" | "0755")
-                }))
-    {
-        bail!("SSH file content or mode is outside the supported limits");
+    if matches!(
+        operation.trim_start_matches("mcp."),
+        "ssh.read_file" | "ssh.write_file" | "ssh.file_info"
+    ) {
+        super::file::Request::parse(operation, args)?;
     }
     if operation.ends_with("ssh.command") {
         validate_commands(args)?;
@@ -475,6 +481,27 @@ impl coterm_core::driver::DriverBackend for Backend {
 }
 
 impl Backend {
+    async fn start_file(
+        &self,
+        id: &str,
+        operation: &str,
+        args: &Value,
+        operation_id: &str,
+        mcp: bool,
+    ) -> Result<Value> {
+        let request = super::file::Request::parse(operation, args)?;
+        let instance = self
+            .instances
+            .get(id)
+            .ok_or_else(|| anyhow!("SSH instance not found"))?;
+        connected(instance)?
+            .start_file(operation_id.to_owned(), mcp, request, None)
+            .await?;
+        Ok(serde_json::to_value(DeferredOperation {
+            operation_id: operation_id.to_owned(),
+        })?)
+    }
+
     pub fn take_notifications(
         &mut self,
     ) -> Option<tokio::sync::mpsc::Receiver<DriverNotification>> {
@@ -787,14 +814,16 @@ impl Backend {
                     command(&request.args)?;
                 }
             }
-            if request.operation == "ssh.file_info" || request.operation == "mcp.ssh.file_info" {
-                path(&request.args)?;
-            }
             if matches!(
                 request.operation.as_str(),
-                "ssh.read_file" | "mcp.ssh.read_file" | "ssh.write_file" | "mcp.ssh.write_file"
+                "ssh.file_info"
+                    | "mcp.ssh.file_info"
+                    | "ssh.read_file"
+                    | "mcp.ssh.read_file"
+                    | "ssh.write_file"
+                    | "mcp.ssh.write_file"
             ) {
-                path(&request.args)?;
+                super::file::Request::parse(&request.operation, &request.args)?;
             }
             self.proposals.insert(
                 proposal_id.clone(),
@@ -843,7 +872,7 @@ impl Backend {
                 command(&args)?;
             }
             "ssh.read_file" | "ssh.write_file" => {
-                path(&args)?;
+                super::file::Request::parse(operation, &args)?;
             }
             _ => bail!("This SSH operation does not support sudo"),
         }
@@ -915,7 +944,7 @@ impl Backend {
         }
         let mcp = pending.operation.starts_with("mcp.");
         let args = &pending.args;
-        let result = match pending.operation.trim_start_matches("mcp.") {
+        match pending.operation.trim_start_matches("mcp.") {
             "ssh.command" => {
                 let text = if mcp {
                     command_sequence(&validate_commands(args)?)
@@ -932,28 +961,22 @@ impl Backend {
                         block_spec(args, mcp, pending.source)?,
                     )
                     .await?;
-                return Ok(serde_json::to_value(DeferredOperation {
-                    operation_id: pending.operation_id,
-                })?);
             }
-            "ssh.read_file" => {
+            "ssh.read_file" | "ssh.write_file" => {
                 connection
-                    .read_file_with_sudo(path(args)?, Some(&password))
-                    .await?
-            }
-            "ssh.write_file" => {
-                connection
-                    .write_file_with_sudo(
-                        path(args)?,
-                        string(args, "content")?,
-                        args.get("mode").and_then(Value::as_str).unwrap_or("0644"),
-                        Some(&password),
+                    .start_file(
+                        pending.operation_id.clone(),
+                        mcp,
+                        super::file::Request::parse(&pending.operation, args)?,
+                        Some(password),
                     )
-                    .await?
+                    .await?;
             }
             _ => bail!("Unknown sudo operation"),
-        };
-        Ok(if mcp { mcp_result(result) } else { result })
+        }
+        Ok(serde_json::to_value(DeferredOperation {
+            operation_id: pending.operation_id,
+        })?)
     }
 
     async fn execute(
@@ -1039,15 +1062,18 @@ impl Backend {
                         .start_command(id, &args, operation_id, true, source)
                         .await
                 }
-                "ssh.read_file" | "ssh.write_file" => {
-                    let result = self.execute_domain(id, native, args, operation_id).await?;
-                    return Ok(mcp_result(result));
+                "ssh.file_info" | "ssh.read_file" | "ssh.write_file" => {
+                    return self.start_file(id, native, &args, operation_id, true).await;
                 }
                 _ => self.execute_domain(id, native, args, operation_id).await?,
             };
             return Ok(mcp_result(result));
         }
         match operation {
+            "ssh.file_info" | "ssh.read_file" | "ssh.write_file" => {
+                self.start_file(id, operation, &args, operation_id, false)
+                    .await
+            }
             "ssh.command" => {
                 self.start_command(id, &args, operation_id, false, source)
                     .await
@@ -1293,35 +1319,6 @@ impl Backend {
                 }
                 Ok(Value::Object(fields))
             }
-            "ssh.file_info" => {
-                let path = path(&args)?;
-                let connection = connected(instance)?;
-                let result = connection.query(&session::file_info_script(path)).await?;
-                if result.timed_out {
-                    bail!("SSH file information query timed out");
-                }
-                let mut fields = session::parse_fields(&result.stdout);
-                fields.insert("path".into(), json!(path));
-                fields.insert("exitCode".into(), json!(result.exit_code));
-                let stderr = String::from_utf8_lossy(&result.stderr);
-                if !stderr.trim().is_empty() {
-                    fields.insert("error".into(), json!(truncate(&stderr, 1024)));
-                }
-                Ok(Value::Object(fields))
-            }
-            "ssh.read_file" => {
-                let path = path(&args)?;
-                connected(instance)?.read_file(path).await
-            }
-            "ssh.write_file" => {
-                let path = path(&args)?;
-                let content = string(&args, "content")?;
-                if content.len() > 65_536 {
-                    bail!("SSH file content exceeds the 65536 byte limit");
-                }
-                let mode = args.get("mode").and_then(Value::as_str).unwrap_or("0644");
-                connected(instance)?.write_file(path, content, mode).await
-            }
             "ssh.input" => {
                 let data = string(&args, "data")?;
                 if data.len() > 22 * 1024 {
@@ -1412,12 +1409,8 @@ fn command(args: &Value) -> Result<&str> {
     Ok(text)
 }
 
-fn path(args: &Value) -> Result<&str> {
-    let path = string(args, "path")?;
-    if path.is_empty() || path.len() > 4096 || path.chars().any(char::is_control) {
-        bail!("SSH path must be 1 to 4096 bytes without control characters");
-    }
-    Ok(path)
+fn file_timeout_schema() -> Value {
+    json!({"type":"integer","minimum":1,"default":DEFAULT_FILE_TIMEOUT_MS})
 }
 
 fn truncate(text: &str, limit: usize) -> String {

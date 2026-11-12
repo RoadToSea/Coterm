@@ -335,6 +335,34 @@ impl server::Handler for Echo {
         session: &mut Session,
     ) -> Result<(), Self::Error> {
         let source = String::from_utf8_lossy(data);
+        if source.contains("__coterm_file_fixture_") {
+            session.channel_success(channel)?;
+            let delay = if source.contains("__coterm_file_fixture_slow__") {
+                16_000
+            } else {
+                0
+            };
+            let bytes = if source.contains("__coterm_file_fixture_oversized__") {
+                vec![b'x'; coterm_core::limits::FILE_CONTENT_MAX_BYTES + 1]
+            } else if source.contains("__coterm_file_fixture_escaped__") {
+                vec![0; coterm_core::limits::FILE_CONTENT_MAX_BYTES]
+            } else if source.contains("__coterm_file_fixture_large__") {
+                vec![b'x'; coterm_core::limits::FILE_CONTENT_MAX_BYTES]
+            } else {
+                b"delayed file\n".to_vec()
+            };
+            let incomplete = source.contains("__coterm_file_fixture_incomplete__");
+            let handle = session.handle();
+            tokio::spawn(async move {
+                sleep(Duration::from_millis(delay)).await;
+                let _ = handle.data(channel, bytes).await;
+                if !incomplete {
+                    let _ = handle.exit_status_request(channel, 0).await;
+                }
+                let _ = handle.close(channel).await;
+            });
+            return Ok(());
+        }
         if self.real_shell {
             session.channel_success(channel)?;
             // Test-only sudo policy: consume one password line, refuse wrong input,
@@ -413,6 +441,10 @@ path={target}
                     .into_bytes(),
                 )?;
             }
+            if target.ends_with("/diagnostic") {
+                session.extended_data(channel, 1, b"metadata warning\n".to_vec())?;
+            }
+            session.exit_status_request(channel, 0)?;
         } else if source.starts_with("cat < '") {
             session.data(channel, b"alpha=1\nbeta=two\n".to_vec())?;
             session.exit_status_request(channel, 0)?;
@@ -2531,6 +2563,19 @@ async fn read_only_queries_use_fixed_scripts_outside_the_pty() -> Result<()> {
     let file = file.output.ok_or_else(|| anyhow::anyhow!("no file info"))?;
     assert_eq!(file["exists"], "1");
     assert_eq!(file["size"], "11");
+    let diagnostic = runtime
+        .submit(
+            human(),
+            call(
+                "ssh.file_info",
+                json!({"path":"/tmp/diagnostic","timeoutMs":120000}),
+            ),
+        )
+        .await?;
+    assert_eq!(
+        diagnostic.output.as_ref().map(|value| &value["error"]),
+        Some(&json!("metadata warning\n"))
+    );
     // Read-only tools never require approval, even for an Agent source.
     let agent = CallerContext {
         source: OperationSource::Agent,
@@ -2563,7 +2608,7 @@ fn file_tools_are_explicit_bounded_and_write_is_a_sensitive_commit() {
     assert!(write.sensitive_input);
     assert_eq!(
         write.input_schema["properties"]["content"]["maxLength"],
-        65536
+        coterm_core::limits::FILE_CONTENT_MAX_BYTES
     );
 
     let tools = coterm_driver::ssh::backend::mcp_tools();
@@ -2882,7 +2927,7 @@ async fn real_mcp_file_tools_and_multiline_exec_preserve_content_and_stop_on_fai
     std::fs::create_dir_all(&directory)?;
     let remote = directory.to_string_lossy().replace('\\', "/");
     let path = format!("{remote}/config.txt");
-    let content = "setting='hello world'\n".repeat(260);
+    let content = "setting='hello world'\n".repeat(700);
     let args =
         json!({"driverInstanceId":instance.driver_instance_id,"path":path,"content":content});
     let proposal = client.tool("coterm_file_write", args.clone()).await?;
@@ -2909,7 +2954,13 @@ async fn real_mcp_file_tools_and_multiline_exec_preserve_content_and_stop_on_fai
             },
         )
         .await?;
-    assert_eq!(approved.status, OperationStatus::Completed, "{approved:?}");
+    let completed =
+        wait_for_test_operation(&runtime, human.clone(), &approved.operation_id).await?;
+    assert_eq!(
+        completed.status,
+        OperationStatus::Completed,
+        "{completed:?}"
+    );
     assert_eq!(
         std::fs::read_to_string(directory.join("config.txt"))?,
         content
@@ -2951,6 +3002,45 @@ async fn real_mcp_file_tools_and_multiline_exec_preserve_content_and_stop_on_fai
             },
         )
         .await?;
+    let limit = coterm_core::limits::FILE_CONTENT_MAX_BYTES;
+    let boundary_content = format!("{}{}", "界".repeat(limit / 3), "x".repeat(limit % 3));
+    let boundary_path = format!("{remote}/boundary.txt");
+    let written = client
+        .rpc(
+            "tools/call",
+            json!({"name":"coterm_file_write","arguments":{"name":instance.label,"path":boundary_path,"content":boundary_content,"timeoutMs":120000},"_meta":{"coterm/waitTimeoutMs":5000}}),
+        )
+        .await?;
+    let operation = &written["_meta"]["coterm/operation"];
+    assert_eq!(operation["status"], "awaiting_approval", "{written}");
+    let approved = runtime.approve(human.clone(), ApproveProposal {
+        operation_id: operation["operationId"].as_str()
+            .ok_or_else(|| anyhow::anyhow!("No boundary operation"))?.to_owned(),
+        proposal_id: operation["proposalId"].as_str()
+            .ok_or_else(|| anyhow::anyhow!("No boundary proposal"))?.to_owned(),
+        driver_instance_id: Some(instance.driver_instance_id.clone()),
+        args: json!({"driverInstanceId":instance.driver_instance_id,"path":boundary_path,"content":boundary_content,"timeoutMs":120000}),
+    }).await?;
+    let written = wait_for_test_operation(&runtime, human.clone(), &approved.operation_id).await?;
+    assert_eq!(written.status, OperationStatus::Completed, "{written:?}");
+    assert_eq!(
+        written
+            .output
+            .as_ref()
+            .map(|value| &value["structuredContent"]["bytes"]),
+        Some(&json!(limit))
+    );
+    assert_eq!(
+        std::fs::read_to_string(directory.join("boundary.txt"))?,
+        boundary_content
+    );
+    let boundary_read = client
+        .rpc(
+            "tools/call",
+            json!({"name":"coterm_file_read","arguments":{"name":instance.label,"path":boundary_path,"timeoutMs":120000},"_meta":{"coterm/waitTimeoutMs":5000}}),
+        )
+        .await?;
+    assert_eq!(boundary_read["structuredContent"]["text"], boundary_content);
     let result = client
         .rpc(
             "tools/call",
@@ -3243,6 +3333,254 @@ async fn sudo_uses_one_desktop_secret_after_approval_without_leaking_or_replayin
     std::fs::remove_dir_all(&directory)?;
     Ok(())
 }
+#[tokio::test]
+async fn file_schemas_share_capacity_paths_and_caller_deadlines() -> Result<()> {
+    use coterm_core::limits::{
+        DEFAULT_FILE_TIMEOUT_MS, FILE_CONTENT_MAX_BYTES, FILE_PATH_MAX_BYTES,
+    };
+    let runtime =
+        coterm_core::runtime::Runtime::new(coterm_core::model::lifecycle::RuntimeLimits {
+            max_control_bytes: 1024 * 1024,
+        });
+    let unified = coterm_mcp::server::tools_list(&runtime).await?;
+    let catalog = coterm_driver::ssh::backend::catalog();
+    let legacy = coterm_driver::ssh::backend::mcp_tools();
+    for name in ["ssh.read_file", "ssh.write_file", "ssh.file_info"] {
+        let native = catalog
+            .iter()
+            .find(|op| op.name == name)
+            .ok_or_else(|| anyhow::anyhow!("Missing operation"))?;
+        let old = legacy
+            .iter()
+            .find(|tool| tool.descriptor["name"] == name)
+            .ok_or_else(|| anyhow::anyhow!("Missing legacy tool"))?;
+        let public_name = if name == "ssh.write_file" {
+            "coterm_file_write"
+        } else {
+            "coterm_file_read"
+        };
+        let public = unified["tools"]
+            .as_array()
+            .and_then(|tools| tools.iter().find(|tool| tool["name"] == public_name))
+            .ok_or_else(|| anyhow::anyhow!("Missing unified tool"))?;
+        for schema in [
+            &native.input_schema,
+            &old.descriptor["inputSchema"],
+            &public["inputSchema"],
+        ] {
+            assert_eq!(
+                schema["properties"]["path"]["maxLength"],
+                FILE_PATH_MAX_BYTES
+            );
+            assert_eq!(schema["properties"]["timeoutMs"]["minimum"], 1);
+            assert_eq!(
+                schema["properties"]["timeoutMs"]["default"],
+                DEFAULT_FILE_TIMEOUT_MS
+            );
+            assert!(schema["properties"]["timeoutMs"].get("maximum").is_none());
+            if name == "ssh.write_file" {
+                assert_eq!(
+                    schema["properties"]["content"]["maxLength"],
+                    FILE_CONTENT_MAX_BYTES
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn file_reads_match_write_capacity_and_reject_escaped_or_oversize_results() -> Result<()> {
+    use coterm_core::limits::FILE_CONTENT_MAX_BYTES;
+    let ssh = server().await?;
+    let (runtime, instance) = load_runtime(&ssh, "file-capacity").await?;
+    connect_instance(&runtime, &instance, &ssh).await?;
+    let read = |path: &str| json!({"name":"coterm_file_read","arguments":{"name":instance.label,"path":path,"timeoutMs":5000},"_meta":{"coterm/waitTimeoutMs":5000}});
+    let large =
+        coterm_mcp::server::call_tool(&runtime, &read("__coterm_file_fixture_large__")).await?;
+    assert_eq!(
+        large["structuredContent"]["bytes"], FILE_CONTENT_MAX_BYTES,
+        "{large}"
+    );
+    assert_eq!(large["structuredContent"]["limit"], FILE_CONTENT_MAX_BYTES);
+    assert_eq!(
+        large["structuredContent"]["text"].as_str().map(str::len),
+        Some(FILE_CONTENT_MAX_BYTES)
+    );
+    for path in [
+        "__coterm_file_fixture_oversized__",
+        "__coterm_file_fixture_escaped__",
+    ] {
+        let result = coterm_mcp::server::call_tool(&runtime, &read(path)).await?;
+        assert_eq!(result["isError"], true, "{result}");
+    }
+    let incomplete =
+        coterm_mcp::server::call_tool(&runtime, &read("__coterm_file_fixture_incomplete__"))
+            .await?;
+    assert_eq!(
+        incomplete["_meta"]["coterm/operation"]["status"], "unknown",
+        "{incomplete}"
+    );
+    assert_eq!(
+        incomplete["_meta"]["coterm/operation"]["error"]["code"],
+        "ssh_file_incomplete"
+    );
+    for timeout in [json!(0), json!(-1), json!(null), json!(1.5), json!("100")] {
+        let mut request = read("unused");
+        request["arguments"]["timeoutMs"] = timeout;
+        let result = coterm_mcp::server::call_tool(&runtime, &request).await;
+        assert!(result.is_err() || result.is_ok_and(|value| value["isError"] == true));
+    }
+    let too_many_bytes = "界".repeat(FILE_CONTENT_MAX_BYTES / 3 + 1);
+    let invalid_write = coterm_mcp::server::call_tool(&runtime, &json!({"name":"coterm_file_write","arguments":{"name":instance.label,"path":"unused","content":too_many_bytes,"timeoutMs":1000}})).await;
+    assert!(invalid_write.is_err() || invalid_write.is_ok_and(|value| value["isError"] == true));
+    assert_eq!(
+        coterm_mcp::server::call_tool(&runtime, &read("normal-file")).await?["structuredContent"]
+            ["bytes"],
+        17
+    );
+    runtime.stop("coterm-driver-ssh").await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn file_deadline_outlives_host_watchdog_without_blocking_status_or_replaying() -> Result<()> {
+    use coterm_core::{
+        model::operation::{OperationSource, OperationStatus},
+        runtime::CallerContext,
+    };
+    let ssh = server().await?;
+    let (runtime, instance) = load_runtime(&ssh, "file-timeout").await?;
+    connect_instance(&runtime, &instance, &ssh).await?;
+    let caller = CallerContext {
+        source: OperationSource::Agent,
+        session_id: instance.session_id.clone(),
+        driver_id: Some(instance.driver_id.clone()),
+    };
+    let request = |timeout_ms, wait_ms| json!({"name":"coterm_file_read","arguments":{"name":instance.label,"path":"__coterm_file_fixture_slow__","timeoutMs":timeout_ms},"_meta":{"coterm/waitTimeoutMs":wait_ms}});
+    let short = coterm_mcp::server::call_tool(&runtime, &request(30, 5000)).await?;
+    assert_eq!(short["isError"], true, "{short}");
+    assert_eq!(
+        short["_meta"]["coterm/operation"]["error"]["code"],
+        "ssh_file_timeout"
+    );
+    let pending = coterm_mcp::server::call_tool(&runtime, &request(25_000, 0)).await?;
+    let id = pending["_meta"]["coterm/operation"]["operationId"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("No operation"))?;
+    let snapshot = timeout(
+        Duration::from_secs(2),
+        coterm_mcp::server::call_tool(
+            &runtime,
+            &json!({"name":"coterm_instances","arguments":{"name":instance.label}}),
+        ),
+    )
+    .await??;
+    assert_eq!(
+        snapshot["structuredContent"]["selectedInstance"]["connected"], true,
+        "{snapshot}"
+    );
+    let record = timeout(Duration::from_secs(25), async {
+        loop {
+            let record = runtime.get(caller.clone(), id).await?;
+            if matches!(
+                record.status,
+                OperationStatus::Completed | OperationStatus::Failed | OperationStatus::Unknown
+            ) {
+                return Ok::<_, anyhow::Error>(record);
+            }
+            sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await??;
+    assert_eq!(record.status, OperationStatus::Completed, "{record:?}");
+    assert_eq!(
+        record
+            .output
+            .as_ref()
+            .map(|value| &value["structuredContent"]["text"]),
+        Some(&json!("delayed file\n"))
+    );
+    runtime.stop("coterm-driver-ssh").await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn file_cancel_and_disconnect_close_jobs_without_killing_the_driver() -> Result<()> {
+    use coterm_core::{
+        model::operation::{OperationSource, OperationStatus},
+        runtime::CallerContext,
+    };
+    let ssh = server().await?;
+    let (runtime, instance) = load_runtime(&ssh, "file-cancel").await?;
+    connect_instance(&runtime, &instance, &ssh).await?;
+    runtime
+        .set_bypass(&instance.driver_instance_id, true)
+        .await?;
+    let caller = CallerContext {
+        source: OperationSource::Agent,
+        session_id: instance.session_id.clone(),
+        driver_id: Some(instance.driver_id.clone()),
+    };
+    let start = json!({"name":"coterm_file_read","arguments":{"name":instance.label,"path":"__coterm_file_fixture_slow__","timeoutMs":30000},"_meta":{"coterm/waitTimeoutMs":0}});
+    let pending = coterm_mcp::server::call_tool(&runtime, &start).await?;
+    let id = pending["_meta"]["coterm/operation"]["operationId"].clone();
+    wait_for_running_file(
+        &runtime,
+        caller.clone(),
+        id.as_str().ok_or_else(|| anyhow::anyhow!("No operation"))?,
+    )
+    .await?;
+    let cancel = coterm_mcp::server::call_tool(&runtime, &json!({"name":"coterm_operation","arguments":{"name":instance.label,"operationId":id,"action":"cancel"}})).await?;
+    assert_eq!(cancel["structuredContent"]["status"], "unknown", "{cancel}");
+    let mut unfinished = Vec::new();
+    for _ in 0..3 {
+        let pending = coterm_mcp::server::call_tool(&runtime, &start).await?;
+        let id = pending["_meta"]["coterm/operation"]["operationId"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("No operation"))?
+            .to_owned();
+        wait_for_running_file(&runtime, caller.clone(), &id).await?;
+        unfinished.push(id);
+    }
+    let disconnected = coterm_mcp::server::call_tool(&runtime, &json!({"name":"coterm_connection","arguments":{"name":instance.label,"action":"disconnect"}})).await?;
+    assert_eq!(disconnected["isError"], false, "{disconnected}");
+    for id in unfinished {
+        let record = wait_for_test_operation(&runtime, caller.clone(), &id).await?;
+        assert_eq!(record.status, OperationStatus::Unknown, "{record:?}");
+        assert_eq!(
+            record.error.map(|error| error.code).as_deref(),
+            Some("ssh_disconnected_before_completion")
+        );
+    }
+    assert_eq!(
+        runtime
+            .list_instances(Some("coterm-driver-ssh"))
+            .await?
+            .len(),
+        1
+    );
+    runtime.stop("coterm-driver-ssh").await?;
+    Ok(())
+}
+
+async fn wait_for_running_file(
+    runtime: &coterm_core::runtime::Runtime,
+    caller: coterm_core::runtime::CallerContext,
+    id: &str,
+) -> Result<()> {
+    timeout(Duration::from_secs(3), async {
+        loop {
+            let record = runtime.get(caller.clone(), id).await?;
+            if record.status == coterm_core::model::operation::OperationStatus::Running {
+                return Ok::<_, anyhow::Error>(());
+            }
+            sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await?
+}
+
 async fn register(
     runtime: &coterm_core::runtime::Runtime,
 ) -> Result<coterm_core::model::manifest::DriverManifest> {

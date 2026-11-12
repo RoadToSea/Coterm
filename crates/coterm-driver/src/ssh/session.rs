@@ -32,7 +32,7 @@ use zeroize::Zeroizing;
 
 const MAX_OUTPUT_BYTES: usize = 256 * 1024;
 const OUTPUT_CHUNK_BYTES: usize = 4 * 1024;
-// Base64 plus envelope must fit the host ledger's 16 KiB result limit.
+// A bounded replay page leaves room for base64 and its JSON envelope.
 const READ_BYTES: usize = 8 * 1024;
 const IO_TIMEOUT: Duration = Duration::from_secs(2);
 pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(7);
@@ -42,9 +42,6 @@ const MAX_EXEC_JOBS: usize = 8;
 const EXEC_MAX_DURATION: Duration = Duration::from_secs(30 * 60);
 const QUERY_LIMIT: usize = 8 * 1024;
 const QUERY_TIMEOUT: Duration = Duration::from_secs(5);
-const FILE_READ_LIMIT: usize = 8 * 1024;
-const FILE_WRITE_LIMIT: usize = 64 * 1024;
-const FILE_TIMEOUT: Duration = Duration::from_secs(15);
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -149,7 +146,7 @@ fn connect_error(error: russh::Error, mismatch: Option<String>) -> anyhow::Error
     session_error(category, code, stage, message)
 }
 
-struct HostKey {
+pub(super) struct HostKey {
     expected: Option<String>,
     observed: Arc<Mutex<Option<String>>>,
     mismatch: Arc<AtomicBool>,
@@ -460,6 +457,12 @@ enum Input {
         password: Option<Zeroizing<String>>,
         block: BlockSpec,
     },
+    File {
+        operation_id: String,
+        mcp: bool,
+        request: super::file::Request,
+        password: Option<Zeroizing<String>>,
+    },
     Cancel(String),
     Reset,
     Close,
@@ -571,6 +574,7 @@ impl Connection {
             let mut shell_exit: Option<u32> = None;
             let mut shell_signal: Option<String> = None;
             let mut exec_tasks = JoinSet::new();
+            let mut close_reply = None;
             loop {
                 tokio::select! {
                     action = receiver.recv() => {
@@ -635,6 +639,18 @@ impl Connection {
                                     command_text,
                                     password,
                                     block,
+                                ));
+                                let _ = action.reply.send(Ok(json!({})));
+                            }
+                            Input::File { operation_id, mcp, request, password } => {
+                                let (cancel, cancel_rx) = watch::channel(false);
+                                if let Err(error) = task_jobs.lock().await.insert(&operation_id, cancel) {
+                                    let _ = action.reply.send(Err(error));
+                                    continue;
+                                }
+                                exec_tasks.spawn(run_file(
+                                    task_handle.clone(), task_jobs.clone(), events.clone(),
+                                    operation_id, mcp, request, password, cancel_rx,
                                 ));
                                 let _ = action.reply.send(Ok(json!({})));
                             }
@@ -718,7 +734,7 @@ impl Connection {
                                     )
                                     .await;
                                 }
-                                let _ = action.reply.send(Ok(json!({"connected":false})));
+                                close_reply = Some(action.reply);
                                 break;
                             }
                             Input::Data(data, observation) => {
@@ -854,6 +870,11 @@ impl Connection {
                 }
             }
             exec_tasks.abort_all();
+            while exec_tasks.join_next().await.is_some() {}
+            fail_pending_jobs(&task_jobs, &events).await;
+            if let Some(reply) = close_reply {
+                let _ = reply.send(Ok(json!({"connected":false})));
+            }
             end_observed(&mut observed, &task_output, &events, &connection_id).await;
             let closed_by_transport = task_handle.is_closed();
             if let Some(mut command) = active {
@@ -1053,82 +1074,36 @@ impl Connection {
             })?
     }
 
+    /// Read UTF-8 text using the shared file policy; invalid paths, data or deadlines fail.
     pub async fn read_file(&self, path: &str) -> Result<Value> {
-        self.read_file_with_sudo(path, None).await
+        let request = super::file::Request::parse("ssh.read_file", &json!({"path":path}))?;
+        super::file::run(self.handle.clone(), request, None, None).await
     }
 
-    pub(crate) async fn read_file_with_sudo(
-        &self,
-        path: &str,
-        password: Option<&str>,
-    ) -> Result<Value> {
-        if self.is_closed() {
-            bail!("SSH is not connected");
-        }
-        let command = format!("cat < '{}'", shell_quote(path));
-        let output = timeout(
-            FILE_TIMEOUT,
-            run_channel(self.handle.clone(), &command, None, password),
-        )
-        .await
-        .map_err(|_| anyhow!("SSH file read timed out"))??;
-        if output.exit_code != Some(0) {
-            bail!("SSH file read failed (exit code {:?})", output.exit_code);
-        }
-        let text = String::from_utf8(output.stdout)
-            .map_err(|_| anyhow!("SSH file is not valid UTF-8 text"))?;
-        let result = json!({"path":path,"text":text,"bytes":text.len(),"limit":FILE_READ_LIMIT,"truncated":false,"executionContext":{"channel":"exec","inheritsPtyState":false,"sudo":password.is_some()}});
-        if serde_json::to_vec(&tool_result(&result))?.len() > 14 * 1024 {
-            bail!("SSH file text expands beyond the host result limit when encoded as JSON");
-        }
-        Ok(result)
-    }
-
+    /// Atomically write UTF-8 text under the shared policy; failure never triggers a replay.
     pub async fn write_file(&self, path: &str, content: &str, mode: &str) -> Result<Value> {
-        self.write_file_with_sudo(path, content, mode, None).await
+        let request = super::file::Request::parse(
+            "ssh.write_file",
+            &json!({"path":path,"content":content,"mode":mode}),
+        )?;
+        super::file::run(self.handle.clone(), request, None, None).await
     }
 
-    pub(crate) async fn write_file_with_sudo(
+    pub(super) async fn start_file(
         &self,
-        path: &str,
-        content: &str,
-        mode: &str,
-        password: Option<&str>,
-    ) -> Result<Value> {
-        if self.is_closed() {
-            bail!("SSH is not connected");
-        }
-        if content.len() > FILE_WRITE_LIMIT {
-            bail!("SSH file content exceeds the 65536 byte limit");
-        }
-        if !matches!(mode, "0600" | "0640" | "0644" | "0700" | "0750" | "0755") {
-            bail!("Unsupported SSH file mode");
-        }
-        let quoted_path = shell_quote(&shell_path(path));
-        let quoted_temp = shell_quote(&shell_path(&format!(
-            "{path}.coterm-{}",
-            uuid::Uuid::new_v4().simple()
-        )));
-        let command = format!(
-            "umask 077; __p='{quoted_path}'; __t='{quoted_temp}'; cat > \"$__t\" && chmod {mode} \"$__t\" && mv -f \"$__t\" \"$__p\"; __rc=$?; if [ $__rc -ne 0 ]; then rm -f \"$__t\"; fi; exit $__rc"
-        );
-        let output = timeout(
-            FILE_TIMEOUT,
-            run_channel(
-                self.handle.clone(),
-                &command,
-                Some(content.as_bytes()),
-                password,
-            ),
-        )
-        .await
-        .map_err(|_| anyhow!("SSH file write timed out; remote result may be unknown"))??;
-        if output.exit_code != Some(0) {
-            bail!("SSH file write failed (exit code {:?})", output.exit_code);
-        }
-        Ok(
-            json!({"path":path,"bytes":content.len(),"mode":mode,"written":true,"executionContext":{"channel":"exec","inheritsPtyState":false,"sudo":password.is_some()}}),
-        )
+        operation_id: String,
+        mcp: bool,
+        request: super::file::Request,
+        password: Option<Zeroizing<String>>,
+    ) -> Result<()> {
+        self.submit(Input::File {
+            operation_id,
+            mcp,
+            request,
+            password,
+        })
+        .await?;
+        Ok(())
     }
 }
 
@@ -1139,61 +1114,14 @@ pub struct QueryResult {
     pub timed_out: bool,
 }
 
-struct ChannelResult {
-    exit_code: Option<i32>,
-    stdout: Vec<u8>,
-}
-
 pub(crate) fn shell_quote(value: &str) -> String {
     value.replace('\'', "'\\''")
-}
-
-fn shell_path(value: &str) -> String {
-    if value.starts_with('-') {
-        format!("./{value}")
-    } else {
-        value.to_owned()
-    }
-}
-
-async fn run_channel(
-    handle: Arc<client::Handle<HostKey>>,
-    command: &str,
-    input: Option<&[u8]>,
-    password: Option<&str>,
-) -> Result<ChannelResult> {
-    let mut channel = handle
-        .channel_open_session()
-        .await
-        .map_err(|_| anyhow!("SSH could not open a file channel"))?;
-    if let Err(error) = start_channel(&mut channel, command, input, password).await {
-        let _ = channel.close().await;
-        return Err(error);
-    }
-    let mut stdout = Vec::new();
-    let mut exit_code = None;
-    loop {
-        match channel.wait().await {
-            Some(ChannelMsg::Data { data }) => {
-                if stdout.len().saturating_add(data.len()) > FILE_READ_LIMIT {
-                    let _ = channel.close().await;
-                    bail!("SSH file exceeds the 8192 byte read limit");
-                }
-                stdout.extend_from_slice(&data);
-            }
-            Some(ChannelMsg::ExitStatus { exit_status }) => exit_code = Some(exit_status as i32),
-            Some(ChannelMsg::Failure) => bail!("SSH server refused the file operation"),
-            Some(ChannelMsg::Close) | None => break,
-            _ => {}
-        }
-    }
-    Ok(ChannelResult { exit_code, stdout })
 }
 
 /// Passwords only travel on stdin, and only after sudo actually prompts. A
 /// NOPASSWD policy starts the child without consuming stdin: eagerly sending a
 /// password would corrupt a file or execute the password as part of a script.
-async fn start_channel(
+pub(super) async fn start_channel(
     channel: &mut russh::Channel<client::Msg>,
     command: &str,
     input: Option<&[u8]>,
@@ -1582,6 +1510,96 @@ async fn fail_operation(
                 },
             })
             .await;
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_file(
+    handle: Arc<client::Handle<HostKey>>,
+    jobs: Arc<Mutex<JobRegistry>>,
+    events: Option<(String, mpsc::Sender<DriverNotification>)>,
+    operation_id: String,
+    mcp: bool,
+    request: super::file::Request,
+    password: Option<Zeroizing<String>>,
+    cancel: watch::Receiver<bool>,
+) {
+    let result = super::file::run(
+        handle,
+        request,
+        password.as_ref().map(|value| value.as_str()),
+        Some(cancel),
+    )
+    .await;
+    drop(password);
+    // Reserve delivery before marking done so disconnect cannot abort a pending completion.
+    let completion = match &events {
+        Some((_, sender)) => sender.reserve().await.ok(),
+        None => None,
+    };
+    let cancel_reply = jobs.lock().await.finish(&operation_id);
+    if let Some(reply) = cancel_reply {
+        let _ = reply.send(Ok(json!({"outcome":"unknown"})));
+        return;
+    }
+    if let Some(completion) = completion {
+        let notification = match result {
+            Ok(result) => DriverNotification::OperationCompleted {
+                operation_id,
+                result: if mcp { tool_result(&result) } else { result },
+            },
+            Err(error) => DriverNotification::OperationFailed {
+                operation_id,
+                error: error
+                    .downcast_ref::<RuntimeError>()
+                    .cloned()
+                    .unwrap_or_else(|| RuntimeError {
+                        category: if error.is::<russh::Error>() {
+                            ErrorCategory::Transport
+                        } else {
+                            ErrorCategory::Domain
+                        },
+                        code: if error.is::<russh::Error>() {
+                            "ssh_file_transport_failed"
+                        } else {
+                            "ssh_file_failed"
+                        }
+                        .into(),
+                        message: error.to_string(),
+                        details: None,
+                    }),
+            },
+        };
+        completion.send(notification);
+    }
+}
+
+async fn fail_pending_jobs(
+    jobs: &Arc<Mutex<JobRegistry>>,
+    events: &Option<(String, mpsc::Sender<DriverNotification>)>,
+) {
+    let unfinished: Vec<_> = jobs
+        .lock()
+        .await
+        .jobs
+        .iter()
+        .filter(|(_, job)| !job.done)
+        .map(|(id, _)| id.clone())
+        .collect();
+    for operation_id in unfinished {
+        if let Some(reply) = jobs.lock().await.finish(&operation_id) {
+            let _ = reply.send(Ok(json!({"outcome":"unknown"})));
+            continue;
+        }
+        if let Some((_, sender)) = events {
+            let _ = sender.send(DriverNotification::OperationFailed {
+                operation_id,
+                error: RuntimeError { category: ErrorCategory::Transport,
+                    code: "ssh_disconnected_before_completion".into(),
+                    message: "SSH disconnected before the operation completed; remote effects may be unknown".into(),
+                    details: None },
+            }).await;
+        }
     }
 }
 

@@ -3,6 +3,7 @@
 pub mod approval_policy;
 pub mod diagnostic;
 pub mod driver;
+pub mod limits;
 pub mod model;
 pub mod operation_history;
 pub mod runtime;

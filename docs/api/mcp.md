@@ -120,17 +120,20 @@ Shell 模式按实例配置或 waitForPrompt 的完整字面提示符判断边�
 
 ## 6. `coterm_file_read`
 
-参数：`name?: string`、`path: string`、`metadataOnly?: boolean`、`sudo?: boolean`。仅 SSH，path 非空且至多 4096 UTF-8 字节；相对路径由独立远端通道解释，不继承前台 PTY 目录。
+参数：`name?: string`、`path: string`、`metadataOnly?: boolean`、`sudo?: boolean`、`timeoutMs?: integer`。仅 SSH，path 非空且至多 4096 UTF-8 字节，拒绝控制字符；相对路径由独立远端通道解释，不继承前台 PTY 目录。
 
-- 默认读取 UTF-8 正文，返回 path、text、bytes、limit、truncated、executionContext。正文上限 8192 字节，超限或非法 UTF-8 拒绝；JSON 转义后超过结果预算也拒绝，不静默返回部分文件。
+- 默认读取 UTF-8 正文，返回 path、text、bytes、limit、truncated、executionContext。正文读写统一上限为 65536 UTF-8 字节，超限或非法 UTF-8 拒绝；结果封装并经 JSON 编码后至多 192 KiB，超过也拒绝，不静默返回部分文件。正文大小与编码后的结果大小是两个不同约束。
 - metadataOnly=true 返回原生元信息，如 exists、type、size、mode、owner、group、mtime、symlink；字段多为字符串，exists 使用 `"1"`／`"0"`，不是统一的布尔／数值对象。
 - sudo 默认 false，仅正文读取支持；metadataOnly=true 与 sudo=true 同时使用会拒绝。文件不存在或读取失败保留原错误。
+- timeoutMs 控制正文或元信息的实际执行期限，从文件作业开始执行时计时，包含通道建立、提权交互、传输和结果收集，不包含此前的人工审批或桌面秘密等待。省略时默认 15000；显式值必须为正整数且能由平台表示，不设额外业务最大值。宿主等待先结束时，使用原 operationId 查询。
 
 ## 7. `coterm_file_write`
 
-参数：`name?: string`、`path: string`、`content: string`、`mode?: string`、`sudo?: boolean`。仅 SSH，经独立通道原子写入；path 边界同读取，content 至多 65536 UTF-8 字节，传输期限 15 秒。
+参数：`name?: string`、`path: string`、`content: string`、`mode?: string`、`sudo?: boolean`、`timeoutMs?: integer`。仅 SSH，经独立通道原子写入；path、正文容量和 timeoutMs 规则同读取。
 
 mode 默认 0644，只接受 0600、0640、0644、0700、0750、0755。sudo 默认 false，提权秘密只在桌面提供。完成结果包含 path、bytes、mode、written、executionContext；前台 PTY 的 su／sudo 身份不自动影响文件通道。
+
+文件操作使用独立异步作业，与 SSH exec 共用至多 8 个作业名额。执行超时报 ssh_file_timeout；运行中取消或断连不能确认远端效果时，操作状态为 unknown。关闭通道不保证远端写入回滚或临时文件清理完成，不能因此自动重试。
 
 ## 8. `coterm_operation`
 
@@ -144,7 +147,17 @@ mode 默认 0644，只接受 0600、0640、0644、0700、0750、0755。sudo 默�
 
 业务结果放在 structuredContent，content 是有界可读表示。驱动调用的 `_meta["coterm/operation"]` 携带宿主收据，其中 output 只报告大小以避免复制正文。请求校验错误可能仅返回 isError=true 和文本；已有 Runtime 错误含 category／code／message，不保证每种错误都有统一结构化错误码。
 
-客户端可通过 `tools/call` 的 `params._meta["coterm/waitTimeoutMs"]` 设置宿主等待上限：0 为立即返回收据，1–300000 为等待毫秒数，默认 60000。它和 arguments 内控制设备等待的 waitTimeoutMs 是两回事。等待耗尽不代表操作失败或取消。
+客户端可通过 `tools/call` 的 `params._meta["coterm/waitTimeoutMs"]` 设置宿主等待上限：0 为立即返回收据，1–300000 为等待毫秒数，默认 60000。它与 arguments 内流式命令的 waitTimeoutMs、文件操作的 timeoutMs 分别控制宿主等待、设备提示符等待和文件执行期限。宿主等待耗尽不代表操作失败或取消。
+
+例如允许文件执行两分钟，并立即取回收据，之后查询同一 operationId：
+
+```json
+{
+  "name": "coterm_file_read",
+  "arguments": {"name": "board", "path": "/var/log/app.log", "timeoutMs": 120000},
+  "_meta": {"coterm/waitTimeoutMs": 0}
+}
+```
 
 命中审批时，工具返回 `structuredContent.status="pending_approval"`，附 operationId／proposalId；宿主收据和后续查询状态为 awaiting_approval。此时提示用户在桌面审批，使用原 operationId 查询，不重复提交。Bypass 只能由用户启用，不能替代主机指纹验证、认证或设备自身交互。
 

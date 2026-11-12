@@ -146,7 +146,10 @@ impl Runtime {
             limits,
             state: Arc::new(Mutex::new(State::default())),
             control_gates: Arc::new(std::sync::Mutex::new(HashMap::new())),
-            history: Arc::new(OperationHistory::new(100, 16 * 1024).with_output_limit(192 * 1024)),
+            history: Arc::new(
+                OperationHistory::new(100, 16 * 1024)
+                    .with_output_limit(crate::limits::OPERATION_RESULT_MAX_BYTES),
+            ),
             attention: Arc::new(std::sync::Mutex::new(0)),
             tasks: Arc::new(std::sync::Mutex::new(HashMap::new())),
             shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),

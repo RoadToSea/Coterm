@@ -583,7 +583,8 @@ mod tests {
         assert_eq!(snapshot["truncated"], true);
         assert_eq!(snapshot, log.dialogue_pairs(32));
         assert!(
-            serde_json::to_vec(&crate::ssh::result::tool_result(&snapshot))?.len() < 192 * 1024
+            serde_json::to_vec(&crate::ssh::result::tool_result(&snapshot))?.len()
+                < coterm_core::limits::OPERATION_RESULT_MAX_BYTES
         );
         Ok(())
     }
@@ -627,7 +628,8 @@ mod tests {
                 assert_eq!(decoded, bytes);
             }
             assert!(
-                serde_json::to_vec(&crate::ssh::result::tool_result(&record))?.len() < 192 * 1024
+                serde_json::to_vec(&crate::ssh::result::tool_result(&record))?.len()
+                    < coterm_core::limits::OPERATION_RESULT_MAX_BYTES
             );
         }
         Ok(())

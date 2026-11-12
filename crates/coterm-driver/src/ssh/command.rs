@@ -509,7 +509,7 @@ mod tests {
             serde_json::to_vec(&crate::ssh::result::tool_result(&result))
                 .expect("JSON")
                 .len()
-                <= 192 * 1024
+                <= coterm_core::limits::OPERATION_RESULT_MAX_BYTES
         );
         assert_eq!(
             STANDARD

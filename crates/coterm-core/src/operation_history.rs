@@ -637,7 +637,8 @@ mod tests {
     #[tokio::test]
     async fn output_budget_is_independent_of_request_budget_and_still_bounded(
     ) -> Result<(), OperationHistoryError> {
-        let history = OperationHistory::new(2, 64).with_output_limit(192 * 1024);
+        let history = OperationHistory::new(2, 64)
+            .with_output_limit(crate::limits::OPERATION_RESULT_MAX_BYTES);
         let mut entry = record("larger-result", Some("instance-a"));
         entry.input = serde_json::json!({"text":"x".repeat(128)});
         history.begin(entry).await?;
@@ -666,7 +667,7 @@ mod tests {
             .transition(
                 "too-large",
                 OperationStatus::Completed,
-                Some(serde_json::json!({"text":"z".repeat(192 * 1024)})),
+                Some(serde_json::json!({"text":"z".repeat(crate::limits::OPERATION_RESULT_MAX_BYTES)})),
                 None,
             )
             .await?;

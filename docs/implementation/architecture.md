@@ -120,6 +120,8 @@ InstanceApproval 持有编译策略和实例 Bypass，接收 ApprovalContext，�
 
 SSH 前台使用同一 POSIX Shell 的语法检查和随机边界包装；后台独立通道。Local 按 POSIX、PowerShell、cmd 分别处理命令，不能直接复制 SSH 包装方式。
 
+SSH 的 [file.rs](../../crates/coterm-driver/src/ssh/file.rs) 集中校验文件路径、正文容量和调用方执行期限，并执行独立文件通道。session 的现有作业登记、取消和完成通知同时承载 exec 与文件操作；控制请求启动作业后立即应答。公开、兼容和原生入口使用同一文件实现，不重复维护文件限额或固定传输超时；共享值见 [limits.rs](../../crates/coterm-core/src/limits.rs)。
+
 Serial 使用阻塞工作线程和 `serialport` 跨平台接口；读写句柄通过库提供的克隆能力分开使用。读取以有界批次通知，满队列保留最新重试线索，关闭提交尾部。不是暂停接收后写入。
 
 网络按每实例任务维护 socket、连接身份、重连与有界输入。Telnet codec 在正文进入 stream 之前处理 IAC／NVT；Raw TCP 不经过这层协议解释。

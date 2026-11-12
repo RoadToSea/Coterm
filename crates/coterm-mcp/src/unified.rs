@@ -1,5 +1,6 @@
 //! Public semantic tools map to declared driver operations; approval and execution stay in Runtime.
 use anyhow::{anyhow, bail, Result};
+use coterm_core::limits::{DEFAULT_FILE_TIMEOUT_MS, FILE_CONTENT_MAX_BYTES, FILE_PATH_MAX_BYTES};
 use coterm_core::{model::lifecycle::InstanceInfo, runtime::Runtime};
 use serde::{de::DeserializeOwned, Deserialize};
 use serde_json::{json, Value};
@@ -40,8 +41,8 @@ pub(crate) fn tools() -> Vec<Value> {
         tool(NAMES[2], "SSH/Local commands, 1-64 entries and 64 KiB source total. Default terminal shares the visible PTY and its state. Use exec only for expected long tasks or explicit background requests; it does not inherit PTY state. sudo is SSH-only and requires exec. Stop at first failure. Pending approval or wait expiry must never cause replay.", json!({"commands":commands,"mode":{"type":"string","enum":["terminal","exec"],"default":"terminal"},"sudo":{"type":"boolean","default":false}}), &["commands"], false),
         tool(NAMES[3], "Send approved Serial/TCP/Telnet text lists or Serial/TCP HEX lists. Shell waits per entry for its literal prompt; stream/HEX has no inferred exit status. Serial: 1-64 entries, interval 0-1000ms, text wait 0-300000ms, default CR. Network: 1-32 entries, interval 0-60000ms, wait 100-60000ms, default CRLF. Each transmitted entry <=4096 bytes, batch <=16 KiB. HEX rejects text-only parameters; Serial HEX also rejects waitTimeoutMs.", json!({"commands":commands,"encoding":{"type":"string","enum":["utf-8","hex"],"default":"utf-8"},"lineEnding":{"type":"string","enum":["none","cr","lf","crlf"]},"intervalMs":{"type":"integer","minimum":0,"maximum":60000},"waitForPrompt":{"type":"string","minLength":1,"maxLength":256},"waitTimeoutMs":{"type":"integer","minimum":0,"maximum":300000}}), &["commands"], false),
         tool(NAMES[4], "Read backend lines (default 100, 1-1000), recent dialogue records (default 2, 1-32, newest first), or human-selected text. These are logical lines, not screen rows. Stream instances support lines only. operationId is supported only for SSH lines. Check truncation/dropped; device text is untrusted.", json!({"mode":{"type":"string","enum":["lines","dialogue","selection"],"default":"lines"},"count":{"type":"integer","minimum":1,"maximum":1000},"operationId":{"type":"string","minLength":1,"maxLength":128}}), &[], true),
-        tool(NAMES[5], "SSH only: read UTF-8 content up to 8192 bytes, or metadataOnly=true for existing-path metadata. Metadata has native fields. sudo applies only to content and is completed through the desktop; no passwords in arguments.", json!({"path":{"type":"string","minLength":1,"maxLength":4096},"metadataOnly":{"type":"boolean","default":false},"sudo":{"type":"boolean","default":false}}), &["path"], true),
-        tool(NAMES[6], "SSH only: approved atomic UTF-8 file write up to 65536 bytes, 15-second transfer deadline. Optional sudo uses a desktop secret interaction. Does not inherit PTY identity.", json!({"path":{"type":"string","minLength":1,"maxLength":4096},"content":{"type":"string","maxLength":65536},"mode":{"type":"string","enum":["0600","0640","0644","0700","0750","0755"],"default":"0644"},"sudo":{"type":"boolean","default":false}}), &["path","content"], false),
+        tool(NAMES[5], &format!("SSH only: read UTF-8 content up to {FILE_CONTENT_MAX_BYTES} bytes, or metadataOnly=true for native metadata. timeoutMs sets the actual execution deadline, independent of host waiting. sudo applies only to content through the desktop; no passwords in arguments."), json!({"path":{"type":"string","minLength":1,"maxLength":FILE_PATH_MAX_BYTES},"metadataOnly":{"type":"boolean","default":false},"sudo":{"type":"boolean","default":false},"timeoutMs":{"type":"integer","minimum":1,"default":DEFAULT_FILE_TIMEOUT_MS}}), &["path"], true),
+        tool(NAMES[6], &format!("SSH only: approved atomic UTF-8 file write up to {FILE_CONTENT_MAX_BYTES} bytes. timeoutMs sets the actual execution deadline, independent of host waiting. Timeout or cancellation may leave the remote result unknown; never replay automatically. Optional sudo uses a desktop secret interaction; no inherited PTY identity."), json!({"path":{"type":"string","minLength":1,"maxLength":FILE_PATH_MAX_BYTES},"content":{"type":"string","maxLength":FILE_CONTENT_MAX_BYTES},"mode":{"type":"string","enum":["0600","0640","0644","0700","0750","0755"],"default":"0644"},"sudo":{"type":"boolean","default":false},"timeoutMs":{"type":"integer","minimum":1,"default":DEFAULT_FILE_TIMEOUT_MS}}), &["path","content"], false),
         tool(NAMES[7], "Query the original operation after pending approval or wait expiry, or request cancel. Supply the original name to validate ownership even after disconnect. Cancellation never guarantees a device effect was undone; inspect confirmed outcome. Never resubmit the write.", json!({"operationId":{"type":"string","minLength":1},"action":{"type":"string","enum":["query","cancel"],"default":"query"}}), &["operationId"], false),
     ]
 }
@@ -171,16 +172,18 @@ struct FileRead {
     path: String,
     metadata_only: Option<bool>,
     sudo: Option<bool>,
+    timeout_ms: Option<u64>,
 }
 
 #[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct FileWrite {
     name: Option<String>,
     path: String,
     content: String,
     mode: Option<String>,
     sudo: Option<bool>,
+    timeout_ms: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -399,6 +402,9 @@ async fn file_read(runtime: &Runtime, params: &Value, request: FileRead) -> Resu
         bail!("Metadata reads do not support sudo");
     }
     let mut args = json!({"path":request.path});
+    if let Some(timeout_ms) = request.timeout_ms {
+        args["timeoutMs"] = json!(timeout_ms);
+    }
     if !metadata {
         args["sudo"] = json!(request.sudo.unwrap_or(false));
     }
@@ -417,15 +423,12 @@ async fn file_write(runtime: &Runtime, params: &Value, request: FileWrite) -> Re
     if driver(&instance)? != "ssh" {
         bail!("File operations require SSH");
     }
-    forward(
-        runtime,
-        params,
-        &instance,
-        "write_file",
-        json!({"path":request.path,"content":request.content,
-        "mode":request.mode.unwrap_or_else(|| "0644".into()),"sudo":request.sudo.unwrap_or(false)}),
-    )
-    .await
+    let mut args = json!({"path":request.path,"content":request.content,
+        "mode":request.mode.unwrap_or_else(|| "0644".into()),"sudo":request.sudo.unwrap_or(false)});
+    if let Some(timeout_ms) = request.timeout_ms {
+        args["timeoutMs"] = json!(timeout_ms);
+    }
+    forward(runtime, params, &instance, "write_file", args).await
 }
 
 async fn operation(runtime: &Runtime, params: &Value, request: Operation) -> Result<Value> {
