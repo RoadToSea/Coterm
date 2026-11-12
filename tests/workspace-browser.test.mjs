@@ -16,8 +16,8 @@ test("workspace groups manage and move live/saved instances without reconnecting
   scenario.workspace = {
     groups:[{id:"default",name:"Default workspace"}],
     entries:[
-      {configRef:"ref-live",driverId:"ssh",instanceId:"inst-1",label:"Prod-Server",workspaceId:"default"},
-      {configRef:"ref-saved",driverId:"ssh",instanceId:null,label:"Standby",workspaceId:"default"},
+      {configRef:"ref-live",driverId:"ssh",instanceId:"inst-1",name:"Prod-Server",workspaceId:"default"},
+      {configRef:"ref-saved",driverId:"ssh",instanceId:null,name:"Standby",workspaceId:"default"},
     ], layout:{activeConfigRef:"ref-live",instancesCollapsed:false,activeWorkspaceId:"default"},
     approvalPolicy:{mode:"allow_matches",patterns:[]},historyPolicy:"session_only",persistence:"windows_dpapi",
   };

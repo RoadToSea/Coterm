@@ -410,7 +410,7 @@ impl Backend {
                 {
                     bail!("This serial port is already used by another instance");
                 }
-                let label = config.label();
+                let name = config.default_name();
                 self.instances.insert(
                     create.instance.driver_instance_id,
                     Instance {
@@ -421,7 +421,7 @@ impl Backend {
                         connection: None,
                     },
                 );
-                Ok(json!({"ok":true,"label":label}))
+                Ok(json!({"ok":true,"name":name}))
             }
             HostCommand::DestroyInstance { driver_instance_id } => {
                 let id = driver_instance_id.as_str();
@@ -967,7 +967,7 @@ mod tests {
     {
         let mut backend = coterm_core::diagnostic::Backend::<Backend>::default();
         backend.request("create_instance", json!({
-            "instance":{"driverId":DRIVER_ID,"driverInstanceId":"console","sessionId":"s","label":"console","status":"ready"},
+            "instance":{"driverId":DRIVER_ID,"driverInstanceId":"console","sessionId":"s","name":"console","status":"ready"},
             "config":{"port":"COM6","baudRate":115200,"mode":"shell","prompt":"# "}
         })).await?;
         let output = backend.instances["console"].output.clone();

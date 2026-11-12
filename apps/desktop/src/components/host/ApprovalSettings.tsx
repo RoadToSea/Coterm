@@ -9,7 +9,7 @@ import { Field, FieldGroup, FieldLabel } from "../ui/field";
 import { ApprovalRuleGroups } from "./ApprovalRuleGroups";
 import { approvalError, approvalInputClass } from "./ApprovalGroupEditor";
 
-export interface ApprovalTarget { label: string; configRef?: string; driverInstanceId?: string }
+export interface ApprovalTarget { name: string; configRef?: string; driverInstanceId?: string }
 
 /** Assigns one group to a saved instance, including offline entries. Failed writes
  * keep the selection; switching targets remounts the form in the parent. */
@@ -58,7 +58,7 @@ export function ApprovalSettings({ instance, onClose }: { instance: ApprovalTarg
   };
   if (manager) return <ApprovalRuleGroups initialGroupId={selected} onClose={returnFromManager} />;
   return <Modal id="approval-settings-dialog" title={t("Instance approval")} onClose={close}>
-    <p className="mb-4 break-all text-sm font-medium" data-approval-instance={instance.configRef ?? instance.driverInstanceId}>{instance.label}</p>
+    <p className="mb-4 break-all text-sm font-medium" data-approval-instance={instance.configRef ?? instance.driverInstanceId}>{instance.name}</p>
     {error && <Alert variant="destructive" className="mb-4"><AlertDescription>{error}</AlertDescription></Alert>}
     {!catalog ? <Button variant="outline" onClick={() => setRetry(value => value + 1)}>{t(error ? "Retry" : "Loading…")}</Button> : <FieldGroup disabled={busy} aria-busy={busy}>
       <Field>

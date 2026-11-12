@@ -2,6 +2,40 @@ use super::*;
 
 #[cfg(windows)]
 #[test]
+fn instance_names_reserve_offline_entries_without_changing_the_storage_format() -> anyhow::Result<()> {
+    let fixture = Fixture::new()?;
+    let mut store = fixture.store()?;
+    store.insert("ssh".into(), "one".into(), " Board ".into(), Value::Null, None)?;
+    let reference = store.snapshot().entries[0].config_ref.clone();
+    let mut reopened = fixture.store()?;
+    assert_eq!(reopened.find(&reference)?.name, "Board");
+    assert!(reopened.find(&reference)?.instance_id.is_none());
+    let duplicate = reopened.insert(
+        "serial".into(),
+        "two".into(),
+        "Board".into(),
+        Value::Null,
+        None,
+    );
+    assert_eq!(
+        duplicate.err().map(|error| error.code).as_deref(),
+        Some("instance_name_exists")
+    );
+    reopened.bind(&reference, "restored".into(), "Board".into())?;
+    let snapshot = serde_json::to_value(reopened.snapshot())?;
+    assert_eq!(snapshot["entries"][0]["name"], "Board");
+    assert!(snapshot["entries"][0].get("label").is_none());
+    let saved: Value = serde_json::from_slice(&protect(&fs::read(fixture.path())?, false)?)?;
+    assert_eq!(saved["version"], 5);
+    assert_eq!(saved["entries"][0]["label"], "Board");
+    assert!(saved["entries"][0].get("name").is_none());
+    reopened.remove(&reference)?;
+    reopened.insert("serial".into(), "two".into(), "Board".into(), Value::Null, None)?;
+    Ok(())
+}
+
+#[cfg(windows)]
+#[test]
 fn bypass_survives_rebinding_but_does_not_follow_other_instances() -> anyhow::Result<()> {
     let fixture = Fixture::new()?;
     let mut store = fixture.store()?;
@@ -400,7 +434,7 @@ fn only_latest_used_session_is_saved_and_empty_visits_do_not_destroy_recovery() 
         .snapshot()
         .entries
         .iter()
-        .find(|entry| entry.label == "C")
+        .find(|entry| entry.name == "C")
         .ok_or_else(|| anyhow::anyhow!("missing C"))?
         .config_ref
         .clone();
@@ -462,7 +496,7 @@ fn configuration_updates_are_bound_and_preserve_identity_and_rules() -> anyhow::
     store.save_configuration("one", config.clone())?;
     assert_eq!(store.find(&reference)?.config, config);
     assert_eq!(store.snapshot().entries[1].config, before[1].config);
-    assert_eq!(store.find(&reference)?.label, before[0].label);
+    assert_eq!(store.find(&reference)?.name, before[0].name);
     assert_eq!(
         store.find(&reference)?.approval_rule_group_id,
         before[0].approval_rule_group_id

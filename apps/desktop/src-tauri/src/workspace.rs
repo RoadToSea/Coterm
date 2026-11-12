@@ -36,7 +36,9 @@ pub fn error(code: &str) -> RuntimeError {
     RuntimeError {
         category: match code {
             "approval_group_not_found" => ErrorCategory::NotFound,
-            "approval_group_in_use" | "approval_group_name_exists" => ErrorCategory::Conflict,
+            "approval_group_in_use" | "approval_group_name_exists" | "instance_name_exists" => {
+                ErrorCategory::Conflict
+            }
             "approval_group_name_invalid"
             | "approval_group_capacity"
             | "approval_group_invalid" => ErrorCategory::InvalidRequest,
@@ -54,6 +56,7 @@ pub fn error(code: &str) -> RuntimeError {
                 "Use a nonempty group name of up to 64 characters without control characters."
             }
             "approval_group_name_exists" => "Another approval rule group already uses this name.",
+            "instance_name_exists" => "An instance with this name already exists.",
             "approval_group_capacity" => "The limit of 128 approval rule groups has been reached.",
             "approval_group_invalid" => "The saved approval rule group catalog is invalid.",
             _ => "Workspace could not be saved or restored. No operations were replayed.",
@@ -68,7 +71,7 @@ pub fn error(code: &str) -> RuntimeError {
 pub struct SavedInstance {
     pub config_ref: String,
     pub driver_id: String,
-    pub label: String,
+    pub name: String,
     pub instance_id: Option<String>,
     pub workspace_id: String,
     #[serde(default)]
@@ -88,7 +91,9 @@ struct Entry {
     config_ref: String,
     #[serde(alias = "pluginId")]
     driver_id: String,
-    label: String,
+    // Preserve the encrypted v5 field while all live interfaces use the canonical name.
+    #[serde(rename = "label")]
+    name: String,
     config: Value,
     #[serde(default = "default_workspace_id")]
     workspace_id: String,
@@ -216,7 +221,7 @@ impl WorkspaceStore {
                 || entry.config_ref.is_empty()
                 || !ids.insert(&entry.config_ref)
                 || entry.driver_id.len() > 256
-                || entry.label.len() > 256
+                || entry.name.len() > coterm_core::limits::INSTANCE_NAME_MAX_BYTES
                 || !group_ids.contains(entry.workspace_id.as_str())
         }) {
             return Err(error("workspace_invalid"));
@@ -250,7 +255,7 @@ impl WorkspaceStore {
                         "coterm-plugin-local" => "coterm-driver-local".into(),
                         _ => entry.driver_id,
                     },
-                    label: entry.label,
+                    name: entry.name,
                     config: entry.config,
                     instance_id: None,
                     workspace_id: entry.workspace_id,
@@ -287,10 +292,12 @@ impl WorkspaceStore {
         &mut self,
         driver_id: String,
         instance_id: String,
-        label: String,
+        name: String,
         config: Value,
         workspace_id: Option<String>,
     ) -> Result<(), RuntimeError> {
+        let name = coterm_core::model::lifecycle::normalize_instance_name(&name)?;
+        self.ensure_name_available(&name, None)?;
         if contains_runtime_handle(&config) {
             return Err(error("workspace_ephemeral_secret_handle"));
         }
@@ -310,7 +317,7 @@ impl WorkspaceStore {
         entries.push(SavedInstance {
             config_ref: uuid::Uuid::new_v4().to_string(),
             driver_id,
-            label,
+            name,
             config,
             instance_id: Some(instance_id),
             workspace_id,
@@ -324,8 +331,10 @@ impl WorkspaceStore {
         &mut self,
         id: &str,
         instance_id: String,
-        label: String,
+        name: String,
     ) -> Result<(), RuntimeError> {
+        let name = coterm_core::model::lifecycle::normalize_instance_name(&name)?;
+        self.ensure_name_available(&name, Some(id))?;
         let mut entries = self.entries.clone();
         let entry = entries
             .iter_mut()
@@ -333,8 +342,20 @@ impl WorkspaceStore {
             .ok_or_else(|| error("workspace_entry_not_found"))?;
         entry.instance_id = Some(instance_id);
         entry.retained = false;
-        entry.label = label;
+        entry.name = name;
         self.commit(entries, self.layout.clone())
+    }
+
+    /// Reject a name reserved by another saved entry, including offline instances.
+    /// exclude identifies the entry being restored; invalid names are rejected before checking.
+    pub fn ensure_name_available(&self, name: &str, exclude: Option<&str>) -> Result<(), RuntimeError> {
+        let name = coterm_core::model::lifecycle::normalize_instance_name(name)?;
+        if self.entries.iter().any(|entry| {
+            Some(entry.config_ref.as_str()) != exclude && entry.name.trim() == name
+        }) {
+            return Err(error("instance_name_exists"));
+        }
+        Ok(())
     }
     pub fn remove(&mut self, id: &str) -> Result<(), RuntimeError> {
         let entries = self
@@ -428,7 +449,7 @@ impl WorkspaceStore {
                 .map(|entry| Entry {
                     config_ref: entry.config_ref.clone(),
                     driver_id: entry.driver_id.clone(),
-                    label: entry.label.clone(),
+                    name: entry.name.clone(),
                     config: entry.config.clone(),
                     workspace_id: entry.workspace_id.clone(),
                     retained: entry.retained,

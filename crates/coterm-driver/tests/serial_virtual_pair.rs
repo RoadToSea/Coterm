@@ -142,7 +142,7 @@ impl Endpoint {
                 ensure!(
                     expected.starts_with(&received),
                     "unexpected bytes on {}: {received:?}",
-                    self.instance.label
+                    self.instance.name
                 );
                 if received.len() < expected.len() {
                     sleep(Duration::from_millis(10)).await;
@@ -214,7 +214,7 @@ async fn exercise(runtime: &Runtime, a: &str, b: &str, baud: u32) -> Result<()> 
             runtime,
             &json!({
                 "name":format!("{DRIVER}__{tool}"),
-                "arguments":{"name":sender.instance.label,"commands":commands,"intervalMs":0}
+                "arguments":{"name":sender.instance.name,"commands":commands,"intervalMs":0}
             }),
         )
         .await?;

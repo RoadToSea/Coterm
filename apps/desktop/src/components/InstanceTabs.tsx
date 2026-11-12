@@ -76,12 +76,12 @@ export function InstanceTabs({ instances, activeId, onSelect, onClose }: Props) 
           <Button type="button" variant="ghost" size="sm" role="tab" id={instanceTabId(instance.driverInstanceId)}
             aria-selected={active} aria-controls={instancePanelId(instance.driverInstanceId)}
             tabIndex={active || (!activeId && index === 0) ? 0 : -1}
-            title={`${instance.label} · ${instance.driverId}`} className={cn("max-w-52 justify-start font-medium", active ? "text-foreground" : "text-muted-foreground")}
+            title={`${instance.name} · ${instance.driverId}`} className={cn("max-w-52 justify-start font-medium", active ? "text-foreground" : "text-muted-foreground")}
             onClick={() => onSelect(instance.driverInstanceId)} onKeyDown={event => navigate(event, index)}>
-            <PlugZap data-icon="inline-start" /><span className="truncate">{instance.label}</span>
+            <PlugZap data-icon="inline-start" /><span className="truncate">{instance.name}</span>
           </Button>
           <Button type="button" variant="ghost" size="icon" className="mr-1 size-6 shrink-0 rounded-full hover:bg-muted"
-            aria-label={t("Close view {name}", { name: instance.label })} title={t("Close view; connection stays open")}
+            aria-label={t("Close view {name}", { name: instance.name })} title={t("Close view; connection stays open")}
             onClick={() => close(index)}><X data-icon="inline-start" /></Button>
         </div>
       );

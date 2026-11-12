@@ -5,7 +5,7 @@ use serde_json::{json, Value};
 
 async fn create(backend: &mut Backend, id: &str, mode: &str, port: &str) -> Result<()> {
     backend.request("create_instance", json!({
-        "instance":{"driverId":"coterm-driver-serial","driverInstanceId":id,"sessionId":"s","label":id,"status":"ready"},
+        "instance":{"driverId":"coterm-driver-serial","driverInstanceId":id,"sessionId":"s","name":id,"status":"ready"},
         "config":{"port":port,"baudRate":115200,"mode":mode,"prompt":"# "}
     })).await?;
     Ok(())

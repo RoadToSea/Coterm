@@ -142,6 +142,9 @@ test("receive newline settings update xterm, preserve raw bytes and persist per 
     assert.deepEqual(await checks(), [false, false]);
 
     // Replay, clear and new connections do not inherit another stream's CR state.
+    // The fixture retains the UART mode configured above; xterm paints only in its visible view.
+    await run(`root.querySelector('.modes button').click()`);
+    await waitForValue(client, `root.querySelector('.modes button').getAttribute('aria-pressed') === 'true'`);
     await change("both"); await emit("\r"); await clear(); await emit("\nZ");
     await waitForValue(client, `root.querySelector('.xterm-rows > div:nth-child(2)')?.textContent.trim() === 'Z'`);
     assert.deepEqual((await rows()).slice(0, 2), ["", "Z"]);

@@ -113,7 +113,7 @@ async fn forward(
     {
         bail!("Unsupported action {suffix} for {driver}");
     }
-    args["name"] = json!(instance.label);
+    args["name"] = json!(instance.name);
     let mut request = json!({"name":format!("coterm_{driver}_{suffix}"),"arguments":args});
     if let Some(meta) = params.get("_meta") {
         request["_meta"] = meta.clone();
@@ -291,7 +291,7 @@ async fn instance_summary(
             capabilities.push(capability);
         }
     }
-    json!({"name":instance.label,"driver":driver,"status":instance.status,"connected":connected,"capabilities":capabilities})
+    json!({"name":instance.name,"driver":driver,"status":instance.status,"connected":connected,"capabilities":capabilities})
 }
 
 async fn connection(runtime: &Runtime, params: &Value, request: Connection) -> Result<Value> {

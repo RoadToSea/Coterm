@@ -36,7 +36,7 @@ Bridge 只监听回环地址，默认 `127.0.0.1:51234`。自定义地址使用 
 | `coterm_file_write` | SSH 原子写入文本文件 | commit |
 | `coterm_operation` | 查询原操作或请求取消 | query 为 read，cancel 为 commit |
 
-- `name` 是实例公开名称。兼容 `instance`、`instanceName`、`instance_name`，一次只能使用其中一个字段；新客户端使用 `name`。不接受内部实例 ID、自报 Human／Bypass、密码或未知参数；可选参数应省略，不能传 `null`。
+- `name` 就是实例自身的名称，与桌面标签页显示值一致，不另设 label。名称在创建时去首尾空白，区分大小写，跨驱动及分组唯一，离线保存项也占用名称；调用时使用列表返回的完整名称。兼容 `instance`、`instanceName`、`instance_name`，一次只能使用其中一个字段；新客户端使用 `name`。不接受内部实例 ID、自报 Human／Bypass、密码或未知参数；可选参数应省略，不能传 `null`。
 - 除实例列表查询外，省略 `name` 要求全局恰有一个确认连接的实例，且无未知状态、快照未截断；不会先按工具支持的驱动筛选。名称无效时拒绝，不自动切换实例。连接工具始终要求 `name`。
 - read 不触发安全审批；commit 使用实例当前审批策略。工具注解是提示，实际效果和权限由宿主验证；混合动作工具的 `readOnlyHint=false`。
 - 参数或能力不适用时明确拒绝，不静默忽略。统一入口保留各驱动原有结果字段和边界，不把字节流伪装成具有退出码的进程。

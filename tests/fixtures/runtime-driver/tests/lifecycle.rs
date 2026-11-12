@@ -58,7 +58,7 @@ async fn submit(
 }
 
 #[tokio::test]
-async fn custom_instance_names_override_driver_labels_and_are_validated() -> Result<()> {
+async fn explicit_instance_names_are_preserved_and_duplicates_are_rejected() -> Result<()> {
     let runtime = runtime();
     register(&runtime).await?;
     runtime.start(ID).await?;
@@ -66,15 +66,19 @@ async fn custom_instance_names_override_driver_labels_and_are_validated() -> Res
     let first = runtime
         .create_instance_with_name(
             ID,
-            json!({"label":"Driver label"}),
+            json!({"name":"Driver name"}),
             Some("  Lab server  ".into()),
         )
         .await?;
-    assert_eq!(first.label, "Lab server");
+    assert_eq!(first.name, "Lab server");
     let second = runtime
         .create_instance_with_name(ID, json!({}), Some("Lab server".into()))
-        .await?;
-    assert_eq!(second.label, "Lab server (2)");
+        .await;
+    assert_eq!(
+        second.err().map(|error| error.code),
+        Some("instance_name_exists".into())
+    );
+    assert_eq!(runtime.list_instances(None).await?.len(), 1);
 
     let invalid = runtime
         .create_instance_with_name(ID, json!({}), Some("名".repeat(86)))
@@ -83,7 +87,15 @@ async fn custom_instance_names_override_driver_labels_and_are_validated() -> Res
         invalid.err().map(|error| error.code),
         Some("instance_name_invalid".into())
     );
-    assert_eq!(runtime.list_instances(None).await?.len(), 2);
+    assert_eq!(runtime.list_instances(None).await?.len(), 1);
+    runtime.destroy_instance(&first.driver_instance_id).await?;
+    let recreated = runtime
+        .create_instance_with_name(ID, json!({}), Some("Lab server".into()))
+        .await?;
+    assert_eq!(recreated.name, "Lab server");
+    let serialized = serde_json::to_value(&recreated)?;
+    assert_eq!(serialized["name"], "Lab server");
+    assert!(serialized.get("label").is_none());
     Ok(())
 }
 
@@ -186,11 +198,9 @@ async fn task_panic_converges_all_scopes_clears_attention_and_allows_restart_wit
     let runtime = runtime();
     register(&runtime).await?;
     runtime.start(ID).await?;
-    let first = runtime
-        .create_instance(ID, json!({"label":"First"}))
-        .await?;
+    let first = runtime.create_instance(ID, json!({"name":"First"})).await?;
     let second = runtime
-        .create_instance(ID, json!({"label":"Second"}))
+        .create_instance(ID, json!({"name":"Second"}))
         .await?;
     let pending = submit(
         &runtime,
@@ -278,9 +288,7 @@ async fn task_panic_converges_all_scopes_clears_attention_and_allows_restart_wit
     );
     runtime.destroy_instance(&first.driver_instance_id).await?;
     runtime.start(ID).await?;
-    let restored = runtime
-        .create_instance(ID, json!({"label":"First"}))
-        .await?;
+    let restored = runtime.create_instance(ID, json!({"name":"First"})).await?;
     assert_ne!(first.driver_instance_id, restored.driver_instance_id);
     let info = submit(
         &runtime,

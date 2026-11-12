@@ -40,7 +40,7 @@ async fn driver_info_lists_ports_before_any_instance_exists() -> Result<()> {
 async fn disconnected_configuration_is_validated_and_keeps_the_instance_port() -> Result<()> {
     let mut backend = Backend::default();
     backend.request("create_instance", json!({
-        "instance":{"driverId":DRIVER_ID,"driverInstanceId":"settings","sessionId":"s","label":"Serial","status":"ready"},
+        "instance":{"driverId":DRIVER_ID,"driverInstanceId":"settings","sessionId":"s","name":"Serial","status":"ready"},
         "config":{"port":"COM6","baudRate":115200}
     })).await?;
     let invoke = |args: Value| {
@@ -161,7 +161,7 @@ async fn backend_rejects_requests_that_break_the_runtime_contract() -> Result<()
         .request(
             "create_instance",
             json!({"instance":{"driverId":DRIVER_ID,"driverInstanceId":"one",
-                               "sessionId":"s","label":"Serial","status":"ready"},
+                               "sessionId":"s","name":"Serial","status":"ready"},
                    "config":{"port":"COM6","baudRate":115200}}),
         )
         .await?;
@@ -170,7 +170,7 @@ async fn backend_rejects_requests_that_break_the_runtime_contract() -> Result<()
         .request(
             "create_instance",
             json!({"instance":{"driverId":DRIVER_ID,"driverInstanceId":"two",
-                               "sessionId":"s","label":"Serial","status":"ready"},
+                               "sessionId":"s","name":"Serial","status":"ready"},
                    "config":{"port":"com6","baudRate":115200}}),
         )
         .await
@@ -182,7 +182,7 @@ async fn backend_rejects_requests_that_break_the_runtime_contract() -> Result<()
             .request(
                 "create_instance",
                 json!({"instance":{"driverId":DRIVER_ID,"driverInstanceId":format!("bad{port}"),
-                                   "sessionId":"s","label":"Serial","status":"ready"},
+                                   "sessionId":"s","name":"Serial","status":"ready"},
                        "config":{"port":port,"baudRate":115200}}),
             )
             .await
@@ -194,7 +194,7 @@ async fn backend_rejects_requests_that_break_the_runtime_contract() -> Result<()
             .request(
                 "create_instance",
                 json!({"instance":{"driverId":DRIVER_ID,"driverInstanceId":format!("ok{index}"),
-                                   "sessionId":"s","label":"Serial","status":"ready"},
+                                   "sessionId":"s","name":"Serial","status":"ready"},
                        "config":{"port":port,"baudRate":115200}}),
             )
             .await
@@ -211,7 +211,7 @@ async fn backend_rejects_requests_that_break_the_runtime_contract() -> Result<()
         .request(
             "create_instance",
             json!({"instance":{"driverId":DRIVER_ID,"driverInstanceId":"typo",
-                               "sessionId":"s","label":"Serial","status":"ready"},
+                               "sessionId":"s","name":"Serial","status":"ready"},
                    "config":{"port":"COM7","baudRate":115200,"databits":8}}),
         )
         .await
@@ -368,7 +368,7 @@ async fn in_process_host_registers_serial_and_validates_mcp_tools() -> Result<()
             json!({"port":"COM6","baudRate":115200,"dataBits":8,"stopBits":1,"parity":"none"}),
         )
         .await?;
-    assert_eq!(instance.label, "COM6@115200");
+    assert_eq!(instance.name, "COM6@115200");
     // Exercise the public bridge contract, not only the internal mirror operations.
     let tools = coterm_mcp::server::tools_list(&runtime).await?;
     let tool = tools["tools"]
@@ -455,7 +455,7 @@ async fn in_process_host_registers_serial_and_validates_mcp_tools() -> Result<()
         &json!({
             "name":"coterm_serial_command",
             "arguments":{
-                "name":instance.label,
+                "name":instance.name,
                 "commands":["secret-command-value"],
                 "line_ending":"cr"
             }
@@ -470,7 +470,7 @@ async fn in_process_host_registers_serial_and_validates_mcp_tools() -> Result<()
             &runtime,
             &json!({
                 "name":"coterm_serial_status",
-                "arguments":{field:instance.label}
+                "arguments":{field:instance.name}
             }),
         )
         .await?;
@@ -481,7 +481,7 @@ async fn in_process_host_registers_serial_and_validates_mcp_tools() -> Result<()
         &runtime,
         &json!({
             "name":"coterm_serial_status",
-            "arguments":{"name":instance.label,"instance":"different"}
+            "arguments":{"name":instance.name,"instance":"different"}
         }),
     )
     .await
@@ -493,7 +493,7 @@ async fn in_process_host_registers_serial_and_validates_mcp_tools() -> Result<()
             &runtime,
             &json!({
                 "name":"coterm_serial_connect",
-                "arguments":{"instanceName":instance.label}
+                "arguments":{"instanceName":instance.name}
             }),
         ),
     )
@@ -544,7 +544,7 @@ async fn in_process_host_registers_serial_and_validates_mcp_tools() -> Result<()
             &runtime,
             &json!({
                 "name":format!("coterm-driver-serial__{tool}"),
-                "arguments":{"name":instance.label,"commands":commands},
+                "arguments":{"name":instance.name,"commands":commands},
                 "_meta":{"coterm/waitTimeoutMs":0}
             }),
         )

@@ -86,7 +86,7 @@ const { setLocale } = await import("../apps/desktop/src/i18n.ts");
 
 test("Shared frontend language subscriptions are released with their frontend scope", () => {
   setLocale("en");
-  const api = createDriverAPI({ driverId: "ssh", driverInstanceId: "locale-instance", sessionId: "locale-session", label: "Locale", status: "ready" });
+  const api = createDriverAPI({ driverId: "ssh", driverInstanceId: "locale-instance", sessionId: "locale-session", name: "Locale", status: "ready" });
   let calls = 0;
   api.i18n.subscribe(() => calls++);
   setLocale("zh-CN");
@@ -104,9 +104,9 @@ test("Shared frontend exposes stable saved identity while operations remain boun
   const previousInvoke = mockInvoke;
   const calls = [];
   mockInvoke = async (command, args) => { calls.push({ command, args }); return { status: "completed" }; };
-  const instance = { driverId: "serial", driverInstanceId: "runtime-one", sessionId: "session-one", label: "Board", status: "ready" };
+  const instance = { driverId: "serial", driverInstanceId: "runtime-one", sessionId: "session-one", name: "Board", status: "ready" };
   const first = createDriverAPI(instance, "saved-reference");
-  const restored = createDriverAPI({ ...instance, driverInstanceId: "runtime-two", sessionId: "session-two", label: "Renamed" }, "saved-reference");
+  const restored = createDriverAPI({ ...instance, driverInstanceId: "runtime-two", sessionId: "session-two", name: "Renamed" }, "saved-reference");
   const unsaved = createDriverAPI(instance);
   try {
     assert.equal(first.instanceConfigRef, restored.instanceConfigRef);

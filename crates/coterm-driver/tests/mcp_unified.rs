@@ -27,6 +27,86 @@ async fn serial_runtime() -> Result<Runtime> {
     Ok(runtime)
 }
 
+#[tokio::test]
+async fn instance_names_are_global_atomic_and_match_public_mcp_names() -> Result<()> {
+    let runtime = serial_runtime().await?;
+    runtime
+        .register::<coterm_driver::ssh::backend::Backend>(
+            serde_json::from_str(include_str!("../manifests/ssh.json"))?,
+            Some("export function mount() { return { unmount() {} }; }"),
+        )
+        .await?;
+    runtime.start("coterm-driver-ssh").await?;
+    let ssh_config = json!({"host":"127.0.0.1","username":"tester","port":22});
+    let duplicate = runtime
+        .create_instance_with_name(
+            "coterm-driver-ssh",
+            ssh_config.clone(),
+            Some(" board ".into()),
+        )
+        .await;
+    assert_eq!(
+        duplicate.err().map(|error| error.code).as_deref(),
+        Some("instance_name_exists")
+    );
+    let serial_config = json!({"port":"COM997","baudRate":115200});
+    let (serial, ssh) = tokio::join!(
+        runtime.create_instance_with_name(
+            "coterm-driver-serial",
+            serial_config.clone(),
+            Some("shared".into())
+        ),
+        runtime.create_instance_with_name(
+            "coterm-driver-ssh",
+            ssh_config.clone(),
+            Some("shared".into())
+        ),
+    );
+    assert_ne!(
+        serial.is_ok(),
+        ssh.is_ok(),
+        "only one driver can reserve a global name"
+    );
+    let (winner, error) = match (serial, ssh) {
+        (Ok(instance), Err(error)) | (Err(error), Ok(instance)) => (instance, error),
+        _ => return Err(anyhow!("Unexpected creation outcomes")),
+    };
+    assert_eq!(error.code, "instance_name_exists");
+    let selected = call(&runtime, "coterm_instances", json!({"name":"shared"})).await?;
+    assert_eq!(
+        selected["structuredContent"]["instances"][0]["name"],
+        winner.name
+    );
+    assert_eq!(serde_json::to_value(&winner)?["name"], winner.name);
+    assert!(serde_json::to_value(&winner)?.get("label").is_none());
+    let failed = runtime
+        .create_instance_with_name(
+            "coterm-driver-serial",
+            json!({"bad":true}),
+            Some("retry".into()),
+        )
+        .await;
+    assert!(failed.is_err());
+    let retry = runtime
+        .create_instance_with_name(
+            "coterm-driver-serial",
+            json!({"port":"COM996","baudRate":115200}),
+            Some("retry".into()),
+        )
+        .await?;
+    assert_eq!(retry.name, "retry");
+    let renamed = runtime
+        .create_instance_with_name(
+            "coterm-driver-serial",
+            json!({"port":"COM995","baudRate":115200}),
+            Some("different".into()),
+        )
+        .await?;
+    assert_eq!(renamed.name, "different");
+    runtime.shutdown().await;
+    Ok(())
+}
+
 async fn call(runtime: &Runtime, name: &str, arguments: Value) -> Result<Value> {
     call_tool(runtime, &json!({"name":name,"arguments":arguments})).await
 }

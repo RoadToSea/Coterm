@@ -5,15 +5,20 @@ import { useEffect, useRef, useState } from "react";
 import type { InvokeOptions, DriverFrontend } from "../../../../shared/index";
 import { loadDriverFrontend } from "../../driver-loader";
 import { driverI18n } from "../../i18n";
+import { cn } from "../../lib/utils";
+import { instanceNameErrorCode, validateInstanceName } from "../../instance-name";
 
-export function DriverConfiguration({ driverId, onSubmit, disabled = false }: { driverId: string; onSubmit(config: unknown, name?: string): Promise<void>; disabled?: boolean }) {
+export function DriverConfiguration({ driverId, onSubmit, existingNames, disabled = false }: { driverId: string; onSubmit(config: unknown, name?: string): Promise<void>; existingNames: readonly string[]; disabled?: boolean }) {
   useI18n();
   const containerRef = useRef<HTMLDivElement>(null);
   const submitRef = useRef(onSubmit);
   submitRef.current = onSubmit;
   const nameRef = useRef("");
   const [name, setName] = useState("");
-  const [nameError, setNameError] = useState<string | null>(null);
+  const namesRef = useRef(existingNames);
+  namesRef.current = existingNames;
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const nameError = validateInstanceName(name, existingNames) ?? submitError;
   const [error, setError] = useState<string | null>(null);
   useEffect(() => { if (containerRef.current) containerRef.current.inert = disabled; }, [disabled]);
   useEffect(() => {
@@ -27,14 +32,20 @@ export function DriverConfiguration({ driverId, onSubmit, disabled = false }: { 
       if (disposed) return;
       if (!module?.configure) throw new Error(t("This driver does not provide a connection configuration screen."));
       frontend = module.configure(container, {
-        submit: (config) => {
+        submit: async (config) => {
           const trimmedName = nameRef.current.trim();
-          if (new TextEncoder().encode(trimmedName).length > 256 || [...trimmedName].some(char => /[\u0000-\u001f\u007f-\u009f]/u.test(char))) {
-            setNameError(t("Instance name must be at most 256 UTF-8 bytes and contain no control characters."));
-            return Promise.reject(new Error("instance_name_invalid"));
+          const validationError = validateInstanceName(trimmedName, namesRef.current);
+          if (validationError) {
+            setSubmitError(validationError);
+            throw new Error(validationError);
           }
-          setNameError(null);
-          return submitRef.current(config, trimmedName || undefined);
+          setSubmitError(null);
+          try {
+            await submitRef.current(config, trimmedName || undefined);
+          } catch (reason) {
+            setSubmitError(instanceNameErrorCode(reason));
+            throw reason;
+          }
         },
         invoke: async <T,>(operation: string, args?: unknown, options?: InvokeOptions) => {
           if (disposed) throw new Error("driver_configuration_closed");
@@ -64,12 +75,13 @@ export function DriverConfiguration({ driverId, onSubmit, disabled = false }: { 
     <label className="mb-4 block text-sm font-medium" htmlFor="new-instance-name">
       <span className="mb-1.5 block">{t("Instance name (optional)")}</span>
       <input id="new-instance-name" type="text" autoComplete="off" maxLength={256} value={name}
-        onChange={event => { setName(event.currentTarget.value); setNameError(null); }}
+        onChange={event => { setName(event.currentTarget.value); setSubmitError(null); }}
         placeholder={t("Leave empty to use the driver default")}
         aria-invalid={!!nameError}
-        className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm font-normal text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring" />
+        aria-describedby={nameError ? "new-instance-name-error" : undefined}
+        className={cn("w-full rounded-md border border-input bg-background px-3 py-2 text-sm font-normal text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring", nameError && "border-destructive focus-visible:ring-destructive")} />
     </label>
-    {nameError && <p role="alert" className="mb-3 text-xs text-destructive">{nameError}</p>}
+    {nameError && <p id="new-instance-name-error" role="alert" className="mb-3 text-xs text-destructive">{t(nameError)}</p>}
     <div ref={containerRef} />
   </fieldset>;
 }

@@ -316,7 +316,7 @@ impl Backend {
                             "Local working directory does not exist or is unavailable",
                         ),
                     })?;
-                let label = resolved.label();
+                let name = resolved.default_name();
                 // 配置只登记，不启动进程：创建实例不应该立刻占用一个 PTY。
                 self.instances.insert(
                     create.instance.driver_instance_id,
@@ -326,7 +326,7 @@ impl Backend {
                         history: Default::default(),
                     },
                 );
-                Ok(json!({"ok":true,"label":label}))
+                Ok(json!({"ok":true,"name":name}))
             }
             HostCommand::DestroyInstance { driver_instance_id } => {
                 let id = driver_instance_id.as_str();
@@ -823,7 +823,7 @@ mod tests {
         let mut backend = coterm_core::diagnostic::Backend::<Backend>::default();
         backend.request("create_instance", json!({
             "instance":{"driverId":DRIVER_ID,"driverInstanceId":"idle","sessionId":"session",
-                        "label":"Local","status":"ready"},
+                        "name":"Local","status":"ready"},
             "config":{"shell":if cfg!(windows) { "cmd.exe" } else { "/bin/sh" }},
         })).await?;
         for (operation, effect, args) in [

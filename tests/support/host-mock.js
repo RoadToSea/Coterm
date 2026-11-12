@@ -45,7 +45,7 @@ export function makeHostMockSource(initial) {
       groups:[{id:"default",name:"Default workspace"}], approvalRuleGroups:[], historyPolicy:"session_only", persistence:"windows_dpapi",
       ...scenario.workspace,
       entries:(scenario.workspace?.entries ?? scenario.instances.map(instance => ({
-        configRef:"ref-" + instance.driverInstanceId, driverId:instance.driverId,label:instance.label,instanceId:instance.driverInstanceId,
+        configRef:"ref-" + instance.driverInstanceId, driverId:instance.driverId,name:instance.name,instanceId:instance.driverInstanceId,
       }))).map(entry => ({workspaceId:"default",approvalRuleGroupId:null,...entry})),
       layout:{...defaultLayout,...scenario.workspace?.layout},
     };
@@ -261,7 +261,7 @@ export function makeHostMockSource(initial) {
       restore_saved_instance: ({configRef}) => {
         const entry = scenario.workspace.entries.find(item => item.configRef === configRef);
         if (!entry) throw new Error("workspace_entry_not_found");
-        const instance = {driverId:entry.driverId,driverInstanceId:"restored-" + ++nextInstance,sessionId:"session-" + nextInstance,label:entry.label,status:"ready"};
+        const instance = {driverId:entry.driverId,driverInstanceId:"restored-" + ++nextInstance,sessionId:"session-" + nextInstance,name:entry.name,status:"ready"};
         scenario.instances = [...scenario.instances,instance];
         bypasses.set(instance.driverInstanceId, entry.bypass ?? false);
         scenario.workspace.entries = scenario.workspace.entries.map(item => item.configRef === configRef ? {...item,instanceId:instance.driverInstanceId} : item);
@@ -275,11 +275,12 @@ export function makeHostMockSource(initial) {
       create_instance: ({driverId,config,workspaceId,name}) => {
         const driver = scenario.catalog.drivers.find(item => item.id === driverId);
         if (!driver?.running) throw new Error("driver_not_running");
+        if (name && [...scenario.instances, ...scenario.workspace.entries].some(item => item.name === name.trim())) throw new Error("instance_name_exists");
         const instance = {driverId,driverInstanceId:"created-" + ++nextInstance,sessionId:"session-" + nextInstance,
-          label:name?.trim() || (config.host ? config.username + "@" + config.host : config.port ?? driver.name),status:"ready"};
+          name:name?.trim() || (config.host ? config.username + "@" + config.host : config.port ?? driver.name),status:"ready"};
         scenario.instances = [...scenario.instances,instance];
         scenario.workspace.entries = [...scenario.workspace.entries,{configRef:"created-ref-" + nextInstance,
-          driverId,instanceId:instance.driverInstanceId,label:instance.label,workspaceId:workspaceId ?? "default",approvalRuleGroupId:null}];
+          driverId,instanceId:instance.driverInstanceId,name:instance.name,workspaceId:workspaceId ?? "default",approvalRuleGroupId:null}];
         return instance;
       },
       start_driver: ({driverId}) => {
@@ -289,7 +290,7 @@ export function makeHostMockSource(initial) {
       provide_secret: ({ driverInstanceId, purpose }) => ({ id: "secret-test", driverInstanceId, purpose, expiresAt: "2099-01-01T00:00:00Z" }),
       list_drivers: () => scenario.catalog,
       approval_snapshot: () => ({groups:structuredClone(scenario.workspace.approvalRuleGroups),
-        instances:scenario.workspace.entries.map(entry=>({configRef:entry.configRef,label:entry.label,driverId:entry.driverId,
+        instances:scenario.workspace.entries.map(entry=>({configRef:entry.configRef,name:entry.name,driverId:entry.driverId,
           instanceId:entry.instanceId ?? null,ruleGroupId:entry.approvalRuleGroupId ?? null,bypass:entry.bypass ?? false}))}),
       save_approval_group: ({group}) => {
         if (!group.name.trim()) throw new Error("approval_group_name_invalid");
@@ -453,7 +454,7 @@ export const defaultScenario = {
     ],
   },
   instances: [
-    { driverId: "ssh", driverInstanceId: "inst-1", sessionId: "sess-1", label: "Prod-Server", status: "ready" },
+    { driverId: "ssh", driverInstanceId: "inst-1", sessionId: "sess-1", name: "Prod-Server", status: "ready" },
   ],
   bypass: false,
   attention: { version: 1, approvals: [], interactions: [] },

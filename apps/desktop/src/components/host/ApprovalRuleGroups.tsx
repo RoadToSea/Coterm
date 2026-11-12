@@ -107,7 +107,7 @@ export function ApprovalRuleGroups({ onClose, initialGroupId }: Props) {
         {draft ? <>
           <ApprovalGroupEditor key={draft.id ?? "new"} draft={draft} onChange={next => { setDraft(next); setError(""); }} custom={custom} onCustomChange={setCustom} busy={busy} onError={setError} />
           <div className="border-t border-border pt-4 text-xs text-muted-foreground" data-group-users>
-            {t(users.length ? "Saving applies to: {names}" : "This group is not assigned to any instance.", { names: users.map(instance => instance.label).join(", ") })}
+            {t(users.length ? "Saving applies to: {names}" : "This group is not assigned to any instance.", { names: users.map(instance => instance.name).join(", ") })}
           </div>
           <div className="flex flex-wrap items-center gap-2 border-t border-border pt-4">
             <Button type="button" variant="outline" size="sm" disabled={busy} onClick={() => attempt(() => {

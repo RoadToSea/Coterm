@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "camelCase")]
 pub struct ApprovalInstance {
     config_ref: String,
-    label: String,
+    name: String,
     driver_id: String,
     instance_id: Option<String>,
     rule_group_id: Option<String>,
@@ -46,7 +46,7 @@ pub async fn approval_snapshot(
                 .into_iter()
                 .map(|entry| ApprovalInstance {
                     config_ref: entry.config_ref,
-                    label: entry.label,
+                    name: entry.name,
                     driver_id: entry.driver_id,
                     instance_id: entry.instance_id,
                     rule_group_id: entry.approval_rule_group_id,

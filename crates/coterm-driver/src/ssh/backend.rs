@@ -602,7 +602,7 @@ impl Backend {
                 }
                 let config: Config = decode(create.config)?;
                 config.validate()?;
-                let label = format!("{}@{}:{}", config.username, config.host, config.port);
+                let name = format!("{}@{}:{}", config.username, config.host, config.port);
                 self.instances.insert(
                     create.instance.driver_instance_id,
                     Instance {
@@ -615,7 +615,7 @@ impl Backend {
                         terminal_history: None,
                     },
                 );
-                Ok(json!({"ok":true,"label":label}))
+                Ok(json!({"ok":true,"name":name}))
             }
             HostCommand::DestroyInstance { driver_instance_id } => {
                 let id = driver_instance_id.as_str();

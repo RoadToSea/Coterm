@@ -17,7 +17,10 @@ use crate::model::{
         DeferredInteraction, InteractionKind, InteractionOutcome, InteractionRequest,
         InteractionResult, InteractionValue, SecretDelivery, SecretHandle,
     },
-    lifecycle::{CreateInstance, InstanceInfo, InstanceStatus, McpToolRegistration, RuntimeLimits},
+    lifecycle::{
+        normalize_instance_name, CreateInstance, InstanceInfo, InstanceStatus, McpToolRegistration,
+        RuntimeLimits,
+    },
     manifest::DriverManifest,
     operation::{
         ApproveProposal, CancellationOutcome, DispatchMode, InvokeRequest, OperationDescriptor,
@@ -156,27 +159,17 @@ impl Runtime {
         }
     }
 
+    /// Create one instance; explicit names are globally unique, trimmed, and never rewritten.
+    /// Returns instance_name_exists on collisions or the original validation/driver error.
     pub async fn create_instance_with_name(
         &self,
         driver_id: &str,
         config: Value,
         name: Option<String>,
     ) -> Result<InstanceInfo, RuntimeError> {
-        let name = match name {
-            Some(name) => {
-                let name = name.trim();
-                if name.len() > 256 || name.chars().any(char::is_control) {
-                    return Err(runtime_error(
-                        ErrorCategory::InvalidRequest,
-                        "instance_name_invalid",
-                    ));
-                }
-                (!name.is_empty()).then(|| name.to_owned())
-            }
-            None => None,
-        };
+        let name = name.as_deref().map(normalize_instance_name).transpose()?;
         let _control = self.control_gate(driver_id).lock_owned().await;
-        let state = self.state.lock().await;
+        let mut state = self.state.lock().await;
         self.ensure_accepting()?;
         let driver = state
             .drivers
@@ -193,43 +186,73 @@ impl Runtime {
             .get(driver_id)
             .cloned()
             .ok_or_else(|| runtime_error(ErrorCategory::Conflict, "driver_not_started"))?;
+        if name
+            .as_ref()
+            .is_some_and(|name| state.instances.values().any(|item| &item.name == name))
+        {
+            return Err(runtime_error(
+                ErrorCategory::Conflict,
+                "instance_name_exists",
+            ));
+        }
         let instance_id = uuid::Uuid::new_v4().to_string();
         let instance = InstanceInfo {
             driver_id: driver_id.to_owned(),
             driver_instance_id: instance_id.clone(),
             session_id: uuid::Uuid::new_v4().to_string(),
-            label: format!("{} {instance_id}", driver.manifest.name),
+            name: name
+                .clone()
+                .unwrap_or_else(|| format!("{} {instance_id}", driver.manifest.name)),
             status: InstanceStatus::Starting,
         };
+        // Reserve before awaiting driver IO; other drivers may create instances concurrently.
+        state
+            .instances
+            .insert(instance_id.clone(), instance.clone());
         drop(state);
         let created = task
             .request(HostCommand::CreateInstance(CreateInstance {
                 instance: instance.clone(),
                 config,
             }))
-            .await?;
+            .await;
+        let created = match created {
+            Ok(created) => created,
+            Err(error) => {
+                self.state.lock().await.instances.remove(&instance_id);
+                return Err(error);
+            }
+        };
         let mut state = self.state.lock().await;
-        ensure_current_task(&state, driver_id, &task)?;
-        self.ensure_accepting()?;
-        let requested_label = name
-            .or_else(|| {
-                created
-                    .get("label")
-                    .and_then(Value::as_str)
-                    .filter(|label| {
-                        !label.trim().is_empty()
-                            && label.len() <= 256
-                            && !label.chars().any(char::is_control)
-                    })
-                    .map(str::to_owned)
-            })
-            .unwrap_or(instance.label);
-        let label = unique_instance_label(
-            &requested_label,
-            state.instances.values().map(|item| item.label.as_str()),
-        );
+        if let Err(error) =
+            ensure_current_task(&state, driver_id, &task).and_then(|_| self.ensure_accepting())
+        {
+            state.instances.remove(&instance_id);
+            drop(state);
+            let _ = task
+                .request(HostCommand::DestroyInstance {
+                    driver_instance_id: instance_id,
+                })
+                .await;
+            return Err(error);
+        }
+        let name = name.unwrap_or_else(|| {
+            let requested_name = created
+                .get("name")
+                .and_then(Value::as_str)
+                .and_then(|value| normalize_instance_name(value).ok())
+                .unwrap_or_else(|| instance.name.clone());
+            unique_instance_name(
+                &requested_name,
+                state
+                    .instances
+                    .values()
+                    .filter(|item| item.driver_instance_id != instance_id)
+                    .map(|item| item.name.as_str()),
+            )
+        });
         let ready = InstanceInfo {
-            label,
+            name,
             status: InstanceStatus::Ready,
             ..instance
         };
@@ -341,7 +364,7 @@ impl Runtime {
                     let target_label = instance
                         .as_ref()
                         .and_then(|id| state.instances.get(id))
-                        .map(|instance| instance.label.clone())
+                        .map(|instance| instance.name.clone())
                         .unwrap_or_else(|| driver_id.clone());
                     PendingApproval {
                         operation_id: operation_id.clone(),
@@ -2110,14 +2133,14 @@ fn runtime_error(category: ErrorCategory, code: &str) -> RuntimeError {
     runtime_error_with(category, code, code.replace('_', " "))
 }
 
-fn unique_instance_label<'a>(requested: &str, existing: impl Iterator<Item = &'a str>) -> String {
+fn unique_instance_name<'a>(requested: &str, existing: impl Iterator<Item = &'a str>) -> String {
     let existing = existing.collect::<std::collections::HashSet<_>>();
     if !existing.contains(requested) {
         return requested.to_owned();
     }
     for suffix in 2u64.. {
         let suffix = format!(" ({suffix})");
-        let max_prefix_bytes = 256usize.saturating_sub(suffix.len());
+        let max_prefix_bytes = crate::limits::INSTANCE_NAME_MAX_BYTES.saturating_sub(suffix.len());
         let mut prefix = String::new();
         for character in requested.chars() {
             if prefix.len() + character.len_utf8() > max_prefix_bytes {
@@ -2272,7 +2295,7 @@ mod tests {
     };
 
     use super::{
-        failure_status, operation_args_error, schema_is_valid, unique_instance_label,
+        failure_status, operation_args_error, schema_is_valid, unique_instance_name,
         validate_driver_authority, validate_scope_target, Runtime,
     };
     use crate::approval_policy::{ApprovalContext, InstanceApproval};
@@ -2355,12 +2378,12 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_instance_label_suffix_stays_within_utf8_limit() {
+    fn default_instance_name_suffix_stays_within_utf8_limit() {
         let long = "名".repeat(85);
-        let label = unique_instance_label(&long, [long.as_str()].into_iter());
-        assert!(label.ends_with(" (2)"));
-        assert!(label.len() <= 256);
-        assert!(label.is_char_boundary(label.len()));
+        let name = unique_instance_name(&long, [long.as_str()].into_iter());
+        assert!(name.ends_with(" (2)"));
+        assert!(name.len() <= crate::limits::INSTANCE_NAME_MAX_BYTES);
+        assert!(name.is_char_boundary(name.len()));
     }
 
     fn runtime() -> Runtime {
@@ -2425,7 +2448,7 @@ mod tests {
             driver_id: driver_id.to_owned(),
             driver_instance_id: instance_id.to_owned(),
             session_id: format!("session-{instance_id}"),
-            label: format!("{driver_id} {instance_id}"),
+            name: format!("{driver_id} {instance_id}"),
             status: InstanceStatus::Ready,
         }
     }

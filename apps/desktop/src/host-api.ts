@@ -82,14 +82,14 @@ export interface InstanceInfo {
   driverId: string;
   driverInstanceId: string;
   sessionId: string;
-  label: string;
+  name: string;
   status: "starting" | "ready" | "stopping" | "stopped" | "failed";
 }
 
 export interface WorkspaceGroup { id: string; name: string }
 
 export interface SavedWorkspace {
-  entries: { configRef: string; driverId: string; label: string; instanceId: string | null; workspaceId: string; approvalRuleGroupId: string | null }[];
+  entries: { configRef: string; driverId: string; name: string; instanceId: string | null; workspaceId: string; approvalRuleGroupId: string | null }[];
   groups: WorkspaceGroup[];
   approvalRuleGroups: ApprovalRuleGroup[];
   layout: { activeConfigRef: string | null; instancesCollapsed: boolean; activeWorkspaceId: string };
@@ -130,7 +130,7 @@ export interface ApprovalRuleGroup extends ApprovalPolicy { id: string; name: st
 export type ApprovalGroupDraft = Omit<ApprovalRuleGroup, "id"> & { id: string | null };
 export interface ApprovalSnapshot {
   groups: ApprovalRuleGroup[];
-  instances: { configRef: string; label: string; driverId: string; instanceId: string | null; ruleGroupId: string | null; bypass: boolean }[];
+  instances: { configRef: string; name: string; driverId: string; instanceId: string | null; ruleGroupId: string | null; bypass: boolean }[];
 }
 
 export interface HostAPI {

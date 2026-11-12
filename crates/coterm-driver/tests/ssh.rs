@@ -40,7 +40,7 @@ async fn in_process_host_routes_approval_snapshot_and_hides_terminal_input() -> 
         .create_instance("coterm-driver-ssh", serde_json::to_value(&server.config)?)
         .await?;
     assert_eq!(
-        instance.label,
+        instance.name,
         format!("tester@127.0.0.1:{}", server.config.port)
     );
     assert!(runtime
@@ -667,7 +667,7 @@ fn output_is_bounded_and_reports_replay_gaps() -> Result<()> {
 }
 
 fn create(id: &str, config: &Config) -> Value {
-    json!({"instance":{"driverId":"coterm-driver-ssh","driverInstanceId":id,"sessionId":format!("session-{id}"),"label":id,"status":"starting"},"config":config})
+    json!({"instance":{"driverId":"coterm-driver-ssh","driverInstanceId":id,"sessionId":format!("session-{id}"),"name":id,"status":"starting"},"config":config})
 }
 
 #[tokio::test]
@@ -1264,7 +1264,7 @@ impl McpWire {
             next_id: 0,
             instance_names: instances
                 .iter()
-                .map(|instance| (instance.driver_instance_id.clone(), instance.label.clone()))
+                .map(|instance| (instance.driver_instance_id.clone(), instance.name.clone()))
                 .collect(),
         };
         client.rpc("initialize", json!({"protocolVersion":"2025-06-18","clientInfo":{"name":"ssh-test","version":"1"},"capabilities":{}})).await?;
@@ -1368,7 +1368,7 @@ async fn external_mcp_uses_shared_ssh_and_host_secret_and_approval_paths() -> Re
     let probe = client
         .tool(
             "coterm_connection",
-            json!({"name":instance.label,"action":"probe"}),
+            json!({"name":instance.name,"action":"probe"}),
         )
         .await?;
     assert_eq!(probe["structuredContent"]["fingerprint"], ssh.fingerprint);
@@ -1455,7 +1455,7 @@ async fn external_mcp_uses_shared_ssh_and_host_secret_and_approval_paths() -> Re
     let waiting_id = client.next_id;
     coterm_mcp::transport::write_frame(&mut client.writer, &json!({
         "jsonrpc":"2.0","id":waiting_id,"method":"tools/call","params":{
-            "name":"coterm_ssh_command","arguments":{"name":instance.label,"commands":["original-waiting-command"]}
+            "name":"coterm_ssh_command","arguments":{"name":instance.name,"commands":["original-waiting-command"]}
         }
     })).await?;
     let pending = timeout(
@@ -1493,7 +1493,7 @@ async fn external_mcp_uses_shared_ssh_and_host_secret_and_approval_paths() -> Re
     let response = client
         .tool(
             "coterm.get_operation",
-            json!({"name":instance.label,"operationId":result_id}),
+            json!({"name":instance.name,"operationId":result_id}),
         )
         .await?;
     assert_eq!(response["structuredContent"]["status"], "completed");
@@ -1519,7 +1519,7 @@ async fn external_mcp_uses_shared_ssh_and_host_secret_and_approval_paths() -> Re
         &mut second.writer,
         &json!({"jsonrpc":"2.0","id":second_waiting_id,"method":"tools/call","params":{
             "name":"coterm_ssh_command",
-            "arguments":{"name":instance.label,"commands":["second-client-command"]}
+            "arguments":{"name":instance.name,"commands":["second-client-command"]}
         }}),
     )
     .await?;
@@ -1567,7 +1567,7 @@ async fn external_mcp_uses_shared_ssh_and_host_secret_and_approval_paths() -> Re
     let response = second
         .tool(
             "coterm.get_operation",
-            json!({"name":instance.label,"operationId":second_operation}),
+            json!({"name":instance.name,"operationId":second_operation}),
         )
         .await?;
     assert_eq!(response["structuredContent"]["status"], "completed");
@@ -1584,7 +1584,7 @@ async fn external_mcp_uses_shared_ssh_and_host_secret_and_approval_paths() -> Re
             "tools/call",
             json!({
                 "name":"coterm_ssh_command",
-                "arguments":{"name":instance.label,"commands":["second-must-not-replay"]},
+                "arguments":{"name":instance.name,"commands":["second-must-not-replay"]},
                 "_meta":{"coterm/waitTimeoutMs":0}
             }),
         )
@@ -1685,7 +1685,7 @@ async fn external_mcp_uses_shared_ssh_and_host_secret_and_approval_paths() -> Re
         .rpc(
             "tools/call",
             json!({"name":"coterm_ssh_command", "arguments":{
-        "name":instance.label,"commands":["must-not-run"]},"_meta":{"coterm/waitTimeoutMs":0}}),
+        "name":instance.name,"commands":["must-not-run"]},"_meta":{"coterm/waitTimeoutMs":0}}),
         )
         .await?;
     assert_eq!(immediate["_meta"]["coterm/operation"]["status"], "accepted");
@@ -1813,7 +1813,7 @@ async fn external_mcp_uses_shared_ssh_and_host_secret_and_approval_paths() -> Re
     client.next_id += 1;
     let interrupted_id = client.next_id;
     coterm_mcp::transport::write_frame(&mut client.writer, &json!({"jsonrpc":"2.0","id":interrupted_id,"method":"tools/call","params":{
-        "name":"coterm_ssh_command","arguments":{"name":instance.label,"commands":["never-completes"]}
+        "name":"coterm_ssh_command","arguments":{"name":instance.name,"commands":["never-completes"]}
     }})).await?;
     timeout(Duration::from_secs(3), async {
         loop {
@@ -2163,7 +2163,7 @@ async fn running_command_output_is_readable_without_cursors_or_resubmission() ->
         .set_bypass(&instance.driver_instance_id, true)
         .await?;
     let submitted = coterm_mcp::server::call_tool(&runtime, &json!({
-        "name":"coterm_ssh_command", "arguments":{"name":instance.label,"commands":["never-completes"]},
+        "name":"coterm_ssh_command", "arguments":{"name":instance.name,"commands":["never-completes"]},
         "_meta":{"coterm/waitTimeoutMs":50}
     })).await?;
     let operation_id = submitted["_meta"]["coterm/operation"]["operationId"].clone();
@@ -2171,7 +2171,7 @@ async fn running_command_output_is_readable_without_cursors_or_resubmission() ->
     timeout(Duration::from_secs(3), async {
         loop {
             let lines = coterm_mcp::server::call_tool(&runtime, &json!({
-                "name":"coterm_ssh_read_lines", "arguments":{"name":instance.label,"operationId":operation_id,"lines":2}
+                "name":"coterm_ssh_read_lines", "arguments":{"name":instance.name,"operationId":operation_id,"lines":2}
             })).await?;
             let domain = &lines["structuredContent"];
             if domain["lines"].to_string().contains("never-completes") {
@@ -2185,7 +2185,7 @@ async fn running_command_output_is_readable_without_cursors_or_resubmission() ->
     let pairs = coterm_mcp::server::call_tool(
         &runtime,
         &json!({
-            "name":"coterm_ssh_read_dialogue_pairs", "arguments":{"name":instance.label,"count":2}
+            "name":"coterm_ssh_read_dialogue_pairs", "arguments":{"name":instance.name,"count":2}
         }),
     )
     .await?;
@@ -2262,7 +2262,7 @@ async fn agent_feedback_approval_returns_without_waiting_for_the_human() -> Resu
             &runtime,
             &json!({
                 "name":"coterm_ssh_command",
-                "arguments":{"name":instance.label,"mode":"exec","commands":["approval-feedback"]}
+                "arguments":{"name":instance.name,"mode":"exec","commands":["approval-feedback"]}
             }),
         ),
     )
@@ -2358,7 +2358,7 @@ async fn agent_feedback_health_default_routing_and_legacy_aliases() -> Result<()
     assert!(no_connection.is_err(), "ready does not mean connected");
     let explicit = coterm_mcp::server::call_tool(
         &runtime,
-        &call("coterm_ssh_status", json!({"name":instance.label})),
+        &call("coterm_ssh_status", json!({"name":instance.name})),
     )
     .await?;
     assert_eq!(explicit["structuredContent"]["connected"], false);
@@ -2410,14 +2410,14 @@ async fn agent_feedback_health_default_routing_and_legacy_aliases() -> Result<()
         &runtime,
         &call(
             "coterm-driver-ssh__ssh.status",
-            json!({"name":instance.label}),
+            json!({"name":instance.name}),
         ),
     )
     .await?;
     assert_eq!(legacy["structuredContent"]["connected"], true);
     for args in [
         json!({"name":null}),
-        json!({"name":instance.label,"instanceName":instance.label}),
+        json!({"name":instance.name,"instanceName":instance.name}),
         json!({"driverInstanceId":instance.driver_instance_id}),
     ] {
         assert!(
@@ -2969,7 +2969,7 @@ async fn real_mcp_file_tools_and_multiline_exec_preserve_content_and_stop_on_fai
         .rpc(
             "tools/call",
             json!({
-                "name":"coterm_file_read", "arguments":{"name":instance.label,"path":path},
+                "name":"coterm_file_read", "arguments":{"name":instance.name,"path":path},
                 "_meta":{"coterm/waitTimeoutMs":5000}
             }),
         )
@@ -2978,7 +2978,7 @@ async fn real_mcp_file_tools_and_multiline_exec_preserve_content_and_stop_on_fai
     let queried = client
         .tool(
             "coterm_operation",
-            json!({"name":instance.label,"operationId":operation["operationId"]}),
+            json!({"name":instance.name,"operationId":operation["operationId"]}),
         )
         .await?;
     assert_eq!(queried["structuredContent"]["status"], "completed");
@@ -2989,7 +2989,7 @@ async fn real_mcp_file_tools_and_multiline_exec_preserve_content_and_stop_on_fai
     let metadata = client
         .rpc(
             "tools/call",
-            json!({"name":"coterm_file_read","arguments":{"name":instance.label,"path":path,"metadataOnly":true},"_meta":{"coterm/waitTimeoutMs":5000}}),
+            json!({"name":"coterm_file_read","arguments":{"name":instance.name,"path":path,"metadataOnly":true},"_meta":{"coterm/waitTimeoutMs":5000}}),
         )
         .await?;
     assert_eq!(metadata["structuredContent"]["exists"], "1", "{metadata}");
@@ -3008,7 +3008,7 @@ async fn real_mcp_file_tools_and_multiline_exec_preserve_content_and_stop_on_fai
     let written = client
         .rpc(
             "tools/call",
-            json!({"name":"coterm_file_write","arguments":{"name":instance.label,"path":boundary_path,"content":boundary_content,"timeoutMs":120000},"_meta":{"coterm/waitTimeoutMs":5000}}),
+            json!({"name":"coterm_file_write","arguments":{"name":instance.name,"path":boundary_path,"content":boundary_content,"timeoutMs":120000},"_meta":{"coterm/waitTimeoutMs":5000}}),
         )
         .await?;
     let operation = &written["_meta"]["coterm/operation"];
@@ -3037,7 +3037,7 @@ async fn real_mcp_file_tools_and_multiline_exec_preserve_content_and_stop_on_fai
     let boundary_read = client
         .rpc(
             "tools/call",
-            json!({"name":"coterm_file_read","arguments":{"name":instance.label,"path":boundary_path,"timeoutMs":120000},"_meta":{"coterm/waitTimeoutMs":5000}}),
+            json!({"name":"coterm_file_read","arguments":{"name":instance.name,"path":boundary_path,"timeoutMs":120000},"_meta":{"coterm/waitTimeoutMs":5000}}),
         )
         .await?;
     assert_eq!(boundary_read["structuredContent"]["text"], boundary_content);
@@ -3046,7 +3046,7 @@ async fn real_mcp_file_tools_and_multiline_exec_preserve_content_and_stop_on_fai
             "tools/call",
             json!({
                 "name":"coterm_terminal_command",
-                "arguments":{"name":instance.label,"mode":"exec","commands":[
+                "arguments":{"name":instance.name,"mode":"exec","commands":[
                     format!("cd '{}'\nexport COTERM_VALUE='a b'", remote.replace('\'', "'\\''")),
                     format!("cat <<'EOF' > composed.conf\n{content}EOF"),
                     "printf '\\033[32m%s\\033[0m\\n' \"$COTERM_VALUE\"; printf 'stderr-ok' >&2",
@@ -3078,7 +3078,7 @@ async fn real_mcp_file_tools_and_multiline_exec_preserve_content_and_stop_on_fai
             "tools/call",
             json!({
                 "name":"coterm_terminal_command",
-                "arguments":{"name":instance.label,"mode":"exec","commands":[script]},
+                "arguments":{"name":instance.name,"mode":"exec","commands":[script]},
                 "_meta":{"coterm/waitTimeoutMs":5000}
             }),
         )
@@ -3395,7 +3395,7 @@ async fn file_reads_match_write_capacity_and_reject_escaped_or_oversize_results(
     let ssh = server().await?;
     let (runtime, instance) = load_runtime(&ssh, "file-capacity").await?;
     connect_instance(&runtime, &instance, &ssh).await?;
-    let read = |path: &str| json!({"name":"coterm_file_read","arguments":{"name":instance.label,"path":path,"timeoutMs":5000},"_meta":{"coterm/waitTimeoutMs":5000}});
+    let read = |path: &str| json!({"name":"coterm_file_read","arguments":{"name":instance.name,"path":path,"timeoutMs":5000},"_meta":{"coterm/waitTimeoutMs":5000}});
     let large =
         coterm_mcp::server::call_tool(&runtime, &read("__coterm_file_fixture_large__")).await?;
     assert_eq!(
@@ -3432,7 +3432,7 @@ async fn file_reads_match_write_capacity_and_reject_escaped_or_oversize_results(
         assert!(result.is_err() || result.is_ok_and(|value| value["isError"] == true));
     }
     let too_many_bytes = "界".repeat(FILE_CONTENT_MAX_BYTES / 3 + 1);
-    let invalid_write = coterm_mcp::server::call_tool(&runtime, &json!({"name":"coterm_file_write","arguments":{"name":instance.label,"path":"unused","content":too_many_bytes,"timeoutMs":1000}})).await;
+    let invalid_write = coterm_mcp::server::call_tool(&runtime, &json!({"name":"coterm_file_write","arguments":{"name":instance.name,"path":"unused","content":too_many_bytes,"timeoutMs":1000}})).await;
     assert!(invalid_write.is_err() || invalid_write.is_ok_and(|value| value["isError"] == true));
     assert_eq!(
         coterm_mcp::server::call_tool(&runtime, &read("normal-file")).await?["structuredContent"]
@@ -3457,7 +3457,7 @@ async fn file_deadline_outlives_host_watchdog_without_blocking_status_or_replayi
         session_id: instance.session_id.clone(),
         driver_id: Some(instance.driver_id.clone()),
     };
-    let request = |timeout_ms, wait_ms| json!({"name":"coterm_file_read","arguments":{"name":instance.label,"path":"__coterm_file_fixture_slow__","timeoutMs":timeout_ms},"_meta":{"coterm/waitTimeoutMs":wait_ms}});
+    let request = |timeout_ms, wait_ms| json!({"name":"coterm_file_read","arguments":{"name":instance.name,"path":"__coterm_file_fixture_slow__","timeoutMs":timeout_ms},"_meta":{"coterm/waitTimeoutMs":wait_ms}});
     let short = coterm_mcp::server::call_tool(&runtime, &request(30, 5000)).await?;
     assert_eq!(short["isError"], true, "{short}");
     assert_eq!(
@@ -3472,7 +3472,7 @@ async fn file_deadline_outlives_host_watchdog_without_blocking_status_or_replayi
         Duration::from_secs(2),
         coterm_mcp::server::call_tool(
             &runtime,
-            &json!({"name":"coterm_instances","arguments":{"name":instance.label}}),
+            &json!({"name":"coterm_instances","arguments":{"name":instance.name}}),
         ),
     )
     .await??;
@@ -3522,7 +3522,7 @@ async fn file_cancel_and_disconnect_close_jobs_without_killing_the_driver() -> R
         session_id: instance.session_id.clone(),
         driver_id: Some(instance.driver_id.clone()),
     };
-    let start = json!({"name":"coterm_file_read","arguments":{"name":instance.label,"path":"__coterm_file_fixture_slow__","timeoutMs":30000},"_meta":{"coterm/waitTimeoutMs":0}});
+    let start = json!({"name":"coterm_file_read","arguments":{"name":instance.name,"path":"__coterm_file_fixture_slow__","timeoutMs":30000},"_meta":{"coterm/waitTimeoutMs":0}});
     let pending = coterm_mcp::server::call_tool(&runtime, &start).await?;
     let id = pending["_meta"]["coterm/operation"]["operationId"].clone();
     wait_for_running_file(
@@ -3531,7 +3531,7 @@ async fn file_cancel_and_disconnect_close_jobs_without_killing_the_driver() -> R
         id.as_str().ok_or_else(|| anyhow::anyhow!("No operation"))?,
     )
     .await?;
-    let cancel = coterm_mcp::server::call_tool(&runtime, &json!({"name":"coterm_operation","arguments":{"name":instance.label,"operationId":id,"action":"cancel"}})).await?;
+    let cancel = coterm_mcp::server::call_tool(&runtime, &json!({"name":"coterm_operation","arguments":{"name":instance.name,"operationId":id,"action":"cancel"}})).await?;
     assert_eq!(cancel["structuredContent"]["status"], "unknown", "{cancel}");
     let mut unfinished = Vec::new();
     for _ in 0..3 {
@@ -3543,7 +3543,7 @@ async fn file_cancel_and_disconnect_close_jobs_without_killing_the_driver() -> R
         wait_for_running_file(&runtime, caller.clone(), &id).await?;
         unfinished.push(id);
     }
-    let disconnected = coterm_mcp::server::call_tool(&runtime, &json!({"name":"coterm_connection","arguments":{"name":instance.label,"action":"disconnect"}})).await?;
+    let disconnected = coterm_mcp::server::call_tool(&runtime, &json!({"name":"coterm_connection","arguments":{"name":instance.name,"action":"disconnect"}})).await?;
     assert_eq!(disconnected["isError"], false, "{disconnected}");
     for id in unfinished {
         let record = wait_for_test_operation(&runtime, caller.clone(), &id).await?;

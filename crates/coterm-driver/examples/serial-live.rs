@@ -28,7 +28,7 @@ async fn main() {
         &mut backend,
         "create_instance",
         json!({"instance":{"driverId":"coterm-driver-serial","driverInstanceId":"live",
-                           "sessionId":"cli","label":"Serial","status":"ready"},
+                           "sessionId":"cli","name":"Serial","status":"ready"},
                "config":{"port":port,"baudRate":baud,"dataBits":8,"stopBits":1,"parity":"none"}}),
     )
     .await;

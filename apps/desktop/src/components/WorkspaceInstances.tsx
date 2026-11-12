@@ -24,7 +24,7 @@ interface Props {
   onRestore(configRef: string): void;
   onRestoreWorkspace(workspaceId: string): void;
   onForget(configRef: string): void;
-  onApproval(configRef: string, label: string): void;
+  onApproval(configRef: string, name: string): void;
 }
 
 /** Workspace membership is host metadata; dragging never reconnects a driver. */
@@ -95,14 +95,14 @@ export function WorkspaceInstances(props: Props) {
               aria-current={activeInstanceId === instance.driverInstanceId ? "true" : undefined}
               onClick={() => props.onSelect(instance, group.id)} className="flex h-full min-w-0 flex-1 items-center gap-2 pl-2 pr-1 text-left text-xs">
               <PlugZap size={15} strokeWidth={1.5} className="shrink-0 text-primary" data-driver-icon />
-              <span className="truncate">{instance.label}</span>
+              <span className="truncate">{instance.name}</span>
             </button>
             <div className="flex shrink-0 items-center pr-1 opacity-0 group-hover/instance:opacity-100 group-focus-within/instance:opacity-100">
               <Button type="button" variant="ghost" size="icon" className="size-6" disabled={busy}
-                title={t("Manage {name}", { name: instance.label })} aria-label={t("Manage {name}", { name: instance.label })}
+                title={t("Manage {name}", { name: instance.name })} aria-label={t("Manage {name}", { name: instance.name })}
                 aria-haspopup="dialog" onClick={() => props.onManage(instance)}><MoreHorizontal data-icon="inline-start" /></Button>
               <Button type="button" variant="ghost" size="icon" className="size-6" disabled={busy}
-                title={t("Destroy instance")} aria-label={t("Delete instance {name}", { name: instance.label })}
+                title={t("Destroy instance")} aria-label={t("Delete instance {name}", { name: instance.name })}
                 onClick={() => props.onDestroy(instance)}><Trash2 data-icon="inline-start" /></Button>
             </div>
           </div>;
@@ -113,15 +113,15 @@ export function WorkspaceInstances(props: Props) {
           <button type="button" className="flex min-w-0 flex-1 items-center gap-2 px-2 py-2 text-left text-xs"
             title={t("Restore instance")} disabled={busy} onClick={() => props.onRestore(entry.configRef)}>
             <PlugZap size={15} strokeWidth={1.5} className="shrink-0 text-muted-foreground" data-driver-icon />
-            <span className="min-w-0"><span className="block truncate">{entry.label}</span><span className="block text-[10px] text-muted-foreground">{t("Restore instance")}</span></span>
+            <span className="min-w-0"><span className="block truncate">{entry.name}</span><span className="block text-[10px] text-muted-foreground">{t("Restore instance")}</span></span>
           </button>
           <Button type="button" variant="ghost" size="icon" disabled={busy}
             className="size-6 shrink-0 opacity-0 group-hover/instance:opacity-100 group-focus-within/instance:opacity-100"
-            aria-label={t("Configure approval for {name}", { name: entry.label })} title={t("Instance approval")}
-            onClick={() => props.onApproval(entry.configRef, entry.label)}><ShieldCheck data-icon="inline-start" /></Button>
+            aria-label={t("Configure approval for {name}", { name: entry.name })} title={t("Instance approval")}
+            onClick={() => props.onApproval(entry.configRef, entry.name)}><ShieldCheck data-icon="inline-start" /></Button>
           <Button type="button" variant="ghost" size="icon" disabled={busy}
             className="mr-1 size-6 shrink-0 opacity-0 group-hover/instance:opacity-100 group-focus-within/instance:opacity-100"
-            aria-label={t("Forget {name}", { name: entry.label })} title={t("Forget")} onClick={() => props.onForget(entry.configRef)}><Trash2 data-icon="inline-start" /></Button>
+            aria-label={t("Forget {name}", { name: entry.name })} title={t("Forget")} onClick={() => props.onForget(entry.configRef)}><Trash2 data-icon="inline-start" /></Button>
         </div>)}
         {live.length + pending.length === 0 && <p className="px-2 py-3 text-[11px] text-muted-foreground">{t("Drop instances here")}</p>}
       </div>

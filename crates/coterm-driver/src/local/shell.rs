@@ -153,8 +153,8 @@ impl ResolvedShell {
         })
     }
 
-    /// 稳定标签：Shell 文件名 + 工作目录，界面上只显示这个。
-    pub fn label(&self) -> String {
+    /// 从已解析 Shell 生成默认名称 String；无额外参数且不执行 IO，不返回错误。
+    pub fn default_name(&self) -> String {
         let name = self
             .path
             .file_name()
@@ -202,7 +202,7 @@ mod tests {
             family: ShellFamily::Posix,
             cwd: PathBuf::from("/srv"),
         };
-        assert_eq!(resolved.label(), "bash @ /srv");
+        assert_eq!(resolved.default_name(), "bash @ /srv");
     }
 
     #[test]

@@ -35,7 +35,9 @@ pub struct InstanceInfo {
     pub driver_id: DriverId,
     pub driver_instance_id: DriverInstanceId,
     pub session_id: String,
-    pub label: String,
+    /// 唯一实例名称，桌面显示与 MCP name 路由使用同一个值。
+    #[serde(alias = "label")]
+    pub name: String,
     pub status: InstanceStatus,
 }
 
@@ -45,4 +47,22 @@ pub struct CreateInstance {
     /// 由基座分配；驱动不得自行切换到另一连接。
     pub instance: InstanceInfo,
     pub config: Value,
+}
+
+/// Trim an instance name and return its canonical String.
+/// Empty names, controls and names exceeding the UTF-8 byte budget return instance_name_invalid.
+pub fn normalize_instance_name(name: &str) -> Result<String, super::RuntimeError> {
+    let name = name.trim();
+    if name.is_empty()
+        || name.len() > crate::limits::INSTANCE_NAME_MAX_BYTES
+        || name.chars().any(char::is_control)
+    {
+        return Err(super::RuntimeError {
+            category: super::ErrorCategory::InvalidRequest,
+            code: "instance_name_invalid".into(),
+            message: "Use a nonempty instance name within the UTF-8 byte limit, without control characters.".into(),
+            details: None,
+        });
+    }
+    Ok(name.to_owned())
 }

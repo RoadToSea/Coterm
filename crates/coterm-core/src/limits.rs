@@ -10,3 +10,5 @@ pub const FILE_PATH_MAX_BYTES: usize = 4096;
 /// Fallback execution deadline in milliseconds when the caller omits timeoutMs.
 /// Explicit positive, representable caller deadlines take precedence.
 pub const DEFAULT_FILE_TIMEOUT_MS: u64 = 15_000;
+/// Maximum UTF-8 bytes in the shared desktop and Agent instance name.
+pub const INSTANCE_NAME_MAX_BYTES: usize = 256;

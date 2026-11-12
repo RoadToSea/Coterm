@@ -7,6 +7,7 @@
 | 契约 | 内容与边界 |
 |---|---|
 | HostCommand | CreateInstance、DestroyInstance、Invoke、Approve、Reject、Cancel、InteractionResult、ProvideSecret、Shutdown |
+| InstanceInfo | driverId、driverInstanceId、sessionId、name、status；name 是桌面及 MCP 共用的唯一名称，快照与保存项接口同样输出 name |
 | InvokeRequest | operationId、driverInstanceId、source、effect、operation、args、dispatch；dispatch 为 execute 或 prepare_proposal |
 | DriverNotification | operation_completed、operation_failed 或实例 event；长操作先返回 _cotermDeferred |
 | 延迟交互 | _cotermInteraction 由宿主消费，不存为普通结果；秘密通过专用投递 |
@@ -16,6 +17,8 @@
 | host_attention | version、approvals、interactions；host://attention-changed 只发送版本，不带参数和秘密 |
 
 字段为 camelCase，标签为 snake_case。普通领域结果不占顶层 _coterm* 保留名。显式诊断适配器将这些控制动作映射成逐行 JSON-RPC，解析错误使用标准码、业务错误为 -32000；它不参与产品驱动控制。
+
+显式实例名称去首尾空白后须非空、无控制字符，至多 256 UTF-8 字节；长度边界定义在 core/limits.rs。重名返回 conflict／instance_name_exists，无效名称返回 invalid_request／instance_name_invalid。显式重名不自动改名；省略名称时由驱动提供默认值，运行模块在运行实例范围内消歧，桌面保存前再检查离线占用。旧诊断输入兼容 label，所有运行接口只输出 name。工作区 v5 加密文件内部仍沿用 label 键编码 name，不修改文件结构或版本。
 
 规则组技术字段为 id、name、mode、patterns；模式为 allow_matches／approve_matches。实例保存 approvalRuleGroupId 和 bypass。命令 schema 的 x-coterm-approval-text 指向 /commands 或内部 /text／/script；未声明、无效指针或错误类型不获规则豁免。Rust regex 不支持环视和反向引用，默认任意位置匹配，不解释 Shell 语法。
 

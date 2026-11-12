@@ -351,15 +351,20 @@ async fn create_instance(
     state: tauri::State<'_, AppState>,
 ) -> Result<InstanceInfo, String> {
     let _guard = state.workspace_actions.lock().await;
+    if let Some(name) = name.clone() {
+        workspace_commands::access(&state, move |store| store.ensure_name_available(&name, None))
+            .await
+            .map_err(|error| format!("{}: {}", error.code, error.message))?;
+    }
     let instance = state
         .driver_runtime
         .create_instance_with_name(&driver_id, config.clone(), name)
         .await
         .map_err(|error| format!("{}: {}", error.code, error.message))?;
     let id = instance.driver_instance_id.clone();
-    let label = instance.label.clone();
+    let name = instance.name.clone();
     if let Err(error) = workspace_commands::access(&state, move |store| {
-        store.insert(driver_id, id, label, config, workspace_id)
+        store.insert(driver_id, id, name, config, workspace_id)
     })
     .await
     {

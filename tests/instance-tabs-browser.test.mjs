@@ -5,6 +5,65 @@ import fs from "node:fs";
 import { setAppLocale, assertFreshBuild, findBrowser, openSession, evaluate, waitForValue, startStaticServer } from "./support/browser-harness.mjs";
 import { defaultScenario, makeHostMockSource } from "./support/host-mock.js";
 
+test("instance names reject live and offline duplicates inline and preserve the canonical tab name", async t => {
+  const browserPath = findBrowser();
+  if (!browserPath) { t.skip("No Chrome/Edge binary; instance-name feedback was not verified"); return; }
+  assertFreshBuild();
+  const scenario = structuredClone(defaultScenario);
+  scenario.catalog.issues = [];
+  scenario.workspace = {entries:[
+    {configRef:"live",driverId:"ssh",instanceId:"inst-1",name:"Prod-Server",workspaceId:"default"},
+    {configRef:"offline",driverId:"ssh",instanceId:null,name:"Standby",workspaceId:"default"},
+  ]};
+  const server = await startStaticServer();
+  const session = await openSession({browserPath,totalTimeoutMs:90_000});
+  const {client} = session;
+  const run = source => evaluate(client, source);
+  const wait = expression => waitForValue(client, expression, {label:"instance-name validation"});
+  const setName = value => run(`(() => {
+    const input=document.getElementById('new-instance-name');
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,${JSON.stringify(value)});
+    input.dispatchEvent(new Event('input',{bubbles:true}));
+  })()`);
+  try {
+    await client.send("Page.enable");
+    await client.send("Runtime.enable");
+    await client.send("Page.addScriptToEvaluateOnNewDocument",{source:makeHostMockSource(scenario)});
+    await client.send("Page.navigate",{url:server.url});
+    await wait(`!!document.getElementById('instance-tab-inst-1')`);
+    await run(`document.querySelector('button[aria-label="Manage SSH"]').click()`);
+    await wait(`!!document.getElementById('new-instance-name') && [...document.querySelectorAll('#driver-configuration div')].some(node=>node.shadowRoot?.querySelector('form'))`);
+    await run(`window.nameForm=[...document.querySelectorAll('#driver-configuration div')].find(node=>node.shadowRoot?.querySelector('form')).shadowRoot;
+      nameForm.querySelectorAll('input')[0].value='lab.example';nameForm.querySelectorAll('input')[2].value='tester';`);
+    await setAppLocale(client,"zh-CN");
+    for (const duplicate of [" Prod-Server ","Standby"]) {
+      await setName(duplicate);
+      await wait(`document.getElementById('new-instance-name-error')?.textContent==='已存在同名实例'`);
+      assert.equal(await run(`document.getElementById('new-instance-name').getAttribute('aria-invalid')`),"true");
+      assert.equal(await run(`getComputedStyle(document.getElementById('new-instance-name')).borderTopColor === getComputedStyle(document.getElementById('new-instance-name-error')).color`),true,"the input uses the actual destructive border color");
+      await run(`nameForm.querySelector('form').requestSubmit()`);
+      await wait(`nameForm.querySelector('button[type=submit]').disabled===false`);
+      assert.equal(await run(`__cotermTest.countCalls('create_instance')`),0,"duplicates never reach instance creation");
+    }
+    await setName("new-board");
+    await wait(`document.getElementById('new-instance-name').getAttribute('aria-invalid')==='false'`);
+    await run(`window.creation=__cotermTest.gate('create_instance');nameForm.querySelector('form').requestSubmit()`);
+    await wait(`creation.size()===1`);
+    await run(`creation.fail('instance_name_exists')`);
+    await wait(`document.getElementById('new-instance-name-error')?.textContent==='已存在同名实例'`);
+    assert.equal(await run(`nameForm.querySelector('input').value`),"lab.example","a server-side collision preserves the connection form");
+    await setName(" unique-board ");
+    await wait(`document.getElementById('new-instance-name-error')===null`);
+    await run(`nameForm.querySelector('form').requestSubmit()`);
+    await wait(`!!document.getElementById('instance-tab-created-1')`);
+    assert.equal(await run(`document.getElementById('instance-tab-created-1').textContent`),"unique-board");
+    assert.equal(await run(`__cotermTest.invocations.filter(item=>item.command==='create_instance').at(-1).args.name`),"unique-board");
+  } finally {
+    await session.close();
+    await new Promise(resolve=>server.server.close(resolve));
+  }
+});
+
 test("inline protocol configuration and instance tabs preserve live frontends and separate view/lifecycle actions", async t => {
   const browserPath = findBrowser();
   if (!browserPath) { t.skip("No Chrome/Edge binary; instance tabs were not browser-verified"); return; }
@@ -128,12 +187,12 @@ test("inline protocol configuration and instance tabs preserve live frontends an
 
     // Failed process removes its frontend, exposes recovery, then removal clears its tab.
     await run(`__cotermTest.replaceInstances([
-      {driverId:'ssh',driverInstanceId:'inst-1',sessionId:'sess-1',label:'Prod-Server',status:'ready'},
-      {driverId:'serial',driverInstanceId:'created-2',sessionId:'session-2',label:'COM2',status:'failed'}
+      {driverId:'ssh',driverInstanceId:'inst-1',sessionId:'sess-1',name:'Prod-Server',status:'ready'},
+      {driverId:'serial',driverInstanceId:'created-2',sessionId:'session-2',name:'COM2',status:'failed'}
     ])`);
     await wait(`document.getElementById('instance-panel-created-2')?.textContent.includes('Driver stopped unexpectedly')`, "failed instance recovery");
     assert.equal(await run(`[...document.querySelectorAll('#instance-panel-created-2 div')].some(el=>!!el.shadowRoot)`), false);
-    await run(`__cotermTest.replaceInstances([{driverId:'ssh',driverInstanceId:'inst-1',sessionId:'sess-1',label:'Prod-Server',status:'ready'}])`);
+    await run(`__cotermTest.replaceInstances([{driverId:'ssh',driverInstanceId:'inst-1',sessionId:'sess-1',name:'Prod-Server',status:'ready'}])`);
     await wait(`!document.getElementById('instance-tab-created-2') && document.getElementById('instance-tab-inst-1').getAttribute('aria-selected')==='true'`, "runtime removal selects remaining tab");
     await run(`document.querySelector('button[aria-label="Close view Prod-Server"]').click()`);
     await wait(`document.querySelector('[role=tablist]')===null && document.querySelector('main').textContent.includes('Ready when you are')`, "last tab closed");

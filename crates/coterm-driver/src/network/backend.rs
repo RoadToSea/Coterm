@@ -116,7 +116,7 @@ impl<const TELNET: bool> Backend<TELNET> {
                     bail!("Invalid or duplicate instance (limit: 32)")
                 }
                 let config = Config::parse(create.config, TELNET)?;
-                let label = format!("{}:{}", config.host, config.port);
+                let name = format!("{}:{}", config.host, config.port);
                 self.instances.insert(
                     create.instance.driver_instance_id,
                     Instance {
@@ -127,7 +127,7 @@ impl<const TELNET: bool> Backend<TELNET> {
                         jobs: HashMap::new(),
                     },
                 );
-                Ok(json!({"ok":true,"label":label}))
+                Ok(json!({"ok":true,"name":name}))
             }
             HostCommand::DestroyInstance { driver_instance_id } => {
                 let Some(mut instance) = self.instances.remove(&driver_instance_id) else {

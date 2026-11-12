@@ -28,7 +28,7 @@ async fn create(
     mode: &str,
 ) -> Result<()> {
     backend.request("create_instance", json!({
-        "instance":{"driverId":"coterm-driver-serial","driverInstanceId":"hardware","sessionId":"hardware","label":"Hardware acceptance","status":"ready"},
+        "instance":{"driverId":"coterm-driver-serial","driverInstanceId":"hardware","sessionId":"hardware","name":"Hardware acceptance","status":"ready"},
         "config":{"port":port,"baudRate":baud,"mode":mode,"prompt":prompt,"dtr":false,"rts":false}
     })).await?;
     Ok(())

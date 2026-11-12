@@ -252,7 +252,7 @@ try {
     requiredFeatures: ['instances', 'backend-calls', 'operation-catalog'], optionalFeatures: ['driver-events'],
     limits: { maxControlBytes: 1048576, maxDataChunkBytes: 65536, initialWindow: { chunks: 16, bytes: 1048576 } } });
   await rpc('create_instance', { instance: { driverId: 'coterm-driver-serial', driverInstanceId: 'benchmark',
-    sessionId: 'benchmark', label: 'Throughput benchmark', status: 'ready' },
+    sessionId: 'benchmark', name: 'Throughput benchmark', status: 'ready' },
     config: { port, baudRate: baud, dtr: false, rts: false, mode: 'stream' } });
   await invoke('serial.connect');
   connectionId = (await invoke('serial.status')).connectionId;

@@ -47,7 +47,7 @@ async fn real_device_round_trips_bytes_at_the_configured_baud_rate() -> Result<(
         .request(
             "create_instance",
             json!({"instance":{"driverId":DRIVER_ID,"driverInstanceId":"live",
-                               "sessionId":"live","label":"Serial","status":"ready"},
+                               "sessionId":"live","name":"Serial","status":"ready"},
                    "config":{"port":port,"baudRate":baud,"dataBits":8,"stopBits":1,"parity":"none"}}),
         )
         .await?;

@@ -38,7 +38,7 @@ impl<const TELNET: bool> Harness<TELNET> {
                     driver_id: catalog::driver_id(TELNET).into(),
                     driver_instance_id: id.into(),
                     session_id: format!("session-{id}"),
-                    label: id.into(),
+                    name: id.into(),
                     status: InstanceStatus::Ready,
                 },
                 config,

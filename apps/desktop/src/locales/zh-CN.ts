@@ -169,6 +169,8 @@ export const zhCN: Readonly<Record<string, string>> = {
   "New instance": "新建实例",
   "Configuration (JSON)": "配置（JSON）",
   "Instance name (optional)": "实例名称（可选）",
+  instance_name_exists: "已存在同名实例",
+  instance_name_invalid: "实例名称最多 256 个 UTF-8 字节，且不能包含控制字符。",
   "Leave empty to use the driver default": "留空则使用驱动默认名称",
   "Instance name must be at most 256 UTF-8 bytes and contain no control characters.": "实例名称最多 256 个 UTF-8 字节，且不能包含控制字符。",
   "Create instance": "创建实例",

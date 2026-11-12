@@ -40,7 +40,7 @@ async fn a_running_job_stops_when_cancelled() -> Result<()> {
         .request(HostCommand::CreateInstance(serde_json::from_value(
             json!({
                 "instance":{"driverId":"coterm-driver-local","driverInstanceId":"i1",
-                            "sessionId":"s1","label":"Local","status":"ready"},
+                            "sessionId":"s1","name":"Local","status":"ready"},
                 "config":{"shell": if cfg!(windows) { "cmd.exe" } else { "/bin/sh" }},
             }),
         )?))

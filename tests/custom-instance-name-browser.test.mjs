@@ -38,7 +38,7 @@ test("the shared driver configuration submits a separate custom instance name", 
     const args = await run(`__cotermTest.invocations.find(call => call.command === 'create_instance').args`);
     assert.equal(args.name, "Lab server");
     assert.deepEqual(args.config, { host: "lab.example", port: 22, username: "tester" });
-    assert.equal(await run(`__cotermTest.workspace().entries.find(entry => entry.instanceId === 'created-1').label`), "Lab server");
+    assert.equal(await run(`__cotermTest.workspace().entries.find(entry => entry.instanceId === 'created-1').name`), "Lab server");
   } finally {
     await session.close();
     await new Promise(resolve => server.server.close(resolve));

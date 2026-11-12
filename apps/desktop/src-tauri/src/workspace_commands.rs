@@ -125,7 +125,9 @@ pub async fn restore_saved_instance(
     let _guard = state.workspace_actions.lock().await;
     let reference = config_ref.clone();
     let (entry, policy) = access(&state, move |store| {
-        Ok((store.find(&reference)?, store.approval_policy(&reference)?))
+        let entry = store.find(&reference)?;
+        store.ensure_name_available(&entry.name, Some(&reference))?;
+        Ok((entry, store.approval_policy(&reference)?))
     })
     .await?;
     if let Some(old_id) = &entry.instance_id {
@@ -142,7 +144,7 @@ pub async fn restore_saved_instance(
     }
     let instance = state
         .driver_runtime
-        .create_instance_with_name(&entry.driver_id, entry.config, Some(entry.label))
+        .create_instance_with_name(&entry.driver_id, entry.config, Some(entry.name))
         .await?;
     if let Err(error) = async {
         state
@@ -163,8 +165,8 @@ pub async fn restore_saved_instance(
         return Err(error);
     }
     let id = instance.driver_instance_id.clone();
-    let label = instance.label.clone();
-    if let Err(error) = access(&state, move |store| store.bind(&config_ref, id, label)).await {
+    let name = instance.name.clone();
+    if let Err(error) = access(&state, move |store| store.bind(&config_ref, id, name)).await {
         let _ = state
             .driver_runtime
             .destroy_instance(&instance.driver_instance_id)

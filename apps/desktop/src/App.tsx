@@ -20,6 +20,7 @@ import { ApprovalSettings, type ApprovalTarget } from "./components/host/Approva
 import { Modal } from "./components/ui/Modal";
 import { DriverWorkspace } from "./components/drivers/DriverWorkspace";
 import { DriverConfiguration } from "./components/drivers/DriverConfiguration";
+import { instanceNameErrorCode } from "./instance-name";
 import {
   hostAPI,
   type InstanceInfo,
@@ -207,7 +208,7 @@ export default function App() {
         const instance = await hostAPI.restoreInstance(entry.configRef);
         restored.push(instance.driverInstanceId);
         if (!active || entry.configRef === workspace.layout.activeConfigRef) active = instance.driverInstanceId;
-      } catch (reason) { failures.push(`${entry.label}: ${formatError(reason)}`); }
+      } catch (reason) { failures.push(`${entry.name}: ${formatError(reason)}`); }
     }
     await refresh();
     await refreshWorkspace();
@@ -244,7 +245,7 @@ export default function App() {
       await refreshWorkspace();
       views.open(instance.driverInstanceId);
     } catch (reason) {
-      setError(String(reason));
+      if (!instanceNameErrorCode(reason)) setError(String(reason));
       throw reason;
     } finally {
       setBusyId(null);
@@ -255,7 +256,7 @@ export default function App() {
     if (!approvalInstance || !bypassReady || bypassAction.current) return;
     const instanceId = approvalInstance.driverInstanceId;
     const enabled = !bypass;
-    if (enabled && !window.confirm(t("Enable Bypass for {name}? This instance will skip Coterm approval. Saved instances remember this setting after restart.", { name: approvalInstance.label }))) return;
+    if (enabled && !window.confirm(t("Enable Bypass for {name}? This instance will skip Coterm approval. Saved instances remember this setting after restart.", { name: approvalInstance.name }))) return;
     bypassAction.current = true;
     setBypassBusy(true);
     try {
@@ -313,7 +314,7 @@ export default function App() {
 
   const destroyInstance = async (instance: InstanceInfo) => {
     const result = await promptForConfirmation(`destroy-${instance.driverInstanceId}`, {
-      title: t("Delete instance {name}", { name: instance.label }),
+      title: t("Delete instance {name}", { name: instance.name }),
       prompt: t("This closes the connection and removes its saved restore entry."), allowCancel: true,
     });
     if (result.outcome !== "submitted") return;
@@ -465,7 +466,7 @@ export default function App() {
               onDestroy={instance => void destroyInstance(instance)} onDeleteWorkspace={group => void deleteWorkspace(group)}
               onMove={(ref, groupId) => void moveWorkspaceEntry(ref, groupId)} onRestore={ref => void restoreSavedInstance(ref)}
               onRestoreWorkspace={groupId => void restoreWorkspace(groupId)}
-              onApproval={(configRef, label) => setApprovalTarget({ configRef, label })}
+              onApproval={(configRef, name) => setApprovalTarget({ configRef, name })}
               onForget={ref => { void runDriverAction(ref, () => hostAPI.forgetInstance(ref)); }} />}
             {!loading && instances.length === 0 && (workspace?.entries.length ?? 0) === 0 && (
               <div className="px-5 py-5 text-xs leading-5 text-coterm-text-muted">
@@ -496,6 +497,7 @@ export default function App() {
               </div>
               {selectedDriver.hasFrontend
                 ? <DriverConfiguration key={selectedDriver.id} driverId={selectedDriver.id}
+                    existingNames={[...instances.map(instance => instance.name), ...(workspace?.entries.map(entry => entry.name) ?? [])]}
                     disabled={busyId !== null} onSubmit={(config, name) => createConfiguredInstance(selectedDriver.id, config, name)} />
                 : <p role="status" className="text-sm text-muted-foreground">{t("This driver does not provide a connection configuration screen.")}</p>}
             </div>
@@ -532,7 +534,7 @@ export default function App() {
           <span className="hidden sm:inline" title={t("Bounded operation history is cleared on application exit")}>{t("History: this session")}</span>
           {busyId && <span role="status">{t("Updating…")}</span>}
         </div>
-        <span title={approvalInstance?.label} className={bypass ? "text-warning" : ""}>{bypass ? t("Bypass on") : t("Agent approval on")}</span>
+        <span title={approvalInstance?.name} className={bypass ? "text-warning" : ""}>{bypass ? t("Bypass on") : t("Agent approval on")}</span>
       </footer>
 
       {managedInstance && (
@@ -540,7 +542,7 @@ export default function App() {
           <div className="flex flex-col gap-5">
             {errorNotice}
             <div className="flex items-center justify-between gap-3">
-              <h2 className="min-w-0 truncate text-lg font-medium">{managedInstance.label}</h2>
+              <h2 className="min-w-0 truncate text-lg font-medium">{managedInstance.name}</h2>
               <Badge variant="secondary">{t(managedInstance.status)}</Badge>
             </div>
             <p className="text-xs text-muted-foreground">{t("Driver")}: {drivers.find(driver => driver.id === managedInstance.driverId)?.name ?? managedInstance.driverId}</p>

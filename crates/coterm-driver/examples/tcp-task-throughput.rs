@@ -143,7 +143,7 @@ async fn run(seconds: u64, rate: u64, pause_ms: u64) -> Result<Value> {
             driver_id: "coterm-driver-tcp".into(),
             driver_instance_id: "throughput".into(),
             session_id: "throughput".into(),
-            label: "Throughput".into(),
+            name: "Throughput".into(),
             status: InstanceStatus::Ready,
         },
         config: json!({"host":"127.0.0.1","port":listener.local_addr()?.port(),"mode":"stream"}),

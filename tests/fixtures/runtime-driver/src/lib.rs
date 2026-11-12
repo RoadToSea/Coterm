@@ -118,15 +118,15 @@ impl DriverBackend for Backend {
                 if self.instances.len() >= 128 {
                     return Err(failure("capacity"));
                 }
-                let label = request
+                let name = request
                     .config
-                    .get("label")
+                    .get("name")
                     .and_then(Value::as_str)
                     .unwrap_or("Fixture")
                     .to_owned();
                 self.instances
                     .insert(request.instance.driver_instance_id, request.config);
-                Ok(json!({"label":label}))
+                Ok(json!({"name":name}))
             }
             HostCommand::DestroyInstance { driver_instance_id } => {
                 self.instances.remove(&driver_instance_id);

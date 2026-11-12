@@ -79,7 +79,7 @@ async function runCase(rate, index) {
     let sentFrames = 0, txFrames = 0, eventGaps = 0, cursor = 0, deliveredBytes = 0;
     server = net.createServer(peer => { socket = peer; peer.setNoDelay(true); peer.on("data", bytes => peerReceiver.feed(bytes)); peer.on("error", () => { }); });
     await new Promise((resolve, reject) => { server.once("error", reject); server.listen(0, "127.0.0.1", resolve); });
-    await rpc("create_instance", { instance: { driverId: "coterm-driver-tcp", driverInstanceId: id, sessionId: id, label: id, status: "ready" }, config: { host: "127.0.0.1", port: server.address().port, mode: "stream" } });
+    await rpc("create_instance", { instance: { driverId: "coterm-driver-tcp", driverInstanceId: id, sessionId: id, name: id, status: "ready" }, config: { host: "127.0.0.1", port: server.address().port, mode: "stream" } });
     const accepted = await invoke(id, "connect");
     await waitFor(() => completed.has(accepted._cotermDeferred));
     const connected = completed.get(accepted._cotermDeferred);

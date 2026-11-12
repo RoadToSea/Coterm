@@ -109,8 +109,8 @@ impl Config {
         Ok(())
     }
 
-    /// 稳定的实例标签，基座只做长度校验，不解析字段含义。
-    pub fn label(&self) -> String {
+    /// 从已校验配置生成默认名称 String；无额外参数且不执行 IO，不返回错误。
+    pub fn default_name(&self) -> String {
         format!("{}@{}", self.port.trim(), self.baud_rate)
     }
 }
@@ -879,7 +879,7 @@ mod tests {
     fn config_accepts_device_names_and_unix_nodes_only() {
         let valid = config("COM6");
         assert!(valid.validate().is_ok());
-        assert_eq!(valid.label(), "COM6@115200");
+        assert_eq!(valid.default_name(), "COM6@115200");
         assert!(config("/dev/ttyUSB0").validate().is_ok());
         assert!(config("/dev/serial/by-id/usb-CH340-if00")
             .validate()

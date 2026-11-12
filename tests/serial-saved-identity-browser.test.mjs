@@ -11,11 +11,11 @@ test("desktop forwards saved instance identity across restart, name changes and 
   const scenario = structuredClone(defaultScenario);
   scenario.catalog = { drivers: [{ id: "serial", name: "Serial", version: "0.1.0", hasFrontend: true, running: true }], issues: [] };
   scenario.instances = [
-    { driverId: "serial", driverInstanceId: "runtime-one", sessionId: "session-one", label: "Board A", status: "ready" },
-    { driverId: "serial", driverInstanceId: "runtime-two", sessionId: "session-two", label: "Board B", status: "ready" },
+    { driverId: "serial", driverInstanceId: "runtime-one", sessionId: "session-one", name: "Board A", status: "ready" },
+    { driverId: "serial", driverInstanceId: "runtime-two", sessionId: "session-two", name: "Board B", status: "ready" },
   ];
   scenario.workspace = { entries: scenario.instances.map((instance, index) => ({
-    driverId: "serial", configRef: "saved-" + index, instanceId: instance.driverInstanceId, label: instance.label, workspaceId: "default",
+    driverId: "serial", configRef: "saved-" + index, instanceId: instance.driverInstanceId, name: instance.name, workspaceId: "default",
   })) };
   const server = await startStaticServer();
   const session = await openSession({ browserPath });
@@ -47,8 +47,8 @@ test("desktop forwards saved instance identity across restart, name changes and 
     assert.equal(await run(`serialRoot().querySelector('[name=receiveCompleteLF]').checked`), false,
       "a different saved instance on the same COM port must keep its own display choices");
 
-    scenario.instances[0] = { ...scenario.instances[0], driverInstanceId: "recreated-one", sessionId: "recreated-session", label: "Renamed board" };
-    scenario.workspace.entries[0] = { ...scenario.workspace.entries[0], instanceId: "recreated-one", label: "Renamed board" };
+    scenario.instances[0] = { ...scenario.instances[0], driverInstanceId: "recreated-one", sessionId: "recreated-session", name: "Renamed board" };
+    scenario.workspace.entries[0] = { ...scenario.workspace.entries[0], instanceId: "recreated-one", name: "Renamed board" };
     await client.send("Page.removeScriptToEvaluateOnNewDocument", { identifier: script.identifier });
     script = await client.send("Page.addScriptToEvaluateOnNewDocument", { source: makeHostMockSource(scenario) });
     await client.send("Page.reload");

@@ -23,7 +23,7 @@ pub(super) fn migrate(doc: &mut Document) -> Result<(), RuntimeError> {
             continue;
         }
         let base: String = entry
-            .label
+            .name
             .trim()
             .chars()
             .filter(|character| !character.is_control())

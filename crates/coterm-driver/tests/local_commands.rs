@@ -75,7 +75,7 @@ async fn exercise(cmd: bool) -> Result<()> {
             &mut backend,
             "create_instance",
             json!({"instance":{"driverId":DRIVER_ID,"driverInstanceId":id,
-            "sessionId":id,"label":id,"status":"ready"},"config":{"shell":shell}}),
+            "sessionId":id,"name":id,"status":"ready"},"config":{"shell":shell}}),
         )
         .await?;
     }

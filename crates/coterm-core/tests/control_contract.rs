@@ -60,7 +60,7 @@ fn golden_methods_round_trip_with_camel_case_fields() {
         ("initialize", serde_json::to_value(hello(4096)).unwrap()),
         (
             "create_instance",
-            json!({"instance":{"driverId":"p","driverInstanceId":"i","sessionId":"s","label":"x","status":"starting"},"config":{}}),
+            json!({"instance":{"driverId":"p","driverInstanceId":"i","sessionId":"s","name":"x","status":"starting"},"config":{}}),
         ),
         ("destroy_instance", json!({"driverInstanceId":"i"})),
         (

@@ -254,7 +254,7 @@ async fn in_process_host_runs_a_local_shell_through_the_runtime() -> Result<()> 
     let instance = runtime
         .create_instance(DRIVER_ID, json!({"shell": test_shell()}))
         .await?;
-    assert!(instance.label.contains(" @ "), "{}", instance.label);
+    assert!(instance.name.contains(" @ "), "{}", instance.name);
     let caller = CallerContext {
         source: OperationSource::Human,
         session_id: instance.session_id.clone(),
@@ -692,7 +692,7 @@ async fn backend_rejects_requests_that_break_the_runtime_contract() -> Result<()
 
     fn create(id: &str, driver_id: &str, config: Value) -> HostCommand {
         let value = json!({"instance":{"driverId":driver_id,"driverInstanceId":id,
-                                       "sessionId":"s","label":"Local","status":"ready"},
+                                       "sessionId":"s","name":"Local","status":"ready"},
                            "config":config});
         HostCommand::CreateInstance(serde_json::from_value(value).unwrap())
     }

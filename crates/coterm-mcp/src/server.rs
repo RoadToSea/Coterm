@@ -260,7 +260,7 @@ fn public_tool_name(driver: &str, native: &str) -> String {
 
 fn public_instance(instance: &InstanceInfo) -> Value {
     json!({
-        "name": instance.label,
+        "name": instance.name,
         "driverId": instance.driver_id,
         "status": instance.status,
     })
@@ -433,7 +433,7 @@ pub(crate) async fn resolve_instance_name(
         .list_instances(driver_id)
         .await?
         .into_iter()
-        .filter(|instance| instance.label == name)
+        .filter(|instance| instance.name == name)
         .collect();
     match matches.as_slice() {
         [instance] => Ok(instance.clone()),

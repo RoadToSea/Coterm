@@ -30,7 +30,7 @@ async function harness(t, scenario) {
 
 const twoInstances = () => {
   const scenario = structuredClone(defaultScenario);
-  scenario.instances.push({...scenario.instances[0],driverInstanceId:"inst-2",sessionId:"sess-2",label:"Staging-Server"});
+  scenario.instances.push({...scenario.instances[0],driverInstanceId:"inst-2",sessionId:"sess-2",name:"Staging-Server"});
   return scenario;
 };
 
@@ -83,8 +83,8 @@ test("independent rule groups work without instances and preserve failed saves a
 test("instances share a group, offline bindings are editable, and group updates show every affected instance", async t => {
   const scenario=twoInstances();
   scenario.workspace={approvalRuleGroups:[{id:'shared',name:'Shared rules',mode:'allow_matches',patterns:['^pwd$']},{id:'other',name:'Other rules',mode:'approve_matches',patterns:['reboot']}],
-    entries:[...scenario.instances.map(instance=>({configRef:'ref-'+instance.driverInstanceId,driverId:instance.driverId,label:instance.label,instanceId:instance.driverInstanceId})),
-      {configRef:'offline',driverId:'ssh',label:'Offline board',instanceId:null}]};
+    entries:[...scenario.instances.map(instance=>({configRef:'ref-'+instance.driverInstanceId,driverId:instance.driverId,name:instance.name,instanceId:instance.driverInstanceId})),
+      {configRef:'offline',driverId:'ssh',name:'Offline board',instanceId:null}]};
   const session=await harness(t,scenario);if(!session)return;
   const {run,wait,click}=session;
   const assign=async id=>{await run(`document.getElementById('approval-group-select').value=${JSON.stringify(id)};document.getElementById('approval-group-select').dispatchEvent(new Event('change',{bubbles:true}))`);await click('Save assignment');};
