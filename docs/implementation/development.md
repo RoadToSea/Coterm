@@ -57,6 +57,10 @@ pnpm test:native target/release/coterm-desktop.exe
 
 脚本不传路径时默认 debug 产物，但仍要求 smoke 配置，不能用普通桌面 EXE 代替。细节见[原生脚本](../../scripts/test-native.mjs)和[Windows CI](../../.github/workflows/windows.yml)。
 
+原生验收保留 MCP 客户端的 stdin 打开，再发送窗口关闭请求，分别断言桌面及空闲适配进程在期限内自行退出；强制结束仅用于失败后的清理，不能作为通过证据。Windows 可能在桌面退出时重置 Bridge socket，适配器可按 IO 错误以 1 退出；正常 EOF 为 0。Stdio 进程回归另覆盖服务关闭及不完整帧，见 [stdio.rs](../../crates/coterm-mcp/tests/stdio.rs)。
+
+Windows 构建报删除 EXE 时“拒绝访问（os error 5）”，先检查同一路径是否仍有桌面或 `mcp stdio` 进程占用；关闭窗口不等于外部 MCP 客户端已释放其子进程。确认完整路径、命令行及连接状态后，只结束已断连的旧适配进程，不按名称批量结束桌面或其他终端进程。已运行的旧版本不会因源码修复而自行更新。
+
 Windows 安装包：
 
 ```powershell

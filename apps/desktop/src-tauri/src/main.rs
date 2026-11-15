@@ -739,7 +739,11 @@ fn run_stdio_adapter(args: &[String]) -> i32 {
             return 1;
         }
     };
-    match runtime.block_on(coterm_mcp::stdio::run(args)) {
+    let result = runtime.block_on(coterm_mcp::stdio::run(args));
+    // Tokio stdin can leave an uncancellable blocking read after the bridge closes.
+    // Dropping the runtime would wait for the MCP client to close its input pipe.
+    runtime.shutdown_background();
+    match result {
         Ok(()) => 0,
         Err(error) => {
             eprintln!("Coterm MCP adapter: {error:#}");

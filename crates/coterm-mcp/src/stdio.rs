@@ -52,6 +52,9 @@ pub fn bridge_address(args: &[String], environment: Option<&str>) -> Result<std:
     Ok(address)
 }
 
+/// Relay process stdin/stdout using validated CLI and environment configuration.
+/// Returns connection, framing or IO errors. The process entrypoint must use
+/// nonblocking runtime shutdown because Tokio stdin reads cannot be cancelled.
 pub async fn run(args: &[String]) -> Result<()> {
     let environment = std::env::var(ADDRESS_ENV).ok();
     let address = bridge_address(args, environment.as_deref())?;

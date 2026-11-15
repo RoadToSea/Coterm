@@ -1,3 +1,4 @@
+use anyhow::Context;
 use coterm_core::model::lifecycle::RuntimeLimits;
 use coterm_core::runtime::Runtime;
 use coterm_mcp::{
@@ -105,6 +106,73 @@ async fn bounds_frames_even_without_a_newline() {
     let mut reader = BufReader::new(oversized.as_slice());
     assert!(read_frame(&mut reader).await.is_err());
     assert!(coterm_mcp::server::loopback_address("192.0.2.1:1234").is_err());
+}
+
+#[tokio::test]
+async fn adapter_exits_when_bridge_closes_with_client_stdin_open() -> anyhow::Result<()> {
+    let runtime = Arc::new(Runtime::new(RuntimeLimits {
+        max_control_bytes: 1024 * 1024,
+    }));
+    let bridge = BridgeServer::bind_at(runtime, "127.0.0.1:0".parse()?).await?;
+    let mut child = Command::new(env!("CARGO_BIN_EXE_coterm-mcp-stdio"))
+        .args(["--addr", &bridge.connection_info().address])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()?;
+    let mut input = child.stdin.take().context("stdin missing")?;
+    let mut output = BufReader::new(child.stdout.take().context("stdout missing")?);
+    write_frame(
+        &mut input,
+        &json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{
+            "protocolVersion":"2025-06-18","clientInfo":{"name":"shutdown-test","version":"1"},"capabilities":{}}}),
+    )
+    .await?;
+    let response = timeout(Duration::from_secs(5), read_frame(&mut output))
+        .await??
+        .context("initialize response missing")?;
+    assert_eq!(serde_json::from_slice::<Value>(&response)?["id"], 1);
+    drop(bridge);
+    let status = timeout(Duration::from_secs(2), child.wait())
+        .await
+        .context("adapter did not exit after bridge shutdown while client stdin stayed open")??;
+    assert!(status.success());
+    drop(input);
+    Ok(())
+}
+
+#[tokio::test]
+async fn adapter_reports_bridge_frame_errors_without_waiting_for_client_stdin() -> anyhow::Result<()>
+{
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let mut child = Command::new(env!("CARGO_BIN_EXE_coterm-mcp-stdio"))
+        .args(["--addr", &listener.local_addr()?.to_string()])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()?;
+    let mut input = child.stdin.take().context("stdin missing")?;
+    write_frame(&mut input, &json!({"jsonrpc":"2.0","id":1})).await?;
+    let (socket, _) = timeout(Duration::from_secs(5), listener.accept()).await??;
+    let (reader, mut writer) = socket.into_split();
+    assert!(timeout(
+        Duration::from_secs(5),
+        read_frame(&mut BufReader::new(reader))
+    )
+    .await??
+    .is_some());
+    writer.write_all(b"{").await?;
+    writer.shutdown().await?;
+    let output = timeout(Duration::from_secs(2), child.wait_with_output())
+        .await
+        .context("adapter did not exit after a bridge framing error with client stdin open")??;
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("incomplete MCP frame"));
+    drop(input);
+    Ok(())
 }
 
 #[tokio::test]

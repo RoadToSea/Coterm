@@ -24,6 +24,14 @@ const invoke=(command,args={})=>run(`window.__TAURI_INTERNALS__.invoke(${JSON.st
 const operation=async(id,operation,args={})=>{const result=await invoke("invoke_operation",{driverInstanceId:id,operation,args,waitTimeoutMs:5000});if(result.error)throw new Error(JSON.stringify(result.error));return result.output;};
 const rpc=(method,params={})=>new Promise((resolve,reject)=>{const id=++sequence;const timer=setTimeout(()=>{calls.delete(id);reject(new Error(`MCP ${method} timed out`))},15000);calls.set(id,{resolve,reject,timer});adapter.stdin.write(JSON.stringify({jsonrpc:"2.0",id,method,params})+"\n");});
 const tool=(name,args)=>rpc("tools/call",{name,arguments:args});
+async function closeAppWindow(){
+  const closer=spawn("powershell",["-NoProfile","-NonInteractive","-Command",`Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public class CotermClose { [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr h,uint m,IntPtr w,IntPtr l); }'; $p=Get-Process -Id ${app.pid}; [CotermClose]::PostMessage($p.MainWindowHandle,0x0010,[IntPtr]::Zero,[IntPtr]::Zero) | Out-Null`],{windowsHide:true,stdio:"ignore"});
+  await new Promise(resolve=>closer.on("exit",resolve));
+}
+async function expectExit(child,label,timeoutMs,codes=[0]){
+  for(let elapsed=0;elapsed<timeoutMs&&child.exitCode===null&&child.signalCode===null;elapsed+=50)await delay(50);
+  assert.ok(codes.includes(child.exitCode),`${label} must exit without forced termination; code=${child.exitCode}, signal=${child.signalCode}`);
+}
 async function approve(name,id,toolName,commands){
   const result=await tool(toolName,{name,commands});
   assert.equal(result.structuredContent.status,"pending_approval",JSON.stringify(result));
@@ -115,13 +123,17 @@ try{
     console.log("PASS physical Serial: MCP -> approval UI -> driver -> board -> backend reads; saved Shell restore without reconnect");
   }
   console.log("PASS native in-process drivers, MCP Stdio, approval UI and shared PowerShell state");
+  await closeAppWindow();
+  await expectExit(app,"Desktop after closing its window",10000);
+  // Windows can reset the bridge socket when the desktop exits: EOF is 0, IO error is 1.
+  await expectExit(adapter,"Idle MCP adapter with client stdin still open",5000,[0,1]);
+  console.log(`PASS window close releases the desktop and idle MCP adapter without closing client stdin (adapter code ${adapter.exitCode})`);
 }finally{
   for(const socket of networkPeers)socket.destroy();
   for(const server of networkServers)if(server.listening)await new Promise(resolve=>server.close(resolve));
   adapter?.kill();for(const call of calls.values()){clearTimeout(call.timer);call.reject(new Error("Acceptance ended"));}
   if(app.exitCode===null){
-    const closer=spawn("powershell",["-NoProfile","-NonInteractive","-Command",`Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public class CotermClose { [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr h,uint m,IntPtr w,IntPtr l); }'; $p=Get-Process -Id ${app.pid}; [CotermClose]::PostMessage($p.MainWindowHandle,0x0010,[IntPtr]::Zero,[IntPtr]::Zero) | Out-Null`],{windowsHide:true,stdio:"ignore"});
-    await new Promise(resolve=>closer.on("exit",resolve));for(let i=0;i<200&&app.exitCode===null;i++)await delay(50);if(app.exitCode===null)app.kill();
+    await closeAppWindow();for(let i=0;i<200&&app.exitCode===null;i++)await delay(50);if(app.exitCode===null)app.kill();
   }
   client?.dispose();
   if(path.basename(profile)!=="com.coterm.smoke"||!scratch.startsWith(path.resolve(os.tmpdir())+path.sep))throw new Error("Unexpected cleanup path");

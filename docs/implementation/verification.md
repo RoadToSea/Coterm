@@ -16,7 +16,9 @@
 
 ## 最近有效的软件验收
 
-宿主工作台与主题统一：`pnpm build`、`pnpm test:build` 和完整 `pnpm test` 通过，105 项前端测试通过，无失败、无跳过；`cargo check --workspace --locked` 通过，桌面后端 37 项测试的最终完整回归通过。浏览器覆盖五种驱动配置、串口端口刷新与保存身份、终端／字节视图切换、搜索和快捷键、命令块选择与复制、SSH 任务列表、认证取消／超时／迟到提交、主题／语言／字号原地更新、动态圆角、宽窄窗口与快速卸载后重挂载。明暗主题、设置页和窄审批页已检查截图；`git diff --check` 与文档相对链接检查通过。Rust 回归期间出现过一次工作区容量用例写入失败，单项与整套复跑均通过，未定位原因，见 [feedback](../feedback/known-issues.md)。本次未重跑原生 WebView2、安装包、macOS／Linux 或真实设备验收，范围见[前端待验收项](../feedback/ui-theme-audit.md)。
+退出与构建锁释放：`cargo check --workspace --all-targets --locked`、`cargo test --workspace --locked -- --test-threads=1` 和 `cargo clippy --workspace --all-targets --locked -- -D warnings` 通过，290 项 Rust 测试通过，3 项设备／虚拟串口用例按默认设置 ignored。Stdio 进程测试保持客户端 stdin 打开，覆盖 Bridge 正常关闭及不完整帧错误后自行退出；正常关闭返回 0，帧错误返回 1 且诊断只写 stderr。Windows 隔离 WebView2 验收通过 Local PowerShell、MCP 审批、本机 TCP／Telnet 命令与保存恢复，并以真实关窗请求验证桌面及空闲适配器均自行退出，未以强杀代替断言；该环境中适配器因 socket 重置返回 1。已复现旧适配进程占用 EXE 导致构建删除文件报 os error 5；释放旧进程后普通桌面构建成功，普通 EXE 在 Bridge 断开而 stdin 仍打开时自行退出并返回 0。内置驱动测试夹具与宿主工作台结构一致，不再注入已移除的驱动前端源码。
+
+宿主工作台与主题统一：`pnpm build`、`pnpm test:build` 和完整 `pnpm test` 通过，105 项前端测试通过，无失败、无跳过；`cargo check --workspace --locked` 通过，桌面后端 37 项测试的最终完整回归通过。浏览器覆盖五种驱动配置、串口端口刷新与保存身份、终端／字节视图切换、搜索和快捷键、命令块选择与复制、SSH 任务列表、认证取消／超时／迟到提交、主题／语言／字号原地更新、动态圆角、宽窄窗口与快速卸载后重挂载。明暗主题、设置页和窄审批页已检查截图；`git diff --check` 与文档相对链接检查通过。Rust 回归期间出现过一次工作区容量用例写入失败，单项与整套复跑均通过，未定位原因，见 [feedback](../feedback/known-issues.md)。原生 WebView2 的功能与关闭验收范围见上段；完整原生外观矩阵、安装包、macOS／Linux 或真实设备仍见[前端待验收项](../feedback/ui-theme-audit.md)。
 
 工作区持续保留：`cargo check --workspace`、`cargo clippy --workspace --all-targets -- -D warnings` 与 `cargo test -p coterm-desktop --bin coterm-desktop -- --test-threads=1` 通过，桌面后端 37 项单元测试包含 22 项工作区回归；`pnpm test workspace approval` 的 27 项测试通过且无跳过。隔离夹具覆盖多次重启、仅恢复 A 时离线 B 仍落盘、新建实例不清除旧项、活动保存身份、显式销毁／忘记以及容量已满时内存和加密文件不变；旧版本读取、v5 编码、审批组、Bypass 和写失败回滚同时回归。未覆盖现场保存文件或替换运行中的桌面进程；已被覆盖的旧配置恢复仍见 [feedback](../feedback/known-issues.md)。
 
