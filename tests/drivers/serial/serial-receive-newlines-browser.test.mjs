@@ -11,9 +11,9 @@ test("receive newline settings update xterm, preserve raw bytes and persist per 
   const browserPath = findBrowser();
   if (!browserPath) { t.skip("No Chrome/Edge binary"); return; }
   assertFreshDriverBuild("serial");
-  const artifact = new URL("../../../crates/coterm-driver/dist/serial/frontend/index.js", import.meta.url);
+  const artifact = new URL("../../../apps/desktop/dist/workbenches/serial/index.js", import.meta.url);
   for (const file of ["index.ts"]) {
-    assert.ok(fs.statSync(artifact).mtimeMs >= fs.statSync(new URL(`../../../crates/coterm-driver/frontend/serial/src/${file}`, import.meta.url)).mtimeMs,
+    assert.ok(fs.statSync(artifact).mtimeMs >= fs.statSync(new URL(`../../../apps/desktop/src/workbenches/serial/${file}`, import.meta.url)).mtimeMs,
       "build the Serial frontend before testing");
   }
   const moduleURL = `data:text/javascript;base64,${fs.readFileSync(artifact).toString("base64")}`;
@@ -73,7 +73,7 @@ test("receive newline settings update xterm, preserve raw bytes and persist per 
           },
           async subscribeEvents(fn){window.event=fn;return ()=>{};}
         });
-        window.root=document.body.firstElementChild.shadowRoot;
+        window.root=document.body.firstElementChild;
       };
       window.emit=async text => {window.rawOutput+=text;window.rx+=new TextEncoder().encode(text).length;
         await window.event({name:'serial.output',payload:{text,bytes:new TextEncoder().encode(text).length,cursor:++window.cursor,connectionId:window.connection}});};

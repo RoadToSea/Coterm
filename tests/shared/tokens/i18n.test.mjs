@@ -4,7 +4,7 @@ import fs from "node:fs";
 import { getLocale, resolveLocale, setLocale, subscribeLocale, t, LOCALE_STORAGE_KEY } from "#desktop/src/i18n.ts";
 import { en } from "#desktop/src/locales/en.ts";
 import { zhCN } from "#desktop/src/locales/zh-CN.ts";
-import { createTranslator } from "#driver/frontend/ssh/src/i18n.ts";
+import { createTranslator } from "#desktop/src/workbenches/ssh/i18n.ts";
 
 test("language selection honors a saved preference and otherwise follows the system language", () => {
   assert.equal(resolveLocale("en", ["zh-CN"]), "en");

@@ -128,9 +128,9 @@ if (targets.length === 0) {
 // Automatically ensure shared browser module and host interaction artifacts exist if running browser tests
 const needsBrowserBuild = targets.some(isBrowserTest);
 if (needsBrowserBuild) {
-  const sharedModule = path.join(rootDir, "apps/shared/dist/browser/block-list.js");
+  const sharedModule = path.join(rootDir, "apps/desktop/dist/shared-ui/index.js");
   if (!fs.existsSync(sharedModule)) {
-    console.log("[test-runner] apps/shared/dist/browser/block-list.js is missing, building...");
+    console.log("[test-runner] apps/desktop/dist/shared-ui/index.js is missing, building...");
     const { execSync } = await import("node:child_process");
     execSync("node scripts/build-shared-browser.mjs", { cwd: rootDir, stdio: "inherit" });
   }
@@ -140,6 +140,10 @@ if (needsBrowserBuild) {
     console.log("[test-runner] apps/desktop/dist/host-interactions/entry.js is missing, building...");
     const { execSync } = await import("node:child_process");
     execSync("node scripts/build-host-interactions-entry.mjs", { cwd: rootDir, stdio: "inherit" });
+  }
+  if (["local", "ssh", "serial", "tcp", "telnet"].some(kind => !fs.existsSync(path.join(rootDir, "apps/desktop/dist/workbenches", kind, "index.js")))) {
+    const { execSync } = await import("node:child_process");
+    execSync("node scripts/build-workbench-tests.mjs", { cwd: rootDir, stdio: "inherit" });
   }
 }
 
@@ -151,7 +155,7 @@ for (const t of relTargets) {
 
 const child = spawn(
   process.execPath,
-  ["--import", "./scripts/test-ts-loader.mjs", "--test", ...relTargets],
+  ["--import", "./scripts/test-ts-loader.mjs", "--test", "--test-concurrency=4", ...relTargets],
   {
     cwd: rootDir,
     stdio: "inherit",

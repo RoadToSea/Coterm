@@ -9,17 +9,17 @@ test("human Shell uses terminal keys, UART uses its sender, and MCP queues stay 
   const browserPath = findBrowser();
   if (!browserPath) { t.skip("No Chrome/Edge binary; serial terminal UI was not verified"); return; }
   assertFreshDriverBuild("serial");
-  const artifact = new URL("../../../crates/coterm-driver/dist/serial/frontend/index.js", import.meta.url);
+  const artifact = new URL("../../../apps/desktop/dist/workbenches/serial/index.js", import.meta.url);
   const built = fs.statSync(artifact).mtimeMs;
-  assert.ok(built >= fs.statSync(new URL("../../../apps/shared/components/terminal-shortcuts.ts", import.meta.url)).mtimeMs,
+  assert.ok(built >= fs.statSync(new URL("../../../apps/desktop/src/workbenches/common/terminal-shortcuts.ts", import.meta.url)).mtimeMs,
     "rebuild the serial frontend after changing shared terminal shortcuts");
-  assert.ok(built >= fs.statSync(new URL("../../../apps/shared/components/terminal-search.ts", import.meta.url)).mtimeMs,
+  assert.ok(built >= fs.statSync(new URL("../../../apps/desktop/src/workbenches/common/terminal-search.ts", import.meta.url)).mtimeMs,
     "rebuild the serial frontend after changing terminal search");
-  assert.ok(built >= fs.statSync(new URL("../../../apps/shared/components/toasts.ts", import.meta.url)).mtimeMs,
+  assert.ok(built >= fs.statSync(new URL("../../../apps/desktop/src/workbenches/common/toasts.tsx", import.meta.url)).mtimeMs,
     "rebuild the serial frontend after changing shared notices");
   for (const file of ["index.ts", "console-settings.ts"]) {
-    assert.ok(built >= fs.statSync(new URL(`../../../crates/coterm-driver/frontend/serial/src/${file}`, import.meta.url)).mtimeMs,
-      "run pnpm --filter coterm-driver-serial-ui build before the serial browser test");
+    assert.ok(built >= fs.statSync(new URL(`../../../apps/desktop/src/workbenches/serial/${file}`, import.meta.url)).mtimeMs,
+      "run pnpm test:build before the serial browser test");
   }
   const moduleURL = `data:text/javascript;base64,${fs.readFileSync(artifact).toString("base64")}`;
   const session = await openSession({ browserPath, totalTimeoutMs: 60_000 });
@@ -107,12 +107,12 @@ test("human Shell uses terminal keys, UART uses its sender, and MCP queues stay 
       };
       const module = await import(${JSON.stringify(moduleURL)});
       window.frontend = module.mount(document.body, window.api);
-      window.root = document.body.firstElementChild.shadowRoot;
+      window.root = document.body.firstElementChild;
       window.writes = () => window.calls.filter(c => c.operation === 'serial.write' || c.operation === 'serial.write_hex');
       window.sendUart = () => root.querySelector('.uart-send textarea').dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}));
       window.raw = () => window.writes().map(c => c.args.text ?? '').join('');
     })()`);
-    await waitForValue(client, `root.querySelector('.connect-button').dataset.connected === 'true' && root.activeElement?.classList.contains('xterm-helper-textarea')`);
+    await waitForValue(client, `root.querySelector('.connect-button').dataset.connected === 'true' && document.activeElement?.classList.contains('xterm-helper-textarea')`);
     assert.equal(await run(`root.querySelector('.send') === null`), true, "Shell has no list editor or send toolbar");
     assert.equal(await run(`root.querySelector('.panel:not([hidden]) textarea:not(.xterm-helper-textarea)') === null`), true);
     assert.equal(await run(`root.querySelector('.uart').hidden`), true);
@@ -166,7 +166,7 @@ test("human Shell uses terminal keys, UART uses its sender, and MCP queues stay 
     assert.ok(Math.abs(overlayBounds.top) < 1 && overlayBounds.bottom);
     await key("Escape", "Escape", 27);
     assert.equal(await run(`root.querySelector('.settings-panel').inert`), true);
-    assert.equal(await run(`root.activeElement.className`), "settings-toggle");
+    assert.equal(await run(`document.activeElement.classList.contains('settings-toggle')`), true);
 
     // 快捷栏晃动调整、拖到垃圾桶移除与默认恢复只影响界面，不产生协议操作。
     assert.equal(await run(`root.querySelector('.connection-label,.state,.apply-settings,.receive-settings,.send-format-select,.uart-send .primary') === null`), true);
@@ -228,7 +228,7 @@ test("human Shell uses terminal keys, UART uses its sender, and MCP queues stay 
     }`);
     assert.equal(await run(`root.querySelectorAll('.toolbar-item:not([hidden])').length`), 0);
     assert.equal(await run(`root.querySelectorAll('.toolbar-removed button').length`), 7, 'removed controls can always be restored');
-    assert.equal(await run(`root.activeElement.className`), 'toolbar-done');
+    assert.equal(await run(`document.activeElement.classList.contains('toolbar-done')`), true);
     await run(`root.querySelector('.toolbar-reset').click(); root.querySelector('.toolbar-done').click()`);
     assert.deepEqual(await run(`[...root.querySelector('.uart-bar').children].map(el=>el.dataset.control)`),
       ['format','timestamps','autoscroll','pause','clear','save','stats']);
@@ -298,7 +298,7 @@ test("human Shell uses terminal keys, UART uses its sender, and MCP queues stay 
       await window.event({name:'serial.command',payload:{connectionId:'conn',txBytes:99,finished:true}});
     })()`);
     await run(`root.querySelectorAll('.modes button')[0].click()`);
-    await waitForValue(client, `root.querySelector('.uart').hidden&&!root.querySelector('.connect-button').disabled&&root.activeElement?.classList.contains('xterm-helper-textarea')`);
+    await waitForValue(client, `root.querySelector('.uart').hidden&&!root.querySelector('.connect-button').disabled&&document.activeElement?.classList.contains('xterm-helper-textarea')`);
     await client.send("Input.insertText", { text: "ok" });
     await waitForValue(client, `window.writes().length > ${count}`);
     assert.equal(await run(`window.writes().at(-1).args.text`), "ok", "human input resumes after MCP finishes");

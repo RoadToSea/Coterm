@@ -8,7 +8,7 @@ for (const protocol of ["tcp","telnet"]) {
   test(`${protocol} uses the shared workbench with explicit connect, epochs and disposable status recovery`,async t => {
     const browserPath=findBrowser(); if (!browserPath) {t.skip("No Chrome/Edge binary");return;}
     assertFreshDriverBuild(protocol);
-    const artifact=new URL(`../../../crates/coterm-driver/dist/${protocol}/frontend/index.js`, import.meta.url);
+    const artifact=new URL(`../../../apps/desktop/dist/workbenches/${protocol}/index.js`, import.meta.url);
     const moduleURL=`data:text/javascript;base64,${fs.readFileSync(artifact).toString("base64")}`;
     const session=await openSession({browserPath,totalTimeoutMs:45000});const {client}=session;
     const run=source=>evaluate(client,source),wait=source=>waitForValue(client,source);
@@ -32,7 +32,7 @@ for (const protocol of ["tcp","telnet"]) {
         window.calls=[];window.submitted=[];window.saved=[];window.listeners=new Set();
         window.i18n={locale:'zh-CN',subscribe(fn){listeners.add(fn);return()=>listeners.delete(fn)}};
         window.view=module.configure(document.body,{i18n,submit:async config=>submitted.push(config)});
-        window.root=document.body.firstElementChild.shadowRoot;
+        window.root=document.body.firstElementChild;
       })()`);
       assert.equal(await run(`root.querySelector('[name=port]').value`),protocol==="telnet"?"23":"8080");
       assert.equal(await run(`!!root.querySelector('[name=username]')`),protocol==="telnet");
@@ -45,9 +45,9 @@ for (const protocol of ["tcp","telnet"]) {
       assert.ok((await run(`root.querySelector('[name=host]').title`)).includes(protocol==='telnet'?'Telnet is unencrypted':'Raw TCP sends exact bytes'));
       assert.ok((await run(`root.querySelector('[name=prompt]').getAttribute('aria-description')`)).includes('Shell reads require terminal mode'));
       await run(`i18n.locale='zh-CN';for(const listener of listeners)listener()`);
-      await run(`root.querySelector('[name=host]').value='127.0.0.1';root.querySelector('[name=proxyType]').value='http';root.querySelector('[name=proxyType]').dispatchEvent(new Event('change',{bubbles:true}));root.querySelector('[name=proxyHost]').value='localhost';root.querySelector('[name=proxyPort]').value='8081'`);
+      await run(`root.querySelector('[name=host]').value='127.0.0.1';root.querySelector('[name="proxy.type"]').value='http';root.querySelector('[name="proxy.type"]').dispatchEvent(new Event('change',{bubbles:true}));root.querySelector('[name="proxy.host"]').value='localhost';root.querySelector('[name="proxy.port"]').value='8081'`);
       await screenshot("configuration");
-      await run(`root.querySelector('form').dispatchEvent(new Event('submit',{cancelable:true}))`);
+      await run(`root.querySelector('form').dispatchEvent(new Event("submit",{cancelable:true,bubbles:true}))`);
       await wait(`submitted.length===1`);
       assert.deepEqual(await run(`submitted[0].proxy`),{type:"http",host:"localhost",port:8081});
       assert.equal(await run(`'password' in submitted[0]`),false);
@@ -69,7 +69,7 @@ for (const protocol of ["tcp","telnet"]) {
             if(name==='resize'||name==='set_selection')return receipt({ok:true});
             throw new Error('Unexpected operation '+operation);
           }};
-        window.mount=()=>{window.view=module.mount(document.body,api);window.root=document.body.firstElementChild.shadowRoot};mount();`);
+        window.mount=()=>{window.view=module.mount(document.body,api);window.root=document.body.firstElementChild};mount();`);
       await wait(`!root.querySelector('.connect-button').disabled`);
       assert.equal(await run(`calls.some(call=>call.operation===protocol+'.connect')`),false,"mounting never connects");
       if (protocol==="tcp") {
@@ -139,7 +139,7 @@ for (const protocol of ["tcp","telnet"]) {
       await run(`document.body.style.width='360px';if(root.querySelector('.settings-toggle').getAttribute('aria-expanded')!=='true')root.querySelector('.settings-toggle').click()`);
       await wait(`root.querySelector('.settings-panel').getAttribute('aria-hidden')==='false'`);
       await screenshot("narrow");
-      assert.equal(await run(`root.querySelector('.settings-panel').scrollWidth<=360`),true);
+      await wait(`root.querySelector('.settings-panel').scrollWidth<=360`);
       await run(`view.unmount();window.afterUnmount=calls.length`);
       assert.equal(await run(`unsubscribed`),1);
       assert.equal(await run(`listeners.size`),0);

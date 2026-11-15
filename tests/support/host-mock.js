@@ -14,24 +14,24 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
-const sshFrontendBundlePath = path.join(rootDir, "crates/coterm-driver/dist/ssh/frontend/index.js");
+const sshFrontendBundlePath = path.join(rootDir, "apps/desktop/dist/workbenches/ssh/index.js");
 const sshFrontendSource = fs.existsSync(sshFrontendBundlePath)
   ? fs.readFileSync(sshFrontendBundlePath, "utf8")
   : null;
-const serialFrontendBundlePath = path.join(rootDir, "crates/coterm-driver/dist/serial/frontend/index.js");
+const serialFrontendBundlePath = path.join(rootDir, "apps/desktop/dist/workbenches/serial/index.js");
 const serialFrontendSource = fs.existsSync(serialFrontendBundlePath)
   ? fs.readFileSync(serialFrontendBundlePath, "utf8") : null;
 
 /**
  * 真实共享前端模块的 ES 源码，供页面以动态 import 加载。
- * 由 scripts/build-shared-browser.mjs 从 `apps/shared/components/block-list.ts` 生成；
+ * 由 scripts/build-shared-browser.mjs 从宿主 React 工作台生成；
  * 缺失时直接报错，绝不回退到手工替身。
  */
 export function sharedModuleSource() {
-  const modulePath = path.join(rootDir, "apps/shared/dist/browser/block-list.js");
+  const modulePath = path.join(rootDir, "apps/desktop/dist/shared-ui/index.js");
   if (!fs.existsSync(modulePath)) {
     throw new Error(
-      `apps/shared/dist/browser/block-list.js is missing; run "pnpm test:build"`,
+      `apps/desktop/dist/shared-ui/index.js is missing; run "pnpm test:build"`,
     );
   }
   return fs.readFileSync(modulePath, "utf8");
@@ -171,7 +171,7 @@ export function makeHostMockSource(initial) {
       },
       /** 真实共享前端组件的动态 import；不用页面里的任何手写替身。 */
       async loadShared() {
-        return import("/__shared/block-list.js");
+        return import("/__shared/index.js");
       },
       /** 真实 SSH 前端的构建产物源码，供隔离 iframe 自行 import。 */
       sshFrontendSource() {

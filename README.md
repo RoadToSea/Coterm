@@ -10,7 +10,6 @@
 
 ```bash
 pnpm install --frozen-lockfile
-pnpm drivers:build
 pnpm tauri:dev
 ```
 
@@ -22,7 +21,7 @@ Windows 安装包：`pnpm tauri:build --bundles nsis`。创建或恢复实例后
 - `crates/coterm-core`：共享数据模型、实例运行时、审批、操作记录和终端工具。
 - `crates/coterm-driver`：SSH、串口、本地终端、Telnet 和 Raw TCP 的内部模块，共用一个 Rust 库。
 - `crates/coterm-mcp`：MCP 工具映射、Bridge 与 Stdio 接入。
-- `apps/shared`：桌面与内置驱动共用的前端类型和交互组件。
+- `apps/shared`：应用内部前端类型契约；React 工作台与交互组件位于 `apps/desktop/src/workbenches`。
 - `scripts`：构建、打包和本机验收脚本。
 - `tests`：跨模块测试、测试夹具与浏览器验收；布局截图输出到忽略目录 `.agent-debug/layout/`。
 - `docs`：按需求、技术实现、feedback、对外 API 分类，入口见 [文档导航](docs/README.md)。

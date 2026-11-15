@@ -26,7 +26,7 @@ test("desktop forwards saved instance identity across restart, name changes and 
     await wait(`!!document.querySelector('[data-instance-id="${id}"] > button')`);
     await run(`document.querySelector('[data-instance-id="${id}"] > button').click();
       window.serialRoot=()=>Array.from(document.querySelector('[role=tabpanel]:not([hidden])').querySelectorAll('div'))
-        .map(el=>el.shadowRoot).find(root=>root?.querySelector('.connect-button'));`);
+        .map(el=>el).find(root=>root?.querySelector('.connect-button'));`);
     await wait(`window.serialRoot()?.querySelector('.connect-button').dataset.connected==='true'`);
   };
   try {
@@ -37,7 +37,7 @@ test("desktop forwards saved instance identity across restart, name changes and 
     await client.send("Page.navigate", { url: server.url });
     await wait(`!!document.querySelector('[data-instance-id="runtime-one"] > button') && workspaceGate.size()===1`);
     await run(`document.querySelector('[data-instance-id="runtime-one"] > button').click()`);
-    assert.equal(await run(`Array.from(document.querySelectorAll('main div')).some(el=>el.shadowRoot?.querySelector('.xterm'))`), false,
+    assert.equal(await run(`Array.from(document.querySelectorAll('main div')).some(el=>el?.querySelector('.xterm'))`), false,
       "wait for saved identity before mounting; a late workspace response must not discard an edited frontend");
     await run(`workspaceGate.release(__cotermTest.workspace())`);
     await open("runtime-one");

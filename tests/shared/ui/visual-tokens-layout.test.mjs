@@ -6,8 +6,8 @@ import path from "node:path";
 const rootDir = process.cwd();
 const indexCssPath = path.join(rootDir, "apps/desktop/src/index.css");
 const tailwindConfigPath = path.join(rootDir, "apps/desktop/tailwind.config.js");
-const sshDriverPath = path.join(rootDir, "crates/coterm-driver/frontend/ssh/src/index.ts");
-const blockListPath = path.join(rootDir, "apps/shared/components/block-list.ts");
+const sshDriverPath = path.join(rootDir, "apps/desktop/src/workbenches/ssh/index.ts");
+const blockListPath = path.join(rootDir, "apps/desktop/src/workbenches/common/block-list.tsx");
 const appTsxPath = path.join(rootDir, "apps/desktop/src/App.tsx");
 
 test("Desktop CSS defines required semantic tokens in :root", () => {
@@ -49,56 +49,12 @@ test("Tailwind configuration maps coterm semantic tokens to CSS custom propertie
   assert.ok(tailwindContent.includes('"var(--coterm-font-sans)"'));
 });
 
-test("SSH Driver Shadow DOM styles use semantic tokens with readable fallbacks", () => {
-  const sshContent = fs.readFileSync(sshDriverPath, "utf8");
-
-  // Extract the css template literal
-  const match = sshContent.match(/const css = `([\s\S]*?)`;/);
-  assert.ok(match, "CSS template literal must exist in SSH driver frontend");
-  const shadowCss = match[1];
-
-  // Check that custom properties are used
-  assert.ok(shadowCss.includes("var(--coterm-text-primary, #cccccc)"));
-  assert.ok(shadowCss.includes("var(--coterm-font-sans,"));
-  assert.ok(shadowCss.includes("var(--coterm-surface, #1e1e1e)"));
-  assert.ok(shadowCss.includes("var(--coterm-accent, #0e639c)"));
-  assert.ok(shadowCss.includes("var(--coterm-border-input, #454545)"));
-  assert.ok(shadowCss.includes("var(--coterm-danger, #f48771)"));
-  assert.ok(shadowCss.includes("var(--coterm-focus, #007fd4)"));
-
-  // Verify that all var(--coterm-*) usages contain a comma and fallback
-  const varMatches = shadowCss.match(/var\(--coterm-[^)]+\)/g) || [];
-  assert.ok(varMatches.length > 5, "Expected multiple semantic var() references");
-  for (const varCall of varMatches) {
-    assert.ok(
-      varCall.includes(","),
-      `Token usage ${varCall} in Shadow DOM must provide a fallback value`
-    );
-  }
-});
-
-test("Shared frontend block-list component styles use semantic tokens with fallbacks", () => {
-  const blockListContent = fs.readFileSync(blockListPath, "utf8");
-
-  const match = blockListContent.match(/const style = `([\s\S]*?)`;/);
-  assert.ok(match, "Style template literal must exist in block-list.ts");
-  const blockCss = match[1];
-
-  assert.ok(blockCss.includes("var(--coterm-text-primary, #cccccc)"));
-  assert.ok(blockCss.includes("var(--coterm-surface, #1e1e1e)"));
-  assert.ok(blockCss.includes("var(--coterm-surface-hover, #2a2d2e)"));
-  assert.ok(blockCss.includes("var(--coterm-accent-active, #094771)"));
-  assert.ok(blockCss.includes("var(--coterm-accent-glow, #3794ff)"));
-  assert.ok(blockCss.includes("var(--coterm-danger, #f48771)"));
-
-  const varMatches = blockCss.match(/var\(--coterm-[^)]+\)/g) || [];
-  assert.ok(varMatches.length > 5, "Expected multiple semantic var() references in block-list");
-  for (const varCall of varMatches) {
-    assert.ok(
-      varCall.includes(","),
-      `Token usage ${varCall} in block-list must provide a fallback value`
-    );
-  }
+test("Host workbench styles share semantic tokens without theme-specific fallbacks", () => {
+  const css = fs.readFileSync(path.join(rootDir,'apps/desktop/src/workbenches/workbenches.css'),'utf8');
+  for(const token of ['--coterm-text-primary','--coterm-surface','--coterm-focus','--radius-md']) assert.ok(css.includes(`var(${token})`));
+  assert.doesNotMatch(css, /#[0-9a-f]{3,8}\b|rgba?\(/i);
+  assert.doesNotMatch(fs.readFileSync(sshDriverPath,'utf8'), /attachShadow|const css/);
+  assert.doesNotMatch(fs.readFileSync(blockListPath,'utf8'), /attachShadow|const style =/);
 });
 
 test("App.tsx implements responsive navigation collapse and accessible controls", () => {

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { hostAPI } from "../../host-api";
 import { useI18n } from "../../use-i18n";
 import { Button } from "../ui/button";
+import { Input } from "../ui/input";
 import type { McpSettingsController } from "./use-mcp-settings";
 
 export function McpPortSetting({ mcp }: { mcp: McpSettingsController }) {
@@ -30,8 +31,7 @@ export function McpPortSetting({ mcp }: { mcp: McpSettingsController }) {
   return <form className="flex w-64 max-w-full flex-col gap-2" noValidate data-invalid={Boolean(error)}
     data-disabled={busy || !status} onSubmit={event => { event.preventDefault(); void save(); }}>
     <div className="flex gap-2">
-      <input id="mcp-port" type="number" inputMode="numeric" min="1" max="65535" step="1"
-        className="h-9 w-full min-w-0 rounded-md border border-input bg-background px-3 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring"
+      <Input id="mcp-port" type="number" inputMode="numeric" min="1" max="65535" step="1"
         value={draft} disabled={busy || !status} aria-label={t("MCP port")} aria-invalid={Boolean(error)}
         aria-describedby={error ? "mcp-settings-error" : undefined}
         onChange={event => { setDraft(event.target.value); setError(""); setSaved(false); }} />

@@ -8,11 +8,10 @@
 
 ```powershell
 pnpm install --frozen-lockfile
-pnpm drivers:build
 pnpm tauri:dev
 ```
 
-仅前端开发用 pnpm dev；桌面前端生产构建用 pnpm build。修改驱动前端后重新构建对应驱动或运行 pnpm drivers:build，再重编桌面。后端由 coterm-driver 库链接，五个前端和声明嵌入桌面 EXE，运行用户不需要仓库、Node、Rust 或独立 driver.exe。
+仅前端开发用 pnpm dev；宿主与五种工作台统一由 pnpm build 构建，Tauri 开发／打包命令自动调用对应前端入口。后端由 coterm-driver 库链接，配置元数据由宿主静态导入；不再构建或嵌入五套独立前端源码。运行用户不需要仓库、Node、Rust 或独立 driver.exe。
 
 ## 软件检查
 
@@ -20,8 +19,8 @@ pnpm tauri:dev
 cargo check --workspace --all-targets --locked
 cargo test --workspace --locked
 cargo clippy --workspace --all-targets --locked -- -D warnings
-pnpm drivers:build
 pnpm build
+pnpm test:build
 pnpm test
 git diff --check
 ```
@@ -35,7 +34,7 @@ git diff --check
 - 共享组件与样式回归：`pnpm test shared`、`pnpm test ui`
 - 单文件测试：`pnpm test <用例相对路径>`（例如 `pnpm test tests/shared/tokens/theme.test.mjs`）
 
-浏览器测试需要 Chrome／Edge／Chromium，可用 CHROME_BIN 或 EDGE_BIN 指定。跳过浏览器或真实硬件用例不等于通过。pnpm test 会构建共享测试入口，但不能替代五个驱动前端和桌面前端构建。
+浏览器测试需要 Chrome／Edge／Chromium，可用 CHROME_BIN 或 EDGE_BIN 指定。跳过浏览器或真实硬件用例不等于通过。先运行 pnpm build 和 pnpm test:build，再执行 pnpm test。测试构建生成同一宿主组件的夹具入口，不参与产品打包；测试调度器只补建缺失夹具，旧产物仍由新鲜度检查拒绝。
 
 | 需求范围 | 定向入口 |
 |---|---|

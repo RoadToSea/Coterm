@@ -7,9 +7,9 @@ import { findBrowser, openSession, evaluate, waitForValue } from "#support/brows
 test("echoed human terminal commands create selectable blocks", async t => {
   const browserPath = findBrowser();
   if (!browserPath) { t.skip("No browser available"); return; }
-  const artifact = new URL("../../../crates/coterm-driver/dist/ssh/frontend/index.js", import.meta.url);
+  const artifact = new URL("../../../apps/desktop/dist/workbenches/ssh/index.js", import.meta.url);
   for (const file of ["index.ts", "human-commands.ts", "observed-boundaries.ts"]) {
-    assert.ok(fs.statSync(artifact).mtimeMs >= fs.statSync(new URL("../../../crates/coterm-driver/frontend/ssh/src/" + file, import.meta.url)).mtimeMs, "build SSH first");
+    assert.ok(fs.statSync(artifact).mtimeMs >= fs.statSync(new URL("../../../apps/desktop/src/workbenches/ssh/" + file, import.meta.url)).mtimeMs, "build SSH first");
   }
   const moduleURL = "data:text/javascript;base64," + fs.readFileSync(artifact).toString("base64");
   const session = await openSession({ browserPath, totalTimeoutMs: 30000 });
@@ -75,7 +75,7 @@ test("echoed human terminal commands create selectable blocks", async t => {
       const module = await import(${JSON.stringify(moduleURL)});
       window.mount = () => {
         window.frontend = module.mount(document.body, api);
-        window.root = document.body.firstElementChild.shadowRoot;
+        window.root = document.body.firstElementChild;
         window.gutters = () => [...root.querySelectorAll('.coterm-terminal-number')];
       };
       window.mount();

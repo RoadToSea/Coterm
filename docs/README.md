@@ -22,6 +22,7 @@ Coterm 面向人类与 Agent 协同操作终端和连接设备，支持 SSH、�
 ## 技术实现与验收
 
 - [内部契约](implementation/contracts.md)：宿主、驱动、前端的控制、配置和容量限制。
+- [前端设计约束](implementation/frontend.md)：几何形状、圆角阶梯、主题变量与组件实现规范。
 - [开发与验收](implementation/development.md)：构建、测试、硬件测速、发行与调试清理。
 - [实现与验收状态](implementation/verification.md)：已有能力、已通过的检查及实际覆盖范围。
 

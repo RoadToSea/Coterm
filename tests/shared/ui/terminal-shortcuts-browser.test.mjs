@@ -10,14 +10,14 @@ for (const protocol of ["serial", "ssh"]) {
     const browserPath = findBrowser();
     if (!browserPath) { t.skip("No Chrome/Edge binary; terminal shortcuts were not browser-verified"); return; }
     assertFreshDriverBuild(protocol);
-    const artifact = new URL(`../../../crates/coterm-driver/dist/${protocol}/frontend/index.js`, import.meta.url);
+    const artifact = new URL(`../../../apps/desktop/dist/workbenches/${protocol}/index.js`, import.meta.url);
     const built = fs.statSync(artifact).mtimeMs;
     for (const source of [
-      new URL(`../../../crates/coterm-driver/frontend/${protocol}/src/index.ts`, import.meta.url),
-      ...(protocol === "ssh" ? [new URL("../../../crates/coterm-driver/frontend/ssh/src/i18n.ts", import.meta.url)] : []),
-      new URL("../../../apps/shared/components/terminal-shortcuts.ts", import.meta.url),
-      new URL("../../../apps/shared/components/terminal-search.ts", import.meta.url),
-      ...(protocol === "ssh" ? [new URL("../../../apps/shared/components/terminal-blocks.ts", import.meta.url)] : []),
+      new URL(`../../../apps/desktop/src/workbenches/${protocol}/index.ts`, import.meta.url),
+      ...(protocol === "ssh" ? [new URL("../../../apps/desktop/src/workbenches/ssh/i18n.ts", import.meta.url)] : []),
+      new URL("../../../apps/desktop/src/workbenches/common/terminal-shortcuts.ts", import.meta.url),
+      new URL("../../../apps/desktop/src/workbenches/common/terminal-search.ts", import.meta.url),
+      ...(protocol === "ssh" ? [new URL("../../../apps/desktop/src/workbenches/common/terminal-blocks.tsx", import.meta.url)] : []),
     ]) assert.ok(built >= fs.statSync(source).mtimeMs, `rebuild driver:${protocol}:build before testing`);
     const moduleURL = `data:text/javascript;base64,${fs.readFileSync(artifact).toString("base64")}`;
     const session = await openSession({ browserPath, totalTimeoutMs:30_000 });
@@ -68,7 +68,7 @@ for (const protocol of ["serial", "ssh"]) {
         };
         const module = await import(${JSON.stringify(moduleURL)});
         window.frontend = module.mount(document.body,api);
-        window.root = document.body.firstElementChild.shadowRoot;
+        window.root = document.body.firstElementChild;
         window.raw = () => window.calls.filter(c => c.operation === 'serial.write' || c.operation === 'ssh.input')
           .map(c => c.operation === 'serial.write' ? c.args.text : atob(c.args.data)).join('');
         window.paste = (text) => {
@@ -128,7 +128,7 @@ for (const protocol of ["serial", "ssh"]) {
       await t.test("Ctrl+F searches terminal output locally, navigates, updates, and closes", async () => {
         await run(`window.output(${JSON.stringify("needle first\r\nneedle second\r\nNEEDLE third\r\n")})`);
         await key("f", "KeyF", 70, 2);
-        await waitForValue(client, `!root.querySelector('.terminal-find').hidden && root.activeElement === root.querySelector('.terminal-find input')`);
+        await waitForValue(client, `!root.querySelector('.terminal-find').hidden && document.activeElement === root.querySelector('.terminal-find input')`);
         await client.send("Input.insertText", {text:"needle"});
         await waitForValue(client, `root.querySelector('.terminal-find-result').textContent === '1 of 3'`);
         await key("Enter", "Enter", 13);
@@ -154,7 +154,7 @@ for (const protocol of ["serial", "ssh"]) {
         await client.send("Input.insertText", {text:"中文"});
         await waitForValue(client, `root.querySelector('.terminal-find-result').textContent === '第 1 / 1 项'`);
         await key("Escape", "Escape", 27);
-        await waitForValue(client, `root.querySelector('.terminal-find').hidden && root.activeElement?.classList.contains('xterm-helper-textarea')`);
+        await waitForValue(client, `root.querySelector('.terminal-find').hidden && document.activeElement?.classList.contains('xterm-helper-textarea')`);
         assert.equal(await run(`window.raw()`), bracketed, "search text and navigation never reach the remote shell");
 
         await key("f", "KeyF", 70, 2);
@@ -168,7 +168,7 @@ for (const protocol of ["serial", "ssh"]) {
         } else {
           await run(`root.querySelectorAll('.terminal-find button')[2].click()`);
         }
-        await waitForValue(client, `root.activeElement?.classList.contains('xterm-helper-textarea')`);
+        await waitForValue(client, `document.activeElement?.classList.contains('xterm-helper-textarea')`);
         await run(`window.locale = 'en'; window.translate()`);
       });
 

@@ -32,9 +32,9 @@ test("instance names reject live and offline duplicates inline and preserve the 
     await client.send("Page.navigate",{url:server.url});
     await wait(`!!document.getElementById('instance-tab-inst-1')`);
     await run(`document.querySelector('button[aria-label="Manage SSH"]').click()`);
-    await wait(`!!document.getElementById('new-instance-name') && [...document.querySelectorAll('#driver-configuration div')].some(node=>node.shadowRoot?.querySelector('form'))`);
-    await run(`window.nameForm=[...document.querySelectorAll('#driver-configuration div')].find(node=>node.shadowRoot?.querySelector('form')).shadowRoot;
-      nameForm.querySelectorAll('input')[0].value='lab.example';nameForm.querySelectorAll('input')[2].value='tester';`);
+    await wait(`!!document.getElementById('new-instance-name') && [...document.querySelectorAll('#driver-configuration div')].some(node=>node?.querySelector('form'))`);
+    await run(`window.nameForm=[...document.querySelectorAll('#driver-configuration div')].find(node=>node?.querySelector('form'));
+      nameForm.querySelector('[name=host]').value='lab.example';nameForm.querySelector('[name=username]').value='tester';`);
     await setAppLocale(client,"zh-CN");
     for (const duplicate of [" Prod-Server ","Standby"]) {
       await setName(duplicate);
@@ -42,7 +42,7 @@ test("instance names reject live and offline duplicates inline and preserve the 
       assert.equal(await run(`document.getElementById('new-instance-name').getAttribute('aria-invalid')`),"true");
       assert.equal(await run(`getComputedStyle(document.getElementById('new-instance-name')).borderTopColor === getComputedStyle(document.getElementById('new-instance-name-error')).color`),true,"the input uses the actual destructive border color");
       await run(`nameForm.querySelector('form').requestSubmit()`);
-      await wait(`nameForm.querySelector('button[type=submit]').disabled===false`);
+      await wait(`nameForm.querySelector('button[type=submit]').disabled===true`);
       assert.equal(await run(`__cotermTest.countCalls('create_instance')`),0,"duplicates never reach instance creation");
     }
     await setName("new-board");
@@ -51,7 +51,7 @@ test("instance names reject live and offline duplicates inline and preserve the 
     await wait(`creation.size()===1`);
     await run(`creation.fail('instance_name_exists')`);
     await wait(`document.getElementById('new-instance-name-error')?.textContent==='已存在同名实例'`);
-    assert.equal(await run(`nameForm.querySelector('input').value`),"lab.example","a server-side collision preserves the connection form");
+    assert.equal(await run(`nameForm.querySelector('[name=host]').value`),"lab.example","a server-side collision preserves the connection form");
     await setName(" unique-board ");
     await wait(`document.getElementById('new-instance-name-error')===null`);
     await run(`nameForm.querySelector('form').requestSubmit()`);
@@ -69,8 +69,8 @@ test("inline protocol configuration and instance tabs preserve live frontends an
   if (!browserPath) { t.skip("No Chrome/Edge binary; instance tabs were not browser-verified"); return; }
   assertFreshBuild();
   for (const driver of ["ssh", "serial"]) {
-    assert.ok(fs.statSync(new URL(`../../../crates/coterm-driver/dist/${driver}/frontend/index.js`, import.meta.url)).mtimeMs >=
-      fs.statSync(new URL(`../../../crates/coterm-driver/frontend/${driver}/src/index.ts`, import.meta.url)).mtimeMs, "rebuild the actual driver frontend");
+    assert.ok(fs.statSync(new URL(`../../../apps/desktop/dist/workbenches/${driver}/index.js`, import.meta.url)).mtimeMs >=
+      fs.statSync(new URL(`../../../apps/desktop/src/workbenches/${driver}/index.ts`, import.meta.url)).mtimeMs, "rebuild the actual driver frontend");
   }
   const scenario = structuredClone(defaultScenario);
   scenario.installPreview = {token:"tab-refresh-test",id:"test.tabs",name:"Tabs test",version:"0.1.0",platform:"windows-x64"};
@@ -97,11 +97,11 @@ test("inline protocol configuration and instance tabs preserve live frontends an
     await client.send("Emulation.setDeviceMetricsOverride", {width:1280,height:800,deviceScaleFactor:1,mobile:false});
     await client.send("Page.addScriptToEvaluateOnNewDocument", {source:makeHostMockSource(scenario)});
     await client.send("Page.navigate", {url:server.url});
-    await wait(`document.querySelector('#instance-panel-inst-1 div') && [...document.querySelectorAll('#instance-panel-inst-1 div')].some(el=>el.shadowRoot?.querySelector('.bar span')?.textContent==='Connected')`, "initial SSH frontend connected");
-    await run(`window.originalHost=[...document.querySelectorAll('#instance-panel-inst-1 div')].find(el=>el.shadowRoot?.querySelector('.xterm'));
-      window.originalRoot=originalHost.shadowRoot; window.originalTerminal=originalRoot.querySelector('.xterm');
+    await wait(`document.querySelector('#instance-panel-inst-1 div') && [...document.querySelectorAll('#instance-panel-inst-1 div')].some(el=>el?.querySelector('.bar span')?.textContent==='Connected')`, "initial SSH frontend connected");
+    await run(`window.originalHost=[...document.querySelectorAll('#instance-panel-inst-1 div')].find(el=>el?.querySelector('.xterm'));
+      window.originalRoot=originalHost; window.originalTerminal=originalRoot.querySelector('.xterm');
       window.baseSubscriptions=__cotermTest.countCalls('subscribe_driver_events');
-      window.configuration=()=>[...document.querySelectorAll('#driver-configuration div')].find(el=>el.shadowRoot?.querySelector('form'))?.shadowRoot;`);
+      window.configuration=()=>[...document.querySelectorAll('#driver-configuration div')].find(el=>el?.querySelector('form'));`);
     assert.equal(await run(`document.querySelectorAll('[role=tab]').length`), 1);
     await run(`document.querySelector('button[aria-label="Manage SSH"]').click()`);
     await wait(`!!configuration()?.querySelector('form')`, "SSH inline connection form");
@@ -113,15 +113,15 @@ test("inline protocol configuration and instance tabs preserve live frontends an
 
     // Failed creation keeps the same form and values; global busy also blocks other UI submissions.
     await run(`window.formBefore=configuration().querySelector('form');
-      (()=>{const fields=configuration().querySelectorAll('input');fields[0].value='lab.example';fields[2].value='tester';})();
+      (()=>{const fields=configuration().querySelectorAll('input');configuration().querySelector('[name=host]').value='lab.example';configuration().querySelector('[name=username]').value='tester';})();
       window.creationGate=__cotermTest.gate('create_instance');formBefore.requestSubmit();`);
     await wait(`creationGate.size()===1 && document.querySelector('#driver-configuration fieldset').getAttribute('aria-busy')==='true'`, "creation in flight");
-    assert.equal(await run(`document.querySelector('#driver-configuration fieldset > div').inert`), true);
+    assert.equal(await run(`document.querySelector('#driver-configuration fieldset').disabled`), true);
     await run(`formBefore.requestSubmit()`);
     assert.equal(await run(`__cotermTest.countCalls('create_instance')`), 1, "duplicate submit is suppressed");
     await run(`creationGate.fail('simulated create failure')`);
     await wait(`configuration()?.querySelector('.error').textContent.includes('simulated create failure')`, "creation failure is visible");
-    assert.equal(await run(`formBefore === configuration().querySelector('form') && configuration().querySelector('input').value==='lab.example'`), true);
+    assert.equal(await run(`formBefore === configuration().querySelector('form') && configuration().querySelector('[name=host]').value==='lab.example'`), true);
     await run(`formBefore.requestSubmit()`);
     await wait(`document.querySelectorAll('[role=tab]').length===2 && !document.getElementById('driver-configuration')`, "successful creation opens a tab");
     const created = await run(`__cotermTest.invocations.filter(x=>x.command==='create_instance').at(-1).args`);
@@ -148,12 +148,12 @@ test("inline protocol configuration and instance tabs preserve live frontends an
     await run(`configuration().querySelector('select').value='COM2';configuration().querySelector('form').requestSubmit()`);
     await wait(`document.querySelectorAll('[role=tab]').length===3 && document.getElementById('instance-tab-created-2')?.getAttribute('aria-selected')==='true'`, "serial created and selected");
     await wait(`__cotermTest.countCalls('subscribe_driver_events')===3`, "serial frontend mounted");
-    assert.equal(await run(`__cotermTest.countCalls('start_driver')`), 2, "configuration lookup starts the driver; creation safely repeats the idempotent start");
+    assert.ok([1, 2].includes(await run(`__cotermTest.countCalls('start_driver')`)), "discovery starts Serial; creation may reuse its refreshed running state");
     assert.deepEqual(await run(`__cotermTest.invocations.filter(x=>x.command==='create_instance').at(-1).args.config`),
       {port:"COM2",baudRate:115200,dataBits:8,stopBits:1,parity:"none",dtr:true,rts:true,mode:"shell",prompt:"# "});
 
     await run(`document.querySelector('button[aria-label="Manage Local"]').click()`);
-    await wait(`document.getElementById('driver-configuration')?.textContent.includes('does not provide a connection configuration screen')`, "headless driver explains missing config UI");
+    await wait(`!!document.querySelector('#driver-configuration [name=shell]')`, "Local configuration is provided by the host regardless of hasFrontend");
     assert.equal(await run(`document.querySelector('#driver-configuration textarea')`), null);
     assert.equal(await run(`document.querySelector('dialog[open]')`), null);
 
@@ -191,7 +191,7 @@ test("inline protocol configuration and instance tabs preserve live frontends an
       {driverId:'serial',driverInstanceId:'created-2',sessionId:'session-2',name:'COM2',status:'failed'}
     ])`);
     await wait(`document.getElementById('instance-panel-created-2')?.textContent.includes('Driver stopped unexpectedly')`, "failed instance recovery");
-    assert.equal(await run(`[...document.querySelectorAll('#instance-panel-created-2 div')].some(el=>!!el.shadowRoot)`), false);
+    assert.equal(await run(`!!document.querySelector('#instance-panel-created-2 .driver-workbench')`), false);
     await run(`__cotermTest.replaceInstances([{driverId:'ssh',driverInstanceId:'inst-1',sessionId:'sess-1',name:'Prod-Server',status:'ready'}])`);
     await wait(`!document.getElementById('instance-tab-created-2') && document.getElementById('instance-tab-inst-1').getAttribute('aria-selected')==='true'`, "runtime removal selects remaining tab");
     await run(`document.querySelector('button[aria-label="Close view Prod-Server"]').click()`);

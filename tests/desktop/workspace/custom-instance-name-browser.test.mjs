@@ -22,16 +22,16 @@ test("the shared driver configuration submits a separate custom instance name", 
     await wait(`!!document.querySelector('button[aria-label="Manage SSH"]')`);
     await run(`document.querySelector('button[aria-label="Manage SSH"]').click()`);
     await wait(`!!document.getElementById('new-instance-name')`);
-    await wait(`Array.from(document.querySelectorAll('#driver-configuration div')).some(element => element.shadowRoot?.querySelector('form'))`);
+    await wait(`Array.from(document.querySelectorAll('#driver-configuration div')).some(element => element?.querySelector('form'))`);
     await run(`(() => {
       window.configuration = [...document.querySelectorAll('#driver-configuration div')]
-        .find(element => element.shadowRoot?.querySelector('form'))?.shadowRoot;
+        .find(element => element?.querySelector('form'));
       const input = document.getElementById('new-instance-name');
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, 'Lab server');
       input.dispatchEvent(new Event('input', { bubbles: true }));
       const fields = configuration.querySelectorAll('input');
-      fields[0].value = 'lab.example';
-      fields[2].value = 'tester';
+      configuration.querySelector('[name=host]').value = 'lab.example';
+      configuration.querySelector('[name=username]').value = 'tester';
       configuration.querySelector('form').requestSubmit();
     })()`);
     await wait(`__cotermTest.countCalls('create_instance') === 1`);

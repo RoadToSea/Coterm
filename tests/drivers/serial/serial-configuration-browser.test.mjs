@@ -11,8 +11,8 @@ test("Serial creation formats Windows and Unix ports and refreshes a stopped dri
   const browserPath = findBrowser();
   if (!browserPath) { t.skip("No Chrome/Edge binary"); return; }
   assertFreshBuild();
-  assert.ok(fs.statSync(new URL("../../../crates/coterm-driver/dist/serial/frontend/index.js", import.meta.url)).mtimeMs >=
-    fs.statSync(new URL("../../../crates/coterm-driver/frontend/serial/src/index.ts", import.meta.url)).mtimeMs, "build Serial first");
+  assert.ok(fs.statSync(new URL("../../../apps/desktop/dist/workbenches/serial/index.js", import.meta.url)).mtimeMs >=
+    fs.statSync(new URL("../../../apps/desktop/src/workbenches/serial/index.ts", import.meta.url)).mtimeMs, "build Serial first");
   const scenario = structuredClone(defaultScenario);
   scenario.catalog = {drivers:[{id:"serial",name:"Serial",version:"0.1.0",hasFrontend:true,running:false}],issues:[]};
   scenario.instances = [];
@@ -46,7 +46,7 @@ test("Serial creation formats Windows and Unix ports and refreshes a stopped dri
     await client.send("Page.addScriptToEvaluateOnNewDocument", {source:makeHostMockSource(scenario)});
     await client.send("Page.navigate", {url:server.url});
     await wait(`!!document.querySelector('button[aria-label="Manage Serial"]')`);
-    await run(`window.configuration=()=>[...document.querySelectorAll('#driver-configuration div')].find(el=>el.shadowRoot?.querySelector('form'))?.shadowRoot;
+    await run(`window.configuration=()=>[...document.querySelectorAll('#driver-configuration div')].find(el=>el?.querySelector('form'));
       document.querySelector('button[aria-label="Manage Serial"]').click()`);
     await wait(`!!configuration()?.querySelector('select') && !configuration().querySelector('select').textContent.includes('Loading')`);
     assert.deepEqual(await run(`[...configuration().querySelector('select').options].map(option=>[option.value,option.textContent])`),
@@ -156,7 +156,7 @@ test("Serial discovery exposes startup failure and cancels lookup when its confi
     await client.send("Page.addScriptToEvaluateOnNewDocument", {source:makeHostMockSource(scenario)});
     await client.send("Page.navigate", {url:server.url});
     await wait(`!!document.querySelector('button[aria-label="Manage Serial"]')`);
-    await run(`window.configuration=()=>[...document.querySelectorAll('#driver-configuration div')].find(el=>el.shadowRoot?.querySelector('form'))?.shadowRoot;
+    await run(`window.configuration=()=>[...document.querySelectorAll('#driver-configuration div')].find(el=>el?.querySelector('form'));
       window.starting=__cotermTest.gate('start_driver');document.querySelector('button[aria-label="Manage Serial"]').click()`);
     await wait(`starting.size()===1`);
     assert.equal(await run(`__cotermTest.countCalls('invoke_driver_operation')`), 0, "enumeration waits for the startup handshake");
@@ -166,7 +166,7 @@ test("Serial discovery exposes startup failure and cancels lookup when its confi
     await run(`window.starting=__cotermTest.gate('start_driver');configuration().querySelector('select').dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,button:0}))`);
     await wait(`starting.size()===1`);
     await run(`document.querySelector('button[aria-label="Manage Local"]').click()`);
-    await wait(`document.getElementById('driver-configuration').textContent.includes('does not provide a connection configuration screen')`);
+    await wait(`!!document.querySelector('#driver-configuration [name=shell]')`);
     await run(`starting.release(null);new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))`);
     assert.equal(await run(`__cotermTest.countCalls('invoke_driver_operation')`), 0, "a closed configuration never sends a late lookup");
     assert.equal(await run(`__cotermTest.countCalls('create_instance')`), 0);

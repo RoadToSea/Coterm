@@ -8,10 +8,10 @@ import { findBrowser, openSession, evaluate, waitForValue } from "#support/brows
 test("SSH integrates command blocks into the real terminal and publishes only human selection", async t => {
   const browserPath=findBrowser();
   if(!browserPath){t.skip("No browser; terminal blocks were not verified");return;}
-  const artifact=new URL("../../../crates/coterm-driver/dist/ssh/frontend/index.js", import.meta.url);
+  const artifact=new URL("../../../apps/desktop/dist/workbenches/ssh/index.js", import.meta.url);
   const built=fs.statSync(artifact).mtimeMs;
   for(const file of ["index.ts","blocks.ts","jobs.ts","i18n.ts"]){
-    assert.ok(built>=fs.statSync(new URL("../../../crates/coterm-driver/frontend/ssh/src/"+file,import.meta.url)).mtimeMs,"build SSH first");
+    assert.ok(built>=fs.statSync(new URL("../../../apps/desktop/src/workbenches/ssh/"+file,import.meta.url)).mtimeMs,"build SSH first");
   }
   const moduleURL="data:text/javascript;base64,"+fs.readFileSync(artifact).toString("base64");
   const session=await openSession({browserPath,totalTimeoutMs:60000});
@@ -55,7 +55,7 @@ test("SSH integrates command blocks into the real terminal and publishes only hu
       "throw new Error('Unexpected operation '+operation);},"+
       "async subscribeEvents(fn){window.event=fn;return()=>window.stopped=true},async cancelOperation(){throw new Error('selection must never cancel');}};"+
       "window.frontend=(await import("+JSON.stringify(moduleURL)+")).mount(document.body,api);"+
-      "window.root=document.body.firstElementChild.shadowRoot;window.gutters=()=>[...root.querySelectorAll('.coterm-terminal-number')];"+
+      "window.root=document.body.firstElementChild;window.gutters=()=>[...root.querySelectorAll('.coterm-terminal-number')];"+
       "})()");
     await waitForValue(client,"gutters().length===2 && root.querySelector('.bar span').textContent==='Connected'");
     assert.equal(await run("root.querySelector('.ssh-view-switch')===null"),true);
@@ -74,7 +74,7 @@ test("SSH integrates command blocks into the real terminal and publishes only hu
     await waitForValue(client,"calls.filter(c=>c.operation==='ssh.select_lines').at(-1)?.args.text===''");
     assert.equal(await run("root.querySelectorAll('.coterm-terminal-gutter > button:not(.coterm-terminal-number)').length"),1);
     assert.equal(await run("root.querySelector('.coterm-terminal-clear').disabled"),true);
-    assert.deepEqual(await run("(()=>{const b=root.querySelector('.coterm-terminal-clear');const r=b.getBoundingClientRect();const s=getComputedStyle(b);return [b.textContent,b.getAttribute('aria-label'),Math.round(r.width),Math.round(r.height),s.borderRadius,s.backgroundColor,s.opacity]})()"),["×","Clear selection",16,16,"4px","rgba(0, 0, 0, 0)","0.45"]);
+    assert.deepEqual(await run("(()=>{const b=root.querySelector('.coterm-terminal-clear');const r=b.getBoundingClientRect();const s=getComputedStyle(b);const probe=document.createElement('div');probe.style.borderRadius='var(--radius-md)';root.append(probe);const radius=getComputedStyle(probe).borderRadius;probe.remove();return [b.textContent,b.getAttribute('aria-label'),Math.round(r.width),Math.round(r.height),s.borderRadius===radius,s.backgroundColor,s.opacity]})()"),["×","Clear selection",16,16,true,"rgba(0, 0, 0, 0)","0.45"]);
     await run("window.gutterWidth=()=>root.querySelector('.coterm-terminal-gutter').getBoundingClientRect().width;window.singleDigitWidth=gutterWidth();backend=backend.map(b=>b.id==='two'?{...b,index:10}:b);version++;event({name:'ssh.blocks.changed',payload:{}})");
     await waitForValue(client,"gutters()[1].textContent==='10' && gutterWidth()>=singleDigitWidth");
     await run("window.twoDigitWidth=gutterWidth();backend=backend.map(b=>b.id==='two'?{...b,index:4294967295}:b);version++;event({name:'ssh.blocks.changed',payload:{}})");
@@ -88,13 +88,13 @@ test("SSH integrates command blocks into the real terminal and publishes only hu
     await waitForValue(client,"context.length===2");
     assert.deepEqual(await run("context"),["one","two"]);
     await waitForValue(client,"root.querySelectorAll('.coterm-terminal-frame[data-selected=true]').length===2");
-    assert.equal(await run("root.activeElement===keptButton"),true);
+    assert.equal(await run("document.activeElement===keptButton"),true);
     await screenshot("ssh-blocks-dark");
     await run("document.documentElement.classList.remove('dark')");
     await screenshot("ssh-blocks-light");
     await run("document.documentElement.classList.add('dark');window.previousReads=calls.filter(c=>c.operation==='ssh.blocks').length;window.changeOnPage=true;for(let i=0;i<40;i++)event({name:'ssh.blocks.changed',payload:{}})");
     await waitForValue(client,"root.querySelector('.ssh-blocks-error').hidden && calls.filter(c=>c.operation==='ssh.blocks').length>=previousReads+5");
-    assert.equal(await run("gutters()[1]===keptButton && root.activeElement===keptButton && keptButton.getAttribute('aria-pressed')==='true'"),true);
+    assert.equal(await run("gutters()[1]===keptButton && document.activeElement===keptButton && keptButton.getAttribute('aria-pressed')==='true'"),true);
     await client.send("Input.dispatchKeyEvent",{type:"keyDown",key:"Escape",code:"Escape",windowsVirtualKeyCode:27});
     await client.send("Input.dispatchKeyEvent",{type:"keyUp",key:"Escape",code:"Escape",windowsVirtualKeyCode:27});
     await waitForValue(client,"context.length===0");
@@ -111,6 +111,7 @@ test("SSH integrates command blocks into the real terminal and publishes only hu
     await run("root.querySelector('.coterm-terminal-clear').click()");
     await waitForValue(client,"context.length===0");
     await run("window.locale='zh-CN';window.translate()");
+    await waitForValue(client,"root.querySelector('.coterm-terminal-clear').title==='取消全选'");
     assert.deepEqual(await run("(()=>{const b=root.querySelector('.coterm-terminal-clear');return [b.textContent,b.title,b.getAttribute('aria-label')]})()"),["×","取消全选","取消全选"]);
     await run("window.missingSelect=true;gutters()[0].click()");
     await waitForValue(client,"!root.querySelector('.ssh-blocks-error').hidden");

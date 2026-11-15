@@ -80,7 +80,7 @@ export function InstanceTabs({ instances, activeId, onSelect, onClose }: Props) 
             onClick={() => onSelect(instance.driverInstanceId)} onKeyDown={event => navigate(event, index)}>
             <PlugZap data-icon="inline-start" /><span className="truncate">{instance.name}</span>
           </Button>
-          <Button type="button" variant="ghost" size="icon" className="mr-1 size-6 shrink-0 rounded-full hover:bg-muted"
+          <Button type="button" variant="ghost" size="icon" className="mr-1 size-6 shrink-0 rounded-md hover:bg-muted"
             aria-label={t("Close view {name}", { name: instance.name })} title={t("Close view; connection stays open")}
             onClick={() => close(index)}><X data-icon="inline-start" /></Button>
         </div>

@@ -8,7 +8,7 @@ export function FieldGroup({ className, ...props }: ComponentProps<"fieldset">) 
 
 /** Accepts native div attributes; data-invalid may mark a field's validation state. */
 export function Field({ className, ...props }: ComponentProps<"div">) {
-  return <div className={cn("flex min-w-0 flex-col gap-2", className)} {...props} />;
+  return <div className={cn("flex min-w-0 flex-col gap-2 [&[hidden]]:hidden", className)} {...props} />;
 }
 
 /** Accepts native label attributes; htmlFor identifies the associated control. */

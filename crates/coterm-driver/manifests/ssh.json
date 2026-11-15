@@ -16,9 +16,6 @@
       "driver-events"
     ]
   },
-  "frontend": {
-    "entry": "frontend/index.js"
-  },
   "mcp": {
     "provider": "backend"
   },
@@ -29,5 +26,40 @@
   "capabilities": [
     "secret-input",
     "confirmation"
-  ]
+  ],
+  "ui": {
+    "workbench": "terminal",
+    "title": "Open SSH",
+    "schema": {
+      "type": "object",
+      "required": [
+        "host",
+        "port",
+        "username"
+      ],
+      "properties": {
+        "host": {
+          "type": "string",
+          "title": "Host",
+          "maxLength": 253
+        },
+        "port": {
+          "type": "integer",
+          "title": "Port",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "username": {
+          "type": "string",
+          "title": "Username",
+          "maxLength": 128
+        }
+      }
+    },
+    "defaults": {
+      "host": "",
+      "port": 22,
+      "username": ""
+    }
+  }
 }

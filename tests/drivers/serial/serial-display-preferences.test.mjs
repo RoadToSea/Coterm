@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { DEFAULT_DISPLAY_PREFERENCES as defaults, readDisplayPreferences as read,
-  saveDisplayPreferences as save } from "#shared/components/stream-workbench/display-preferences.ts";
+  saveDisplayPreferences as save } from "#desktop/src/workbenches/common/stream-workbench/display-preferences.ts";
 
 function withStorage(run) {
   const previous = Object.getOwnPropertyDescriptor(globalThis, "localStorage");

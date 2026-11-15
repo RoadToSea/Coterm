@@ -47,7 +47,7 @@ export async function buildHostInteractionsEntry() {
     logLevel: "warn",
     // 与产品构建一致：React 走 production 分支，浏览器里没有 process。
     define: { "process.env.NODE_ENV": '"production"' },
-    resolve: { alias: bareAlias },
+    resolve: { alias: [{ find: "@", replacement: path.join(desktopDir, "src") }, ...bareAlias] },
     build: {
       outDir: path.join(desktopDir, "dist/host-interactions"),
       emptyOutDir: true,

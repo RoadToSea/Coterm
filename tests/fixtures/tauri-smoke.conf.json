@@ -7,6 +7,6 @@
     ]
   },
   "build": {
-    "beforeBuildCommand": "pnpm --dir ../.. drivers:build && pnpm build"
+    "beforeBuildCommand": "pnpm build"
   }
 }

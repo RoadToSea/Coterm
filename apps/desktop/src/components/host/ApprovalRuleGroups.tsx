@@ -6,9 +6,10 @@ import { useI18n } from "../../use-i18n";
 import { cn } from "../../lib/utils";
 import { Modal } from "../ui/Modal";
 import { Button } from "../ui/button";
+import { Input } from "../ui/input";
 import { Alert, AlertDescription } from "../ui/alert";
 import { Skeleton } from "../ui/skeleton";
-import { ApprovalGroupEditor, approvalError, approvalInputClass } from "./ApprovalGroupEditor";
+import { ApprovalGroupEditor, approvalError } from "./ApprovalGroupEditor";
 
 interface Props { onClose(): void; initialGroupId?: string | null }
 
@@ -87,7 +88,7 @@ export function ApprovalRuleGroups({ onClose, initialGroupId }: Props) {
       : <><Skeleton className="h-9 w-48" /><Skeleton className="h-48 w-full" /></>}</div> :
     <div className="grid min-h-[440px] md:grid-cols-[220px_minmax(0,1fr)]">
       <aside aria-label={t("Rule groups")} className={cn("flex min-w-0 flex-col gap-3 border-r border-border p-4", details && "max-md:hidden")}>
-        <input type="search" value={query} aria-label={t("Search rule groups")} placeholder={t("Search rule groups")} className={approvalInputClass} onChange={event => setQuery(event.target.value)} />
+        <Input type="search" value={query} aria-label={t("Search rule groups")} placeholder={t("Search rule groups")} onChange={event => setQuery(event.target.value)} />
         <nav className="flex max-h-[52dvh] flex-col gap-1 overflow-y-auto" aria-label={t("Rule group list")}>
           {catalog.groups.filter(group => group.name.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())).map(group => <Button key={group.id} type="button"
             variant={draft?.id === group.id ? "secondary" : "ghost"} className="h-auto justify-start py-3 text-left" disabled={busy} data-approval-group={group.id}
@@ -124,7 +125,7 @@ export function ApprovalRuleGroups({ onClose, initialGroupId }: Props) {
         </> : <p className="py-12 text-sm text-muted-foreground">{t("Select a rule group or create one.")}</p>}
       </section>
     </div>}
-    {pending && <Alert className="sticky bottom-0 rounded-none border-x-0 border-b-0"><AlertDescription>
+    {pending && <Alert className="sticky bottom-0 m-3"><AlertDescription>
       <p className="mb-3">{t("Save changes before leaving this group?")}</p>
       <div className="flex flex-wrap gap-2">
         <Button size="sm" disabled={busy || !canSave} onClick={() => void save()}>{t("Save and continue")}</Button>

@@ -18,6 +18,53 @@ const browserPath = findBrowser();
 
 const attention = (version, interactions) => ({ version, approvals: [], interactions });
 
+test("host prompt delivers once, clears secrets, and cancels by request key", async t => {
+  if (!browserPath) { t.skip("No Chrome/Edge binary"); return; }
+  assertFreshTestArtifacts();
+  const server = await startStaticServer(); serverUrl = server.url;
+  const session = await openSession({ browserPath, totalTimeoutMs: 30_000 });
+  let page;
+  try {
+    page = await openInteractionsPage(session, scenarioBase(attention(1, [])));
+    await page.evaluate(`(() => {
+      window.deliveries=[];
+      window.promptResult=__cotermHostInteractions.promptForSecret('instance-a',{
+        title:'Test password',prompt:'Password',purpose:'ssh.password',timeoutMs:60000,allowCancel:true
+      }, async (instance,purpose,value) => {
+        deliveries.push({instance,purpose,value});
+        await new Promise(resolve=>{window.releaseDelivery=resolve});
+        return {handle:'test-handle'};
+      },'request-a');
+    })()`);
+    await waitForDialogs(page, 1, "React prompt opened");
+    await page.evaluate(`(() => {
+      const dialog=document.querySelector('dialog.host-secret-dialog');
+      window.savedInput=dialog.querySelector('input');window.savedForm=dialog.querySelector('form');
+      savedInput.value='test-only-value';
+      savedForm.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true}));
+      savedForm.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true}));
+    })()`);
+    assert.equal(await page.evaluate("deliveries.length"), 1);
+    assert.equal(await page.evaluate("savedInput.value"), "");
+    assert.deepEqual(await page.evaluate("deliveries.map(({instance,purpose})=>({instance,purpose}))"), [{instance:"instance-a",purpose:"ssh.password"}]);
+    await page.evaluate("releaseDelivery()");
+    assert.deepEqual(await page.evaluate("promptResult"), {outcome:"submitted",value:{handle:"test-handle"}});
+    await waitForDialogs(page, 0, "submitted prompt removed");
+    await page.evaluate(`window.promptResult=__cotermHostInteractions.promptForSecret('instance-b',{
+      title:'Cancel test',prompt:'Password',purpose:'ssh.password',timeoutMs:60000,allowCancel:true
+    },async()=>{deliveries.push('unexpected');return {handle:'unexpected'}},'request-b');void 0`);
+    await waitForDialogs(page, 1, "cancellable prompt opened");
+    await page.evaluate("__cotermHostInteractions.cancelSecretInput('instance-b')");
+    assert.equal(await page.evaluate("document.querySelectorAll('dialog.host-secret-dialog').length"), 1, "an instance id cannot cancel a different request key");
+    await page.evaluate(`window.savedForm=document.querySelector('dialog form');window.savedInput=savedForm.querySelector('input');savedInput.value='test-cancel-value';__cotermHostInteractions.cancelSecretInput('request-b')`);
+    assert.deepEqual(await page.evaluate("promptResult"), {outcome:"cancelled"});
+    await waitForDialogs(page, 0, "cancelled prompt removed");
+    assert.equal(await page.evaluate("savedInput.value"), "", "cancellation clears the detached input too");
+    await page.evaluate("savedForm.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true}));void 0");
+    assert.equal(await page.evaluate("deliveries.length"), 1, "a cancelled view cannot deliver a late submission");
+  } finally { await page?.close(); await session.close(); await new Promise(resolve=>server.server.close(resolve)); }
+});
+
 /** 打开只挂 HostInteractions 的页面；宿主替身先于页面脚本注入。 */
 async function openInteractionsPage(session, scenario) {
   const { client } = session;
@@ -607,7 +654,7 @@ test("Frontend API: typed host dialogs, rejection, timeout, scope replacement an
     await page.evaluate(`window.api = window.__cotermHostInteractions.createDriverAPI({driverId:'fixture',driverInstanceId:'shared-instance',sessionId:'session',name:'shared frontend',status:'ready'});
       window.result = null; window.api.requestText({title:'Text',prompt:'<b>plain text</b>'}).then(value=>window.result=value); true;`);
     await waitForDialogs(page, 1, "text prompt");
-    assert.equal(await page.evaluate("document.querySelector('dialog label span').textContent"), "<b>plain text</b>");
+    assert.equal(await page.evaluate("document.querySelector('dialog label').textContent"), "<b>plain text</b>");
     assert.equal(await page.evaluate("document.querySelector('dialog b')"), null);
     await page.evaluate("document.querySelector('dialog input').value='typed'; document.querySelector('dialog form').requestSubmit()");
     await waitForValue({send:page.send}, "window.result?.outcome === 'submitted'");

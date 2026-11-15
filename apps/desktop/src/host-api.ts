@@ -20,7 +20,7 @@ import { driverI18n } from "./i18n";
 import { listen } from "@tauri-apps/api/event";
 import { cancelSecretInput, promptForSecret, promptForText, promptForConfirmation, promptForSelection } from "./secret-input";
 import { FRONTEND_API_VERSION } from "../../shared/index";
-import { mountBlockList } from "../../shared/components/block-list";
+import { mountBlockList } from "./workbenches/common/block-list";
 
 /** 宿主待处理状态变化的全局事件；payload 只有版本号。 */
 export const ATTENTION_CHANGED_EVENT = "host://attention-changed";

@@ -8,7 +8,7 @@ import { evaluate, findBrowser, openSession, waitForValue } from "#support/brows
 
 async function serialSession(browserPath, { delayStatus = false } = {}) {
   assertFreshDriverBuild("serial");
-  const artifact = new URL("../../../crates/coterm-driver/dist/serial/frontend/index.js", import.meta.url);
+  const artifact = new URL("../../../apps/desktop/dist/workbenches/serial/index.js", import.meta.url);
   const server = http.createServer((request, response) => {
     if (request.url === "/serial.js") {
       response.setHeader("Content-Type", "text/javascript");
@@ -48,7 +48,7 @@ async function serialSession(browserPath, { delayStatus = false } = {}) {
         async subscribeEvents(listener){window.event=listener;return()=>{};}
       };
       window.frontend=mount(document.body,api);
-      window.root=document.body.firstElementChild.shadowRoot;
+      window.root=document.body.firstElementChild;
     </script></body></html>`);
   });
   await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));

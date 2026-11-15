@@ -9,9 +9,9 @@ test("Serial view switches synchronize backend mode without reconnecting or losi
   const browserPath = findBrowser();
   if (!browserPath) { t.skip("No Chrome/Edge binary"); return; }
   assertFreshDriverBuild("serial");
-  const artifact = new URL("../../../crates/coterm-driver/dist/serial/frontend/index.js", import.meta.url);
+  const artifact = new URL("../../../apps/desktop/dist/workbenches/serial/index.js", import.meta.url);
   for (const name of ["index.ts", "console-settings.ts"]) {
-    assert.ok(fs.statSync(artifact).mtimeMs >= fs.statSync(new URL(`../../../crates/coterm-driver/frontend/serial/src/${name}`, import.meta.url)).mtimeMs);
+    assert.ok(fs.statSync(artifact).mtimeMs >= fs.statSync(new URL(`../../../apps/desktop/src/workbenches/serial/${name}`, import.meta.url)).mtimeMs);
   }
   const moduleURL = `data:text/javascript;base64,${fs.readFileSync(artifact).toString("base64")}`;
   const session = await openSession({browserPath}); const {client} = session;
@@ -30,12 +30,12 @@ test("Serial view switches synchronize backend mode without reconnecting or losi
       window.receipt=output=>({status:'completed',output,error:null});
       window.i18n={locale:'zh-CN',subscribe(){return()=>{}}};
       window.frontend=module.configure(document.body,{i18n,invoke:async()=>receipt({ports:[{portName:'COM6'}]}),submit:async config=>{submitted.push(config)}});
-      window.root=document.body.firstElementChild.shadowRoot;
+      window.root=document.body.firstElementChild;
     })()`);
     await wait(`root.querySelector('button[type=submit]').disabled===false`);
     assert.equal(await run(`root.querySelector('[name=mode]')===null`), true);
     assert.equal(await run(`root.querySelector('[name=prompt]')===null`), true);
-    await run(`root.querySelector('form').dispatchEvent(new Event('submit',{cancelable:true}))`);
+    await run(`root.querySelector('form').dispatchEvent(new Event("submit",{cancelable:true,bubbles:true}))`);
     await wait(`submitted.length===1`);
     assert.equal(await run(`submitted[0].mode`), "shell");
     assert.equal(await run(`submitted[0].prompt`), "# ");
@@ -51,13 +51,13 @@ test("Serial view switches synchronize backend mode without reconnecting or losi
           if(operation==='serial.configure'){if(window.rejectMode)throw new Error('mode denied');Object.assign(config,args);return receipt(serialSnapshot())}
           throw new Error('Unexpected operation '+operation);
         },async subscribeEvents(fn){window.event=fn;return()=>{}}};
-      window.mount=()=>{window.frontend=module.mount(document.body,api);window.root=document.body.firstElementChild.shadowRoot};mount();`);
+      window.mount=()=>{window.frontend=module.mount(document.body,api);window.root=document.body.firstElementChild};mount();`);
     await wait(`root.querySelector('.connect-button').dataset.connected==='true'`);
     await wait(`root.querySelector('.xterm-rows').textContent.includes('reply one')`);
     const originalOutput = await run(`root.querySelector('.xterm-rows').textContent`);
     await run(`root.querySelector('.settings-toggle').click()`);
     assert.equal(await run(`root.querySelector('[name=mode]')===null`), true);
-    assert.equal(await run(`root.querySelector('[name=prompt]').closest('label').hidden`), false);
+    assert.equal(await run(`root.querySelector('[name=prompt]').closest('[data-field]').hidden`), false);
     assert.equal(await run(`root.querySelector('[name=prompt]').value`), "root# ");
     await run(`root.querySelector('.settings-toggle').click();root.querySelector('.xterm-helper-textarea').focus()`);
     for (const type of ["keyDown", "keyUp"]) await client.send("Input.dispatchKeyEvent", {type,key:"A",code:"KeyA",windowsVirtualKeyCode:65,modifiers:10});
@@ -66,7 +66,7 @@ test("Serial view switches synchronize backend mode without reconnecting or losi
     assert.equal(await run(`config.mode`), "stream");
     assert.equal(await run(`saved.at(-1).mode`), "stream");
     assert.equal(await run(`config.prompt`), "root# ");
-    assert.equal(await run(`root.querySelector('[name=prompt]').closest('label').hidden`), true);
+    assert.equal(await run(`root.querySelector('[name=prompt]').closest('[data-field]').hidden`), true);
     assert.equal(await run(`root.querySelector('.uart-output').textContent.includes('reply one')`), true);
 
     await run(`window.rejectMode=true;root.querySelectorAll('.modes button')[0].click()`);

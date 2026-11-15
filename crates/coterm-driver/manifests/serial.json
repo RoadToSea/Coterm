@@ -14,9 +14,6 @@
       "driver-events"
     ]
   },
-  "frontend": {
-    "entry": "frontend/index.js"
-  },
   "mcp": {
     "provider": "backend"
   },
@@ -26,5 +23,100 @@
   },
   "capabilities": [
     "confirmation"
-  ]
+  ],
+  "ui": {
+    "workbench": "stream",
+    "title": "Open serial port",
+    "schema": {
+      "type": "object",
+      "required": [
+        "port",
+        "baudRate"
+      ],
+      "properties": {
+        "port": {
+          "type": "string",
+          "title": "Port",
+          "x-source": "serial.ports",
+          "x-help": "Port names come from the operating system, e.g. COM6 or /dev/ttyUSB0."
+        },
+        "baudRate": {
+          "type": "integer",
+          "title": "Baud rate",
+          "minimum": 1,
+          "maximum": 4294967295,
+          "x-suggestions": [
+            300,
+            1200,
+            2400,
+            4800,
+            9600,
+            19200,
+            38400,
+            57600,
+            115200,
+            230400,
+            460800,
+            921600
+          ]
+        },
+        "dataBits": {
+          "type": "integer",
+          "title": "Data bits",
+          "minimum": 5,
+          "maximum": 8,
+          "enum": [
+            5,
+            6,
+            7,
+            8
+          ]
+        },
+        "stopBits": {
+          "type": "integer",
+          "title": "Stop bits",
+          "minimum": 1,
+          "maximum": 2,
+          "enum": [
+            1,
+            2
+          ]
+        },
+        "parity": {
+          "type": "string",
+          "title": "Parity",
+          "enum": [
+            "none",
+            "odd",
+            "even"
+          ],
+          "x-enumNames": [
+            "None",
+            "Odd",
+            "Even"
+          ]
+        },
+        "dtr": {
+          "type": "boolean",
+          "title": "DTR high on open",
+          "x-help": "Some boards reset when DTR changes; clear it if the device reboots unexpectedly."
+        },
+        "rts": {
+          "type": "boolean",
+          "title": "RTS high on open"
+        }
+      }
+    },
+    "defaults": {
+      "port": "",
+      "baudRate": 115200,
+      "dataBits": 8,
+      "stopBits": 1,
+      "parity": "none",
+      "dtr": true,
+      "rts": true,
+      "mode": "shell",
+      "prompt": "# "
+    }
+  }
 }

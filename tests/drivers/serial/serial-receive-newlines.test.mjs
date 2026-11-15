@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createReceiveNewlineNormalizer, readReceiveNewlineMode, saveReceiveNewlineMode,
-  RECEIVE_NEWLINE_MODES } from "#shared/components/stream-workbench/receive-newlines.ts";
+  RECEIVE_NEWLINE_MODES } from "#desktop/src/workbenches/common/stream-workbench/receive-newlines.ts";
 
 const cases = [
   ["a\nb", ["a\nb", "a\r\nb", "a\nb", "a\r\nb"]],

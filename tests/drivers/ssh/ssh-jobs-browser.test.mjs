@@ -8,16 +8,19 @@ import { findBrowser, openSession, evaluate, waitForValue } from "#support/brows
 test("SSH tasks collapse to one row and keep the selected task last while live events arrive", async (t) => {
   const browserPath = findBrowser();
   if (!browserPath) { t.skip("No Chrome/Edge binary; SSH task layout was not browser-verified"); return; }
-  const artifact = new URL("../../../crates/coterm-driver/dist/ssh/frontend/index.js", import.meta.url);
+  const artifact = new URL("../../../apps/desktop/dist/workbenches/ssh/index.js", import.meta.url);
   const built = fs.statSync(artifact).mtimeMs;
   for (const file of ["index.ts", "i18n.ts"]) {
-    assert.ok(built >= fs.statSync(new URL(`../../../crates/coterm-driver/frontend/ssh/src/${file}`, import.meta.url)).mtimeMs,
-      "run pnpm --filter coterm-driver-ssh-ui build before the SSH jobs browser test");
+    assert.ok(built >= fs.statSync(new URL(`../../../apps/desktop/src/workbenches/ssh/${file}`, import.meta.url)).mtimeMs,
+      "run pnpm test:build before the SSH jobs browser test");
   }
   const moduleURL = `data:text/javascript;base64,${fs.readFileSync(artifact).toString("base64")}`;
   const session = await openSession({ browserPath, totalTimeoutMs: 45_000 });
   const { client } = session;
-  const run = (source) => evaluate(client, source);
+  const run = async (source) => {
+    try { return await evaluate(client, source); }
+    catch (error) { error.message += `; expression: ${source.slice(0, 180)}`; throw error; }
+  };
   const assertTerminalFits = () => waitForValue(client, `(() => {
     const screen=root.querySelector('.xterm-screen').getBoundingClientRect();
     const terminal=root.querySelector('.terminal').getBoundingClientRect();
@@ -64,13 +67,16 @@ test("SSH tasks collapse to one row and keep the selected task last while live e
       };
       const module = await import(${JSON.stringify(moduleURL)});
       window.frontend = module.mount(document.body,api);
-      window.root = document.body.firstElementChild.shadowRoot;
+      window.root = document.body.firstElementChild;
       window.list = root.querySelector('.jobs-list');
       window.toggle = root.querySelector('.jobs-toggle');
       window.items = () => [...list.querySelectorAll('.job:not([hidden])')];
       window.task = n => 'echo task ' + String(n).padStart(3,'0');
       window.select = n => [...list.querySelectorAll('.job-select')].find(b => b.title === task(n));
-      window.emit = n => window.event({name:'ssh.job',payload:{operationId:'job-' + n,text:task(n)}});
+      window.emit = async n => {
+        await window.event({name:'ssh.job',payload:{operationId:'job-' + n,text:task(n)}});
+        await new Promise(resolve => requestAnimationFrame(resolve));
+      };
     })()`);
     await waitForValue(client, `root.querySelector('.bar span').textContent === 'Connected'`);
     assert.equal(await run(`root.querySelector('.jobs').hidden`), true, "empty picker uses no space");
@@ -94,7 +100,7 @@ test("SSH tasks collapse to one row and keep the selected task last while live e
     const scrollTop = await run(`list.scrollTop`);
     await run(`window.savedButton=select(30); savedButton.focus({preventScroll:true}); window.states['job-30']=true;`);
     await run(`emit(30)`);
-    assert.equal(await run(`select(30) === savedButton && root.activeElement === savedButton`), true,
+    assert.equal(await run(`select(30) === savedButton && document.activeElement === savedButton`), true,
       "status refresh keeps button identity and keyboard focus");
     assert.ok(Math.abs(await run(`list.scrollTop`) - scrollTop) <= 1, "completion keeps expanded scroll position");
     await run(`window.anchor=items().find(el=>el.getBoundingClientRect().bottom>list.getBoundingClientRect().top);
@@ -177,7 +183,8 @@ test("SSH tasks collapse to one row and keep the selected task last while live e
     assert.equal(await run(`items()[0].querySelector('.job-select').title`), "echo task 050");
     await run(`list.dispatchEvent(new WheelEvent('wheel',{deltaY:100,bubbles:true,cancelable:true}))`);
     assert.ok(await run(`list.scrollLeft > 0`), "collapsed row supports wheel navigation");
-    await run(`while (list.firstElementChild) list.firstElementChild.querySelector('.dismiss').click()`);
+    await run(`[...list.querySelectorAll('.dismiss')].forEach(button=>button.click())`);
+    await waitForValue(client, `list.childElementCount===0`);
     assert.equal(await run(`root.querySelector('.jobs').hidden`), true);
     await run(`emit(52)`);
     assert.equal(await run(`items().length`), 1);

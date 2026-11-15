@@ -1,4 +1,4 @@
-/** Actual framework-neutral shared frontend component in its runnable Shadow DOM example. */
+/** Actual host React component in its runnable command-block example. */
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -9,12 +9,12 @@ import { findBrowser, openSession, evaluate, waitForValue, rootDir } from "#supp
 test("command/reply blocks support number selection, keyboard, live updates, copy and theme inheritance", async t => {
   const browserPath = findBrowser();
   if (!browserPath) { t.skip("No Chrome/Edge binary; command blocks were not browser-verified"); return; }
-  const modulePath = path.join(rootDir, "apps/shared/dist/browser/block-list.js");
+  const modulePath = path.join(rootDir, "apps/desktop/dist/shared-ui/index.js");
   assert.ok(fs.existsSync(modulePath), "run pnpm test:build");
-  assert.ok(fs.statSync(modulePath).mtimeMs >= fs.statSync(path.join(rootDir, "apps/shared/components/block-list.ts")).mtimeMs, "shared frontend build must be current");
+  assert.ok(fs.statSync(modulePath).mtimeMs >= fs.statSync(path.join(rootDir, "apps/desktop/src/workbenches/common/block-list.tsx")).mtimeMs, "shared frontend build must be current");
   const routes = new Map([
     ["/apps/shared/examples/command-blocks.html", ["text/html; charset=utf-8", path.join(rootDir, "apps/shared/examples/command-blocks.html")]],
-    ["/apps/shared/dist/browser/block-list.js", ["text/javascript; charset=utf-8", modulePath]],
+    ["/apps/desktop/dist/shared-ui/index.js", ["text/javascript; charset=utf-8", modulePath]],
   ]);
   const server = http.createServer((request, response) => {
     const route = routes.get(request.url);
@@ -34,8 +34,8 @@ test("command/reply blocks support number selection, keyboard, live updates, cop
     await client.send("Runtime.enable");
     await client.send("Emulation.setDeviceMetricsOverride", { width: 1000, height: 720, deviceScaleFactor: 1, mobile: false });
     await client.send("Page.navigate", { url: `http://127.0.0.1:${server.address().port}/apps/shared/examples/command-blocks.html` });
-    await waitForValue(client, `document.querySelector('#blocks')?.shadowRoot?.querySelectorAll('.coterm-block').length===3`);
-    await run(`window.blocksRoot=document.querySelector('#blocks').shadowRoot;
+    await waitForValue(client, `document.querySelector('#blocks')?.querySelectorAll('.coterm-block').length===3`);
+    await run(`window.blocksRoot=document.querySelector('#blocks');
       window.rows=()=>[...blocksRoot.querySelectorAll('.coterm-block')];
       window.buttons=()=>[...blocksRoot.querySelectorAll('.coterm-block-gutter')];
       window.pressed=()=>buttons().map(el=>el.getAttribute('aria-pressed'));`);
@@ -65,14 +65,14 @@ test("command/reply blocks support number selection, keyboard, live updates, cop
       await client.send("Input.dispatchKeyEvent", { type: "keyUp", key, code, windowsVirtualKeyCode: keyCode });
     };
     await key("ArrowDown", "ArrowDown", 40);
-    assert.equal(await run(`blocksRoot.activeElement===buttons()[1]`), true);
+    assert.equal(await run(`document.activeElement===buttons()[1]`), true);
     await key("Enter", "Enter", 13);
     assert.deepEqual(await run(`pressed()`), ["true", "true", "false"]);
     await key("End", "End", 35);
     await key(" ", "Space", 32);
     assert.deepEqual(await run(`pressed()`), ["true", "true", "true"]);
     await key("Home", "Home", 36);
-    assert.equal(await run(`blocksRoot.activeElement===buttons()[0]`), true);
+    assert.equal(await run(`document.activeElement===buttons()[0]`), true);
 
     const screenshot = async name => {
       if (!process.env.COTERM_BLOCKS_SCREENSHOT_DIR) return;
@@ -97,16 +97,17 @@ test("command/reply blocks support number selection, keyboard, live updates, cop
     assert.deepEqual(await run(`pressed()`), ["false", "true", "false"], "live output preserves selection");
 
     // Isolated consumer: plain-text safety, keyed update semantics and lifecycle.
-    await run(String.raw`(async()=>{window.shared=await import('/apps/shared/dist/browser/block-list.js');
+    await run(String.raw`(async()=>{window.shared=await import('/apps/desktop/dist/shared-ui/index.js');
       window.host=document.createElement('div'); host.style.cssText='height:150px;width:280px'; document.body.replaceChildren(host);
       window.changes=[]; window.data=[{id:'a',index:41,command:'echo <script>literal</script>',output:'<img src=x onerror=alert(1)>\n中文\toutput',actor:'human'},
         {id:'b',index:42,command:'long',output:'x'.repeat(400),actor:'robot',exitCode:7}];
       window.props=()=>({blocks:data,onSelectionChange:ids=>changes.push(ids)});
-      window.view=shared.mountBlockList(host,props()); window.block=id=>host.querySelector('[data-block-id="'+id+'"]');
-      block('a').querySelector('button').click();
+      window.view=shared.mountBlockList(host,props()); window.block=id=>host.querySelector('[data-block-id="'+id+'"]');})()`);
+    await waitForValue(client, `!!block('a')`);
+    await run(`block('a').querySelector('button').click();
       window.kept=block('a'); window.keptButton=kept.querySelector('button'); window.keptText=kept.querySelector('.coterm-block-output').firstChild;
       window.range=document.createRange(); range.setStart(keptText,0); range.setEnd(keptText,10); getSelection().removeAllRanges(); getSelection().addRange(range);
-      view.update(props());})()`);
+      view.update(props());`);
     assert.equal(await run(`host.querySelector('img,script')===null`), true, "remote output cannot inject HTML");
     assert.equal(await run(`getSelection().toString()==='<img src=x' && block('a')===kept && kept.querySelector('.coterm-block-output').firstChild===keptText`), true, "unchanged refresh preserves copy selection and DOM");
     assert.equal(await run(`keptButton.getAttribute('aria-pressed')`), "true", "omitted selected preserves local choice");
@@ -120,12 +121,18 @@ test("command/reply blocks support number selection, keyboard, live updates, cop
     assert.equal(await run(`host.querySelector('[role=status]').textContent`), "暂无消息");
     assert.equal(await run(`host.querySelector('[role=list]').getAttribute('aria-label')`), "命令消息");
     await run(`window.historyBlocks=Array.from({length:24},(_,i)=>({id:'history-'+i,index:i+1,command:'read snapshot',output:'bounded reply',actor:'human'}));
-      view.update({blocks:historyBlocks}); window.list=host.querySelector('.coterm-blocks'); list.scrollTop=180; window.savedScroll=list.scrollTop;
+      view.update({blocks:historyBlocks});`);
+    await waitForValue(client, `host.querySelectorAll('.coterm-block').length===24`);
+    await run(`window.list=host.querySelector('.coterm-blocks'); list.scrollTop=180; window.savedScroll=list.scrollTop;
       historyBlocks[23]={...historyBlocks[23],output:'updated tail reply'}; view.update({blocks:historyBlocks});`);
     assert.ok(await run(`savedScroll>0 && list.scrollTop===savedScroll`), "updating a tail reply does not jump away from the reader's scroll position");
     await run(`view.unmount(); view.update({blocks:data}); keptButton.click()`);
     assert.equal(await run(`host.childElementCount`), 0);
     assert.deepEqual(await run(`changes`), [["a"], []], "disposed controls do not invoke old callbacks");
+    await run(`window.first=shared.mountBlockList(host,{blocks:data});first.unmount();window.replacement=shared.mountBlockList(host,{blocks:[{id:'replacement',index:99,command:'new view',actor:'human'}]})`);
+    await waitForValue(client, `host.querySelectorAll('.coterm-block').length===1 && !!host.querySelector('[data-block-id=replacement]')`);
+    await run(`replacement.unmount()`);
+    await waitForValue(client, `host.childElementCount===0`);
     assert.deepEqual(errors, []);
   } finally {
     await session?.close();

@@ -6,8 +6,8 @@ import { findBrowser, openSession, evaluate, waitForValue } from "#support/brows
 test("shared toasts are non-modal, colored, bounded, dismissible and automatically released", async t => {
   const browserPath = findBrowser();
   if (!browserPath) { t.skip("No Chrome/Edge binary; shared notifications were not verified"); return; }
-  const artifact = new URL("../../../apps/shared/dist/browser/toasts.js", import.meta.url);
-  assert.ok(fs.statSync(artifact).mtimeMs >= fs.statSync(new URL("../../../apps/shared/components/toasts.ts", import.meta.url)).mtimeMs,
+  const artifact = new URL("../../../apps/desktop/dist/shared-ui/index.js", import.meta.url);
+  assert.ok(fs.statSync(artifact).mtimeMs >= fs.statSync(new URL("../../../apps/desktop/src/workbenches/common/toasts.tsx", import.meta.url)).mtimeMs,
     "run pnpm test:build before testing the shared toast component");
   const url = `data:text/javascript;base64,${fs.readFileSync(artifact).toString("base64")}`;
   const session = await openSession({ browserPath, totalTimeoutMs: 20_000 });
@@ -17,7 +17,7 @@ test("shared toasts are non-modal, colored, bounded, dismissible and automatical
     await session.client.send("Emulation.setFocusEmulationEnabled", { enabled: true });
     await run(`(async () => {
       document.body.style.cssText='margin:0;height:600px';
-      const host=document.createElement('div'); document.body.append(host); window.root=host.attachShadow({mode:'open'});
+      const host=document.createElement('div'); document.body.append(host); window.root=host;
       window.area=document.createElement('div'); area.style.cssText='position:relative;height:500px;--coterm-danger:rgb(180,30,40);--coterm-warning:rgb(190,140,20);--coterm-surface-raised:#fff;--coterm-text-primary:#222'; root.append(area);
       window.input=document.createElement('textarea'); area.append(input); input.focus();
       const {mountToasts}=await import(${JSON.stringify(url)});
@@ -25,7 +25,7 @@ test("shared toasts are non-modal, colored, bounded, dismissible and automatical
       window.closeError=toasts.show({message:'Connection failed',tone:'error'});
       toasts.show({message:'Invalid HEX input',tone:'warning'});
     })()`);
-    assert.equal(await run(`root.activeElement===input`), true, "showing a toast keeps the editor focused");
+    assert.equal(await run(`document.activeElement===input`), true, "showing a toast keeps the editor focused");
     assert.equal(await run(`root.querySelector('dialog,[aria-modal=true]')===null`), true);
     assert.equal(await run(`getComputedStyle(root.querySelector('.coterm-toasts')).pointerEvents`), "none");
     assert.equal(await run(`getComputedStyle(root.querySelector('[data-tone=error]')).borderTopColor`), "rgb(180, 30, 40)");
@@ -33,22 +33,25 @@ test("shared toasts are non-modal, colored, bounded, dismissible and automatical
     assert.equal(await run(`root.querySelector('[data-tone=warning]').getAttribute('role')`), "alert");
     assert.ok(Number.parseFloat(await run(`getComputedStyle(root.querySelector('.coterm-toast')).borderRadius`)) > 0);
     await waitForValue(session.client, `root.querySelectorAll('.coterm-toast').length===0`);
-    assert.equal(await run(`root.activeElement===input`), true, "expiry never changes focus");
+    assert.equal(await run(`document.activeElement===input`), true, "expiry never changes focus");
 
     await run(`for(let i=0;i<10;i++) toasts.show({message:'same warning',tone:'warning'})`);
     assert.equal(await run(`root.querySelectorAll('.coterm-toast').length`), 1, "identical messages are coalesced");
     await run(`for(let i=0;i<100;i++) toasts.show({message:'error '+i,tone:'error'})`);
     assert.equal(await run(`root.querySelectorAll('.coterm-toast').length`), 3);
-    await run(`toasts.clear(); toasts.show({message:'<img src=x onerror=alert(1)>',tone:'warning'});
-      root.querySelector('.coterm-toast').dispatchEvent(new MouseEvent('mouseenter'))`);
+    await run(`toasts.clear(); toasts.show({message:'<img src=x onerror=alert(1)>',tone:'warning'});`);
+    await waitForValue(session.client, `root.querySelector('.coterm-toast-message')?.textContent==='<img src=x onerror=alert(1)>'`);
+    await run(`root.querySelector('.coterm-toast').dispatchEvent(new MouseEvent('mouseover', {bubbles:true,relatedTarget:input}))`);
     assert.equal(await run(`root.querySelector('.coterm-toast img')===null`), true, "messages stay plain text");
     await run(`new Promise(resolve=>setTimeout(resolve,650))`);
     assert.equal(await run(`root.querySelectorAll('.coterm-toast').length`), 1, "hover pauses expiry for reading");
-    await run(`root.querySelector('.coterm-toast').dispatchEvent(new MouseEvent('mouseleave'))`);
+    await run(`root.querySelector('.coterm-toast').dispatchEvent(new MouseEvent('mouseout', {bubbles:true, relatedTarget:input}))`);
     await waitForValue(session.client, `root.querySelectorAll('.coterm-toast').length===0`);
 
-    await run(`toasts.show({message:'keyboard reading',tone:'error'}); root.querySelector('.coterm-toast-close').focus()`);
-    assert.equal(await run(`root.activeElement===root.querySelector('.coterm-toast-close')`), true, "the toast close button is keyboard focusable");
+    await run(`toasts.show({message:'keyboard reading',tone:'error'});`);
+    await waitForValue(session.client, `!!root.querySelector('.coterm-toast-close')`);
+    await run(`root.querySelector('.coterm-toast-close').focus()`);
+    assert.equal(await run(`document.activeElement===root.querySelector('.coterm-toast-close')`), true, "the toast close button is keyboard focusable");
     await run(`new Promise(resolve=>setTimeout(resolve,650))`);
     assert.equal(await run(`root.querySelectorAll('.coterm-toast').length`), 1, "keyboard focus pauses expiry");
     await run(`input.focus()`);

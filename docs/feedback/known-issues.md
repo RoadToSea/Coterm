@@ -49,11 +49,13 @@ Python 3.9 的 raw 模式曾留下 IXOFF，捕获过混入的 XOFF；测试已�
 | 问题 | 已有证据 | 下一步 |
 |---|---|---|
 | 已覆盖的工作区配置恢复 | 现存加密文件可正常解密，但旧实例已不在其中；应用数据目录内未发现旧工作区备份 | 需要外部备份或重新录入；不能把防止继续丢失等同于已找回旧配置 |
+| 工作区容量回归偶发写入失败 | Windows 桌面后端完整回归中，`capacity_rejects_new_instances_without_evicting_offline_entries` 一次返回 `workspace_write_failed`；单项及整套 37 项复跑通过 | 复现时采集测试临时目录的文件写入／替换错误；尚未定位原因，不能据此归因于浏览器并发或主题迁移 |
 | SSH 现场复合命令返回空输出 | 本地复合命令、目录变化、ANSI 与分包边界回归已过，尚未在原反馈远端复测 | 保留完整 structuredContent、两流编码、截断和字节信息；同一 operationId 比对 read_lines 与对话，确认远端 Shell／提示符。不能只看旧 text 字段判断无输出 |
 | Serial MCP 客户端导出 parameters=null | 服务端工具目录已验证存在 inputSchema；客户端导出缺失尚未归因 | 同一连接比对原始 tools/list 和客户端转换值，不假定服务端漏发 |
 | SSH 认证与终端限制 | 当前为密码认证、一次 sudo／NOPASSWD，POSIX 前台；人工复杂输入观察不保证可靠 | 实际远端 TTY／MFA／自定义提示符与长连接分别验收；不把未支持能力写成已完成 |
 | Local 后台取消范围 | Windows 只保证实际结束的直接子进程，人工原始输入不生成可靠对话 | 独立设计并验收后代进程回收；其他系统真实 Shell 另验 |
 | 网络现场兼容 | Windows 回环与协议夹具已验收，未覆盖实际代理部署和远程 Telnet 设备 | 真设备、代理和断线重连现场复测 |
 | 非 Windows 与发行 | 工作区无明文回退，macOS／Linux 原生、安装与安全存储未完整验收 | 按发行检查执行，不能以浏览器测试替代 |
+| 宿主工作台的原生验收 | 软件覆盖与待验收范围见 [前端主题与工作台](ui-theme-audit.md) | Windows WebView2／安装包及 macOS／Linux 原生行为分别验收 |
 
 SSH 现场入口为[命令边界](../../crates/coterm-driver/src/ssh/command.rs)和[SSH 集成测试](../../crates/coterm-driver/tests/ssh.rs)；MCP 目录现场入口为[工具映射](../../crates/coterm-mcp/src/server.rs)和[串口工具测试](../../crates/coterm-driver/tests/serial.rs)。

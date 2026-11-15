@@ -4,10 +4,11 @@ import { t } from "../../i18n";
 import { useI18n } from "../../use-i18n";
 import { Modal } from "../ui/Modal";
 import { Button } from "../ui/button";
+import { Select } from "../ui/input";
 import { Alert, AlertDescription } from "../ui/alert";
 import { Field, FieldGroup, FieldLabel } from "../ui/field";
 import { ApprovalRuleGroups } from "./ApprovalRuleGroups";
-import { approvalError, approvalInputClass } from "./ApprovalGroupEditor";
+import { approvalError } from "./ApprovalGroupEditor";
 
 export interface ApprovalTarget { name: string; configRef?: string; driverInstanceId?: string }
 
@@ -63,11 +64,11 @@ export function ApprovalSettings({ instance, onClose }: { instance: ApprovalTarg
     {!catalog ? <Button variant="outline" onClick={() => setRetry(value => value + 1)}>{t(error ? "Retry" : "Loading…")}</Button> : <FieldGroup disabled={busy} aria-busy={busy}>
       <Field>
         <FieldLabel htmlFor="approval-group-select">{t("Rule group")}</FieldLabel>
-        <select id="approval-group-select" value={selected ?? ""} className={approvalInputClass} disabled={!binding}
+        <Select id="approval-group-select" value={selected ?? ""} disabled={!binding}
           onChange={event => { setSelected(event.target.value || null); setShowRules(false); setError(""); }}>
           <option value="">{t("Unassigned")}</option>
           {catalog.groups.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
-        </select>
+        </Select>
         {!binding && <p role="alert" className="text-sm text-destructive">{t("This instance has no saved configuration to assign a rule group.")}</p>}
         <p role="status" className="text-sm">{t(binding?.bypass ? "Bypass is on: this instance currently skips approval." : !group ? "All Agent commits require approval."
           : group.mode === "allow_matches" ? "Matching commands skip approval; unmatched commands require approval." : "Matching commands require approval; unmatched commands skip approval.")}</p>

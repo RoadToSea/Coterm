@@ -3,10 +3,9 @@ import { Plus, Trash2 } from "lucide-react";
 import { hostAPI, type ApprovalGroupDraft } from "../../host-api";
 import { t } from "../../i18n";
 import { Button } from "../ui/button";
+import { Input, Textarea } from "../ui/input";
 import { Field, FieldGroup, FieldLabel } from "../ui/field";
 import { ToggleGroup, ToggleGroupItem } from "../ui/toggle-group";
-
-export const approvalInputClass = "w-full min-w-0 rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring";
 
 /** Converts host configuration errors to user text; no submitted command is logged. */
 export function approvalError(reason: unknown): string {
@@ -53,7 +52,7 @@ export function ApprovalGroupEditor({ draft, onChange, custom, onCustomChange, b
   return <FieldGroup disabled={busy || testing} aria-busy={busy || testing}>
     <Field>
       <FieldLabel htmlFor="approval-group-name">{t("Group name")}</FieldLabel>
-      <input id="approval-group-name" value={draft.name} maxLength={64} className={approvalInputClass}
+      <Input id="approval-group-name" value={draft.name} maxLength={64}
         onChange={event => onChange({ ...draft, name: event.target.value })} />
     </Field>
     <Field>
@@ -71,13 +70,13 @@ export function ApprovalGroupEditor({ draft, onChange, custom, onCustomChange, b
     <Field>
       <FieldLabel htmlFor="approval-pattern">{t("Regular expression rules")}</FieldLabel>
       {draft.patterns.map((pattern, index) => <div key={index} className="flex min-w-0 items-center gap-2">
-        <input aria-label={t("Rule {number}", { number: index + 1 })} value={pattern} spellCheck={false} maxLength={2048}
-          className={approvalInputClass} onChange={event => onChange({ ...draft, patterns: draft.patterns.map((item, position) => position === index ? event.target.value : item) })} />
+        <Input aria-label={t("Rule {number}", { number: index + 1 })} value={pattern} spellCheck={false} maxLength={2048}
+          onChange={event => onChange({ ...draft, patterns: draft.patterns.map((item, position) => position === index ? event.target.value : item) })} />
         <Button type="button" variant="ghost" size="icon" aria-label={t("Remove rule {number}", { number: index + 1 })}
           onClick={() => onChange({ ...draft, patterns: draft.patterns.filter((_, position) => position !== index) })}><Trash2 /></Button>
       </div>)}
       {!draft.patterns.length && <p className="text-xs text-muted-foreground">{t("No rules yet.")}</p>}
-      <input id="approval-pattern" value={custom} spellCheck={false} maxLength={2048} placeholder="^pwd$" className={approvalInputClass}
+      <Input id="approval-pattern" value={custom} spellCheck={false} maxLength={2048} placeholder="^pwd$"
         onChange={event => onCustomChange(event.target.value)} onKeyDown={event => {
           if (event.key === "Enter" && !event.nativeEvent.isComposing) { event.preventDefault(); add(); }
         }} />
@@ -87,7 +86,7 @@ export function ApprovalGroupEditor({ draft, onChange, custom, onCustomChange, b
     </Field>
     <Field>
       <FieldLabel htmlFor="approval-preview">{t("Test a command")}</FieldLabel>
-      <textarea id="approval-preview" rows={2} value={text} maxLength={65536} className={approvalInputClass} onChange={event => setText(event.target.value)} />
+      <Textarea id="approval-preview" rows={2} value={text} maxLength={65536} onChange={event => setText(event.target.value)} />
       <Button type="button" variant="outline" size="sm" className="self-start" disabled={!text || !!custom.trim()} onClick={() => void test()}>{t("Test matching")}</Button>
       <p role="status" className="text-sm">{preview === null ? "" : t(preview ? "Requires human approval" : "Skips human approval")}</p>
     </Field>

@@ -32,6 +32,12 @@ importers:
       '@tauri-apps/plugin-opener':
         specifier: ^2.0.0
         version: 2.7.2
+      '@xterm/addon-fit':
+        specifier: ^0.10.0
+        version: 0.10.0(@xterm/xterm@5.5.0)
+      '@xterm/addon-search':
+        specifier: ~0.15.0
+        version: 0.15.0(@xterm/xterm@5.5.0)
       '@xterm/xterm':
         specifier: ^5.5.0
         version: 5.5.0
@@ -75,101 +81,6 @@ importers:
       tailwindcss:
         specifier: ^3.4.14
         version: 3.4.19
-      typescript:
-        specifier: ^5.6.3
-        version: 5.9.3
-      vite:
-        specifier: ^5.4.9
-        version: 5.4.21(@types/node@22.20.5)
-
-  crates/coterm-driver/frontend/local:
-    dependencies:
-      '@xterm/addon-fit':
-        specifier: ^0.10.0
-        version: 0.10.0(@xterm/xterm@5.5.0)
-      '@xterm/addon-search':
-        specifier: ~0.15.0
-        version: 0.15.0(@xterm/xterm@5.5.0)
-      '@xterm/xterm':
-        specifier: ^5.5.0
-        version: 5.5.0
-    devDependencies:
-      typescript:
-        specifier: ^5.6.3
-        version: 5.9.3
-      vite:
-        specifier: ^5.4.9
-        version: 5.4.21(@types/node@22.20.5)
-
-  crates/coterm-driver/frontend/serial:
-    dependencies:
-      '@xterm/addon-fit':
-        specifier: ^0.10.0
-        version: 0.10.0(@xterm/xterm@5.5.0)
-      '@xterm/addon-search':
-        specifier: ~0.15.0
-        version: 0.15.0(@xterm/xterm@5.5.0)
-      '@xterm/xterm':
-        specifier: ^5.5.0
-        version: 5.5.0
-    devDependencies:
-      typescript:
-        specifier: ^5.6.3
-        version: 5.9.3
-      vite:
-        specifier: ^5.4.9
-        version: 5.4.21(@types/node@22.20.5)
-
-  crates/coterm-driver/frontend/ssh:
-    dependencies:
-      '@xterm/addon-fit':
-        specifier: ^0.10.0
-        version: 0.10.0(@xterm/xterm@5.5.0)
-      '@xterm/addon-search':
-        specifier: ~0.15.0
-        version: 0.15.0(@xterm/xterm@5.5.0)
-      '@xterm/xterm':
-        specifier: ^5.5.0
-        version: 5.5.0
-    devDependencies:
-      typescript:
-        specifier: ^5.6.3
-        version: 5.9.3
-      vite:
-        specifier: ^5.4.9
-        version: 5.4.21(@types/node@22.20.5)
-
-  crates/coterm-driver/frontend/tcp:
-    dependencies:
-      '@xterm/addon-fit':
-        specifier: ^0.10.0
-        version: 0.10.0(@xterm/xterm@5.5.0)
-      '@xterm/addon-search':
-        specifier: ~0.15.0
-        version: 0.15.0(@xterm/xterm@5.5.0)
-      '@xterm/xterm':
-        specifier: ^5.5.0
-        version: 5.5.0
-    devDependencies:
-      typescript:
-        specifier: ^5.6.3
-        version: 5.9.3
-      vite:
-        specifier: ^5.4.9
-        version: 5.4.21(@types/node@22.20.5)
-
-  crates/coterm-driver/frontend/telnet:
-    dependencies:
-      '@xterm/addon-fit':
-        specifier: ^0.10.0
-        version: 0.10.0(@xterm/xterm@5.5.0)
-      '@xterm/addon-search':
-        specifier: ~0.15.0
-        version: 0.15.0(@xterm/xterm@5.5.0)
-      '@xterm/xterm':
-        specifier: ^5.5.0
-        version: 5.5.0
-    devDependencies:
       typescript:
         specifier: ^5.6.3
         version: 5.9.3

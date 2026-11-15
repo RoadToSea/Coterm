@@ -61,8 +61,8 @@ const run = (expression) => evaluate(client, expression);
 const invoke = (command, args = {}) => run(`window.__TAURI_INTERNALS__.invoke(${JSON.stringify(command)},${JSON.stringify(args)})`);
 
 async function serialRoot() {
-  // 串口前端挂在自己的 Shadow DOM 里，用模式按钮定位它的宿主节点。
-  return "([...document.querySelectorAll('main div')].find(node => node.shadowRoot?.querySelector('.modes'))?.shadowRoot)";
+  // 用模式按钮定位宿主串口工作台。
+  return "document.querySelector('main [data-workbench=stream]')";
 }
 
 await launch();
@@ -72,11 +72,10 @@ try {
   assert.ok(serial, `serial driver must be discovered: ${JSON.stringify(drivers)}`);
 
   await run(`document.querySelector('[aria-label="Manage ${serial.name}"]').click()`);
-  await waitForValue(client, "[...document.querySelectorAll('dialog div')].some(node=>node.shadowRoot?.querySelector('form'))", { label: "serial configuration form" });
+  await waitForValue(client, "!!document.querySelector('#driver-configuration [name=port]')", { label: "serial configuration form" });
   await run(`(() => {
-    const host = [...document.querySelectorAll('dialog div')].find(node=>node.shadowRoot?.querySelector('form'));
-    const root = host.shadowRoot;
-    const portControl = root.querySelector('form label select, form input[type=text]');
+    const root = document.getElementById('driver-configuration');
+    const portControl = root.querySelector('[name=port]');
     portControl.value = ${JSON.stringify(port)};
     root.querySelector('form').requestSubmit();
   })()`);

@@ -1,4 +1,5 @@
 @import "@xterm/xterm/css/xterm.css";
+@import "./workbenches/workbenches.css";
 
 @tailwind base;
 @tailwind components;
@@ -26,6 +27,21 @@
   --input: 220 16% 79%;
   --ring: 214 78% 43%;
   --radius: 0.625rem;
+  --radius-lg: var(--radius);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-sm: calc(var(--radius) - 4px);
+  --shadow-color: 220 25% 20% / 0.18;
+  --overlay: 220 25% 12% / 0.45;
+  --coterm-shadow-panel: 0 10px 24px hsl(var(--shadow-color));
+  --coterm-shadow-up: 0 -6px 24px hsl(var(--shadow-color));
+  --coterm-success: hsl(var(--success));
+  --coterm-warning: hsl(var(--warning));
+  --coterm-selection: hsl(var(--accent));
+  --coterm-ui-font-size: 13px;
+  --coterm-terminal-font-size: 13px;
+  --coterm-terminal-line-height: 1;
+  --coterm-terminal-cursor-blink: true;
+  --coterm-terminal-number-chars: 2;
   --warning: 35 83% 30%;
   --warning-surface: 42 90% 95%;
   --warning-border: 39 60% 78%;
@@ -46,7 +62,7 @@
   --terminal-search: #e8cc76;
   --terminal-search-active: #d99b38;
 
-  /* Stable driver tokens: inherited through Shadow DOM, no IPC required. */
+  /* Semantic colors shared by host controls and terminal adapters. */
   --coterm-surface: hsl(var(--background));
   --coterm-surface-raised: hsl(var(--card));
   --coterm-surface-panel: hsl(var(--secondary));
@@ -77,6 +93,8 @@
 }
 
 .dark {
+  --shadow-color: 220 30% 2% / 0.5;
+  --overlay: 220 30% 2% / 0.65;
   color-scheme: dark;
   --background: 220 22% 9%;
   --foreground: 216 20% 86%;
@@ -146,11 +164,6 @@ body {
 .settings-section-title { padding: 14px 0 8px; font-size: .75rem; font-weight: 600; color: hsl(var(--muted-foreground)); }
 .settings-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 16px; padding: 16px 0; border-bottom: 1px solid hsl(var(--border)); }
 .settings-control { display: flex; justify-content: flex-end; }
-.settings-switch { appearance: none; position: relative; width: 36px; height: 22px; border: 1px solid hsl(var(--input)); border-radius: 999px; background: hsl(var(--muted)); cursor: pointer; }
-.settings-switch::after { content: ""; position: absolute; width: 16px; height: 16px; left: 2px; top: 2px; border-radius: 50%; background: hsl(var(--muted-foreground)); transition: transform 140ms ease-out; }
-.settings-switch:checked { border-color: hsl(var(--primary)); background: hsl(var(--primary)); }
-.settings-switch:checked::after { transform: translateX(14px); background: hsl(var(--primary-foreground)); }
-.settings-switch:focus-visible { outline: 2px solid hsl(var(--ring)); outline-offset: 3px; }
 .settings-preview { margin-top: 20px; padding: 14px; border: 1px solid hsl(var(--border)); border-radius: var(--radius); overflow-wrap: anywhere; background: hsl(var(--muted)); font: var(--coterm-terminal-font-size, 13px)/var(--coterm-terminal-line-height, 1.6) var(--coterm-font-mono); }
 .settings-preview span { color: hsl(var(--primary)); }
 .settings-footer { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; padding: 12px 20px; border-top: 1px solid hsl(var(--border)); }
@@ -163,8 +176,6 @@ body {
   .settings-row:has(.settings-control-switch) { grid-template-columns: minmax(0, 1fr) auto; }
   .settings-results { padding: 12px 16px; }
 }
-@media (prefers-reduced-motion: reduce) { .settings-switch::after { transition: none; } }
-
 button:focus-visible,
 select:focus-visible {
   outline: 1px solid var(--coterm-focus);
@@ -181,34 +192,13 @@ button:disabled {
   }
 }
 
-.host-secret-dialog {
-  margin: auto;
-  width: min(420px, calc(100% - 32px));
-  padding: 24px;
-  border: 1px solid var(--coterm-border-input);
-  background: var(--coterm-surface-raised);
-  color: var(--coterm-text-primary);
-  font-size: 13px;
-  border-radius: var(--radius);
-  box-shadow: 0 24px 70px rgb(0 0 0 / 20%);
-}
-
-.host-secret-dialog::backdrop { background: rgb(0 0 0 / 55%); }
-.host-secret-dialog h2 { margin-bottom: 18px; font-weight: 600; }
-.host-secret-dialog label { display: grid; gap: 8px; }
-.host-secret-dialog input, .host-secret-dialog select { padding: 8px; border: 1px solid var(--coterm-border-input); background: var(--coterm-surface); color: var(--coterm-text-primary); border-radius: calc(var(--radius) - 2px); }
-.host-secret-dialog form > div { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
-.host-secret-dialog button { padding: 6px 12px; background: var(--coterm-border-subtle); color: var(--coterm-text-primary); border-radius: calc(var(--radius) - 2px); }
-.host-secret-dialog button[type="submit"] { background: var(--coterm-accent); color: var(--coterm-accent-foreground); border-radius: calc(var(--radius) - 2px); }
-.host-secret-dialog p { color: var(--coterm-danger); margin-top: 8px; }
-
 /* Inverted rounded bottom corner for browser-style tabs */
 .coterm-tab-active {
   position: relative;
   background-color: hsl(var(--background));
   color: hsl(var(--foreground));
-  border-top-left-radius: 10px;
-  border-top-right-radius: 10px;
+  border-top-left-radius: var(--radius);
+  border-top-right-radius: var(--radius);
   margin-bottom: -1px;
   z-index: 10;
 }
@@ -257,8 +247,8 @@ button:disabled {
 }
 
 @keyframes approval-tray-rise {
-  from { max-height: 0; transform: translateY(18px); opacity: 0; }
-  to { max-height: min(46vh, 360px); transform: translateY(0); opacity: 1; }
+  from { transform: translateY(18px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
 }
 
 @keyframes approval-card-reveal {

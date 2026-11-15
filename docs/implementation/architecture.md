@@ -11,8 +11,9 @@
 ```text
 apps/
   desktop/src/                  React 桌面、宿主接口、实例视图
+    workbenches/                宿主配置表单、终端／字节工作台与驱动控制器
   desktop/src-tauri/src/        应用组合、Tauri 命令、工作区与 MCP 设置
-  shared/                      应用内部前端契约、终端与字节工作台
+  shared/                      应用内部前端类型契约
 crates/
   coterm-core/src/
     model/                     操作、实例、错误与交互数据
@@ -26,7 +27,6 @@ crates/
     tcp/ telnet/               两种网络驱动入口
     network/                   TCP 生命周期、代理与网络命令共用实现
     stream/                    串口与网络共用缓冲及提示符观察
-  coterm-driver/frontend/      五个驱动的内置前端
   coterm-driver/manifests/     编译期固定声明
   coterm-mcp/src/              工具映射、Bridge 与 Stdio 适配
 scripts/                       构建、验收和调试清理
@@ -41,7 +41,7 @@ docs/                          唯一长文档目录
 ### 控制与数据路径
 
 ```text
-桌面驱动前端 → 实例绑定 Host API → Tauri 命令 ─┐
+宿主 React 工作台 → 实例绑定 Host API → Tauri 命令 ─┐
                                              ├→ Runtime → 实例审批 → DriverTask → 驱动
 Agent → 桌面 EXE 的 mcp stdio → 本机 Bridge ──┘
 
@@ -52,7 +52,7 @@ Agent → 桌面 EXE 的 mcp stdio → 本机 Bridge ──┘
 
 桌面前端不经过 MCP；驱动控制不经过内部 JSON-RPC；数据正文由驱动直接保留，不先搬进通用 Repository 再读回。每次控制应答与异步通知是不同路径。
 
-固定工厂与前端资源由 [builtin_drivers.rs](../../apps/desktop/src-tauri/src/builtin_drivers.rs) 注册。注册校验声明、能力和参数目录，不扫描外部驱动目录、不运行外部入口、不做产品运行期握手。诊断 JSON-RPC 仅供显式示例和契约测试。
+固定工厂由 [builtin_drivers.rs](../../apps/desktop/src-tauri/src/builtin_drivers.rs) 注册。注册校验声明、能力和参数目录，不扫描外部驱动目录、不运行外部入口、不做产品运行期握手。诊断 JSON-RPC 仅供显式示例和契约测试。
 
 ### 后续建议
 
@@ -73,7 +73,7 @@ Agent → 桌面 EXE 的 mcp stdio → 本机 Bridge ──┘
 | 终端基础工具 | [core/terminal](../../crates/coterm-core/src/terminal) | Local 使用；不要求强制替换 SSH 已有领域缓冲 |
 | 字节流缓冲与提示符 | [driver/stream](../../crates/coterm-driver/src/stream) | Serial 与网络复用；不包含串口控制线或 SSH 命令包装 |
 | TCP 连接与代理 | [driver/network](../../crates/coterm-driver/src/network) | Raw TCP 与 Telnet 共用，Telnet 编解码仍独立 |
-| 前端终端与字节交互 | [apps/shared/components](../../apps/shared/components) | 共用显示和生命周期，不接管协议或建立第二套保存结构 |
+| 前端终端与字节交互 | [宿主工作台](../../apps/desktop/src/workbenches) | 共用显示和生命周期，不接管协议或建立第二套保存结构 |
 
 公共复用以消除重复知识为准，不要求所有缓冲、命令记录和 Shell 都统一成同一种实现。输入输出字段相似不能证明协议边界、取消或执行语义相同。
 
@@ -142,22 +142,22 @@ Serial 端口枚举保留库返回的 portName 与 product；前端仅在展示�
 
 ### 桌面交互
 
-React 桌面使用 Tailwind 与现有 shadcn 源码组件；驱动前端仍是当前已有的内置模块，不在整理文档时改写框架。driver-loader 按实例挂载可信前端，Host API 固定目标和来源。
+React 桌面使用 Tailwind 与现有 shadcn 源码组件；连接参数由内置声明的 ui 元数据描述，宿主渲染配置表单与终端／字节工作台。工作台按需加载；协议控制器维护 xterm、状态补取和订阅，Host API 固定目标和来源。产品不动态加载驱动前端源码，也不使用 Shadow DOM。具体组件、主题与元数据边界见[前端实现](frontend.md)。
 
 设置、连接表单及工具栏的辅助说明使用原生 title 悬浮提示，不另引入 Tooltip 依赖；无障碍描述通过 aria-description 提供。语言切换只更新文案，不重新挂载连接。Local 的退出码仍在状态栏显示，重启操作说明放在重启按钮上，错误区域不被状态刷新覆盖。
 
 | 共享入口 | 当前职责 |
 |---|---|
-| [terminal-surface.ts](../../apps/shared/components/terminal-surface.ts) | xterm、主题、字号、搜索、快捷键、尺寸监听和释放 |
-| [stream-workbench](../../apps/shared/components/stream-workbench) | 终端／字节视图、回放、发送队列、HEX、历史、定时发送和偏好 |
-| [network-connection.ts](../../apps/shared/components/network-connection.ts) | 网络配置、回显、状态补取，不含 SSH 文件与 exec 面板 |
-| [terminal-blocks.ts](../../apps/shared/components/terminal-blocks.ts) | xterm marker、数字块号、选择和上下横线，不识别执行边界 |
-| [block-list.ts](../../apps/shared/components/block-list.ts) | 有界纯文本块列表和选择；与终端叠层是两个展示入口 |
-| [toasts.ts](../../apps/shared/components/toasts.ts) | 不抢焦点的有界提示，不替代审批或秘密交互 |
+| [terminal-surface.ts](../../apps/desktop/src/workbenches/common/terminal-surface.ts) | xterm、主题、字号、搜索、快捷键、尺寸监听和释放 |
+| [stream-workbench](../../apps/desktop/src/workbenches/common/stream-workbench) | 终端／字节视图、回放、发送队列、HEX、历史、定时发送和偏好 |
+| [network-connection.ts](../../apps/desktop/src/workbenches/common/network-connection.ts) | 网络配置、回显、状态补取，不含 SSH 文件与 exec 面板 |
+| [terminal-blocks.tsx](../../apps/desktop/src/workbenches/common/terminal-blocks.tsx) | xterm marker、数字块号、选择和上下横线，不识别执行边界 |
+| [block-list.tsx](../../apps/desktop/src/workbenches/common/block-list.tsx) | 有界纯文本块列表和选择；与终端叠层是两个展示入口 |
+| [toasts.tsx](../../apps/desktop/src/workbenches/common/toasts.tsx) | 不抢焦点的有界提示，不替代审批或秘密交互 |
 
-颜色来自桌面语义变量，由 Shadow DOM 继承；终端读取解析后的调色板。切换主题原地更新，不重建连接。尺寸回调只对可见容器执行，卸载清理监听、队列后续动作和计时器。
+颜色和圆角统一来自桌面语义变量；终端读取解析后的调色板。切换主题原地更新，不重建连接。尺寸回调只对可见容器执行，卸载清理监听、队列后续动作和计时器。
 
-apps/shared 是内部源码，不是外部 SDK。当前前端契约 2.0 绑定实例；saveConfiguration 可选，subscribeEvents 安装后返回注销函数，处理完成确认消费；预留 subscribeStream 当前返回不支持。
+apps/shared 只保留内部类型契约与可执行示例，不导出 UI 实现。当前前端契约 2.0 绑定实例；saveConfiguration 可选，subscribeEvents 安装后返回注销函数，处理完成确认消费；预留 subscribeStream 当前返回不支持。
 
 ### Agent 接入
 

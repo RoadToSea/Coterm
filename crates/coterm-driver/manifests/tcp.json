@@ -14,9 +14,6 @@
       "driver-events"
     ]
   },
-  "frontend": {
-    "entry": "frontend/index.js"
-  },
   "mcp": {
     "provider": "backend"
   },
@@ -26,5 +23,144 @@
   },
   "capabilities": [
     "confirmation"
-  ]
+  ],
+  "ui": {
+    "workbench": "stream",
+    "title": "Create instance",
+    "schema": {
+      "type": "object",
+      "required": [
+        "host",
+        "port"
+      ],
+      "properties": {
+        "host": {
+          "type": "string",
+          "title": "Remote host",
+          "maxLength": 253,
+          "x-help": "Raw TCP sends exact bytes."
+        },
+        "port": {
+          "type": "integer",
+          "title": "Port",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "connectTimeoutMs": {
+          "type": "integer",
+          "title": "Connection timeout (ms)",
+          "minimum": 100,
+          "maximum": 60000
+        },
+        "autoReconnect": {
+          "type": "boolean",
+          "title": "Reconnect after disconnection",
+          "x-help": "Reconnecting never replays input."
+        },
+        "reconnectIntervalMs": {
+          "type": "integer",
+          "title": "Reconnect interval (ms)",
+          "minimum": 250,
+          "maximum": 60000,
+          "x-enabledBy": "autoReconnect"
+        },
+        "proxy": {
+          "type": "object",
+          "title": "Proxy",
+          "properties": {
+            "type": {
+              "type": "string",
+              "title": "Proxy",
+              "enum": [
+                "direct",
+                "socks5",
+                "http"
+              ],
+              "x-enumNames": [
+                "Direct",
+                "SOCKS5 (no authentication)",
+                "HTTP CONNECT (no authentication)"
+              ]
+            },
+            "host": {
+              "type": "string",
+              "title": "Proxy host",
+              "maxLength": 253
+            },
+            "port": {
+              "type": "integer",
+              "title": "Proxy port",
+              "minimum": 1,
+              "maximum": 65535
+            }
+          }
+        },
+        "localEcho": {
+          "type": "string",
+          "title": "Local echo",
+          "enum": [
+            "auto",
+            "on",
+            "off"
+          ],
+          "x-enumNames": [
+            "Automatic",
+            "On",
+            "Off"
+          ]
+        },
+        "receiveNewlines": {
+          "type": "string",
+          "title": "Receive newline completion",
+          "enum": [
+            "none",
+            "lf",
+            "cr",
+            "both"
+          ],
+          "x-enumNames": [
+            "None",
+            "Complete LF with CR",
+            "Complete CR with LF",
+            "Complete CR and LF"
+          ]
+        },
+        "backspace": {
+          "type": "string",
+          "title": "Backspace key",
+          "enum": [
+            "bs",
+            "del"
+          ],
+          "x-enumNames": [
+            "BS (0x08)",
+            "DEL (0x7F)"
+          ]
+        },
+        "prompt": {
+          "type": "string",
+          "title": "Shell prompt",
+          "maxLength": 256,
+          "x-help": "Use the complete visible Shell prompt; trailing spaces are ignored. Shell reads require terminal mode."
+        }
+      }
+    },
+    "defaults": {
+      "host": "",
+      "port": 8080,
+      "username": null,
+      "connectTimeoutMs": 5000,
+      "autoReconnect": false,
+      "reconnectIntervalMs": 1000,
+      "proxy": {
+        "type": "direct"
+      },
+      "localEcho": "on",
+      "receiveNewlines": "lf",
+      "backspace": "bs",
+      "terminalType": "xterm",
+      "mode": "stream",
+      "prompt": "# "
+    }
+  }
 }

@@ -21,6 +21,7 @@ export default {
         "warning-surface": "hsl(var(--warning-surface))",
         "warning-border": "hsl(var(--warning-border))",
         "success": "hsl(var(--success))",
+        overlay: "hsl(var(--overlay))",
 
         coterm: {
           surface: "var(--coterm-surface)",
@@ -48,11 +49,18 @@ export default {
           focus: "var(--coterm-focus)",
         },
         agent: {
-          500: "#8b5cf6", // Purple accent for Agent commands
-          900: "#2e1065",
+          500: "var(--coterm-accent)",
+          900: "var(--coterm-surface-active)",
         },
       },
       borderRadius: { lg: "var(--radius)", md: "calc(var(--radius) - 2px)", sm: "calc(var(--radius) - 4px)" },
+      boxShadow: {
+        sm: '0 1px 2px hsl(var(--shadow-color))',
+        DEFAULT: '0 1px 3px hsl(var(--shadow-color))',
+        lg: 'var(--coterm-shadow-panel)',
+        '2xl': '0 24px 70px hsl(var(--shadow-color))',
+        up: 'var(--coterm-shadow-up)',
+      },
       fontFamily: {
         sans: ["var(--coterm-font-sans)"],
         mono: ["var(--coterm-font-mono)"],

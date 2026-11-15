@@ -49,8 +49,8 @@ test("workspace groups manage and move live/saved instances without reconnecting
     await client.send("Emulation.setDeviceMetricsOverride", {width:1280,height:800,deviceScaleFactor:1,mobile:false});
     await client.send("Page.addScriptToEvaluateOnNewDocument", {source:makeHostMockSource(scenario)});
     await client.send("Page.navigate", {url:server.url});
-    await wait(`!!document.querySelector('[data-instance-id="inst-1"]') && [...document.querySelectorAll('main div')].some(el=>el.shadowRoot?.querySelector('.xterm'))`, "real SSH workspace mounted");
-    await run(`window.sshHost=[...document.querySelectorAll('main div')].find(el=>el.shadowRoot?.querySelector('.xterm'));
+    await wait(`!!document.querySelector('[data-instance-id="inst-1"]') && [...document.querySelectorAll('main div')].some(el=>el?.querySelector('.xterm'))`, "real SSH workspace mounted");
+    await run(`window.sshHost=[...document.querySelectorAll('main div')].find(el=>el?.querySelector('.xterm'));
       window.initialSubscriptions=__cotermTest.countCalls('subscribe_driver_events');`);
     assert.equal(await run(`document.querySelector('[role=toolbar]').textContent.includes('Prod-Server')`), false);
     assert.equal(await run(`document.querySelector('[role=toolbar]').textContent.includes('MCP')`), false);

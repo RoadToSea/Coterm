@@ -6,10 +6,13 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import { HostInteractions } from "../../apps/desktop/src/components/host/HostInteractions";
 import { createDriverAPI, retryHostAttention } from "../../apps/desktop/src/host-api";
+import { promptForSecret, cancelSecretInput } from "../../apps/desktop/src/secret-input";
 
 window.__cotermHostInteractions = {
   createDriverAPI,
   retryHostAttention,
+  promptForSecret,
+  cancelSecretInput,
   mount() {
     const root = document.getElementById("root");
     if (!root) throw new Error("missing #root");

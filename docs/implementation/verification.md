@@ -11,10 +11,12 @@
 | 审批与交互 | 独立规则组、实例单组绑定、正反向规则、独立 Bypass 和秘密交互 | 已待审批提案不随规则更新自动执行；通用多轮认证未完成 |
 | 通信驱动 | SSH／Local 前台与显式后台，Serial Shell／stream，Telnet 与 Raw TCP | SSH 认证和 Shell 范围有限；Telnet／TCP 明文，代理无认证 |
 | 数据记录与读取 | 后端有界正文、操作摘要、三种无游标读取、前端回放 | 数据不跨启动；字节流无对话；长期慢消费可产生不可恢复缺口 |
-| 桌面交互 | 分组、标签、主题语言、终端、字节工作台、横向块分隔、审批设置 | 原生跨平台、完整后代进程回收和现场协议兼容仍需验收 |
+| 桌面交互 | 宿主 React 配置与两类工作台、统一主题控件、分组、标签、终端、字节调试、横向命令块、审批设置 | 原生跨平台、完整后代进程回收和现场协议兼容仍需验收 |
 | Agent 接入 | 桌面 Stdio 适配、本机 Bridge、8 个统一语义工具、全局唯一默认目标、名称路由与操作查询 | 旧工具名仅隐藏兼容；无 Resources／Prompts／事件订阅／MCP cancellation notification |
 
 ## 最近有效的软件验收
+
+宿主工作台与主题统一：`pnpm build`、`pnpm test:build` 和完整 `pnpm test` 通过，105 项前端测试通过，无失败、无跳过；`cargo check --workspace --locked` 通过，桌面后端 37 项测试的最终完整回归通过。浏览器覆盖五种驱动配置、串口端口刷新与保存身份、终端／字节视图切换、搜索和快捷键、命令块选择与复制、SSH 任务列表、认证取消／超时／迟到提交、主题／语言／字号原地更新、动态圆角、宽窄窗口与快速卸载后重挂载。明暗主题、设置页和窄审批页已检查截图；`git diff --check` 与文档相对链接检查通过。Rust 回归期间出现过一次工作区容量用例写入失败，单项与整套复跑均通过，未定位原因，见 [feedback](../feedback/known-issues.md)。本次未重跑原生 WebView2、安装包、macOS／Linux 或真实设备验收，范围见[前端待验收项](../feedback/ui-theme-audit.md)。
 
 工作区持续保留：`cargo check --workspace`、`cargo clippy --workspace --all-targets -- -D warnings` 与 `cargo test -p coterm-desktop --bin coterm-desktop -- --test-threads=1` 通过，桌面后端 37 项单元测试包含 22 项工作区回归；`pnpm test workspace approval` 的 27 项测试通过且无跳过。隔离夹具覆盖多次重启、仅恢复 A 时离线 B 仍落盘、新建实例不清除旧项、活动保存身份、显式销毁／忘记以及容量已满时内存和加密文件不变；旧版本读取、v5 编码、审批组、Bypass 和写失败回滚同时回归。未覆盖现场保存文件或替换运行中的桌面进程；已被覆盖的旧配置恢复仍见 [feedback](../feedback/known-issues.md)。
 
@@ -24,10 +26,7 @@
 - `cargo test --workspace -- --test-threads=1`：286 项通过，3 项设备／虚拟串口用例按默认设置 ignored。
 - 6 项统一入口集成测试覆盖固定目录、实例当前能力、无游标读取、审批／查询／取消、实例归属、未知参数与内部身份拒绝、Serial／TCP 参数边界、Telnet HEX 拒绝，以及跨驱动并发重名拒绝和 MCP 名称一致性；Local 与 TCP 同时连接时，省略名称不能按驱动偷偷选择目标。
 - 运行时夹具验证显式名称去空白、重名拒绝、UTF-8 长度边界和销毁后复用；工作区验证离线占用、自身恢复排除、快照只输出 name，以及 v5 加密文件仍保留原 label 编码键和版本。旧文件已有重名时保留配置并拒绝冲突恢复。
-- `pnpm drivers:build`、`pnpm build` 和 `pnpm test`：五个驱动及桌面前端构建成功，106 项前端回归通过。真实 React 名称表单验证运行／离线重名红框、中文提示、拒绝提交、后端竞争错误回填、表单保留和创建后标签名称一致；审批及工作区界面一并回归。串口换行夹具在检查 xterm 前显式切回终端，避免把隐藏视图的绘制时序当作换行结果。
 - Local 浏览器生命周期回归覆盖初始状态等待、首次启动、运行／退出后的重新挂载、中英文切换、重启后丢弃旧 shellId 的退出事件，以及当前会话真实退出码与重启入口。运行中不残留退出提示，真实输入错误不因重新渲染运行状态而被清空。完整前端回归 106 项通过；`cargo test -p coterm-driver --test local --test local_commands --test local_control -- --test-threads=1` 的 10 项测试通过，包含 Windows PowerShell 与 cmd 的真实执行。此次未重跑原生 WebView2，也未替换正在使用的桌面进程。
-- 辅助说明悬浮展示通过 `pnpm drivers:build`、`pnpm build`、`pnpm test:build` 和完整 `pnpm test`：106 项通过、无跳过。浏览器回归验证设置说明仍可搜索，Local／串口／Telnet／TCP 提示随语言更新，MCP 配置、审批匹配模式及工具栏说明不占正文行；Local 配置错误、运行状态、退出码及重启按钮仍可见，真实输入错误不被退出状态覆盖。检查了设置页、审批组、串口与网络配置的宽／窄窗口截图；未重跑原生 WebView2 或替换桌面可执行文件。
-- Serial 端口名称通过 `pnpm driver:serial:build`、`pnpm build`、2 项配置页定向测试及完整 106 项前端回归，无跳过。9 种端口元数据输入覆盖 Windows COM、Linux ttyUSB／ttyACM、macOS cu 路径、重复括号后缀、名称等于端口、无产品名、其他产品括号及 Unix 路径大小写；显示去重不修改选项的连接值。浏览器截图确认 `COM6 (USB-SERIAL CH340)`；已检查锁定版本串口库的 Windows／Linux／macOS 枚举来源，未在 Unix 实机枚举设备。
 - 本机 SSH 软件服务夹具验证统一文件写入仍经审批、读取使用独立通道、多行 exec 保留内容并在首错停止；完整写入并读回恰好 64 KiB 的 UTF-8 中文文本。旧工具名仍可调用但不出现在公开目录。真实 Stdio 适配进程验证固定 8 项目录和实例概览。
 - 4 项文件策略回归覆盖公开／兼容／原生声明对齐、正整数期限校验、UTF-8 字节及 JSON 转义预算、超限后继续读取、30 ms 执行超时、16 秒慢操作在调用方 25 秒期限内完成且不阻塞状态查询、运行中取消及断连后多个作业收敛。没有退出码的关闭保持 unknown，元信息诊断字段保留。
 - 本轮没有连接开发板、做吞吐测速或重跑原生 WebView2／远端设备验收；原生验收脚本沿用此前的 Node 语法检查结果。

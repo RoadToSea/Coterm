@@ -6,8 +6,8 @@ import { findBrowser, openSession, evaluate, waitForValue } from "#support/brows
 test("Local starts explicitly on first mount and preserves running or exited shells on remount", async (t) => {
   const browserPath = findBrowser();
   if (!browserPath) { t.skip("No Chrome/Edge binary; Local terminal UI was not verified"); return; }
-  const artifact = new URL("../../../crates/coterm-driver/dist/local/frontend/index.js", import.meta.url);
-  assert.ok(fs.statSync(artifact).mtimeMs >= fs.statSync(new URL("../../../crates/coterm-driver/frontend/local/src/index.ts", import.meta.url)).mtimeMs,
+  const artifact = new URL("../../../apps/desktop/dist/workbenches/local/index.js", import.meta.url);
+  assert.ok(fs.statSync(artifact).mtimeMs >= fs.statSync(new URL("../../../apps/desktop/src/workbenches/local/index.ts", import.meta.url)).mtimeMs,
     "rebuild the Local frontend before this test");
   const moduleURL = `data:text/javascript;base64,${fs.readFileSync(artifact).toString("base64")}`;
   const session = await openSession({ browserPath, totalTimeoutMs: 30_000 });
@@ -47,17 +47,17 @@ test("Local starts explicitly on first mount and preserves running or exited she
       };
       window.view = frontend.configure(container, {i18n:api.i18n, submit:async()=>{throw new Error('configuration-rejected')}});
     })()`);
-    await run("window.root=container.firstElementChild.shadowRoot");
+    await run("window.root=container.firstElementChild;void 0");
     assert.equal(await run("root.querySelectorAll('label p').length"),0);
-    assert.equal(await run("root.querySelector('input').title"),'Leave empty to detect the system shell.');
+    assert.equal(await run("root.querySelector('[name=shell]').title"),'Leave empty to detect the system shell.');
     await run("window.locale='zh-CN';window.onLocale()");
-    assert.ok((await run("root.querySelector('input').title")).includes('系统'));
-    assert.equal(await run("root.querySelector('input').getAttribute('aria-description')"),await run("root.querySelector('input').title"));
+    assert.ok((await run("root.querySelector('[name=shell]').title")).includes('系统'));
+    assert.equal(await run("root.querySelector('[name=shell]').getAttribute('aria-description')"),await run("root.querySelector('[name=shell]').title"));
     await run("root.querySelector('form').requestSubmit()");
     await waitForValue(session.client,"root.querySelector('[role=alert]').textContent.includes('configuration-rejected')");
     await run("view.unmount();window.locale='en';window.view=frontend.mount(container,api)");
     await waitForValue(session.client, "calls.some(call=>call.operation==='local.status')");
-    await run("window.root=container.firstElementChild.shadowRoot");
+    await run("window.root=container.firstElementChild;void 0");
     assert.equal(await run("root.querySelector('.notice').textContent"), "", "an unread shell status must not be reported as an exit");
     assert.equal(await run("root.querySelector('.state').textContent"), "");
     assert.equal(await run("root.querySelector('.bar > button').hidden"), true);
@@ -67,7 +67,7 @@ test("Local starts explicitly on first mount and preserves running or exited she
     assert.equal(first.filter(name => name === "local.restart").length, 1);
     assert.ok(first.indexOf("local.restart") < first.indexOf("local.read"));
     assert.ok(first.indexOf("local.restart") < first.indexOf("local.resize"));
-    await run("window.root=container.firstElementChild.shadowRoot; root.querySelector('.xterm-helper-textarea').focus()");
+    await run("window.root=container.firstElementChild; root.querySelector('.xterm-helper-textarea').focus()");
     assert.equal(await run("root.querySelector('.state').textContent"), "running");
     assert.equal(await run("root.querySelector('.notice').textContent"), "", "a running shell must not retain an exit notice from initialization");
     await run("window.locale='zh-CN';window.onLocale()");
@@ -80,10 +80,10 @@ test("Local starts explicitly on first mount and preserves running or exited she
     for (const type of ["keyDown", "keyUp"]) await session.client.send("Input.dispatchKeyEvent", {type,key:"Escape",code:"Escape",windowsVirtualKeyCode:27});
     await waitForValue(session.client, "calls.filter(call=>call.operation==='local.select_lines').at(-1)?.args.text===''");
     for (const running of [true, false]) {
-      await run(`view.unmount(); window.localStatus.running=${running}; calls.length=0; view=frontend.mount(container,api);window.root=container.firstElementChild.shadowRoot;`);
+      await run(`view.unmount(); window.localStatus.running=${running}; calls.length=0; view=frontend.mount(container,api);window.root=container.firstElementChild;`);
       await waitForValue(session.client, "calls.some(call=>call.operation==='local.read')");
       assert.equal(await run("calls.some(call=>call.operation==='local.restart')"), false);
-      assert.equal(await run("container.firstElementChild.shadowRoot.querySelector('.notice').textContent"), "");
+      assert.equal(await run("container.firstElementChild.querySelector('.notice').textContent"), "");
       if (!running) assert.equal(await run("root.querySelector('.bar > button').title"), "The shell exited. Restart it to keep using this instance.");
     }
     await run("root.querySelector('.bar > button').click()");

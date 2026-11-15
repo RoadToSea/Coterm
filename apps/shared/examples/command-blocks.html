@@ -61,7 +61,7 @@
     <footer><span id="selection" role="status"></span><span>点击左侧块号多选；正文可选中复制</span></footer>
   </div>
   <script type="module">
-    import { mountBlockList } from "../dist/browser/block-list.js";
+    import { mountBlockList } from "../../desktop/dist/shared-ui/index.js";
     // 仅用于静态预览的后端替身。真实驱动通过 api.invoke / api.subscribeEvents
     // 获取后端生成的块，并在自己的前端适配为组件数据；此处不定义通用块协议。
     const demoBackend = (() => {
@@ -84,7 +84,7 @@
     let blocks = demoBackend.snapshot();
     // 选择由前端维护，不写入后端块快照。
     let selectedIds = ["platform"];
-    const root = document.querySelector("#blocks").attachShadow({ mode: "open" });
+    const root = document.querySelector("#blocks");
     const container = document.createElement("div");
     container.style.height = "100%";
     root.append(container);

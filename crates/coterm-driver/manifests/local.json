@@ -14,9 +14,6 @@
       "native-mcp-tools"
     ]
   },
-  "frontend": {
-    "entry": "frontend/index.js"
-  },
   "mcp": {
     "provider": "backend"
   },
@@ -26,5 +23,28 @@
   },
   "capabilities": [
     "confirmation"
-  ]
+  ],
+  "ui": {
+    "workbench": "terminal",
+    "title": "Open terminal",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "shell": {
+          "type": "string",
+          "title": "Shell",
+          "x-help": "Leave empty to detect the system shell."
+        },
+        "cwd": {
+          "type": "string",
+          "title": "Working directory",
+          "x-help": "Leave empty to start in your home directory."
+        }
+      }
+    },
+    "defaults": {
+      "shell": "",
+      "cwd": ""
+    }
+  }
 }

@@ -22,6 +22,14 @@
 
 规则组技术字段为 id、name、mode、patterns；模式为 allow_matches／approve_matches。实例保存 approvalRuleGroupId 和 bypass。命令 schema 的 x-coterm-approval-text 指向 /commands 或内部 /text／/script；未声明、无效指针或错误类型不获规则豁免。Rust regex 不支持环视和反向引用，默认任意位置匹配，不解释 Shell 语法。
 
+## 宿主配置与工作台元数据
+
+五个内置 manifest 的 ui 定义 workbench（terminal／stream）、title、schema 和 defaults，由桌面构建静态导入，不作为 MCP 目录或保存文件。schema 只支持现有连接表单所需的 object、string、integer、boolean、enum、required、minimum、maximum、maxLength；不宣称支持完整 JSON Schema。宿主负责字段展示和基础校验，驱动仍执行最终参数及状态校验。
+
+x-help 提供可翻译的悬浮说明，x-source=serial.ports 请求端口枚举，x-suggestions 提供波特率建议，x-enumNames 提供选项文案，x-enabledBy 关联布尔开关。嵌套代理字段在表单中使用 proxy.type／proxy.host／proxy.port，提交还原为对象；direct 只提交 type。枚举、标签及界面默认值不改变后端省略字段的默认语义。未知内置驱动没有宿主配置描述时明确显示不支持。
+
+产品内置注册不提供 frontend 源码。兼容类型中的可选 frontend 字段和读取命令仍保留，不用于当前五种驱动；hasFrontend 不再决定宿主配置页是否可用。工作区编码、操作参数和运行协议保持原有契约。
+
 ## 容量与保留
 
 | 对象 | 当前边界 |

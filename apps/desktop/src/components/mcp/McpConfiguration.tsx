@@ -3,6 +3,7 @@ import type { McpStdioStatus } from "../../host-api";
 import { useI18n } from "../../use-i18n";
 import { Modal } from "../ui/Modal";
 import { Button } from "../ui/button";
+import { Textarea } from "../ui/input";
 import { Alert, AlertDescription } from "../ui/alert";
 
 /** Client configuration only; startup and manual controls live in the Settings row. */
@@ -15,10 +16,10 @@ export function McpConfiguration({ status, onClose }: { status: McpStdioStatus; 
     {status.command === null ? <p className="text-xs text-muted-foreground">
       {t("This build cannot start the local Stdio adapter because its executable path is unavailable.")}
     </p> : status.clientConfig ? <>
-      <textarea aria-label={t("Stdio client configuration")} readOnly rows={10} value={status.clientConfig}
+      <Textarea aria-label={t("Stdio client configuration")} readOnly rows={10} value={status.clientConfig}
         title={t("Paste this into the agent's MCP settings. Host-side Agent approval still applies to write operations.")}
         aria-description={t("Paste this into the agent's MCP settings. Host-side Agent approval still applies to write operations.")}
-        spellCheck={false} className="w-full rounded-md border border-input bg-background p-3 font-mono text-xs"
+        spellCheck={false} className="p-3 text-xs"
         onFocus={event => event.target.select()} />
       <Button type="button" variant="outline" size="sm" className="mt-2" onClick={() => {
         void navigator.clipboard.writeText(status.clientConfig ?? "").then(() => { setError(""); setCopied(true); })

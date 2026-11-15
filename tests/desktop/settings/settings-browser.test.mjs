@@ -31,7 +31,7 @@ test("categorized settings search, apply live fonts, persist and preserve mounte
     await client.send("Page.addScriptToEvaluateOnNewDocument",{source:makeHostMockSource(defaultScenario)});
     await client.send("Emulation.setDeviceMetricsOverride",{width:1280,height:800,deviceScaleFactor:1,mobile:false});
     await client.send("Page.navigate",{url:server.url});
-    await wait(`(()=>{const host=[...document.querySelectorAll('main div')].find(node=>node.shadowRoot?.querySelector('.xterm'));if(!host)return false;window.settingsSsh=host;window.settingsTerminal=host.shadowRoot.querySelector('.xterm');return !!host.shadowRoot.querySelector('.bar span')?.textContent.includes('Connected');})()`);
+    await wait(`(()=>{const host=[...document.querySelectorAll('main div')].find(node=>node?.querySelector('.xterm'));if(!host)return false;window.settingsSsh=host;window.settingsTerminal=host.querySelector('.xterm');return !!host.querySelector('.bar span')?.textContent.includes('Connected');})()`);
     assert.equal(await run(`!!document.getElementById('locale-select')`),false,'language moves into settings');
     await run(`window.beforeSubscriptions=__cotermTest.calls.filter(c=>c==='subscribe_driver_events').length;window.beforeProtocol=__cotermTest.invocations.filter(c=>['ssh.connect','ssh.disconnect','ssh.write'].includes(c.args.operation)).length;document.getElementById('open-settings').focus();document.getElementById('open-settings').click()`);
     await wait(`document.getElementById('app-settings-dialog')?.open`);
@@ -63,8 +63,8 @@ test("categorized settings search, apply live fonts, persist and preserve mounte
     await select('terminal-font-size',20);
     await select('terminal-line-height',1.4);
     await run(`document.getElementById('cursor-blink').click()`);
-    await wait(`getComputedStyle(settingsSsh.shadowRoot.querySelector('.xterm-char-measure-element')).fontSize==='20px'`);
-    assert.equal(await run(`settingsTerminal===settingsSsh.shadowRoot.querySelector('.xterm')`),true);
+    await wait(`getComputedStyle(settingsSsh.querySelector('.xterm-char-measure-element')).fontSize==='20px'`);
+    assert.equal(await run(`settingsTerminal===settingsSsh.querySelector('.xterm')`),true);
     assert.equal(await run(`__cotermTest.calls.filter(c=>c==='subscribe_driver_events').length===beforeSubscriptions`),true);
     assert.equal(await run(`__cotermTest.invocations.filter(c=>['ssh.connect','ssh.disconnect','ssh.write'].includes(c.args.operation)).length===beforeProtocol`),true);
     assert.deepEqual(await run(`JSON.parse(localStorage.getItem('coterm.preferences.v1'))`),{interfaceFontSize:18,terminalFontSize:20,terminalLineHeight:1.4,cursorBlink:false});
@@ -90,7 +90,7 @@ test("categorized settings search, apply live fonts, persist and preserve mounte
     await client.send('Page.reload');
     await wait(`document.getElementById('open-settings')&&document.documentElement.lang==='zh-CN'`);
     assert.equal(await run(`getComputedStyle(document.documentElement).getPropertyValue('--coterm-terminal-font-size').trim()`),'20px');
-    const artifact=fs.readFileSync(path.join(rootDir,'crates/coterm-driver/dist/serial/frontend/index.js'));
+    const artifact=fs.readFileSync(path.join(rootDir,'apps/desktop/dist/workbenches/serial/index.js'));
     await run(`(async()=>{
       const container=document.createElement('div');container.style.cssText='position:fixed;inset:80px 20px 40px 80px';document.body.append(container);
       window.settingsSerialCalls=[];
@@ -102,20 +102,20 @@ test("categorized settings search, apply live fonts, persist and preserve mounte
       },subscribeEvents:async()=>()=>{}};
       window.settingsSerialView=(await import('data:text/javascript;base64,${artifact.toString('base64')}')).mount(container,api);
       window.settingsSerial=container.firstElementChild;
-      window.settingsSerialTerminal=settingsSerial.shadowRoot.querySelector('.xterm');
+      window.settingsSerialTerminal=settingsSerial.querySelector('.xterm');
     })()`);
-    await wait(`getComputedStyle(settingsSerial.shadowRoot.querySelector('.xterm-char-measure-element')).fontSize==='20px'`);
+    await wait(`getComputedStyle(settingsSerial.querySelector('.xterm-char-measure-element')).fontSize==='20px'`);
     await run(`document.getElementById('open-settings').click()`);
     await wait(`document.getElementById('app-settings-dialog')?.open`);
     await run(`document.querySelector('.settings-footer button').click()`);
-    await wait(`getComputedStyle(settingsSerial.shadowRoot.querySelector('.xterm-char-measure-element')).fontSize==='13px'`);
-    assert.equal(await run(`settingsSerialTerminal===settingsSerial.shadowRoot.querySelector('.xterm')`),true);
+    await wait(`getComputedStyle(settingsSerial.querySelector('.xterm-char-measure-element')).fontSize==='13px'`);
+    assert.equal(await run(`settingsSerialTerminal===settingsSerial.querySelector('.xterm')`),true);
     assert.equal(await run(`settingsSerialCalls.some(op=>['serial.connect','serial.disconnect','serial.write','serial.write_hex'].includes(op))`),false);
     assert.equal(await run(`document.documentElement.lang`),'zh-CN','reset affects font/cursor preferences only');
     assert.equal(await run(`document.documentElement.dataset.theme`),'dark');
     await category('terminal');
     await select('terminal-font-size',17);
-    await wait(`getComputedStyle(settingsSerial.shadowRoot.querySelector('.uart-output')).fontSize==='17px'`);
+    await wait(`getComputedStyle(settingsSerial.querySelector('.uart-output')).fontSize==='17px'`);
     await run(`(()=>{const container=settingsSerial.parentElement;settingsSerialView.unmount();container.remove();})()`);
     // Storage messages synchronize display preferences from another window; invalid data is bounded.
     await run(`localStorage.setItem('coterm.preferences.v1',JSON.stringify({interfaceFontSize:16,terminalFontSize:18,terminalLineHeight:1.2,cursorBlink:true}));window.dispatchEvent(new StorageEvent('storage',{key:'coterm.preferences.v1'}))`);

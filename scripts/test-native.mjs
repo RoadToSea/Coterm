@@ -59,7 +59,7 @@ try{
   const local=await invoke("create_instance",{driverId:"coterm-driver-local",config:{shell:"powershell.exe"},name:"Native local"});
   await waitForValue(client,`!!document.querySelector('[data-instance-id="${local.driverInstanceId}"]')`);
   await run(`document.querySelector('[data-instance-id="${local.driverInstanceId}"] > button').click()`);
-  await waitForValue(client,"[...document.querySelectorAll('main div')].some(node=>node.shadowRoot?.querySelector('.xterm'))");
+  await waitForValue(client,"[...document.querySelectorAll('main div')].some(node=>node.querySelector('.xterm'))");
   for(let i=0;i<300;i++){if((await operation(local.driverInstanceId,"local.status")).running)break;await delay(50);}
   assert.equal((await operation(local.driverInstanceId,"local.status")).running,true);
   const mcp=await invoke("mcp_stdio_status");assert.equal(mcp.enabled,true);

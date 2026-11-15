@@ -1,3 +1,4 @@
+import { Button } from "../ui/button";
 import { t } from "../../i18n";
 import { useI18n } from "../../use-i18n";
 import { useEffect, useRef, useState } from "react";
@@ -118,12 +119,12 @@ export function HostApprovals() {
       }}
     />
   ) : (
-    <div key={item.operationId} className="pointer-events-auto flex w-full flex-wrap items-center gap-2 border-t border-coterm-border-subtle bg-coterm-surface-raised px-5 py-3 text-xs text-coterm-text">
+    <div key={item.operationId} className="pointer-events-auto flex w-full flex-wrap items-center gap-2 rounded-lg border border-coterm-border-subtle bg-coterm-surface-raised px-5 py-3 text-xs text-coterm-text">
       <span className="min-w-0 flex-1 truncate" title={`${item.targetLabel} · ${item.operation}`}>
         {item.targetLabel} · {item.operation}
         {item.loadError && <span className="ml-2 text-destructive">{t("details unavailable:")} {item.loadError}</span>}
       </span>
-      <button
+      <Button variant="ghost" size="sm"
         type="button"
         onClick={async () => {
           try {
@@ -140,20 +141,20 @@ export function HostApprovals() {
         className="inline-flex h-8 items-center rounded-md border border-coterm-border-input px-4 text-xs transition-colors hover:bg-coterm-border-subtle"
       >
         {t("Reject")}
-      </button>
+      </Button>
     </div>
   );
 
   return (
-    <section aria-label={t("Agent approvals")} className="approval-tray-shell shrink-0 border-t border-coterm-border-input bg-coterm-surface shadow-[0_-8px_24px_rgb(0_0_0/18%)]">
+    <section aria-label={t("Agent approvals")} className="approval-tray-shell shrink-0 border-t border-coterm-border-input bg-coterm-surface shadow-up">
       <div className="mx-auto w-full max-w-[900px]">
         <div className="flex min-h-10 items-center gap-3 border-b border-coterm-border-subtle px-4 py-2 text-xs text-coterm-text">
           <span className="font-medium">{t("Agent approval")}</span>
           <span className="text-coterm-text-muted">{pending.length} {t("pending")}</span>
           {queued > 0 && <span className="text-warning">{queued} {t("queued")}</span>}
-          {pending.length > 1 && <button type="button" aria-expanded={expanded} onClick={() => setExpanded((value) => !value)} className="ml-auto rounded px-2 py-1 text-coterm-accent-glow transition-colors hover:bg-accent">{expanded ? t("Collapse queue") : t("Show queue")}</button>}
+          {pending.length > 1 && <Button variant="ghost" size="sm" type="button" aria-expanded={expanded} onClick={() => setExpanded((value) => !value)} className="ml-auto rounded-md px-2 py-1 text-coterm-accent-glow transition-colors hover:bg-accent">{expanded ? t("Collapse queue") : t("Show queue")}</Button>}
         </div>
-        {notice && <p role="alert" className="mx-4 mt-2 rounded border border-coterm-danger-border bg-coterm-danger-surface px-3 py-2 text-xs text-destructive">{notice}</p>}
+        {notice && <p role="alert" className="mx-4 mt-2 rounded-md border border-coterm-danger-border bg-coterm-danger-surface px-3 py-2 text-xs text-destructive">{notice}</p>}
         <div className={`approval-queue ${expanded ? "approval-queue-expanded" : ""}`}>
           {visible.map(renderApproval)}
         </div>

@@ -12,17 +12,19 @@ interface ModalProps {
   id?: string;
   className?: string;
   bodyClassName?: string;
+  allowClose?: boolean;
+  onOpenError?: () => void;
 }
 
 /** Native dialog supplies focus trapping, Escape handling and a modal backdrop. */
-export function Modal({ title, onClose, children, id, className, bodyClassName }: ModalProps) {
+export function Modal({ title, onClose, children, id, className, bodyClassName, allowClose = true, onOpenError }: ModalProps) {
   useI18n();
   const dialogRef = useRef<HTMLDialogElement>(null);
 
   useEffect(() => {
     const dialog = dialogRef.current;
     const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    dialog?.showModal();
+    try { dialog?.showModal(); } catch { onOpenError?.(); }
     return () => {
       dialog?.close();
       if (previousFocus?.isConnected) previousFocus.focus({ preventScroll: true });
@@ -36,15 +38,15 @@ export function Modal({ title, onClose, children, id, className, bodyClassName }
       aria-label={title}
       onCancel={(event) => {
         event.preventDefault();
-        onClose();
+        if (allowClose) onClose();
       }}
-      className={cn("m-auto max-h-[85dvh] w-[640px] max-w-[calc(100%-32px)] overflow-auto rounded-xl border border-border bg-card p-0 text-card-foreground shadow-2xl backdrop:bg-black/50", className)}
+      className={cn("m-auto max-h-[85dvh] w-[640px] max-w-[calc(100%-32px)] overflow-auto rounded-lg border border-border bg-card p-0 text-card-foreground shadow-2xl backdrop:bg-overlay", className)}
     >
       <header className="sticky top-0 flex h-14 items-center justify-between border-b border-border bg-card px-5">
         <h2 className="truncate text-sm font-semibold">{title}</h2>
-        <Button variant="ghost" size="icon" type="button" aria-label={t("Close dialog")} onClick={onClose}>
+        {allowClose && <Button variant="ghost" size="icon" type="button" aria-label={t("Close dialog")} onClick={onClose}>
           <X data-icon="inline-start" />
-        </Button>
+        </Button>}
       </header>
       <div className={cn("p-5", bodyClassName)}>{children}</div>
     </dialog>

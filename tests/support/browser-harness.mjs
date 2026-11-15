@@ -75,20 +75,20 @@ export function assertFreshBuild() {
   if (!fs.existsSync(entry)) {
     throw new Error(`apps/desktop/dist is missing; run "pnpm build" before the browser suite`);
   }
-  const sshDist = path.join(rootDir, "crates/coterm-driver/dist/ssh/frontend/index.js");
+  const sshDist = path.join(rootDir, "apps/desktop/dist/workbenches/ssh/index.js");
   if (!fs.existsSync(sshDist)) {
-    throw new Error(`crates/coterm-driver/dist/ssh/frontend/index.js is missing; run "pnpm --filter coterm-driver-ssh-ui build"`);
+    throw new Error(`apps/desktop/dist/workbenches/ssh/index.js is missing; run "pnpm test:build"`);
   }
   assertNotStale(entry, [
     path.join(rootDir, "apps/desktop/src"),
     path.join(rootDir, "apps/shared/index.ts"),
     path.join(rootDir, "apps/shared/driver-api.ts"),
-    path.join(rootDir, "apps/shared/components"),
+    path.join(rootDir, "apps/desktop/src/workbenches/common"),
   ]);
 }
 
 const HOST_INTERACTIONS_ENTRY = path.join(distDir, "host-interactions/entry.js");
-const SHARED_BROWSER_MODULE = path.join(rootDir, "apps/shared/dist/browser/block-list.js");
+const SHARED_BROWSER_MODULE = path.join(rootDir, "apps/desktop/dist/shared-ui/index.js");
 
 /** 交互与共享前端组件的测试产物：缺失或比源码旧都必须失败，不许静默测旧实现。 */
 export function assertFreshTestArtifacts() {
@@ -98,7 +98,7 @@ export function assertFreshTestArtifacts() {
       path.join(rootDir, "apps/desktop/src/secret-input.ts"),
       path.join(rootDir, "apps/desktop/src/host-api.ts"),
     ]],
-    [SHARED_BROWSER_MODULE, [path.join(rootDir, "apps/shared/components/block-list.ts")]],
+    [SHARED_BROWSER_MODULE, [path.join(rootDir, "apps/desktop/src/workbenches/common/block-list.tsx")]],
   ]) {
     if (!fs.existsSync(artifact)) {
       throw new Error(`${path.relative(rootDir, artifact)} is missing; run "pnpm test:build"`);
@@ -135,10 +135,10 @@ function assertNotStale(artifact, sources) {
 /** Check the actual shared sources as well as the concrete driver adapter. */
 export function assertFreshDriverBuild(protocol) {
   if (!["ssh", "serial", "local", "tcp", "telnet"].includes(protocol)) throw new Error("Unknown built-in driver");
-  const base = path.join(rootDir,"crates/coterm-driver");
-  assertNotStale(path.join(base,"dist",protocol,"frontend/index.js"),[
-    path.join(base,"frontend",protocol,"src"),
-    path.join(rootDir,"apps/shared/components"),
+  const base = path.join(rootDir,"apps/desktop");
+  assertNotStale(path.join(base,"dist/workbenches",protocol,"index.js"),[
+    path.join(base,"src/workbenches"),
+    path.join(rootDir,"apps/desktop/src/workbenches/common"),
     path.join(rootDir,"apps/shared/driver-api.ts"),
   ]);
 }
@@ -164,8 +164,8 @@ export async function startStaticServer() {
     // 真实共享前端模块：直接给源文件的构建产物，测试里不存在替身。
     const sharedMatch = requestPath.match(/^\/__shared\/(.+)$/);
     if (sharedMatch) {
-      const sharedPath = path.join(rootDir, "apps/shared/dist/browser", sharedMatch[1]);
-      if (!sharedPath.startsWith(path.join(rootDir, "apps/shared/dist/browser")) || !fs.existsSync(sharedPath)) {
+      const sharedPath = path.join(distDir, "shared-ui", sharedMatch[1]);
+      if (!sharedPath.startsWith(path.join(distDir, "shared-ui") + path.sep) || !fs.existsSync(sharedPath)) {
         response.writeHead(404, { "Content-Type": "text/plain" });
         response.end("Not Found");
         return;
@@ -362,7 +362,7 @@ export const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 export async function waitForValue(client, expression, { timeoutMs = 10_000, intervalMs = 50, label = expression } = {}) {
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
-    const { result } = await client.send("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true });
+    const { result } = await client.send("Runtime.evaluate", { expression: `!!(${expression})`, returnByValue: true, awaitPromise: true });
     if (result?.value) return result.value;
     await delay(intervalMs);
   }
@@ -371,7 +371,7 @@ export async function waitForValue(client, expression, { timeoutMs = 10_000, int
 
 export async function evaluate(client, expression) {
   const { result, exceptionDetails } = await client.send("Runtime.evaluate", {
-    expression,
+    expression: `(async () => { const value = await (0,eval)(${JSON.stringify(expression)}); return value instanceof Node ? {nodeType:value.nodeType,nodeName:value.nodeName} : value; })()`,
     returnByValue: true,
     awaitPromise: true,
   });

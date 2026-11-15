@@ -1,6 +1,6 @@
 import { t } from "./i18n";
 import { useI18n } from "./use-i18n";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useInstanceViews } from "./use-instance-views";
 import { InstanceTabs, instanceTabId, instancePanelId } from "./components/InstanceTabs";
 import { PanelLeftClose, PanelLeftOpen, Plus, PlugZap, Settings2, ShieldAlert, ShieldCheck, SlidersHorizontal, TerminalSquare, Trash2 } from "lucide-react";
@@ -18,8 +18,9 @@ import { HostInteractions } from "./components/host/HostInteractions";
 import { HostApprovals } from "./components/host/HostApprovals";
 import { ApprovalSettings, type ApprovalTarget } from "./components/host/ApprovalSettings";
 import { Modal } from "./components/ui/Modal";
-import { DriverWorkspace } from "./components/drivers/DriverWorkspace";
+import { Select } from "./components/ui/input";
 import { DriverConfiguration } from "./components/drivers/DriverConfiguration";
+import { workbenchDefinition } from "./workbenches/definitions";
 import { instanceNameErrorCode } from "./instance-name";
 import {
   hostAPI,
@@ -36,6 +37,7 @@ const EMPTY_WORKSPACE: SavedWorkspace = { approvalRuleGroups: [],
   layout: { activeConfigRef: null, instancesCollapsed: false, activeWorkspaceId: "default" },
   historyPolicy: "session_only", persistence: "memory_only",
 };
+const DriverWorkspace = lazy(() => import("./components/drivers/DriverWorkspace").then(module => ({ default: module.DriverWorkspace })));
 
 export default function App() {
   const { locale } = useI18n();
@@ -327,7 +329,7 @@ export default function App() {
   );
 
   const driverIssueNotice = driverIssues.length > 0 && (
-    <ul role="status" aria-label={t("Driver registration issues")} className="max-h-32 overflow-y-auto break-words border-l-2 border-warning bg-warning-surface px-3 py-2 text-xs leading-relaxed text-warning">
+    <ul role="status" aria-label={t("Driver registration issues")} className="max-h-32 overflow-y-auto break-words rounded-lg border border-warning bg-warning-surface px-3 py-2 text-xs leading-relaxed text-warning">
       {driverIssues.map((issue) => (
         <li key={`${issue.directory}:${issue.code}`} title={issue.code}>
           <span className="font-medium">{issue.driverId ? `${issue.driverId} (${issue.directory})` : issue.directory}</span>
@@ -396,7 +398,7 @@ export default function App() {
                 aria-controls="driver-configuration"
                 aria-pressed={selectedDriverId === driver.id}
                 onClick={() => views.configure(driver.id)}
-                className={cn("group relative flex min-h-16 w-full flex-col items-center justify-center gap-1.5 border-l-2 px-1 py-3 transition-colors hover:bg-accent", selectedDriverId === driver.id ? "border-primary bg-accent" : "border-transparent")}
+                className={cn("group relative mx-1 mb-1 flex min-h-16 w-[calc(100%-0.5rem)] rounded-md flex-col items-center justify-center gap-1.5 border px-1 py-3 transition-colors hover:bg-accent", selectedDriverId === driver.id ? "border-primary bg-accent" : "border-transparent")}
               >
                 <span className="relative grid h-7 w-8 place-items-center">
                   <PlugZap size={25} strokeWidth={1.5} className={driver.running ? "text-primary" : "text-muted-foreground"} data-driver-icon />
@@ -486,7 +488,7 @@ export default function App() {
           {errorNotice}
           {selectedDriver && <section id="driver-configuration" aria-label={t("New instance")}
             className="min-h-0 flex-1 overflow-y-auto p-5 sm:p-8">
-            <div className="mx-auto max-w-xl rounded-xl border border-border bg-card p-5 sm:p-6">
+            <div className="mx-auto max-w-xl rounded-lg border border-border bg-card p-5 sm:p-6">
               <div className="mb-6 flex items-center gap-3">
                 <PlugZap className="size-6 shrink-0 text-primary" />
                 <div className="min-w-0">
@@ -494,7 +496,7 @@ export default function App() {
                   <p className="mt-1 text-xs text-muted-foreground">{t("Workspace:")} {workspaceName((workspace ?? EMPTY_WORKSPACE).groups.find(group => group.id === activeWorkspaceId) ?? EMPTY_WORKSPACE.groups[0])}</p>
                 </div>
               </div>
-              {selectedDriver.hasFrontend
+              {workbenchDefinition(selectedDriver.id)
                 ? <DriverConfiguration key={selectedDriver.id} driverId={selectedDriver.id}
                     existingNames={[...instances.map(instance => instance.name), ...(workspace?.entries.map(entry => entry.name) ?? [])]}
                     disabled={busyId !== null} onSubmit={(config, name) => createConfiguredInstance(selectedDriver.id, config, name)} />
@@ -512,8 +514,8 @@ export default function App() {
             id={instancePanelId(instance.driverInstanceId)} aria-labelledby={instanceTabId(instance.driverInstanceId)}
             hidden={!!selectedDriverId || instance.driverInstanceId !== activeInstanceId} tabIndex={0}
             className="min-h-0 flex-1 overflow-hidden">
-            {instance.status === "ready" && (workspace !== null || workspaceError !== null) && <DriverWorkspace instance={instance}
-              configRef={workspace?.entries.find(entry => entry.instanceId === instance.driverInstanceId)?.configRef} />}
+            {instance.status === "ready" && (workspace !== null || workspaceError !== null) && <Suspense fallback={<div className="p-4"><Skeleton className="h-8 w-48" /></div>}><DriverWorkspace instance={instance}
+              configRef={workspace?.entries.find(entry => entry.instanceId === instance.driverInstanceId)?.configRef} /></Suspense>}
             {instance.status !== "ready" && instance.status !== "failed" && <p role="status" className="p-5 text-sm text-muted-foreground">{t(instance.status)}</p>}
             {instance.status === "failed" && <div role="alert" className="p-5 text-sm text-destructive">
               <p>{t("Driver stopped unexpectedly. In-flight results are unknown. Operations will not be replayed.")}</p>
@@ -547,15 +549,15 @@ export default function App() {
             <p className="text-xs text-muted-foreground">{t("Driver")}: {drivers.find(driver => driver.id === managedInstance.driverId)?.name ?? managedInstance.driverId}</p>
             {workspace && <label className="flex items-center gap-3 text-xs">
               {t("Move to workspace")}
-              <select aria-label={t("Move to workspace")} disabled={busyId !== null || !workspace.entries.some(entry => entry.instanceId === managedInstance.driverInstanceId)}
+              <Select aria-label={t("Move to workspace")} disabled={busyId !== null || !workspace.entries.some(entry => entry.instanceId === managedInstance.driverInstanceId)}
                 value={workspace.entries.find(entry => entry.instanceId === managedInstance.driverInstanceId)?.workspaceId ?? workspace.groups[0]?.id}
-                className="h-9 min-w-0 flex-1 rounded-md border border-input bg-background px-2"
+                className="flex-1"
                 onChange={event => {
                   const entry = workspace.entries.find(item => item.instanceId === managedInstance.driverInstanceId);
                   if (entry) void moveWorkspaceEntry(entry.configRef, event.target.value);
                 }}>
                 {workspace.groups.map(group => <option key={group.id} value={group.id}>{workspaceName(group)}</option>)}
-              </select>
+              </Select>
             </label>}
             <Button variant="destructive" disabled={busyId !== null} onClick={() => void destroyInstance(managedInstance)}>
               <Trash2 data-icon="inline-start" />{t("Destroy instance")}

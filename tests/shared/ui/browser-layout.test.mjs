@@ -1,8 +1,8 @@
 /**
  * 当前构建的真实浏览器验收：布局（1280/1024/768）、纯键盘折叠恢复、DriverCatalog 逐包诊断、
- * 真实 SSH 前端 Shadow DOM 与共享前端 mountBlockList 的 token/fallback 计算样式验证、多审批卡片独立处理。
+ * 真实宿主 SSH 工作台与 React mountBlockList 的主题计算样式验证、多审批卡片独立处理。
  *
- * 这里验证的是 App.tsx + index.css + apps/shared + coterm-driver-ssh-ui 的实际浏览器渲染结果。
+ * 这里验证的是 App.tsx + index.css + 宿主工作台 的实际浏览器渲染结果。
  * 没有浏览器时整组 skip 并写明原因；skip 不等于通过。
  */
 import test from "node:test";
@@ -83,8 +83,8 @@ test("SSH terminal bottom row stays inside the workspace above the host footer",
       sshOutput: Array.from({ length: 100 }, (_, i) => `output line ${i}\r\n`).join("") + "BOTTOM ROW VISIBLE > ",
     });
     await waitForValue({ send: page.send }, `(() => {
-      window.sshHost = [...document.querySelectorAll('main div')].find(node => node.shadowRoot?.querySelector('.xterm-screen'));
-      window.sshRoot = sshHost?.shadowRoot;
+      window.sshHost = [...document.querySelectorAll('main div')].find(node => node?.querySelector('.xterm-screen'));
+      window.sshRoot = sshHost;
       return sshRoot?.querySelector('.bar span')?.textContent === 'Connected';
     })()`);
     for (const [width, height, fontSize] of [[1280, 800, 13], [1024, 600, 20], [768, 480, 16]]) {
@@ -130,9 +130,9 @@ test("appearance switches live SSH and serial renderers, persists, and follows s
   try {
     page = await openPage(session);
     await waitForValue({ send: page.send }, `(() => {
-      const host = [...document.querySelectorAll('main div')].find(node => node.shadowRoot?.querySelector('.xterm'));
-      if (!host || !host.shadowRoot.querySelector('.bar span')?.textContent.includes('Connected')) return false;
-      window.themeSsh = host; window.themeTerminal = host.shadowRoot.querySelector('.xterm');
+      const host = [...document.querySelectorAll('main div')].find(node => node?.querySelector('.xterm'));
+      if (!host || !host.querySelector('.bar span')?.textContent.includes('Connected')) return false;
+      window.themeSsh = host; window.themeTerminal = host.querySelector('.xterm');
       window.themeSubscriptions = window.__cotermTest.calls.filter(c => c === 'subscribe_driver_events').length;
       window.themeConnectionCalls = window.__cotermTest.invocations.filter(c => c.command === 'invoke_driver_operation' && ['ssh.connect','ssh.disconnect','ssh.write'].includes(c.args.operation)).length;
       return true;
@@ -147,7 +147,7 @@ test("appearance switches live SSH and serial renderers, persists, and follows s
       fs.mkdirSync(path.join(rootDir, ".agent-debug", "layout"), { recursive: true });
       fs.writeFileSync(path.join(rootDir, ".agent-debug", "layout", name), Buffer.from(result.data, "base64"));
     };
-    const terminalBackground = (host) => page.evaluate(`getComputedStyle(${host}.shadowRoot.querySelector('.xterm-viewport')).backgroundColor`);
+    const terminalBackground = (host) => page.evaluate(`getComputedStyle(${host}.querySelector('.xterm-viewport')).backgroundColor`);
     await choose("dark");
     await waitForValue({ send: page.send }, `document.documentElement.dataset.theme === 'dark'`);
     assert.equal(await terminalBackground("themeSsh"), "rgb(21, 26, 35)");
@@ -155,7 +155,7 @@ test("appearance switches live SSH and serial renderers, persists, and follows s
     await choose("light");
     await waitForValue({ send: page.send }, `document.documentElement.dataset.theme === 'light'`);
     assert.equal(await terminalBackground("themeSsh"), "rgb(255, 255, 255)");
-    assert.equal(await page.evaluate(`themeTerminal === themeSsh.shadowRoot.querySelector('.xterm')`), true);
+    assert.equal(await page.evaluate(`themeTerminal === themeSsh.querySelector('.xterm')`), true);
     assert.equal(await page.evaluate(`window.__cotermTest.calls.filter(c => c === 'subscribe_driver_events').length === themeSubscriptions`), true, "theme changes do not remount the SSH driver");
     assert.equal(await page.evaluate(`window.__cotermTest.invocations.filter(c => c.command === 'invoke_driver_operation' && ['ssh.connect','ssh.disconnect','ssh.write'].includes(c.args.operation)).length === themeConnectionCalls`), true);
     for (const [width, height] of [[1280, 800], [1024, 768], [768, 800]]) {
@@ -167,8 +167,8 @@ test("appearance switches live SSH and serial renderers, persists, and follows s
     await page.resize(1280, 800);
 
     // Mount the actual serial bundle in the same themed document, with a typed-contract mock only.
-    const artifact = path.join(rootDir, "crates/coterm-driver/dist/serial/frontend/index.js");
-    assert.ok(fs.statSync(artifact).mtimeMs >= fs.statSync(path.join(rootDir, "apps/shared/components/terminal-theme.ts")).mtimeMs);
+    const artifact = path.join(rootDir, "apps/desktop/dist/workbenches/serial/index.js");
+    assert.ok(fs.statSync(artifact).mtimeMs >= fs.statSync(path.join(rootDir, "apps/desktop/src/workbenches/common/terminal-theme.ts")).mtimeMs);
     const serialURL = `data:text/javascript;base64,${fs.readFileSync(artifact).toString("base64")}`;
     await page.evaluate(`(async () => {
       const container = document.createElement('div'); container.style.cssText = 'position:fixed;inset:80px 24px 50px 330px'; document.body.append(container);
@@ -182,16 +182,16 @@ test("appearance switches live SSH and serial renderers, persists, and follows s
       }, async subscribeEvents() { themeSerialSubscriptions++; return () => {}; } };
       window.themeSerialFrontend = (await import(${JSON.stringify(serialURL)})).mount(container, api);
       window.themeSerial = container.firstElementChild;
-      window.themeSerialTerminal = themeSerial.shadowRoot.querySelector('.xterm');
+      window.themeSerialTerminal = themeSerial.querySelector('.xterm');
     })()`);
-    await waitForValue({ send: page.send }, `themeSerial.shadowRoot.querySelector('.connect-button')?.dataset.connected === 'true'`);
+    await waitForValue({ send: page.send }, `themeSerial.querySelector('.connect-button')?.dataset.connected === 'true'`);
     assert.equal(await terminalBackground("themeSerial"), "rgb(255, 255, 255)");
     await choose("dark");
-    await waitForValue({ send: page.send }, `getComputedStyle(themeSerial.shadowRoot.querySelector('.xterm-viewport')).backgroundColor === 'rgb(21, 26, 35)'`);
+    await waitForValue({ send: page.send }, `getComputedStyle(themeSerial.querySelector('.xterm-viewport')).backgroundColor === 'rgb(21, 26, 35)'`);
     assert.equal(await terminalBackground("themeSsh"), "rgb(21, 26, 35)");
-    assert.equal(await page.evaluate(`themeSerialTerminal === themeSerial.shadowRoot.querySelector('.xterm') && themeSerialSubscriptions === 1`), true);
+    assert.equal(await page.evaluate(`themeSerialTerminal === themeSerial.querySelector('.xterm') && themeSerialSubscriptions === 1`), true);
     assert.equal(await page.evaluate(`themeSerialCalls.every(c => ['serial.status','serial.read'].includes(c.operation))`), true, "palette changes never send serial bytes or reconnect");
-    assert.equal(await page.evaluate(`themeSerial.shadowRoot.querySelector('.xterm-screen').textContent.includes('Theme probe')`), true, "existing terminal output survives");
+    assert.equal(await page.evaluate(`themeSerial.querySelector('.xterm-screen').textContent.includes('Theme probe')`), true, "existing terminal output survives");
     await screenshot("desktop-theme-serial-dark.png");
     await page.evaluate(`(() => { const container = themeSerial.parentElement; themeSerialFrontend.unmount(); container.remove(); })()`);
 
@@ -224,24 +224,24 @@ test("Language switching and built-in driver settings preserve live SSH state", 
   try {
     page = await openPage(session, defaultScenario);
     await waitForValue({ send: page.send }, `(() => {
-      const host = [...document.querySelectorAll('main div')].find((node) => node.shadowRoot?.querySelector('.layout'));
-      if (!host || host.shadowRoot.querySelector('.bar span')?.textContent !== 'Connected') return false;
+      const host = [...document.querySelectorAll('main div')].find((node) => node?.querySelector('.layout'));
+      if (!host || host.querySelector('.bar span')?.textContent !== 'Connected') return false;
       window.__alphaSshHost = host;
-      window.__alphaTerminal = host.shadowRoot.querySelector('.xterm');
+      window.__alphaTerminal = host.querySelector('.xterm');
       window.__alphaSubscriptions = window.__cotermTest.calls.filter((command) => command === 'subscribe_driver_events').length;
       return !!window.__alphaTerminal;
     })()`, { label: "live SSH frontend" });
     const switchLanguage = (locale) => setAppLocale({ send: page.send }, locale);
     await switchLanguage("zh-CN");
     await waitForValue({ send: page.send }, `document.documentElement.lang === 'zh-CN' && !document.getElementById('install-driver-button')`, { label: "Chinese host controls" });
-    assert.equal(await page.evaluate(`window.__alphaSshHost.shadowRoot.querySelector('.bar span').textContent`), "已连接");
-    assert.equal(await page.evaluate(`window.__alphaTerminal === window.__alphaSshHost.shadowRoot.querySelector('.xterm')`), true);
+    assert.equal(await page.evaluate(`window.__alphaSshHost.querySelector('.bar span').textContent`), "已连接");
+    assert.equal(await page.evaluate(`window.__alphaTerminal === window.__alphaSshHost.querySelector('.xterm')`), true);
     assert.equal(await page.evaluate(`window.__cotermTest.countCalls('subscribe_driver_events') === window.__alphaSubscriptions`), true);
     await page.evaluate(`document.getElementById('open-settings').click()`);
     await waitForValue({ send: page.send }, `document.getElementById('app-settings-dialog')?.open`);
     assert.equal(await page.evaluate(`!!document.querySelector('[data-category="drivers"]')`),false);
     assert.equal(await page.evaluate(`!!document.getElementById('install-driver-package')`),false);
-    assert.equal(await page.evaluate(`window.__alphaTerminal===window.__alphaSshHost.shadowRoot.querySelector('.xterm')`),true);
+    assert.equal(await page.evaluate(`window.__alphaTerminal===window.__alphaSshHost.querySelector('.xterm')`),true);
     await page.evaluate(`document.querySelector('#app-settings-dialog button[aria-label="关闭对话框"]').click()`);
     await page.send("Page.reload");
     await waitForValue({ send: page.send }, `document.documentElement.lang === 'zh-CN' && !!document.getElementById('open-settings')`, { label: "language preference survives reload" });
@@ -270,15 +270,15 @@ test("Browser layout, catalog diagnostics, and keyboard collapse on the current 
       // 页面挂载完成
       await waitForValue({ send: page.send }, `!!document.querySelector('main[aria-label="Driver workspace"]')`, { label: "app mounted" });
 
-      // 等待真实 SSH 前端 Shadow DOM 在工作区内完整挂载
+      // 等待真实 SSH 工作台在工作区内完整挂载
       await waitForValue(
         { send: page.send },
         `(() => {
           const workspace = document.querySelector('main[aria-label="Driver workspace"]');
           const hosts = workspace ? Array.from(workspace.querySelectorAll('div')) : [];
-          return hosts.some((host) => !!(host.shadowRoot && host.shadowRoot.querySelector('.layout')));
+          return hosts.some((host) => !!(host && host.querySelector('.layout')));
         })()`,
-        { label: "real SSH frontend Shadow DOM mounted in workspace" },
+        { label: "real SSH host workbench mounted in workspace" },
       );
 
       const takeScreenshot = async (name) => {
@@ -440,7 +440,7 @@ test("Browser layout, catalog diagnostics, and keyboard collapse on the current 
       assert.match(diagnostics.entries[1], /legacy-driver/, "second broken package is listed too");
       assert.deepEqual(diagnostics.driverButtons, ["Manage SSH"], "valid driver stays listable alongside broken packages");
 
-      // --- 真实 SSH 前端 Shadow DOM：计算样式与 token 继承 ---
+      // --- 真实 SSH 工作台：计算样式与 token 继承 ---
       const palette = await page.evaluate(`(() => {
         const probe = document.createElement('span'); document.body.append(probe);
         const color = (token) => { probe.style.color = 'var(' + token + ')'; return getComputedStyle(probe).color; };
@@ -449,8 +449,8 @@ test("Browser layout, catalog diagnostics, and keyboard collapse on the current 
       })()`);
       const sshStyles = await page.evaluate(`(() => {
         const workspace = document.querySelector('main[aria-label="Driver workspace"]');
-        const host = workspace ? Array.from(workspace.querySelectorAll('div')).find((d) => d.shadowRoot) : null;
-        const root = host ? host.shadowRoot : null;
+        const host = workspace?.querySelector('[data-workbench=ssh]');
+        const root = host ? host : null;
         const layout = root ? root.querySelector('.layout') : null;
         const bar = root ? root.querySelector('.bar') : null;
         const strong = root ? root.querySelector('.bar strong') : null;
@@ -468,170 +468,47 @@ test("Browser layout, catalog diagnostics, and keyboard collapse on the current 
       assert.equal(sshStyles.strongColor, palette.text, "SSH .bar strong color inherits --coterm-text-primary");
       assert.equal(sshStyles.hasTerminal, true, "SSH terminal container exists in real frontend");
 
-      // --- 真实 SSH 前端自己的 fallback ---
-      // 同一个 Document 里的任何容器都会从 :root 继承 token，所以这里另开一个
-      // 同源空白 iframe：里面没有任何 --coterm-*，组件只能用自己的 fallback。
-      const sshFallbacks = await page.evaluate(`(async () => {
-        const frame = document.createElement('iframe');
-        frame.style.cssText = 'width:480px;height:240px;border:0';
-        document.body.append(frame);
-        const doc = frame.contentDocument;
-        const win = frame.contentWindow;
-        const source = window.__cotermTest.sshFrontendSource();
-        const url = URL.createObjectURL(new Blob([source], { type: "text/javascript" }));
-        try {
-          const module = await import(url);
-          const container = win.document.createElement('div');
-          container.style.cssText = 'height:100%;width:100%';
-          win.document.body.append(container);
-          const api = {
-            invoke: async () => ({
-              status: 'completed',
-              output: { connected: false, connectionId: null, config: { username: 'fallback', host: '127.0.0.1', port: 22 } },
-            }),
-            subscribeEvents: async () => () => {},
-            subscribe: () => () => {},
-            components: {},
-          };
-          const view = module.mount(container, api);
-          const host = container.querySelector('div');
-          const root = host && host.shadowRoot;
-          const result = {
-            // 先证明这个文档里确实没有主题变量。
-            docPrimary: win.getComputedStyle(win.document.documentElement).getPropertyValue('--coterm-text-primary').trim(),
-            hostColor: host ? win.getComputedStyle(host).color : null,
-            layoutBg: root ? win.getComputedStyle(root.querySelector('.layout')).backgroundColor : null,
-            barBg: root ? win.getComputedStyle(root.querySelector('.bar')).backgroundColor : null,
-            strongColor: root ? win.getComputedStyle(root.querySelector('.bar strong')).color : null,
-          };
-          view.unmount();
-          frame.remove();
-          return result;
-        } finally {
-          URL.revokeObjectURL(url);
-        }
-      })()`);
-      assert.equal(sshFallbacks.docPrimary, "", "the isolated document really has no --coterm-text-primary");
-      assert.equal(sshFallbacks.hostColor, "rgb(204, 204, 204)", "SSH :host falls back to its own #cccccc");
-      assert.equal(sshFallbacks.layoutBg, "rgb(30, 30, 30)", "SSH .layout falls back to its own #1e1e1e");
-      assert.equal(sshFallbacks.barBg, "rgb(37, 37, 38)", "SSH .bar falls back to its own #252526");
-      assert.equal(sshFallbacks.strongColor, "rgb(204, 204, 204)", "SSH .bar strong falls back to its own #cccccc");
+      await page.evaluate(`document.documentElement.style.setProperty('--radius','1.125rem')`);
+      assert.equal(await page.evaluate(`(()=>{const host=document.querySelector('[data-workbench=ssh]');const probe=document.createElement('div');host.append(probe);probe.style.borderRadius='var(--radius-md)';const buttonRadius=getComputedStyle(probe).borderRadius;probe.style.borderRadius='var(--radius-sm)';const inputRadius=getComputedStyle(probe).borderRadius;probe.remove();return getComputedStyle(host.querySelector('.coterm-terminal-clear')).borderRadius===buttonRadius&&getComputedStyle(host.querySelector('.terminal-find input')).borderRadius===inputRadius})()`),true, "workbench buttons and inputs follow a changed root radius");
+      await page.evaluate(`document.documentElement.style.removeProperty('--radius')`);
+
+      // One theme source updates the mounted terminal without remounting it.
+      await page.evaluate(`window.keptTerminal=document.querySelector('[data-workbench=ssh] .xterm');document.documentElement.classList.add('dark')`);
+      assert.equal(await page.evaluate(`(()=>{const root=document.querySelector('[data-workbench=ssh]');const value=getComputedStyle(root).getPropertyValue('--coterm-surface').trim();const probe=document.createElement('div');probe.style.background=value;root.append(probe);const expected=getComputedStyle(probe).backgroundColor;probe.remove();return getComputedStyle(root.querySelector('.layout')).backgroundColor===expected&&root.querySelector('.xterm')===keptTerminal})()`),true);
+      await page.evaluate(`document.documentElement.classList.remove('dark')`);
 
       // --- 真实共享前端 mountBlockList：token 继承、选择状态与销毁 ---
-      // 组件来自 apps/shared/components/block-list.ts 的构建产物，
+      // 组件来自 apps/desktop/src/workbenches/common/block-list.tsx 的构建产物，
       // 页面以动态 import 加载，脚本里没有任何手写 DOM 或样式替身。
       await page.evaluate(`(async () => { window.__sharedModule = await window.__cotermTest.loadShared(); })()`);
-      const blockStyles = await page.evaluate(`(() => {
-        const { mountBlockList } = window.__sharedModule;
-        const container = document.createElement('div');
-        document.body.append(container);
-        const selections = [];
-        const view = mountBlockList(container, {
-          blocks: [
-            { id: "b1", index: 1, command: "whoami", actor: "robot", exitCode: 0 },
-            { id: "b2", index: 2, command: "cat /etc/passwd", actor: "human", exitCode: null },
-            { id: "b3", index: 3, command: "rm -rf /", actor: "robot", exitCode: 1 },
-          ],
-          onSelectionChange: (ids) => selections.push(ids),
-        });
-        const root = container.querySelector('.coterm-blocks');
-        const rows = [...container.querySelectorAll('.coterm-block')];
-        const result = {
-          rowTagNames: rows.map((row) => row.tagName),
-          rootRole: root.getAttribute('role'),
-          rootLabel: root.getAttribute('aria-label'),
-          rootColor: getComputedStyle(root).color,
-          rootBg: getComputedStyle(root).backgroundColor,
-          robotColor: getComputedStyle(container.querySelector('.coterm-block-actor[data-actor="robot"]')).color,
-          humanText: container.querySelector('.coterm-block-actor[data-actor="human"]').textContent,
-          robotText: container.querySelector('.coterm-block-actor[data-actor="robot"]').textContent,
-          failureMark: rows[2].querySelector('.coterm-block-status').textContent,
-          failureTitle: rows[2].querySelector('.coterm-block-status').title,
-          successMark: rows[0].querySelector('.coterm-block-status').textContent,
-        };
-
-        // 选择只由左侧块号触发，正文保留原生文本选择。
-        rows[1].querySelector('.coterm-block-gutter').click();
-        result.afterClick = {
-          pressed: [...container.querySelectorAll('.coterm-block-gutter')].map((button) => button.getAttribute('aria-pressed')),
-          selections: [...selections],
-        };
-
-        // update 后选择集重置为传入的 selected，而不是沿用旧集合。
-        view.update({ blocks: [
-          { id: "b1", index: 1, command: "whoami", actor: "robot", exitCode: 0 },
-          { id: "b2", index: 2, command: "cat /etc/passwd", actor: "human", exitCode: null, selected: true },
-        ] });
-        result.afterUpdate = [...container.querySelectorAll('.coterm-block-gutter')]
-          .map((button) => button.getAttribute('aria-pressed'));
-
-        // 销毁：容器清空，且 disposed 之后 update 不再渲染。
-        view.unmount();
-        result.afterUnmount = container.childElementCount;
-        view.update({ blocks: [{ id: "b9", index: 9, command: "late", actor: "human" }] });
-        result.afterLateUpdate = container.childElementCount;
-        container.remove();
-        return result;
-      })()`);
-      assert.deepEqual(blockStyles.rowTagNames, ["ARTICLE", "ARTICLE", "ARTICLE"], "commands and replies are list items with separate number buttons");
-      assert.equal(blockStyles.rootRole, "list", "real shared frontend root carries role=list");
-      assert.equal(blockStyles.rootLabel, "Command blocks", "real shared frontend root is labelled");
-      assert.equal(blockStyles.rootColor, palette.text, "shared frontend block-list inherits --coterm-text-primary");
-      assert.equal(blockStyles.rootBg, palette.surface, "shared frontend block-list inherits --coterm-surface");
-      assert.equal(blockStyles.robotColor, palette.accent, "shared frontend robot actor inherits --coterm-accent-glow");
-      assert.equal(blockStyles.robotText, "Robot", "shared frontend renders the actor label, not the raw enum");
-      assert.equal(blockStyles.humanText, "Human", "shared frontend renders the human actor label");
-      assert.equal(blockStyles.failureMark, "!", "shared frontend marks a non-zero exit");
-      assert.equal(blockStyles.failureTitle, "Exit code 1", "shared frontend exposes the exit code as a title");
-      assert.equal(blockStyles.successMark, "", "shared frontend leaves a zero exit unmarked");
-      assert.deepEqual(blockStyles.afterClick.pressed, ["false", "true", "false"], "clicking a number selects its block");
-      assert.deepEqual(blockStyles.afterClick.selections, [["b2"]], "selection change reports the selected block id");
-      assert.deepEqual(blockStyles.afterUpdate, ["false", "true"], "update() adopts explicitly declared selection");
-      assert.equal(blockStyles.afterUnmount, 0, "unmount clears the container it was given");
-      assert.equal(blockStyles.afterLateUpdate, 0, "a disposed view ignores further updates");
-
-      // --- token fallback：让真实共享前端组件在无主题的文档里自己回退 ---
-      // 同文档里连 Shadow DOM 的内联 style 都会从 :root 继承，所以再开一个同源空白 iframe。
-      // 源码先放到 window 上，避免把它拼进求值字符串（源里本身就有模板字符）。
-      await page.evaluate(`(async () => { window.__sharedSource = await (await fetch("/__shared/block-list.js")).text(); })()`);
-      const fallbacks = await page.evaluate(`(async () => {
-        const frame = document.createElement('iframe');
-        frame.style.cssText = 'width:480px;height:240px;border:0';
-        document.body.append(frame);
-        const win = frame.contentWindow;
-        const url = URL.createObjectURL(new Blob([window.__sharedSource], { type: "text/javascript" }));
-        try {
-          const { mountBlockList } = await import(url);
-          const container = win.document.createElement('div');
-          win.document.body.append(container);
-          const view = mountBlockList(container, {
-            blocks: [
-              { id: "b1", index: 1, command: "whoami", actor: "robot", exitCode: 0 },
-              { id: "b2", index: 2, command: "false", actor: "human", exitCode: 1 },
-            ],
-          });
-          const root = container.querySelector('.coterm-blocks');
-          const result = {
-            docPrimary: win.getComputedStyle(win.document.documentElement).getPropertyValue('--coterm-text-primary').trim(),
-            rootColor: win.getComputedStyle(root).color,
-            rootBg: win.getComputedStyle(root).backgroundColor,
-            robotColor: win.getComputedStyle(container.querySelector('.coterm-block-actor[data-actor="robot"]')).color,
-            gutterColor: win.getComputedStyle(container.querySelector('.coterm-block-gutter')).color,
-            failureColor: win.getComputedStyle(container.querySelector('.coterm-block-status')).color,
-          };
-          view.unmount();
-          frame.remove();
-          return result;
-        } finally {
-          URL.revokeObjectURL(url);
-        }
-      })()`);
-      assert.equal(fallbacks.docPrimary, "", "the isolated document really has no --coterm-text-primary");
-      assert.equal(fallbacks.rootColor, "rgb(204, 204, 204)", "real shared frontend block-list falls back to its own #cccccc");
-      assert.equal(fallbacks.rootBg, "rgb(30, 30, 30)", "real shared frontend block-list falls back to its own #1e1e1e surface");
-      assert.equal(fallbacks.robotColor, "rgb(117, 190, 255)", "real shared frontend robot actor falls back to its own #75beff");
-      assert.equal(fallbacks.gutterColor, "rgb(133, 133, 133)", "real shared frontend gutter falls back to its own #858585");
-      assert.equal(fallbacks.failureColor, "rgb(244, 135, 113)", "real shared frontend failure status falls back to its own #f48771");
+      await page.evaluate(`window.blockContainer=document.createElement('div');document.body.append(blockContainer);window.blockSelections=[];
+        window.blockView=__sharedModule.mountBlockList(blockContainer,{blocks:[
+          {id:'b1',index:1,command:'whoami',actor:'robot',exitCode:0},
+          {id:'b2',index:2,command:'cat /etc/passwd',actor:'human',exitCode:null},
+          {id:'b3',index:3,command:'false',actor:'robot',exitCode:1}
+        ],onSelectionChange:ids=>blockSelections.push(ids)});void 0`);
+      await waitForValue({send:page.send},`blockContainer.querySelectorAll('.coterm-block').length===3`);
+      const blockStyles=await page.evaluate(`(()=>{const root=blockContainer.querySelector('.coterm-blocks');const rows=[...blockContainer.querySelectorAll('.coterm-block')];return {
+        rowTagNames:rows.map(row=>row.tagName),rootRole:root.getAttribute('role'),rootLabel:root.getAttribute('aria-label'),
+        rootColor:getComputedStyle(root).color,rootBg:getComputedStyle(root).backgroundColor,
+        robotColor:getComputedStyle(blockContainer.querySelector('[data-actor=robot]')).color,
+        actors:[...blockContainer.querySelectorAll('.coterm-block-actor')].map(node=>node.textContent),
+        failureMark:rows[2].querySelector('.coterm-block-status').textContent,failureTitle:rows[2].querySelector('.coterm-block-status').title,
+        successMark:rows[0].querySelector('.coterm-block-status').textContent
+      }})()`);
+      assert.deepEqual(blockStyles.rowTagNames,['ARTICLE','ARTICLE','ARTICLE']);
+      assert.equal(blockStyles.rootRole,'list');assert.equal(blockStyles.rootLabel,'Command blocks');
+      assert.equal(blockStyles.rootColor,palette.text);assert.equal(blockStyles.rootBg,palette.surface);assert.equal(blockStyles.robotColor,palette.accent);
+      assert.deepEqual(blockStyles.actors,['Robot','Human','Robot']);assert.equal(blockStyles.failureMark,'!');assert.equal(blockStyles.failureTitle,'Exit code 1');assert.equal(blockStyles.successMark,'');
+      await page.evaluate(`blockContainer.querySelectorAll('.coterm-block-gutter')[1].click()`);
+      await waitForValue({send:page.send},`blockContainer.querySelectorAll('.coterm-block-gutter')[1].getAttribute('aria-pressed')==='true'`);
+      assert.deepEqual(await page.evaluate(`blockSelections`),[['b2']]);
+      await page.evaluate(`blockView.update({blocks:[{id:'b1',index:1,command:'whoami',actor:'robot',exitCode:0},{id:'b2',index:2,command:'cat /etc/passwd',actor:'human',selected:true}]})`);
+      await waitForValue({send:page.send},`blockContainer.querySelectorAll('.coterm-block').length===2`);
+      assert.deepEqual(await page.evaluate(`[...blockContainer.querySelectorAll('.coterm-block-gutter')].map(node=>node.getAttribute('aria-pressed'))`),['false','true']);
+      await page.evaluate(`blockView.unmount();blockView.update({blocks:[{id:'late',index:9,command:'late',actor:'human'}]})`);
+      await waitForValue({send:page.send},`blockContainer.childElementCount===0`);
+      await page.evaluate(`blockContainer.remove()`);
     } finally {
       await page.close();
     }
@@ -702,7 +579,7 @@ test("Snapshot failure keeps the last valid attention state on screen", async (t
         resolve();
       }, 50);
     })`);
-    await waitForValue({ send: page.send }, `!document.querySelector('[role="alert"]')`, { label: "notice cleared after recovery" });
+    await waitForValue({ send: page.send }, `[...document.querySelectorAll('[role="alert"]')].every(node=>!node.textContent.trim()||!!node.closest('[hidden]'))`, { label: "notice cleared after recovery" });
     const recovered = await page.evaluate(`document.querySelectorAll('form[aria-label="Agent operation approval"]').length`);
     assert.equal(recovered, 1, "attention subscription resumes after a transient failure");
 

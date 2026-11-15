@@ -21,7 +21,7 @@ Coterm 是面向人类与 Agent 协同的终端交互基座。支持 SSH、串�
 
 ```text
 apps/desktop/          Tauri + React 桌面应用
-apps/shared/           桌面与内置驱动共用的前端类型和交互模块
+apps/shared/           应用内部前端类型契约；工作台组件位于 desktop/src/workbenches
 apps/desktop/src-tauri Tauri Rust 后端
 crates/coterm-core     共享类型、实例运行时、审批、操作记录和终端工具
 crates/coterm-mcp      MCP Bridge 相关类型和逻辑

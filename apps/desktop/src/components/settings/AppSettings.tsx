@@ -1,3 +1,4 @@
+import { Switch } from "../ui/switch";
 import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { Globe2, Palette, Plug, RotateCcw, Search, Settings2, ShieldCheck, TerminalSquare, X } from "lucide-react";
 import { useI18n } from "../../use-i18n";
@@ -5,6 +6,7 @@ import { DEFAULT_PREFERENCES, getPreferences, setPreferences, subscribePreferenc
 import { ThemeSwitcher } from "../ThemeSwitcher";
 import { Modal } from "../ui/Modal";
 import { Button } from "../ui/button";
+import { Input, Select } from "../ui/input";
 import { Empty, EmptyContent, EmptyHeader, EmptyMedia, EmptyTitle } from "../ui/empty";
 import { cn } from "../../lib/utils";
 import { McpPortSetting } from "./McpPortSetting";
@@ -24,7 +26,7 @@ const categories = [
   { id: "approval", label: "Approval", icon: ShieldCheck },
 ] as const;
 
-const controlClass = "h-9 w-full min-w-0 rounded-md border border-input bg-background px-3 text-sm text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring sm:w-44";
+const controlClass = "sm:w-44";
 
 export function AppSettings({ onClose }: { onClose: () => void }) {
   const { t, locale, setLocale } = useI18n();
@@ -40,25 +42,25 @@ export function AppSettings({ onClose }: { onClose: () => void }) {
     { id: "approval-rule-groups", category: "approval", title: "Approval rule groups", description: "Create reusable rules and assign one group to each instance.", keywords: "approval rules groups intercept allow 审批 规则组 拦截 放行",
       control: <Button id="approval-rule-groups" type="button" variant="outline" onClick={() => setApprovalGroups(true)}>{t("Manage rule groups")}</Button> },
     { id: "language", category: "general", title: "Language", description: "Choose the language used by the app and supported drivers.", keywords: "locale translation 中文 简体中文 English en zh-CN",
-      control: <select id="locale-select" className={controlClass} aria-label={t("Language")} value={locale} onChange={event => {
+      control: <Select id="locale-select" className={controlClass} aria-label={t("Language")} value={locale} onChange={event => {
         if (event.target.value === "en" || event.target.value === "zh-CN") setLocale(event.target.value);
-      }}><option value="zh-CN">简体中文</option><option value="en">English</option></select> },
+      }}><option value="zh-CN">简体中文</option><option value="en">English</option></Select> },
     { id: "theme", category: "appearance", title: "Color theme", description: "Use a light theme, a dark theme, or follow your system.", keywords: "light dark system 主题 浅色 深色 系统",
       control: <ThemeSwitcher id="settings-theme-switcher" /> },
     { id: "interface-font-size", category: "appearance", title: "Interface font size", description: "Adjust app text and controls. Default: 14 px.", keywords: "font size text zoom 字体 字号 文字 缩放 px",
-      control: <select id="interface-font-size" className={controlClass} aria-label={t("Interface font size")} value={preferences.interfaceFontSize} onChange={event => setPreferences({ interfaceFontSize: Number(event.target.value) })}>
+      control: <Select id="interface-font-size" className={controlClass} aria-label={t("Interface font size")} value={preferences.interfaceFontSize} onChange={event => setPreferences({ interfaceFontSize: Number(event.target.value) })}>
         {Array.from({ length: 9 }, (_, index) => index + 12).map(size => <option key={size} value={size}>{size} px</option>)}
-      </select> },
+      </Select> },
     { id: "terminal-font-size", category: "terminal", title: "Terminal font size", description: "Adjust terminal and command output text. Default: 13 px.", keywords: "font size output ssh serial 字体 字号 输出 串口 px",
-      control: <select id="terminal-font-size" className={controlClass} aria-label={t("Terminal font size")} value={preferences.terminalFontSize} onChange={event => setPreferences({ terminalFontSize: Number(event.target.value) })}>
+      control: <Select id="terminal-font-size" className={controlClass} aria-label={t("Terminal font size")} value={preferences.terminalFontSize} onChange={event => setPreferences({ terminalFontSize: Number(event.target.value) })}>
         {Array.from({ length: 19 }, (_, index) => index + 10).map(size => <option key={size} value={size}>{size} px</option>)}
-      </select> },
+      </Select> },
     { id: "terminal-line-height", category: "terminal", title: "Terminal line height", description: "Set the space between terminal lines. Default: 1.0.", keywords: "line spacing 行距 行高",
-      control: <select id="terminal-line-height" className={controlClass} aria-label={t("Terminal line height")} value={preferences.terminalLineHeight} onChange={event => setPreferences({ terminalLineHeight: Number(event.target.value) })}>
+      control: <Select id="terminal-line-height" className={controlClass} aria-label={t("Terminal line height")} value={preferences.terminalLineHeight} onChange={event => setPreferences({ terminalLineHeight: Number(event.target.value) })}>
         {[1, 1.2, 1.4, 1.6, 1.8, 2].map(height => <option key={height} value={height}>{height.toFixed(1)}</option>)}
-      </select> },
+      </Select> },
     { id: "cursor-blink", category: "terminal", title: "Blinking cursor", description: "Blink the cursor in terminal views.", keywords: "caret cursor blink 光标 闪烁",
-      control: <input id="cursor-blink" type="checkbox" role="switch" className="settings-switch" aria-label={t("Blinking cursor")} checked={preferences.cursorBlink} onChange={event => setPreferences({ cursorBlink: event.target.checked })} /> },
+      control: <Switch id="cursor-blink" aria-label={t("Blinking cursor")} checked={preferences.cursorBlink} onCheckedChange={cursorBlink => setPreferences({ cursorBlink })} /> },
     { id: "mcp-port", category: "mcp", title: "MCP port", description: "MCP port changes apply after saving.", keywords: "MCP Stdio bridge interface port localhost 端口 接口 本机 桥接",
       control: <McpPortSetting mcp={mcp} /> },
     { id: "mcp-connection", category: "mcp", title: "MCP connection", keywords: "MCP Stdio auto manual startup connection client 自启动 手动启动 开关 连接 客户端",
@@ -79,7 +81,7 @@ export function AppSettings({ onClose }: { onClose: () => void }) {
     <div className="settings-content">
       <div className="settings-search">
         <Search className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
-        <input ref={searchRef} id="settings-search" type="search" value={query} placeholder={t("Search settings…")} aria-label={t("Search settings")} onChange={event => setQuery(event.target.value)} />
+        <Input ref={searchRef} id="settings-search" type="search" value={query} placeholder={t("Search settings…")} aria-label={t("Search settings")} className="border-0 bg-transparent px-0 focus-visible:ring-0" onChange={event => setQuery(event.target.value)} />
         {query && <Button variant="ghost" size="icon" type="button" aria-label={t("Clear search")} onClick={clearSearch}><X data-icon="inline-start" /></Button>}
       </div>
       <div className="settings-layout">
