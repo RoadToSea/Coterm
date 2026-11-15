@@ -38,8 +38,11 @@ export const StreamView = memo(function StreamView({ namespace }: { namespace: "
   const definition = workbenchDefinition(`coterm-driver-${namespace}`)!;
   const t = createTranslator(driverI18n);
   const properties = { ...definition.schema.properties };
-  if (namespace === "serial") delete properties.port;
-  properties.prompt = { type: "string", title: "Shell prompt", maxLength: 256 };
+  if (namespace === "serial") {
+    delete properties.port;
+  } else {
+    properties.prompt = { type: "string", title: "Shell prompt", maxLength: 256 };
+  }
   return <div className="layout" data-ui="layout">
     <div className="bar" data-ui="bar">
       <div className="modes" role="group" data-ui="modes"><Button variant="ghost" size="sm" data-ui="terminalMode" /><Button variant="ghost" size="sm" data-ui="uartMode" /></div>
@@ -57,18 +60,38 @@ export const StreamView = memo(function StreamView({ namespace }: { namespace: "
         <form className="communication-settings settings-grid" data-ui="communication">
           <ConfigurationFields schema={{ ...definition.schema, properties }} defaults={definition.defaults} translate={t} manageConditions={false} />
           {namespace === "tcp" && <div hidden><Input name="username" /><Select name="terminalType" defaultValue="xterm"><option value="xterm">xterm</option></Select></div>}
-          <div hidden={namespace !== "serial"} className="col-span-1 sm:col-span-2">
-            <div className="receive-newlines grid grid-cols-2 gap-2" data-ui="receiveNewlines" role="group">
-              <label className="signal-check flex h-9 items-center gap-2.5 cursor-pointer select-none rounded-sm px-2.5 border border-input bg-background/80 hover:bg-muted/60 hover:border-border transition-colors">
-                <Input type="checkbox" name="receiveCompleteLF" data-ui="completeLF" className="size-4 rounded-sm accent-primary cursor-pointer shrink-0" />
-                <span data-ui="completeLFLabel" className="text-xs font-medium text-foreground leading-none truncate" />
-              </label>
-              <label className="signal-check flex h-9 items-center gap-2.5 cursor-pointer select-none rounded-sm px-2.5 border border-input bg-background/80 hover:bg-muted/60 hover:border-border transition-colors">
-                <Input type="checkbox" name="receiveCompleteCR" data-ui="completeCR" className="size-4 rounded-sm accent-primary cursor-pointer shrink-0" />
-                <span data-ui="completeCRLabel" className="text-xs font-medium text-foreground leading-none truncate" />
-              </label>
-            </div>
+          <div
+            hidden={namespace !== "serial"}
+            className="receive-newlines col-span-2 grid grid-cols-2 gap-3"
+            data-ui="receiveNewlines"
+            role="group"
+          >
+            <label className="signal-check flex h-9 items-center gap-2.5 cursor-pointer select-none rounded-sm px-2.5 border border-input bg-background/80 hover:bg-muted/60 hover:border-border transition-colors">
+              <Input type="checkbox" name="receiveCompleteLF" data-ui="completeLF" className="size-4 rounded-sm accent-primary cursor-pointer shrink-0" />
+              <span data-ui="completeLFLabel" className="text-xs font-medium text-foreground leading-none truncate" />
+            </label>
+            <label className="signal-check flex h-9 items-center gap-2.5 cursor-pointer select-none rounded-sm px-2.5 border border-input bg-background/80 hover:bg-muted/60 hover:border-border transition-colors">
+              <Input type="checkbox" name="receiveCompleteCR" data-ui="completeCR" className="size-4 rounded-sm accent-primary cursor-pointer shrink-0" />
+              <span data-ui="completeCRLabel" className="text-xs font-medium text-foreground leading-none truncate" />
+            </label>
           </div>
+          {namespace === "serial" && (
+            <Field data-field="prompt">
+              <FieldLabel htmlFor={`${namespace}-prompt`} className="text-xs font-medium text-muted-foreground truncate">
+                {t("Shell prompt")}
+              </FieldLabel>
+              <Input
+                id={`${namespace}-prompt`}
+                name="prompt"
+                type="text"
+                defaultValue="# "
+                maxLength={256}
+                autoComplete="off"
+                spellCheck={false}
+                className="h-9 text-xs"
+              />
+            </Field>
+          )}
           <Field data-field="backspace" hidden={namespace !== "serial"}>
             <FieldLabel htmlFor={`${namespace}-backspace-key`} data-ui="backspaceLabel" className="text-xs font-medium text-muted-foreground truncate">
               <span data-ui="backspaceLabelText" />

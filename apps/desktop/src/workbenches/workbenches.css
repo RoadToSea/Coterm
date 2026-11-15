@@ -184,13 +184,10 @@
   }
   :where([data-workbench="stream"]) .signal-check input { width: auto; margin: 0; }
   :where([data-workbench="stream"]) .settings-grid [aria-disabled="true"] { opacity: .65; cursor: not-allowed; }
+  :where([data-workbench="stream"]) .receive-newlines { grid-column: span 2; }
   :where([data-workbench="stream"]) .settings-grid [data-field="receiveFilename"] { grid-column: span 2; }
   :where([data-workbench="stream"]) .settings-grid:has([data-field="prompt"]:not([hidden])) [data-field="receiveFilename"] { grid-column: span 1; }
-  @media (max-width: 840px) {
-    :where([data-workbench="stream"]) .settings-grid [data-field="receiveFilename"] { grid-column: span 1; }
-  }
   :where([data-workbench="stream"]) .settings-grid label:has(.receive-filename) { min-width: 0; }
-  :where([data-workbench="stream"]) .receive-newlines { grid-column: 1 / -1; }
   :where([data-workbench="stream"]) .toolbar-item { position: relative; display: inline-flex; flex: 0 0 auto; align-items: center; }
   :where([data-workbench="stream"]) .toolbar-item[data-control="stats"] { margin-left: auto; }
   :where([data-workbench="stream"]) .uart-bar[data-customizing="true"] .toolbar-item { cursor: grab; user-select: none;
