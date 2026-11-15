@@ -44,6 +44,16 @@ Python 3.9 的 raw 模式曾留下 IXOFF，捕获过混入的 XOFF；测试已�
 
 **下一步**：若需要提高上限，先分开测生产／消费／显示路径并复现失败负载；不要只看 RX 计数或无限扩大队列。入口：[生产队列压测](../../crates/coterm-driver/examples/tcp-task-throughput.rs)、[网络浏览器回归](../../tests/drivers/network/network-drivers-browser.test.mjs)、[Node 校验器](../../tests/system/throughput-frames.test.mjs)。
 
+## 工作区批次保存导致未恢复实例丢失
+
+反馈：重启后，上次工作区中的实例保存项消失。现有 [WS-05](../requirements/workspace.md) 采用“最新一次实际使用批次”策略；这与“工作区中的保存项持续保留，显式删除才移除”的使用预期存在冲突。
+
+确定的复现路径：先保存 A、B，再重新打开工作区，仅恢复 A。当前窗口的内存快照仍有 A、B，但写回文件只剩 A；再次打开后 B 不再可恢复。创建新实例也会启动同一筛选。未恢复且未标记 retained 的保存项会在序列化时被排除，而非文件解密失败。达到容量时，创建路径还允许淘汰未恢复且未标记 retained 的保存项。
+
+`cargo test -p coterm-desktop session -- --test-threads=1` 的 2 项隔离测试确认了上述筛选和保存失败回滚行为。入口：[工作区写回筛选](../../apps/desktop/src-tauri/src/workspace.rs)、[批次测试](../../apps/desktop/src-tauri/src/workspace_tests.rs)。仅凭这条复现不能还原每次现场丢失的操作顺序。
+
+待确定保存语义：若改为保存项持续保留，需要同时取消批次筛选与容量自动淘汰，满容量明确拒绝新建；恢复只改变运行绑定，不隐式删除其他保存项。该调整不要求改变文件格式。现场仅检查现存加密文件及元数据，未覆盖文件、修改实例或尝试重建旧配置；应用数据目录内未发现旧工作区备份。
+
 ## 其他未解决问题
 
 | 问题 | 已有证据 | 下一步 |
