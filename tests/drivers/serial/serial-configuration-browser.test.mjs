@@ -7,7 +7,7 @@ import path from "node:path";
 import { assertFreshBuild, findBrowser, openSession, evaluate, waitForValue, startStaticServer, setAppLocale } from "#support/browser-harness.mjs";
 import { defaultScenario, makeHostMockSource } from "#support/host-mock.js";
 
-test("Serial creation lists COM6 from a stopped driver before any instance is submitted", async t => {
+test("Serial creation formats Windows and Unix ports and refreshes a stopped driver before submission", async t => {
   const browserPath = findBrowser();
   if (!browserPath) { t.skip("No Chrome/Edge binary"); return; }
   assertFreshBuild();
@@ -16,7 +16,18 @@ test("Serial creation lists COM6 from a stopped driver before any instance is su
   const scenario = structuredClone(defaultScenario);
   scenario.catalog = {drivers:[{id:"serial",name:"Serial",version:"0.1.0",hasFrontend:true,running:false}],issues:[]};
   scenario.instances = [];
-  scenario.serialPorts = [{portName:"COM6",portType:{kind:"usb",product:"USB-SERIAL CH340 (COM6)"}}];
+  const portCases = [
+    ["COM6", "USB-SERIAL CH340 (COM6)", "COM6 (USB-SERIAL CH340)"],
+    ["COM7", "USB UART (rev B)", "COM7 (USB UART (rev B))"],
+    ["COM8", "COM8", "COM8"],
+    ["COM9", "USB Serial (COM19)", "COM9 (USB Serial (COM19))"],
+    ["/dev/ttyUSB0", "USB Serial", "/dev/ttyUSB0 (USB Serial)"],
+    ["/dev/ttyUSB1", "USB Serial (/dev/ttyUSB1)", "/dev/ttyUSB1 (USB Serial)"],
+    ["/dev/cu.usbserial-1410", "USB UART (/dev/cu.usbserial-1410)", "/dev/cu.usbserial-1410 (USB UART)"],
+    ["/dev/ttyUSB2", "USB UART (/dev/ttyusb2)", "/dev/ttyUSB2 (USB UART (/dev/ttyusb2))"],
+    ["/dev/ttyACM0", null, "/dev/ttyACM0"],
+  ];
+  scenario.serialPorts = portCases.map(([portName, product]) => ({portName,portType:{kind:"usb",product}}));
   const server = await startStaticServer();
   const session = await openSession({browserPath});
   const {client} = session;
@@ -38,8 +49,8 @@ test("Serial creation lists COM6 from a stopped driver before any instance is su
     await run(`window.configuration=()=>[...document.querySelectorAll('#driver-configuration div')].find(el=>el.shadowRoot?.querySelector('form'))?.shadowRoot;
       document.querySelector('button[aria-label="Manage Serial"]').click()`);
     await wait(`!!configuration()?.querySelector('select') && !configuration().querySelector('select').textContent.includes('Loading')`);
-    assert.deepEqual(await run(`[...configuration().querySelector('select').options].map(option=>option.value)`), ["COM6"],
-      "a present system port must be selectable before creating an instance");
+    assert.deepEqual(await run(`[...configuration().querySelector('select').options].map(option=>[option.value,option.textContent])`),
+      portCases.map(([portName, , label]) => [portName, label]), "remove only the repeated device identifier, preserving actual port values and other product details");
     const calls = await run(`__cotermTest.invocations.map(call=>call.command)`);
     assert.ok(calls.indexOf("start_driver") >= 0 && calls.indexOf("start_driver") < calls.indexOf("invoke_driver_operation"),
       "the host must start the backend before requesting driver-level data");

@@ -5,6 +5,14 @@ import { surface, option, caption, retitle } from "../../../../../apps/shared/co
 import { mountStreamWorkbench } from "../../../../../apps/shared/components/stream-workbench";
 interface PortEntry { portName: string; portType: { kind: string; product?: string | null } }
 const BAUD_RATES = [300, 1200, 2400, 4800, 9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600];
+function portDisplayName({ portName, portType }: PortEntry): string {
+  const product = portType?.product?.trim() ?? "";
+  const suffix = `(${portName})`;
+  // Windows friendly names can already contain the port identifier.
+  const description = product.endsWith(suffix) ? product.slice(0, -suffix.length).trimEnd() : product;
+  return description && description !== portName ? `${portName} (${description})` : portName;
+}
+
 function output<T>(receipt: OperationReceipt<T>): T {
   if (receipt.status !== "completed" || receipt.error || receipt.output === null) {
     throw new Error(receipt.error?.message ?? `Operation ${receipt.status}`);
@@ -39,8 +47,7 @@ export function configure(container: HTMLElement, api: DriverConfigurationAPI): 
     if (list.length > 0) {
       portPlaceholder = null;
       for (const item of list) {
-        const desc = item.portType?.product ? `${item.portName} (${item.portType.product})` : item.portName;
-        port.append(option(item.portName, desc));
+        port.append(option(item.portName, portDisplayName(item)));
       }
       if (currentVal && list.some(item => item.portName === currentVal)) {
         port.value = currentVal;

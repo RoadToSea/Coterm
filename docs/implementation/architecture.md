@@ -128,6 +128,8 @@ SSH 的 [file.rs](../../crates/coterm-driver/src/ssh/file.rs) 集中校验文件
 
 Serial 使用阻塞工作线程和 `serialport` 跨平台接口；读写句柄通过库提供的克隆能力分开使用。读取以有界批次通知，满队列保留最新重试线索，关闭提交尾部。不是暂停接收后写入。
 
+Serial 端口枚举保留库返回的 portName 与 product；前端仅在展示时去掉产品名称末尾与当前端口完全一致的括号后缀，或省略与端口相同的产品名称。Windows COM 名与 Unix 设备路径共用该规则，其他产品括号及连接参数保持原值。
+
 网络按每实例任务维护 socket、连接身份、重连与有界输入。Telnet codec 在正文进入 stream 之前处理 IAC／NVT；Raw TCP 不经过这层协议解释。
 
 ### 数据记录与读取
