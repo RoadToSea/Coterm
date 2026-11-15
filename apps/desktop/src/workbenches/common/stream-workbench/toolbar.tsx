@@ -7,7 +7,7 @@ import { createTranslator, type Translator } from "./i18n";
 
 const labels = {
   format: "Receive format", timestamps: "Show timestamps", autoscroll: "Auto-scroll",
-  pause: "Pause / resume", copy: "Copy received text", clear: "Clear", save: "Save receive buffer", stats: "Byte counters",
+  pause: "Pause / resume", clear: "Clear", save: "Save receive buffer", stats: "Byte counters",
 };
 type Id = keyof typeof labels;
 interface Layout { order: Id[]; hidden: Id[] }
@@ -94,7 +94,6 @@ export function StreamToolbarView({ namespace }: { namespace: string }) {
     timestamps: <label><Input type="checkbox" data-ui="timestamps" /><span data-ui="timestampsText" /></label>,
     autoscroll: <label><Input type="checkbox" data-ui="autoscroll" /><span data-ui="autoscrollText" /></label>,
     pause: <Button variant="ghost" size="icon" className="icon-button" data-ui="pause"><svg viewBox="0 0 24 24" aria-hidden="true"><path data-ui="pauseIcon" d="M8 5v14M16 5v14" /></svg></Button>,
-    copy: <Button variant="ghost" size="icon" className="icon-button" data-ui="copyReceived"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 8V4h12v12h-4M4 8h12v12H4z" /></svg></Button>,
     clear: <Button variant="ghost" size="icon" className="icon-button" data-ui="clear"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M9 6V3h6v3M6 6l1 15h10l1-15M10 10v7m4-7v7" /></svg></Button>,
     save: <Button variant="ghost" size="icon" className="export-receive icon-button" data-ui="exportButton"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m-5-5 5 5 5-5M4 16v5h16v-5" /></svg></Button>,
     stats: <span className="stats" data-ui="stats" />,
