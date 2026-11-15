@@ -31,7 +31,7 @@ async fn register(runtime: &Runtime) -> Result<coterm_core::model::manifest::Dri
     Ok(runtime
         .register::<coterm_driver::local::backend::Backend>(
             serde_json::from_str(include_str!("../manifests/local.json"))?,
-            Some("export function mount() { return { unmount() {} }; }"),
+            None,
         )
         .await?)
 }
@@ -216,12 +216,8 @@ async fn in_process_host_runs_a_local_shell_through_the_runtime() -> Result<()> 
     assert_eq!(manifest.manifest_version, 1);
     assert_eq!(manifest.instances.instance_type, "local-shell");
     assert!(manifest.instances.multiple);
-    // 前端入口是必需的：基座没有配置界面就无法创建本地实例。
-    let frontend = runtime
-        .frontend_source(DRIVER_ID)
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("local driver must ship a frontend entry"))?;
-    assert!(frontend.contains("export function mount"));
+    assert!(manifest.frontend.is_none());
+    assert!(runtime.frontend_source(DRIVER_ID).await?.is_none());
 
     runtime.start(DRIVER_ID).await?;
     let catalog = runtime.operation_catalog(DRIVER_ID).await;

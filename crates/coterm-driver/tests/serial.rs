@@ -111,7 +111,7 @@ async fn register(
     Ok(runtime
         .register::<coterm_driver::serial::backend::Backend>(
             serde_json::from_str(include_str!("../manifests/serial.json"))?,
-            Some("export function mount() { return { unmount() {} }; }"),
+            None,
         )
         .await?)
 }
@@ -361,7 +361,7 @@ async fn in_process_host_registers_serial_and_validates_mcp_tools() -> Result<()
     // 基座握手会校验实例作用域的 MCP 工具必须要求 driverInstanceId。
     register(&runtime).await?;
     runtime.start(DRIVER_ID).await?;
-    assert!(runtime.frontend_source(DRIVER_ID).await?.is_some());
+    assert!(runtime.frontend_source(DRIVER_ID).await?.is_none());
     let instance = runtime
         .create_instance(
             DRIVER_ID,

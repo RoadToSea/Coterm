@@ -46,7 +46,7 @@ async fn in_process_host_routes_approval_snapshot_and_hides_terminal_input() -> 
     assert!(runtime
         .frontend_source("coterm-driver-ssh")
         .await?
-        .is_some());
+        .is_none());
     let caller = |source| CallerContext {
         source,
         session_id: instance.session_id.clone(),
@@ -3587,7 +3587,7 @@ async fn register(
     Ok(runtime
         .register::<coterm_driver::ssh::backend::Backend>(
             serde_json::from_str(include_str!("../manifests/ssh.json"))?,
-            Some("export function mount() { return { unmount() {} }; }"),
+            None,
         )
         .await?)
 }

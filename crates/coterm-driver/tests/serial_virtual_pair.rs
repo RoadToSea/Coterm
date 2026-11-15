@@ -172,7 +172,7 @@ async fn register(runtime: &Runtime) -> Result<coterm_core::model::manifest::Dri
     Ok(runtime
         .register::<coterm_driver::serial::backend::Backend>(
             serde_json::from_str(include_str!("../manifests/serial.json"))?,
-            Some("export function mount() { return { unmount() {} }; }"),
+            None,
         )
         .await?)
 }

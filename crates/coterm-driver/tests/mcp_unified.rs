@@ -11,7 +11,7 @@ async fn serial_runtime() -> Result<Runtime> {
     runtime
         .register::<coterm_driver::serial::backend::Backend>(
             serde_json::from_str(include_str!("../manifests/serial.json"))?,
-            Some("export function mount() { return { unmount() {} }; }"),
+            None,
         )
         .await?;
     runtime.start("coterm-driver-serial").await?;
@@ -33,7 +33,7 @@ async fn instance_names_are_global_atomic_and_match_public_mcp_names() -> Result
     runtime
         .register::<coterm_driver::ssh::backend::Backend>(
             serde_json::from_str(include_str!("../manifests/ssh.json"))?,
-            Some("export function mount() { return { unmount() {} }; }"),
+            None,
         )
         .await?;
     runtime.start("coterm-driver-ssh").await?;
@@ -330,13 +330,13 @@ async fn network_routes_keep_native_limits_and_do_not_invent_hex_or_probe_capabi
     runtime
         .register::<coterm_driver::tcp::backend::Backend>(
             serde_json::from_str(include_str!("../manifests/tcp.json"))?,
-            Some("export function mount() { return { unmount() {} }; }"),
+            None,
         )
         .await?;
     runtime
         .register::<coterm_driver::telnet::backend::Backend>(
             serde_json::from_str(include_str!("../manifests/telnet.json"))?,
-            Some("export function mount() { return { unmount() {} }; }"),
+            None,
         )
         .await?;
     let mut peers = Vec::new();
@@ -425,17 +425,16 @@ async fn local_exec_and_global_default_routing_work_across_driver_types() -> Res
         runtime::{CallerContext, SubmitOperation},
     };
     let runtime = serial_runtime().await?;
-    let frontend = Some("export function mount() { return { unmount() {} }; }");
     runtime
         .register::<coterm_driver::local::backend::Backend>(
             serde_json::from_str(include_str!("../manifests/local.json"))?,
-            frontend,
+            None,
         )
         .await?;
     runtime
         .register::<coterm_driver::tcp::backend::Backend>(
             serde_json::from_str(include_str!("../manifests/tcp.json"))?,
-            frontend,
+            None,
         )
         .await?;
     runtime.start("coterm-driver-local").await?;
