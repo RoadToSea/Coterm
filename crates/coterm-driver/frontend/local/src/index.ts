@@ -297,7 +297,7 @@ export function mount(container: HTMLElement, api: DriverAPI): DriverFrontend {
   let disposed = false;
   let shellId: string | null = null;
   let cursor = 0n;
-  let running = false;
+  let running: boolean | null = null;
   let resizing = false;
   let status_: Status | null = null;
   let unsubscribe: (() => void) | undefined;
@@ -325,6 +325,11 @@ export function mount(container: HTMLElement, api: DriverAPI): DriverFrontend {
   };
 
   const renderState = () => {
+    // No lifecycle fact is available until the initial status snapshot arrives.
+    if (running === null) {
+      restart.hidden = true;
+      return;
+    }
     if (running) {
       state.textContent = t("running");
       restart.hidden = true;
@@ -398,10 +403,13 @@ export function mount(container: HTMLElement, api: DriverAPI): DriverFrontend {
         return;
       }
       if (event.name === "local.status") {
-        const payload = event.payload as { shellId?: string; running?: boolean };
-        if (typeof payload?.running === "boolean") {
-          running = payload.running;
-          renderState();
+        const payload = event.payload as Partial<Pick<Status, "shellId" | "running" | "exitCode">>;
+        if (status_ && payload?.shellId === shellId && typeof payload.running === "boolean") {
+          applyStatus({
+            ...status_,
+            running: payload.running,
+            exitCode: payload.exitCode === undefined ? status_.exitCode : payload.exitCode,
+          });
         }
         return;
       }
