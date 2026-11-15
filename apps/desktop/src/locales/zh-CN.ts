@@ -376,6 +376,7 @@ export const zhCN: Readonly<Record<string, string>> = {
   "Dismiss notification": "关闭提示",
   "Timed send": "定时发送",
   "Save file (download directory)": "保存文件（系统下载目录）",
+  "Receive buffer filename": "保存文件（系统下载目录）",
   "Disconnect before changing communication parameters. Changes apply on the next connection.": "请先断开连接再修改通信参数，修改会在下次连接时生效。",
   "Check the communication parameters before connecting.": "请检查通信参数后再连接。",
   "Enter to send · Shift+Enter for a new line": "Enter 发送 · Shift+Enter 换行",

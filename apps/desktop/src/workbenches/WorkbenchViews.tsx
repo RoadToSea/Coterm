@@ -1,5 +1,6 @@
 import { memo } from "react";
 import { Button } from "../components/ui/button";
+import { Field, FieldLabel } from "../components/ui/field";
 import { Input, Select, Textarea } from "../components/ui/input";
 import { ConfigurationFields } from "./ConfigurationFields";
 import { workbenchDefinition } from "./definitions";
@@ -56,17 +57,36 @@ export const StreamView = memo(function StreamView({ namespace }: { namespace: "
         <form className="communication-settings settings-grid" data-ui="communication">
           <ConfigurationFields schema={{ ...definition.schema, properties }} defaults={definition.defaults} translate={t} manageConditions={false} />
           {namespace === "tcp" && <div hidden><Input name="username" /><Select name="terminalType" defaultValue="xterm"><option value="xterm">xterm</option></Select></div>}
-          <div hidden={namespace !== "serial"} className="col-span-full">
-            <div className="receive-newlines checks" data-ui="receiveNewlines" role="group">
-              <label className="signal-check"><Input type="checkbox" name="receiveCompleteLF" data-ui="completeLF" /><span data-ui="completeLFLabel" /></label>
-              <label className="signal-check"><Input type="checkbox" name="receiveCompleteCR" data-ui="completeCR" /><span data-ui="completeCRLabel" /></label>
+          <div hidden={namespace !== "serial"} className="col-span-1 sm:col-span-2">
+            <div className="receive-newlines grid grid-cols-2 gap-2" data-ui="receiveNewlines" role="group">
+              <label className="signal-check flex h-9 items-center gap-2.5 cursor-pointer select-none rounded-sm px-2.5 border border-input bg-background/80 hover:bg-muted/60 hover:border-border transition-colors">
+                <Input type="checkbox" name="receiveCompleteLF" data-ui="completeLF" className="size-4 rounded-sm accent-primary cursor-pointer shrink-0" />
+                <span data-ui="completeLFLabel" className="text-xs font-medium text-foreground leading-none truncate" />
+              </label>
+              <label className="signal-check flex h-9 items-center gap-2.5 cursor-pointer select-none rounded-sm px-2.5 border border-input bg-background/80 hover:bg-muted/60 hover:border-border transition-colors">
+                <Input type="checkbox" name="receiveCompleteCR" data-ui="completeCR" className="size-4 rounded-sm accent-primary cursor-pointer shrink-0" />
+                <span data-ui="completeCRLabel" className="text-xs font-medium text-foreground leading-none truncate" />
+              </label>
             </div>
-            <label data-ui="backspaceLabel"><span data-ui="backspaceLabelText" /><Select name="backspaceKey" data-ui="backspaceKey"><option value="bs">BS (0x08)</option><option value="del">DEL (0x7F)</option></Select></label>
           </div>
-          <div hidden={namespace === "telnet"} className="col-span-full grid grid-cols-2 gap-3">
-            <label data-ui="uartEndingLabel"><span data-ui="uartEndingLabelText" /><Select className="line-ending" data-ui="uartEnding"><EndingOptions /></Select></label>
-            <label data-ui="receiveFilenameLabel"><span /><Input className="receive-filename" data-ui="receiveFilename" defaultValue={`${namespace}-receive.txt`} maxLength={128} /></label>
-          </div>
+          <Field data-field="backspace" hidden={namespace !== "serial"}>
+            <FieldLabel htmlFor={`${namespace}-backspace-key`} data-ui="backspaceLabel" className="text-xs font-medium text-muted-foreground truncate">
+              <span data-ui="backspaceLabelText" />
+            </FieldLabel>
+            <Select id={`${namespace}-backspace-key`} name="backspaceKey" data-ui="backspaceKey" className="h-9 text-xs"><option value="bs">BS (0x08)</option><option value="del">DEL (0x7F)</option></Select>
+          </Field>
+          <Field data-field="uartEnding" hidden={namespace === "telnet"}>
+            <FieldLabel htmlFor={`${namespace}-uart-ending`} data-ui="uartEndingLabel" className="text-xs font-medium text-muted-foreground truncate">
+              <span data-ui="uartEndingLabelText" />
+            </FieldLabel>
+            <Select id={`${namespace}-uart-ending`} className="line-ending h-9 text-xs" data-ui="uartEnding"><EndingOptions /></Select>
+          </Field>
+          <Field data-field="receiveFilename" hidden={namespace === "telnet"}>
+            <FieldLabel htmlFor={`${namespace}-receive-filename`} data-ui="receiveFilenameLabel" className="text-xs font-medium text-muted-foreground truncate">
+              <span data-ui="receiveFilenameLabelText">{t("Receive buffer filename")}</span>
+            </FieldLabel>
+            <Input id={`${namespace}-receive-filename`} className="receive-filename h-9 text-xs" data-ui="receiveFilename" defaultValue={`${namespace}-receive.txt`} maxLength={128} />
+          </Field>
         </form>
       </section>
     </div>

@@ -45,19 +45,28 @@ export function ConfigurationFields({ schema, defaults, translate: t, ports = []
     const common = { id: controlId, name, required, disabled: inactive, title: field["x-help"] ? t(field["x-help"]) : undefined,
       "aria-description": field["x-help"] ? t(field["x-help"]) : undefined };
     const serialPort = field["x-source"] === "serial.ports";
-    return <Field key={name} data-field={name} hidden={conditional && proxyType === "direct"} className={field.type === "boolean" ? "flex-row items-center" : undefined}>
-      <FieldLabel htmlFor={controlId}>{t(field.title ?? key)}</FieldLabel>
-      {serialPort ? <Select {...common} defaultValue={String(value ?? "")} {...portEvents}>
+    if (field.type === "boolean") {
+      return (
+        <Field key={name} data-field={name} hidden={conditional && proxyType === "direct"} className="justify-end">
+          <label htmlFor={controlId} className="signal-check flex h-9 items-center gap-2.5 cursor-pointer select-none rounded-sm px-2.5 border border-input bg-background/80 hover:bg-muted/60 hover:border-border transition-colors">
+            <Input {...common} type="checkbox" defaultChecked={value === true} className="size-4 rounded-sm accent-primary cursor-pointer shrink-0"
+              onChange={manageConditions ? event => setValues({ ...values, [key]: event.currentTarget.checked }) : undefined} />
+            <span className="text-xs font-medium text-foreground leading-none truncate">{t(field.title ?? key)}</span>
+          </label>
+        </Field>
+      );
+    }
+    return <Field key={name} data-field={name} hidden={conditional && proxyType === "direct"}>
+      <FieldLabel htmlFor={controlId} className="text-xs font-medium text-muted-foreground truncate">{t(field.title ?? key)}</FieldLabel>
+      {serialPort ? <Select {...common} defaultValue={String(value ?? "")} {...portEvents} className="h-9 text-xs">
         {!ports.length && <option value="">{t(portMessage ?? "No serial ports detected")}</option>}
         {ports.map(port => <option key={port.portName} value={port.portName}>{portDisplayName(port)}</option>)}
-      </Select> : field.enum ? <Select {...common} defaultValue={String(value ?? field.enum[0])}
+      </Select> : field.enum ? <Select {...common} defaultValue={String(value ?? field.enum[0])} className="h-9 text-xs"
         onChange={proxy && key === "type" && manageConditions ? event => setValues({ ...values, type: event.currentTarget.value }) : undefined}>
         {field.enum.map((option, index) => <option key={option} value={option}>{t(field["x-enumNames"]?.[index] ?? String(option))}</option>)}
-      </Select> : field.type === "boolean" ? <Input {...common} type="checkbox" defaultChecked={value === true} className="size-4 accent-primary"
-        onChange={manageConditions ? event => setValues({ ...values, [key]: event.currentTarget.checked }) : undefined} />
-        : <Input {...common} type={field.type === "integer" ? "number" : "text"} defaultValue={value == null ? "" : String(value)}
+      </Select> : <Input {...common} type={field.type === "integer" ? "number" : "text"} defaultValue={value == null ? "" : String(value)}
           min={field.minimum} max={field.maximum} maxLength={field.maxLength} step={field.type === "integer" ? 1 : undefined}
-          list={field["x-suggestions"] ? `${controlId}-suggestions` : undefined} autoComplete="off" spellCheck={false} />}
+          list={field["x-suggestions"] ? `${controlId}-suggestions` : undefined} autoComplete="off" spellCheck={false} className="h-9 text-xs" />}
       {field["x-suggestions"] && <datalist id={`${controlId}-suggestions`}>{field["x-suggestions"].map(item => <option key={item} value={item} />)}</datalist>}
     </Field>;
   })}</>;
