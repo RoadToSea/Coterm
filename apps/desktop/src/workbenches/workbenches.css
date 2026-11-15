@@ -252,6 +252,8 @@
     white-space: pre-wrap;
     overflow-wrap: anywhere;
     tab-size: 4;
+    user-select: text;
+    cursor: text;
   }
   :where([data-workbench="stream"]) .uart-output:empty::before {
     content: attr(data-empty);

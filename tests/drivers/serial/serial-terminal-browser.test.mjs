@@ -25,6 +25,7 @@ test("human Shell uses terminal keys, UART uses its sender, and MCP queues stay 
   const session = await openSession({ browserPath, totalTimeoutMs: 60_000 });
   const { client } = session;
   const run = (source) => evaluate(client, source);
+  const observedFailures = [];
   const key = async (key, code, windowsVirtualKeyCode, extra = {}) => {
     const params = { key, code, windowsVirtualKeyCode, ...extra };
     await client.send("Input.dispatchKeyEvent", { type: "keyDown", ...params });
@@ -140,6 +141,57 @@ test("human Shell uses terminal keys, UART uses its sender, and MCP queues stay 
     // UART 发送框按原样发送文本或 HEX，不拆成命令列表。
     await run(`root.querySelectorAll('.modes button')[1].click()`);
     await waitForValue(client, `!root.querySelector('.uart').hidden&&!root.querySelector('.connect-button').disabled`);
+
+    const emitOutput = text => run(`(async () => {
+      const text = ${JSON.stringify(text)};
+      window.cursor++;
+      await window.event({name:'serial.output',payload:{connectionId:'conn',cursor:window.cursor,text,bytes:new TextEncoder().encode(text).length}});
+    })()`);
+    await run(`root.querySelector('[data-control=pause] button').click()`);
+    const pausedText = await run(`root.querySelector('.uart-output').textContent`);
+    await emitOutput('paused-output');
+    assert.equal(await run(`root.querySelector('[data-control=pause] button').getAttribute('aria-pressed')`), 'true');
+    assert.match(await run(`root.querySelector('.stats').textContent`), /RX 26 B/,
+      'received bytes continue to be captured while paused');
+    if (await run(`root.querySelector('.uart-output').textContent`) !== pausedText) {
+      observedFailures.push('pause changed visible UART output while receive capture continued');
+    }
+    await run(`root.querySelector('[data-control=pause] button').click()`);
+    await waitForValue(client, `root.querySelector('.uart-output').textContent.includes('paused-output')`);
+
+    await run(`root.querySelector('[data-control=timestamps] input').click()`);
+    await emitOutput('cntA is :');
+    await emitOutput('506cntB is :');
+    await emitOutput('506\\n');
+    const renderedWithTimestamps = await run(`root.querySelector('.uart-output').textContent`);
+    if (!renderedWithTimestamps.includes('cntB is :506')) observedFailures.push('fragmented output did not reach the UART view');
+    const timestampCount = (renderedWithTimestamps.match(/\[\d{2}:\d{2}:\d{2}\.\d{3}\]/g) ?? []).length;
+    if (timestampCount !== 2) observedFailures.push(`two logical lines received ${timestampCount} timestamps`);
+
+    await emitOutput('copy-this-content\\n');
+    const copyVisible = await run(`root.querySelector('.uart-output').textContent.includes('copy-this-content')`);
+    if (!copyVisible) observedFailures.push('copy fixture did not reach the UART view');
+    await run(`Object.defineProperty(navigator, 'clipboard', {configurable:true,value:{writeText:async text => {window.copiedText=text;}}})`);
+    await run(`root.querySelector('[data-control=copy] button').click()`);
+    await waitForValue(client, `window.copiedText === root.querySelector('.uart-output').textContent`);
+    assert.equal(await run(`window.copiedText.includes('copy-this-content')`), true,
+      'copy command must copy the displayed UART output');
+    assert.equal(await run(`root.querySelector('[data-control=copy] button').getAttribute('aria-label')`), 'Copy received text');
+    await run(`(() => {
+      const button=root.querySelector('[data-control=copy] button');
+      button.focus();
+      navigator.clipboard.writeText=async () => { throw new Error('clipboard permission denied'); };
+      document.execCommand=command => { window.fallbackCopied=document.activeElement.value; return command==='copy'; };
+      button.click();
+    })()`);
+    await waitForValue(client, `root.querySelector('.coterm-toasts').textContent.includes('Received text copied.')`);
+    assert.equal(await run(`window.fallbackCopied === root.querySelector('.uart-output').textContent`), true,
+      'older WebViews use the native clipboard command');
+    assert.equal(await run(`document.activeElement === root.querySelector('[data-control=copy] button')`), true,
+      'clipboard fallback restores focus');
+    assert.equal(await run(`document.querySelectorAll('textarea').length`), 2,
+      'clipboard fallback removes its temporary editor');
+
     await run(`(() => {
       root.querySelector('.uart-send textarea').value = ${JSON.stringify("first\nsecond")};
       window.sendUart();
@@ -148,6 +200,7 @@ test("human Shell uses terminal keys, UART uses its sender, and MCP queues stay 
     assert.deepEqual(await run(`window.writes().at(-1).args`),
       { text: "first\nsecond", lineEnding: "crlf" });
     await run(`root.querySelector('.history-toggle').click()`);
+    await waitForValue(client, `!!root.querySelector('.send-history button')`);
     assert.equal(await run(`root.querySelector('.send-history button').textContent`), "ASCII · first second");
     await run(`root.querySelector('.send-history button').click()`);
     assert.equal(await run(`root.querySelector('.uart-send textarea').value`), "first\nsecond");
@@ -202,19 +255,19 @@ test("human Shell uses terminal keys, UART uses its sender, and MCP queues stay 
     await dragToolbar('save', 'clear', false);
     assert.equal(await run(`root.querySelector('[data-control=timestamps]').hidden`), true);
     assert.deepEqual(await run(`[...root.querySelector('.uart-bar').children].map(el=>el.dataset.control)`),
-      ['format','timestamps','autoscroll','pause','save','clear','stats']);
+      ['format','timestamps','autoscroll','pause','copy','save','clear','stats']);
     assert.equal(await run(`root.querySelector('.toolbar-customization').hidden`), false, 'dragging toolbar controls keeps customization active');
     assert.equal(await run(`root.querySelectorAll('[data-dragging],[data-drop-side]').length`), 0);
     await dragToolbar('save', 'format', false, true);
     assert.deepEqual(await run(`[...root.querySelector('.uart-bar').children].map(el=>el.dataset.control)`),
-      ['format','timestamps','autoscroll','pause','save','clear','stats'], 'cancelled drags leave the order unchanged');
+      ['format','timestamps','autoscroll','pause','copy','save','clear','stats'], 'cancelled drags leave the order unchanged');
     await dragToolbar('save', 'clear', true);
     assert.deepEqual(await run(`[...root.querySelector('.uart-bar').children].map(el=>el.dataset.control)`),
-      ['format','timestamps','autoscroll','pause','clear','save','stats'], 'controls can also be dragged to the right');
+      ['format','timestamps','autoscroll','pause','copy','clear','save','stats'], 'controls can also be dragged to the right');
     await run(`root.querySelector('[data-control=save]').focus()`);
     await key("ArrowLeft", "ArrowLeft", 37, { modifiers: 1 });
     assert.deepEqual(await run(`[...root.querySelector('.uart-bar').children].map(el=>el.dataset.control)`),
-      ['format','timestamps','autoscroll','pause','save','clear','stats'], 'Alt + arrows offer keyboard reordering');
+      ['format','timestamps','autoscroll','pause','copy','save','clear','stats'], 'Alt + arrows offer keyboard reordering');
     assert.equal(await run(`window.calls.length`), toolbarCallCount);
     await run(`root.querySelector('[data-restore=timestamps]').click()`);
     assert.equal(await run(`root.querySelector('[data-control=timestamps]').hidden`), false);
@@ -227,11 +280,11 @@ test("human Shell uses terminal keys, UART uses its sender, and MCP queues stay 
       slot.focus(); slot.dispatchEvent(new KeyboardEvent('keydown',{key:'Delete',bubbles:true,cancelable:true}));
     }`);
     assert.equal(await run(`root.querySelectorAll('.toolbar-item:not([hidden])').length`), 0);
-    assert.equal(await run(`root.querySelectorAll('.toolbar-removed button').length`), 7, 'removed controls can always be restored');
+    assert.equal(await run(`root.querySelectorAll('.toolbar-removed button').length`), 8, 'removed controls can always be restored');
     assert.equal(await run(`document.activeElement.classList.contains('toolbar-done')`), true);
     await run(`root.querySelector('.toolbar-reset').click(); root.querySelector('.toolbar-done').click()`);
     assert.deepEqual(await run(`[...root.querySelector('.uart-bar').children].map(el=>el.dataset.control)`),
-      ['format','timestamps','autoscroll','pause','clear','save','stats']);
+      ['format','timestamps','autoscroll','pause','copy','clear','save','stats']);
     assert.equal(await run(`root.querySelector('[data-control=save]').draggable || root.querySelector('.export-receive').inert`), false, 'leaving customization restores normal button actions');
     assert.equal(await run(`getComputedStyle(root.querySelector('.export-receive')).animationName`), 'none');
     assert.equal(await run(`getComputedStyle(root.querySelector('.export-receive')).willChange`), 'auto');
@@ -448,6 +501,7 @@ test("human Shell uses terminal keys, UART uses its sender, and MCP queues stay 
     assert.deepEqual(await run(`window.revoked`), ["blob:test-1"]);
     await run(`new Promise(resolve => setTimeout(resolve, 80))`);
     assert.equal(await run(`window.writes().length`), unmountCount, "unmount cancels the repeat timer");
+    assert.deepEqual(observedFailures, [], 'UART pause, line timestamps and copy must work on the real receive view');
   } catch (error) {
     t.diagnostic(JSON.stringify(await run(`({
       calls:window.calls?.slice(-6), state:root.querySelector('.connect-button')?.textContent,

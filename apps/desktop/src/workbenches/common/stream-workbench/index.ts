@@ -142,6 +142,7 @@ export function mountStreamWorkbench<C extends StreamConfig>(container: HTMLElem
   const autoscroll = node<HTMLInputElement>('autoscroll'); autoscroll.checked=displayPreferences.autoScroll;
   const autoscrollText = node<HTMLElement>('autoscrollText');
   const pause = node<HTMLButtonElement>('pause'), clear = node<HTMLButtonElement>('clear');
+  const copyReceived = node<HTMLButtonElement>('copyReceived');
   const stats = node<HTMLElement>('stats'), exportButton = node<HTMLButtonElement>('exportButton');
   const toolbar = createToolbar(uartBar, createTranslator(api.i18n));
   const historyView = mountSendHistory(historyPanel);
@@ -330,6 +331,8 @@ export function mountStreamWorkbench<C extends StreamConfig>(container: HTMLElem
     timestampsText.textContent = tr("Show timestamps");
     autoscrollText.textContent = tr("Auto-scroll");
     renderPause();
+    copyReceived.title = tr("Copy received text");
+    copyReceived.setAttribute("aria-label", copyReceived.title);
     clear.className = "icon-button"; clear.title = tr("Clear"); clear.setAttribute("aria-label", clear.title);
     uartEntryText.textContent = tr("Send");
     uartText.placeholder = tr("Enter to send · Shift+Enter for a new line");
@@ -380,11 +383,21 @@ export function mountStreamWorkbench<C extends StreamConfig>(container: HTMLElem
     if (disposed || (!force && (paused || mode !== "uart"))) return;
     let text = "";
     const normalizer = createReceiveNewlineNormalizer(receiveNewlineMode);
+    let atLineStart = true;
     for (const item of uartView === "hex" ? hexEntries : entries) {
-      if (item.boundary) normalizer.reset();
-      const prefix = timestamps.checked ? `[${stamp(item.time)}] ` : "";
+      if (item.boundary) { normalizer.reset(); atLineStart = true; }
       const content = uartView === "hex" ? item.hex : normalizer.write(item.text);
-      if (content) text += prefix + content;
+      if (!content) continue;
+      if (!timestamps.checked) {
+        text += content;
+        atLineStart = /[\r\n]$/.test(content);
+        continue;
+      }
+      for (const character of content) {
+        if (atLineStart && character !== "\r" && character !== "\n") text += `[${stamp(item.time)}] `;
+        text += character;
+        atLineStart = character === "\r" || character === "\n";
+      }
     }
     if (uartView === "text") text = text.replace(/\r\n/g, "\n");
     uartOutput.textContent = text.length > RENDER_LIMIT ? text.slice(-RENDER_LIMIT) : text;
@@ -454,7 +467,7 @@ export function mountStreamWorkbench<C extends StreamConfig>(container: HTMLElem
       hexCursor = data.cursor;
       if (!data.more) break;
     }
-    renderUart(true);
+    renderUart(false);
   };
 
   const refreshSnapshot = async () => {
@@ -818,6 +831,37 @@ export function mountStreamWorkbench<C extends StreamConfig>(container: HTMLElem
       if (pendingWhilePaused > 0) notify(t("The device sent {bytes} bytes while paused.", { bytes: pendingWhilePaused }));
       pendingWhilePaused = 0;
       renderUart(true);
+    }
+  }, { signal: controller.signal });
+  copyReceived.addEventListener("click", async () => {
+    const text = uartOutput.textContent ?? "";
+    if (!text) { notify(t("No received text to copy."), "info"); return; }
+    try {
+      const clipboard = root.ownerDocument.defaultView?.navigator.clipboard;
+      if (clipboard) {
+        try { await clipboard.writeText(text); notify(t("Received text copied."), "info"); return; }
+        catch { /* Older WebViews may only support the native copy event. */ }
+      }
+      const document = root.ownerDocument;
+      const temporary = document.createElement("textarea");
+      const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      temporary.value = text;
+      temporary.setAttribute("aria-hidden", "true");
+      temporary.style.position = "fixed";
+      temporary.style.opacity = "0";
+      let copied = false;
+      try {
+        document.body.append(temporary);
+        temporary.select();
+        copied = document.execCommand("copy");
+      } finally {
+        temporary.remove();
+        previousFocus?.focus();
+      }
+      if (!copied) throw new Error("Clipboard is unavailable");
+      notify(t("Received text copied."), "info");
+    } catch {
+      notify(t("Could not copy received text."), "error");
     }
   }, { signal: controller.signal });
 
