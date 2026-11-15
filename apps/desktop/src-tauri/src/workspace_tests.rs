@@ -402,13 +402,14 @@ fn legacy_v1_migrates_into_default_group_and_preserves_encrypted_config() -> any
 
 #[cfg(windows)]
 #[test]
-fn only_latest_used_session_is_saved_and_empty_visits_do_not_destroy_recovery() -> anyhow::Result<()>
-{
+fn saved_instances_survive_partial_restore_and_new_sessions() -> anyhow::Result<()> {
     let fixture = Fixture::new()?;
     let mut first = fixture.store()?;
     first.insert("test".into(), "a".into(), "A".into(), Value::Null, None)?;
     first.insert("test".into(), "b".into(), "B".into(), Value::Null, None)?;
     let a = first.snapshot().entries[0].config_ref.clone();
+    let b = first.snapshot().entries[1].config_ref.clone();
+    first.save_layout(Some("b".into()), false, Vec::new(), None)?;
     let mut visit = fixture.store()?;
     visit.save_layout(None, false, Vec::new(), None)?;
     assert_eq!(
@@ -424,12 +425,16 @@ fn only_latest_used_session_is_saved_and_empty_visits_do_not_destroy_recovery() 
     );
     assert_eq!(
         fixture.store()?.snapshot().entries.len(),
-        1,
-        "unrestored older sessions are not accumulated on disk"
+        2,
+        "restoring A must not remove offline B from the saved workspace"
+    );
+    assert_eq!(
+        fixture.store()?.snapshot().layout.active_config_ref,
+        Some(b.clone())
     );
     visit.insert("test".into(), "c".into(), "C".into(), Value::Null, None)?;
     let mut next = fixture.store()?;
-    assert_eq!(next.snapshot().entries.len(), 2);
+    assert_eq!(next.snapshot().entries.len(), 3);
     let c = next
         .snapshot()
         .entries
@@ -439,17 +444,69 @@ fn only_latest_used_session_is_saved_and_empty_visits_do_not_destroy_recovery() 
         .config_ref
         .clone();
     next.bind(&c, "c-restored".into(), "C".into())?;
-    next.remove(&c)?;
-    assert!(
-        fixture.store()?.snapshot().entries.is_empty(),
-        "deleting the last used instance cannot revive old sessions"
-    );
+    next.remove_instance("c-restored")?;
+    assert_eq!(fixture.store()?.snapshot().entries.len(), 2);
+    assert!(fixture.store()?.find(&a).is_ok());
+    assert!(fixture.store()?.find(&b).is_ok());
+    next.remove(&a)?;
+    assert_eq!(fixture.store()?.snapshot().entries.len(), 1);
+    next.remove(&b)?;
+    assert!(fixture.store()?.snapshot().entries.is_empty());
     Ok(())
 }
 
 #[cfg(windows)]
 #[test]
-fn failed_write_preserves_groups_membership_and_session_checkpoint() -> anyhow::Result<()> {
+fn new_instances_preserve_offline_entries_without_restoring_them() -> anyhow::Result<()> {
+    let fixture = Fixture::new()?;
+    fixture
+        .store()?
+        .insert("test".into(), "a".into(), "A".into(), Value::Null, None)?;
+    let mut reopened = fixture.store()?;
+    reopened.insert("test".into(), "b".into(), "B".into(), Value::Null, None)?;
+    assert_eq!(fixture.store()?.snapshot().entries.len(), 2);
+    assert!(fixture
+        .store()?
+        .snapshot()
+        .entries
+        .iter()
+        .all(|entry| entry.instance_id.is_none()));
+    Ok(())
+}
+
+#[cfg(windows)]
+#[test]
+fn capacity_rejects_new_instances_without_evicting_offline_entries() -> anyhow::Result<()> {
+    let fixture = Fixture::new()?;
+    let mut store = fixture.store()?;
+    for index in 0..MAX_ENTRIES {
+        store.insert(
+            "test".into(),
+            index.to_string(),
+            format!("Saved {index}"),
+            Value::Null,
+            None,
+        )?;
+    }
+    let mut reopened = fixture.store()?;
+    let before = serde_json::to_value(reopened.snapshot())?;
+    let saved_bytes = fs::read(fixture.path())?;
+    let error = reopened
+        .insert("test".into(), "new".into(), "New".into(), Value::Null, None)
+        .err()
+        .ok_or_else(|| anyhow::anyhow!("full workspace accepted another instance"))?;
+    assert_eq!(error.code, "workspace_capacity");
+    assert_eq!(error.category, ErrorCategory::InvalidRequest);
+    assert!(error.message.contains("saved instance limit"));
+    assert_eq!(serde_json::to_value(reopened.snapshot())?, before);
+    assert_eq!(fs::read(fixture.path())?, saved_bytes);
+    assert_eq!(serde_json::to_value(fixture.store()?.snapshot())?, before);
+    Ok(())
+}
+
+#[cfg(windows)]
+#[test]
+fn failed_write_preserves_groups_membership_and_saved_instances() -> anyhow::Result<()> {
     let fixture = Fixture::new()?;
     let mut store = fixture.store()?;
     store.insert(

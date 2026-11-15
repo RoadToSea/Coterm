@@ -16,7 +16,7 @@
 
 ## 最近有效的软件验收
 
-工作区保存反馈的诊断确认（不是修复验收）：`cargo test -p coterm-desktop session -- --test-threads=1` 的 2 项测试通过。现有实现会在开始使用本次实例后，仅将本次使用或标记保留的实例写回文件；隔离夹具确认“内存仍有 A、B，恢复 A 后重新打开文件只剩 A”。具体风险及待确定语义见 [工作区保存反馈](../feedback/known-issues.md#工作区批次保存导致未恢复实例丢失)。此次未修改生产保存文件或持久化格式。
+工作区持续保留：`cargo check --workspace`、`cargo clippy --workspace --all-targets -- -D warnings` 与 `cargo test -p coterm-desktop --bin coterm-desktop -- --test-threads=1` 通过，桌面后端 37 项单元测试包含 22 项工作区回归；`pnpm test workspace approval` 的 27 项测试通过且无跳过。隔离夹具覆盖多次重启、仅恢复 A 时离线 B 仍落盘、新建实例不清除旧项、活动保存身份、显式销毁／忘记以及容量已满时内存和加密文件不变；旧版本读取、v5 编码、审批组、Bypass 和写失败回滚同时回归。未覆盖现场保存文件或替换运行中的桌面进程；已被覆盖的旧配置恢复仍见 [feedback](../feedback/known-issues.md)。
 
 统一实例名称、MCP 接口与文件容量、执行期限策略已通过以下软件验收：
 

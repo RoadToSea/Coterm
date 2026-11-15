@@ -174,7 +174,7 @@ impl WorkspaceStore {
             .find(|entry| entry.config_ref == config_ref)
             .ok_or_else(|| error("workspace_entry_not_found"))?;
         entry.approval_rule_group_id = group_id;
-        // Explicitly edited recovery records must survive the next session checkpoint.
+        // Keep the retention marker for older workspace readers that still honor it.
         if entry.instance_id.is_none() {
             entry.retained = true;
         }

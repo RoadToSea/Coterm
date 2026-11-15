@@ -41,6 +41,7 @@ pub fn error(code: &str) -> RuntimeError {
             }
             "approval_group_name_invalid"
             | "approval_group_capacity"
+            | "workspace_capacity"
             | "approval_group_invalid" => ErrorCategory::InvalidRequest,
             _ => ErrorCategory::Internal,
         },
@@ -58,6 +59,9 @@ pub fn error(code: &str) -> RuntimeError {
             "approval_group_name_exists" => "Another approval rule group already uses this name.",
             "instance_name_exists" => "An instance with this name already exists.",
             "approval_group_capacity" => "The limit of 128 approval rule groups has been reached.",
+            "workspace_capacity" => {
+                "The saved instance limit has been reached. Delete a saved instance before creating another."
+            }
             "approval_group_invalid" => "The saved approval rule group catalog is invalid.",
             _ => "Workspace could not be saved or restored. No operations were replayed.",
         }
@@ -162,9 +166,6 @@ pub struct WorkspaceStore {
     layout: Layout,
     groups: Vec<WorkspaceGroup>,
     approval_rule_groups: Vec<ApprovalRuleGroup>,
-    // Keep the previous session available for recovery in memory, but once this
-    // session has instances, only this session is written to the next snapshot.
-    session_started: bool,
 }
 
 impl WorkspaceStore {
@@ -178,7 +179,6 @@ impl WorkspaceStore {
             layout: Layout::default(),
             groups: default_groups(),
             approval_rule_groups: Vec::new(),
-            session_started: false,
         }
     }
     pub fn open(path: PathBuf) -> Result<Self, RuntimeError> {
@@ -243,7 +243,6 @@ impl WorkspaceStore {
             layout: doc.layout,
             groups: doc.groups,
             approval_rule_groups: doc.approval_rule_groups,
-            session_started: false,
             entries: doc
                 .entries
                 .into_iter()
@@ -303,17 +302,10 @@ impl WorkspaceStore {
         }
         let workspace_id = workspace_id.unwrap_or_else(|| self.layout.active_workspace_id.clone());
         self.require_group(&workspace_id)?;
-        let mut entries = self.entries.clone();
-        if entries.len() >= MAX_ENTRIES {
-            if let Some(index) = entries
-                .iter()
-                .position(|entry| entry.instance_id.is_none() && !entry.retained)
-            {
-                entries.remove(index);
-            } else {
-                return Err(error("workspace_capacity"));
-            }
+        if self.entries.len() >= MAX_ENTRIES {
+            return Err(error("workspace_capacity"));
         }
+        let mut entries = self.entries.clone();
         entries.push(SavedInstance {
             config_ref: uuid::Uuid::new_v4().to_string(),
             driver_id,
@@ -430,22 +422,10 @@ impl WorkspaceStore {
         groups: Vec<WorkspaceGroup>,
         approval_rule_groups: Vec<ApprovalRuleGroup>,
     ) -> Result<(), RuntimeError> {
-        let session_started =
-            self.session_started || entries.iter().any(|entry| entry.instance_id.is_some());
-        let mut saved_layout = layout.clone();
-        if session_started
-            && !entries.iter().any(|entry| {
-                entry.instance_id.is_some()
-                    && Some(&entry.config_ref) == saved_layout.active_config_ref.as_ref()
-            })
-        {
-            saved_layout.active_config_ref = None;
-        }
         let doc = Document {
             version: 5,
             entries: entries
                 .iter()
-                .filter(|entry| !session_started || entry.instance_id.is_some() || entry.retained)
                 .map(|entry| Entry {
                     config_ref: entry.config_ref.clone(),
                     driver_id: entry.driver_id.clone(),
@@ -458,7 +438,7 @@ impl WorkspaceStore {
                     bypass: entry.bypass,
                 })
                 .collect(),
-            layout: saved_layout,
+            layout: layout.clone(),
             allowed_operations: Vec::new(),
             approval_policy: None,
             groups: groups.clone(),
@@ -478,7 +458,6 @@ impl WorkspaceStore {
         self.layout = layout;
         self.groups = groups;
         self.approval_rule_groups = approval_rule_groups;
-        self.session_started = session_started;
         Ok(())
     }
 
