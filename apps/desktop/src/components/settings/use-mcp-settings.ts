@@ -1,15 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { hostAPI, type McpStdioStatus } from "../../host-api";
+import { hostAPI, type McpStatus } from "../../host-api";
 
 /** One backend snapshot and mutation lock for every MCP control in Settings. */
 export function useMcpSettings() {
-  const [status, setStatus] = useState<McpStdioStatus | null>(null);
+  const [status, setStatus] = useState<McpStatus | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const mounted = useRef(false);
   const pending = useRef(false);
 
-  const perform = useCallback(async (action: () => Promise<McpStdioStatus>) => {
+  const perform = useCallback(async (action: () => Promise<McpStatus>) => {
     if (pending.current) return null;
     pending.current = true;
     setBusy(true); setError("");
@@ -26,7 +26,7 @@ export function useMcpSettings() {
       if (mounted.current) setBusy(false);
     }
   }, []);
-  const refresh = useCallback(() => perform(() => hostAPI.mcpStdioStatus()), [perform]);
+  const refresh = useCallback(() => perform(() => hostAPI.mcpStatus()), [perform]);
   useEffect(() => {
     mounted.current = true;
     void refresh();

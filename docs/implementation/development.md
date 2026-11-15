@@ -43,12 +43,12 @@ git diff --check
 | 审批组与界面 | [规则实现与单元测试](../../crates/coterm-core/src/approval_policy.rs)、[审批浏览器](../../tests/desktop/approval/approval-settings-browser.test.mjs) |
 | SSH、Local、Serial | [driver/tests](../../crates/coterm-driver/tests)、[tests/drivers/](../../tests/drivers) 中对应驱动用例 |
 | Telnet／Raw TCP | [网络测试](../../crates/coterm-driver/src/network/tests.rs)、[codec](../../crates/coterm-driver/src/telnet/codec.rs)、[网络浏览器](../../tests/drivers/network/network-drivers-browser.test.mjs) |
-| MCP Stdio 与目录 | [coterm-mcp/tests](../../crates/coterm-mcp/tests)、各驱动目录与 MCP 集成测试 |
+| MCP HTTP 与目录 | [HTTP 协议测试](../../crates/coterm-mcp/tests/http.rs)、各驱动目录与 MCP 集成测试 |
 | 前端公共交互 | tests/shared 下 terminal-shortcuts、command-blocks、toasts、tokens 等用例 |
 
 ## 原生与发行验收
 
-pnpm test:native 使用 Windows WebView2、隔离 smoke 配置、本地 Shell、网络回环与真实 MCP Stdio；脚本拒绝覆盖已有 smoke profile。先构建带测试配置的专用版本，再指定该产物运行：
+pnpm test:native 使用 Windows WebView2、隔离 smoke 配置、本地 Shell、网络回环与真实 MCP HTTP；脚本拒绝覆盖已有 smoke profile。先构建带测试配置的专用版本，再指定该产物运行：
 
 ```powershell
 pnpm tauri:build --config ../../tests/fixtures/tauri-smoke.conf.json --bundles nsis
@@ -57,9 +57,9 @@ pnpm test:native target/release/coterm-desktop.exe
 
 脚本不传路径时默认 debug 产物，但仍要求 smoke 配置，不能用普通桌面 EXE 代替。细节见[原生脚本](../../scripts/test-native.mjs)和[Windows CI](../../.github/workflows/windows.yml)。
 
-原生验收保留 MCP 客户端的 stdin 打开，再发送窗口关闭请求，分别断言桌面及空闲适配进程在期限内自行退出；强制结束仅用于失败后的清理，不能作为通过证据。Windows 可能在桌面退出时重置 Bridge socket，适配器可按 IO 错误以 1 退出；正常 EOF 为 0。Stdio 进程回归另覆盖服务关闭及不完整帧，见 [stdio.rs](../../crates/coterm-mcp/tests/stdio.rs)。
+原生验收覆盖 HTTP 配置 URL、换端口、服务停用／重启与不同实例的并发查询；保持空闲 HTTP 连接再发送真实关窗请求，断言桌面在期限内自行退出、连接关闭且端口可重新绑定。强制结束仅用于失败后的清理，不能作为通过证据。请求正文边界、并发容量、Origin 校验与连接回收见 [http.rs](../../crates/coterm-mcp/tests/http.rs)。完成 smoke 验收后重新执行普通构建，避免将隔离配置的 EXE 当成日常版本。
 
-Windows 构建报删除 EXE 时“拒绝访问（os error 5）”，先检查同一路径是否仍有桌面或 `mcp stdio` 进程占用；关闭窗口不等于外部 MCP 客户端已释放其子进程。确认完整路径、命令行及连接状态后，只结束已断连的旧适配进程，不按名称批量结束桌面或其他终端进程。已运行的旧版本不会因源码修复而自行更新。
+Windows 构建报删除 EXE 时“拒绝访问（os error 5）”，先检查占用该完整路径的进程与命令行，保存会话后正常关窗。升级前残留的旧适配进程不会因源码变更自行更新，需确认已断连后精确清理；不按名称批量结束桌面或其他终端。当前 HTTP 入口由桌面持有，不启动或保留适配进程。
 
 Windows 安装包：
 

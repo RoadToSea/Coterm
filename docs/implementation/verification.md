@@ -12,30 +12,27 @@
 | 通信驱动 | SSH／Local 前台与显式后台，Serial Shell／stream，Telnet 与 Raw TCP | SSH 认证和 Shell 范围有限；Telnet／TCP 明文，代理无认证 |
 | 数据记录与读取 | 后端有界正文、操作摘要、三种无游标读取、前端回放 | 数据不跨启动；字节流无对话；长期慢消费可产生不可恢复缺口 |
 | 桌面交互 | 宿主 React 配置与两类工作台、统一主题控件、分组、标签、终端、字节调试、横向命令块、审批设置 | 原生跨平台、完整后代进程回收和现场协议兼容仍需验收 |
-| Agent 接入 | 桌面 Stdio 适配、本机 Bridge、8 个统一语义工具、全局唯一默认目标、名称路由与操作查询 | 旧工具名仅隐藏兼容；无 Resources／Prompts／事件订阅／MCP cancellation notification |
+| Agent 接入 | 进程内 Streamable HTTP、8 个统一语义工具、名称路由、多客户端并发与操作查询 | 仅本机、无 Agent 身份隔离；无 Resources／Prompts／事件订阅／MCP cancellation notification |
 
 ## 最近有效的软件验收
 
-退出与构建锁释放：`cargo check --workspace --all-targets --locked`、`cargo test --workspace --locked -- --test-threads=1` 和 `cargo clippy --workspace --all-targets --locked -- -D warnings` 通过，290 项 Rust 测试通过，3 项设备／虚拟串口用例按默认设置 ignored。Stdio 进程测试保持客户端 stdin 打开，覆盖 Bridge 正常关闭及不完整帧错误后自行退出；正常关闭返回 0，帧错误返回 1 且诊断只写 stderr。Windows 隔离 WebView2 验收通过 Local PowerShell、MCP 审批、本机 TCP／Telnet 命令与保存恢复，并以真实关窗请求验证桌面及空闲适配器均自行退出，未以强杀代替断言；该环境中适配器因 socket 重置返回 1。已复现旧适配进程占用 EXE 导致构建删除文件报 os error 5；释放旧进程后普通桌面构建成功，普通 EXE 在 Bridge 断开而 stdin 仍打开时自行退出并返回 0。内置驱动测试夹具与宿主工作台结构一致，不再注入已移除的驱动前端源码。
+软件检查：`cargo check --workspace --all-targets --locked`、`cargo test --workspace --locked -- --test-threads=1` 和 `cargo clippy --workspace --all-targets --locked -- -D warnings` 通过。完整 Rust 回归 287 项通过，3 项设备／虚拟串口用例按默认设置 ignored；包含 36 项桌面后端测试、7 项统一 MCP 集成测试、27 项 SSH 集成测试和 7 项 HTTP 协议测试。`pnpm build`、`pnpm test:build` 和完整 `pnpm test` 通过，105 项前端测试通过，无失败、无跳过。
 
-宿主工作台与主题统一：`pnpm build`、`pnpm test:build` 和完整 `pnpm test` 通过，105 项前端测试通过，无失败、无跳过；`cargo check --workspace --locked` 通过，桌面后端 37 项测试的最终完整回归通过。浏览器覆盖五种驱动配置、串口端口刷新与保存身份、终端／字节视图切换、搜索和快捷键、命令块选择与复制、SSH 任务列表、认证取消／超时／迟到提交、主题／语言／字号原地更新、动态圆角、宽窄窗口与快速卸载后重挂载。明暗主题、设置页和窄审批页已检查截图；`git diff --check` 与文档相对链接检查通过。Rust 回归期间出现过一次工作区容量用例写入失败，单项与整套复跑均通过，未定位原因，见 [feedback](../feedback/known-issues.md)。原生 WebView2 的功能与关闭验收范围见上段；完整原生外观矩阵、安装包、macOS／Linux 或真实设备仍见[前端待验收项](../feedback/ui-theme-audit.md)。
+HTTP 协议与隔离：初始化、固定八项工具、通知 202、无会话调用、Host／Origin 和媒体类型、非法 JSON／请求／协议版本均有回归。恰好 1 MiB 的有效 JSON 可接收，多 1 字节返回 413；128 个请求占满后返回 503，释放请求容量后继续服务；重复 Origin 被拒绝。关闭服务会结束空闲连接并释放端口。两个独立客户端可使用相同 JSON-RPC id 对不同实例产生独立审批；跨实例查询被拒绝，取消其中一个不改变另一个提案。
 
-工作区持续保留：`cargo check --workspace`、`cargo clippy --workspace --all-targets -- -D warnings` 与 `cargo test -p coterm-desktop --bin coterm-desktop -- --test-threads=1` 通过，桌面后端 37 项单元测试包含 22 项工作区回归；`pnpm test workspace approval` 的 27 项测试通过且无跳过。隔离夹具覆盖多次重启、仅恢复 A 时离线 B 仍落盘、新建实例不清除旧项、活动保存身份、显式销毁／忘记以及容量已满时内存和加密文件不变；旧版本读取、v5 编码、审批组、Bypass 和写失败回滚同时回归。未覆盖现场保存文件或替换运行中的桌面进程；已被覆盖的旧配置恢复仍见 [feedback](../feedback/known-issues.md)。
+Windows 原生与 SDK 互通：隔离 smoke 构建使用真实 WebView2、Local PowerShell、回环 TCP／Telnet 和 MCP HTTP，已验证审批 UI、命令与后端结果、前台状态延续、保存恢复不重连、不同实例并发查询、配置 URL、换端口与服务启停。保持 HTTP 空闲连接后发送真实关窗请求，桌面自行退出，连接关闭且端口可重新绑定；强杀不作为通过依据。官方 TypeScript MCP SDK 1.32.2 独立验证版本协商、工具目录、双客户端审批、实例归属与取消互不影响；SDK 只临时安装于调试目录，未加入项目依赖。旧 `mcp stdio` 参数的集成测试确认立即以 2 退出、stdout 为空且 stderr 提示 HTTP 迁移。MCP 设置保持 version 1，工作区保存格式未修改。验收后已恢复普通 debug 构建，确认桌面 EXE 无进程占用、隔离 profile 已删除。
 
-统一实例名称、MCP 接口与文件容量、执行期限策略已通过以下软件验收：
+文档与界面检查：21 份 Markdown 的 175 个本地链接及锚点、`git diff --check` 通过；已检查窄窗口设置页截图。HTTP 配置弹窗由原生验收核对 URL 和生成的客户端配置，未扩大为完整原生外观验收。
 
-- `cargo check --workspace`、`cargo clippy --workspace --all-targets -- -D warnings`；core、MCP、驱动与运行时夹具的包内 rustfmt 检查及 `git diff --check`。
-- `cargo test --workspace -- --test-threads=1`：286 项通过，3 项设备／虚拟串口用例按默认设置 ignored。
-- 6 项统一入口集成测试覆盖固定目录、实例当前能力、无游标读取、审批／查询／取消、实例归属、未知参数与内部身份拒绝、Serial／TCP 参数边界、Telnet HEX 拒绝，以及跨驱动并发重名拒绝和 MCP 名称一致性；Local 与 TCP 同时连接时，省略名称不能按驱动偷偷选择目标。
-- 运行时夹具验证显式名称去空白、重名拒绝、UTF-8 长度边界和销毁后复用；工作区验证离线占用、自身恢复排除、快照只输出 name，以及 v5 加密文件仍保留原 label 编码键和版本。旧文件已有重名时保留配置并拒绝冲突恢复。
-- Local 浏览器生命周期回归覆盖初始状态等待、首次启动、运行／退出后的重新挂载、中英文切换、重启后丢弃旧 shellId 的退出事件，以及当前会话真实退出码与重启入口。运行中不残留退出提示，真实输入错误不因重新渲染运行状态而被清空。完整前端回归 106 项通过；`cargo test -p coterm-driver --test local --test local_commands --test local_control -- --test-threads=1` 的 10 项测试通过，包含 Windows PowerShell 与 cmd 的真实执行。此次未重跑原生 WebView2，也未替换正在使用的桌面进程。
-- 本机 SSH 软件服务夹具验证统一文件写入仍经审批、读取使用独立通道、多行 exec 保留内容并在首错停止；完整写入并读回恰好 64 KiB 的 UTF-8 中文文本。旧工具名仍可调用但不出现在公开目录。真实 Stdio 适配进程验证固定 8 项目录和实例概览。
-- 4 项文件策略回归覆盖公开／兼容／原生声明对齐、正整数期限校验、UTF-8 字节及 JSON 转义预算、超限后继续读取、30 ms 执行超时、16 秒慢操作在调用方 25 秒期限内完成且不阻塞状态查询、运行中取消及断连后多个作业收敛。没有退出码的关闭保持 unknown，元信息诊断字段保留。
-- 本轮没有连接开发板、做吞吐测速或重跑原生 WebView2／远端设备验收；原生验收脚本沿用此前的 Node 语法检查结果。
+现有业务回归覆盖：
 
-2026-11-11 的性能修复版本记录了以下结果，属于当时实际执行的验收，不表示整理文档时重新运行：
+- 工作区隔离夹具验证多次重启、仅恢复 A 时离线 B 仍保留、新建不清除旧项、活动保存身份、显式销毁／忘记、容量拒绝、写失败回滚、审批组及 Bypass；v5 加密编码保留原 label 键。旧文件已有重名时保留配置并拒绝冲突恢复。
+- 运行时和统一工具验证名称去空白、跨驱动重名拒绝、UTF-8 边界、销毁后复用、当前能力、无游标读取、未知参数及内部身份拒绝、Serial／TCP 参数边界和 Telnet HEX 拒绝。多个驱动连接时，省略名称不能按驱动偷偷选择目标。
+- 本机 SSH 服务验证认证秘密、统一文件写入审批、独立读取通道、多行 exec 首错停止、64 KiB UTF-8 正文往返、JSON 编码预算、30 ms 超时、16 秒慢操作及并行查询、运行中取消和断连后作业收敛。Local 覆盖 Windows PowerShell 与 cmd；没有退出码的关闭保持 unknown。
+- 浏览器覆盖五种驱动配置、串口端口刷新与保存身份、终端／字节视图、命令块选择与复制、搜索与快捷键、SSH 任务和认证、主题／语言／字号、动态圆角、宽窄窗口及卸载重挂载。Local 生命周期包含首次启动、真实退出码、重新挂载、丢弃旧 shellId 事件及保留当前输入错误。HTTP 设置支持复制 URL 配置、启动策略、端口校验与失败状态。
 
-- 工作区全目标 check、280 项 Rust 测试及严格 Clippy 通过；3 项既有真实设备用例按默认设置 ignored。
-- 五个驱动前端、桌面前端构建及 105 项前端回归通过；吞吐校验器另有 2 项 Rust 和 2 项 Node 用例。
-- Windows 原生 WebView2 → MCP Stdio → 审批 → 本机网络 Shell 的链路、Local PowerShell 及保存后恢复保持断开已有验收。
-- 浏览器／本机测试不等于原远端 SSH、实际代理部署、真实 Telnet 设备、NSIS 干净安装或 macOS／Linux 验收。
+## 验收边界
+
+- 未重新进行真实开发板收发或吞吐测速；高速串口和慢消费者的失败证据仍见 [feedback](../feedback/known-issues.md)，不能据软件回归宣称无损速率提高。
+- 原生验收使用隔离配置，不读取现场工作区，未覆盖原远端 SSH、实际代理、真实 Telnet 设备、干净 NSIS 安装或 macOS／Linux。完整外观矩阵见[前端待验收项](../feedback/ui-theme-audit.md)。
+- 工作区容量回归曾有一次未定位的写入失败，当前完整回归通过不等于已证明根因消失；已被覆盖的现场配置恢复同样仍见 [feedback](../feedback/known-issues.md)。

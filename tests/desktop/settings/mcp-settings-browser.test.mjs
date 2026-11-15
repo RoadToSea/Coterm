@@ -1,4 +1,4 @@
-/** Settings and the Stdio configuration dialog use the real host API; only IPC is mocked. */
+/** Settings and the HTTP configuration dialog use the real host API; only IPC is mocked. */
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -6,7 +6,7 @@ import path from "node:path";
 import { assertFreshBuild, evaluate, findBrowser, openSession, rootDir, startStaticServer, waitForValue, setAppLocale } from "#support/browser-harness.mjs";
 import { defaultScenario, makeHostMockSource } from "#support/host-mock.js";
 
-test("MCP settings validate, save ports, preserve failures and publish matching client arguments", async t => {
+test("MCP settings validate, save ports, preserve failures and publish matching client URLs", async t => {
   const browserPath = findBrowser();
   if (!browserPath) { t.skip("No Chrome/Edge binary"); return; }
   assertFreshBuild();
@@ -23,7 +23,7 @@ test("MCP settings validate, save ports, preserve failures and publish matching 
     input.dispatchEvent(new Event('input',{bubbles:true}));
   })()`);
   const submit = () => run(`document.getElementById('mcp-port').form.requestSubmit()`);
-  const portCalls = () => run(`__cotermTest.invocations.filter(c=>c.command==='set_mcp_stdio_port')`);
+  const portCalls = () => run(`__cotermTest.invocations.filter(c=>c.command==='set_mcp_port')`);
   const openConnection = async () => {
     await run(`document.querySelector('[data-setting=mcp-client-configuration] [data-mcp-config]').click()`);
     await wait(`!!document.querySelector('dialog[aria-label="MCP connection"]')?.open`);
@@ -67,7 +67,7 @@ test("MCP settings validate, save ports, preserve failures and publish matching 
     assert.equal(await run(`document.getElementById('mcp-port').value`),'51235');
     assert.equal(await run(`__cotermTest.mcpStatus().port`),51234);
 
-    await run(`window.saveGate=__cotermTest.gate('set_mcp_stdio_port')`);
+    await run(`window.saveGate=__cotermTest.gate('set_mcp_port')`);
     await input('mcp-port',51236); await submit();
     await wait(`window.saveGate.size()===1`);
     assert.equal(await run(`document.getElementById('mcp-port').disabled`),true);
@@ -81,23 +81,23 @@ test("MCP settings validate, save ports, preserve failures and publish matching 
     await input('mcp-port',51237); await submit();
     await wait(`document.getElementById('mcp-port').form.textContent.includes('Saved')`);
     assert.deepEqual((await portCalls()).at(-1).args,{request:{port:51237}});
-    assert.equal(await run(`__cotermTest.mcpStatus().address`),'127.0.0.1:51237');
+    assert.equal(await run(`__cotermTest.mcpStatus().url`),'http://127.0.0.1:51237/mcp');
     await shot('mcp-settings-light');
     await openConnection();
-    await wait(`!!document.querySelector('textarea[aria-label="Stdio client configuration"]')`);
-    assert.ok((await run(`document.querySelector('textarea[aria-label="Stdio client configuration"]').title`)).includes("Paste this into the agent's MCP settings."));
+    await wait(`!!document.querySelector('textarea[aria-label="HTTP client configuration"]')`);
+    assert.ok((await run(`document.querySelector('textarea[aria-label="HTTP client configuration"]').title`)).includes("Paste this into the agent's MCP settings."));
     assert.equal(await run(`document.querySelector('dialog[aria-label="MCP connection"] p')`),null,'configuration instructions are hover help');
-    assert.deepEqual(await run(`JSON.parse(document.querySelector('textarea[aria-label="Stdio client configuration"]').value).mcpServers.coterm.args`),['mcp','stdio','--addr','127.0.0.1:51237']);
+    assert.deepEqual(await run(`JSON.parse(document.querySelector('textarea[aria-label="HTTP client configuration"]').value).mcpServers.coterm`),{type:'http',url:'http://127.0.0.1:51237/mcp'});
     await closeConnection();
     await run(`document.querySelector('#mcp-connection button[data-state=off]').click()`);
     await wait(`!!document.getElementById('mcp-toggle')`);
     await run(`document.getElementById('mcp-toggle').click()`);
     await wait(`document.querySelector('[data-mcp-status]').textContent.includes('Not started')`);
-    const enables=await run(`__cotermTest.calls.filter(c=>c==='set_mcp_stdio_enabled').length`);
+    const enables=await run(`__cotermTest.calls.filter(c=>c==='set_mcp_enabled').length`);
     await input('mcp-port',51238); await submit();
     await wait(`document.getElementById('mcp-port').form.textContent.includes('Saved')`);
     assert.equal(await run(`__cotermTest.mcpStatus().enabled`),false);
-    assert.equal(await run(`__cotermTest.calls.filter(c=>c==='set_mcp_stdio_enabled').length`),enables);
+    assert.equal(await run(`__cotermTest.calls.filter(c=>c==='set_mcp_enabled').length`),enables);
     assert.equal(await run(`__cotermTest.invocations.filter(c=>c.command==='invoke_operation' && ['ssh.connect','ssh.disconnect','ssh.write'].includes(c.args.operation)).length`),beforeProtocol);
 
     await run(`document.querySelector('[data-category=appearance]').click()`);
@@ -131,7 +131,7 @@ test("MCP settings recover read failures and damaged preferences without a late 
   assertFreshBuild();
   const scenario=structuredClone(defaultScenario);
   scenario.mcp={enabled:false,configurationError:'mcp_settings_invalid'};
-  scenario.failures={mcp_stdio_status:{sequence:[1]}};
+  scenario.failures={mcp_status:{sequence:[1]}};
   const server=await startStaticServer(),session=await openSession({browserPath});
   const {client}=session, run=source=>evaluate(client,source), wait=source=>waitForValue(client,source);
   try{
@@ -150,7 +150,7 @@ test("MCP settings recover read failures and damaged preferences without a late 
     assert.equal(await run(`__cotermTest.mcpStatus().enabled`),false);
     await run(`document.querySelector('#app-settings-dialog header button').click()`);
     await wait(`!document.getElementById('app-settings-dialog')`);
-    await run(`window.loadGate=__cotermTest.gate('mcp_stdio_status');document.getElementById('open-settings').click()`);
+    await run(`window.loadGate=__cotermTest.gate('mcp_status');document.getElementById('open-settings').click()`);
     await wait(`window.loadGate.size()>=1`);
     await run(`document.querySelector('#app-settings-dialog header button').click();window.loadGate.release(__cotermTest.mcpStatus());__cotermTest.clearGates()`);
     assert.equal(await run(`!!document.getElementById('app-settings-dialog')`),false);
@@ -191,7 +191,7 @@ test("MCP connection has equal capsule options, manual controls, live status and
     await mode('manual');
     assert.equal(await run(`__cotermTest.calls.filter(c=>c==='set_mcp_startup_mode').length`),calls,'selected option cannot be deselected');
 
-    await run(`window.startGate=__cotermTest.gate('set_mcp_stdio_enabled');document.getElementById('mcp-toggle').click()`);
+    await run(`window.startGate=__cotermTest.gate('set_mcp_enabled');document.getElementById('mcp-toggle').click()`);
     await wait(`startGate.size()===1`);
     assert.equal(await run(`document.getElementById('mcp-toggle').disabled&&document.getElementById('mcp-port').disabled&&[...document.querySelectorAll('#mcp-connection button')].every(b=>b.disabled)`),true);
     assert.equal(await run(`document.querySelector('[data-mcp-status] [role=status]').textContent`),'Not started','never reports success before IPC completes');

@@ -25,7 +25,7 @@ export function McpPortSetting({ mcp }: { mcp: McpSettingsController }) {
       setError("mcp_port_invalid"); return;
     }
     setSaved(false);
-    const value = await perform(() => hostAPI.setMcpStdioPort(port));
+    const value = await perform(() => hostAPI.setMcpPort(port));
     if (value) { setDraft(String(value.port)); setSaved(true); }
   };
   return <form className="flex w-64 max-w-full flex-col gap-2" noValidate data-invalid={Boolean(error)}

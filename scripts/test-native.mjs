@@ -1,11 +1,10 @@
-/** Windows WebView2 + in-process drivers + real MCP Stdio, with an isolated smoke profile. */
+/** Windows WebView2 + in-process drivers + real MCP HTTP, with an isolated smoke profile. */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import net from "node:net";
 import {spawn} from "node:child_process";
-import {createInterface} from "node:readline";
 import {connectCdp,delay,evaluate,waitForValue,setAppLocale} from "../tests/support/browser-harness.mjs";
 
 if(process.platform!=="win32")throw new Error("Requires Windows WebView2");
@@ -15,14 +14,22 @@ try{await fs.access(profile);throw new Error("Smoke profile already exists; refu
 catch(error){if(error.code!=="ENOENT")throw error;}
 const scratch=await fs.mkdtemp(path.join(os.tmpdir(),"coterm-native-"));
 const port=await new Promise((resolve,reject)=>{const server=net.createServer();server.on("error",reject);server.listen(0,"127.0.0.1",()=>{const port=server.address().port;server.close(()=>resolve(port));});});
-let client,adapter;const calls=new Map();let sequence=0;
+let client,mcpUrl;let sequence=0;
+const requests=new Set();
 const networkPeers=new Set();const networkServers=[];
 const app=spawn(executable,[],{windowsHide:true,stdio:["ignore","ignore","pipe"],env:{...process.env,WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS:`--remote-debugging-port=${port}`,WEBVIEW2_USER_DATA_FOLDER:path.join(scratch,"webview")}});
 let diagnostic="";app.stderr.on("data",data=>{diagnostic=(diagnostic+data).slice(-4096)});
 const run=source=>evaluate(client,source);
 const invoke=(command,args={})=>run(`window.__TAURI_INTERNALS__.invoke(${JSON.stringify(command)},${JSON.stringify(args)}).catch(reason=>{throw new Error(typeof reason==='string'?reason:JSON.stringify(reason))})`);
 const operation=async(id,operation,args={})=>{const result=await invoke("invoke_operation",{driverInstanceId:id,operation,args,waitTimeoutMs:5000});if(result.error)throw new Error(JSON.stringify(result.error));return result.output;};
-const rpc=(method,params={})=>new Promise((resolve,reject)=>{const id=++sequence;const timer=setTimeout(()=>{calls.delete(id);reject(new Error(`MCP ${method} timed out`))},15000);calls.set(id,{resolve,reject,timer});adapter.stdin.write(JSON.stringify({jsonrpc:"2.0",id,method,params})+"\n");});
+async function rpc(method,params={}){
+  const id=++sequence,controller=new AbortController();requests.add(controller);
+  try{
+    const reply=await fetch(mcpUrl,{method:"POST",headers:{"Content-Type":"application/json",Accept:"application/json, text/event-stream","MCP-Protocol-Version":"2025-06-18"},body:JSON.stringify({jsonrpc:"2.0",id,method,params}),signal:AbortSignal.any([controller.signal,AbortSignal.timeout(15000)])});
+    assert.equal(reply.status,200);const message=await reply.json();assert.equal(message.id,id);
+    if(message.error)throw new Error(JSON.stringify(message.error));return message.result;
+  }finally{requests.delete(controller);}
+}
 const tool=(name,args)=>rpc("tools/call",{name,arguments:args});
 async function closeAppWindow(){
   const closer=spawn("powershell",["-NoProfile","-NonInteractive","-Command",`Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public class CotermClose { [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr h,uint m,IntPtr w,IntPtr l); }'; $p=Get-Process -Id ${app.pid}; [CotermClose]::PostMessage($p.MainWindowHandle,0x0010,[IntPtr]::Zero,[IntPtr]::Zero) | Out-Null`],{windowsHide:true,stdio:"ignore"});
@@ -32,6 +39,18 @@ async function expectExit(child,label,timeoutMs,codes=[0]){
   for(let elapsed=0;elapsed<timeoutMs&&child.exitCode===null&&child.signalCode===null;elapsed+=50)await delay(50);
   assert.ok(codes.includes(child.exitCode),`${label} must exit without forced termination; code=${child.exitCode}, signal=${child.signalCode}`);
 }
+function bounded(promise,message){
+  let timer;return Promise.race([promise,new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error(message)),5000);})]).finally(()=>clearTimeout(timer));
+}
+async function idleConnection(url){
+  const endpoint=new URL(url),socket=net.createConnection({host:endpoint.hostname,port:Number(endpoint.port)});
+  networkPeers.add(socket);socket.on("close",()=>networkPeers.delete(socket));socket.on("error",()=>{});
+  await bounded(new Promise((resolve,reject)=>{socket.once("connect",resolve);socket.once("error",reject);}),"HTTP client did not connect");
+  const received=new Promise((resolve,reject)=>{socket.once("data",resolve);socket.once("error",reject);});
+  socket.write(`GET /mcp HTTP/1.1\r\nHost: ${endpoint.host}\r\n\r\n`);
+  await bounded(received,"HTTP endpoint did not answer GET");return socket;
+}
+const expectClosed=socket=>socket.closed?Promise.resolve():bounded(new Promise(resolve=>socket.once("close",resolve)),"HTTP connection survived service shutdown");
 async function approve(name,id,toolName,commands){
   const result=await tool(toolName,{name,commands});
   assert.equal(result.structuredContent.status,"pending_approval",JSON.stringify(result));
@@ -70,12 +89,16 @@ try{
   await waitForValue(client,"[...document.querySelectorAll('main div')].some(node=>node.querySelector('.xterm'))");
   for(let i=0;i<300;i++){if((await operation(local.driverInstanceId,"local.status")).running)break;await delay(50);}
   assert.equal((await operation(local.driverInstanceId,"local.status")).running,true);
-  const mcp=await invoke("mcp_stdio_status");assert.equal(mcp.enabled,true);
-  adapter=spawn(executable,["mcp","stdio","--addr",mcp.address],{windowsHide:true,stdio:["pipe","pipe","pipe"]});
-  adapter.stderr.on("data",data=>{diagnostic=(diagnostic+data).slice(-4096)});
-  createInterface({input:adapter.stdout}).on("line",line=>{const message=JSON.parse(line),call=calls.get(message.id);if(!call)return;calls.delete(message.id);clearTimeout(call.timer);message.error?call.reject(new Error(JSON.stringify(message.error))):call.resolve(message.result);});
-  await rpc("initialize",{protocolVersion:"2024-11-05",capabilities:{},clientInfo:{name:"native-acceptance",version:"1"}});
-  adapter.stdin.write(JSON.stringify({jsonrpc:"2.0",method:"notifications/initialized"})+"\n");
+  const mcp=await invoke("mcp_status");assert.equal(mcp.enabled,true);mcpUrl=mcp.url;
+  assert.deepEqual(JSON.parse(mcp.clientConfig).mcpServers.coterm,{type:"http",url:mcpUrl});
+  await run("document.getElementById('open-settings').click()");await waitForValue(client,"document.getElementById('app-settings-dialog')?.open");
+  await run("document.querySelector('[data-category=mcp]').click()");await waitForValue(client,"!!document.querySelector('[data-mcp-config]:not(:disabled)')");
+  await run("document.querySelector('[data-mcp-config]').click()");await waitForValue(client,"!!document.querySelector('textarea[aria-label=\"HTTP client configuration\"]')");
+  assert.deepEqual(await run("JSON.parse(document.querySelector('textarea[aria-label=\"HTTP client configuration\"]').value).mcpServers.coterm"),{type:"http",url:mcpUrl});
+  await run("document.querySelector('dialog[aria-label=\"MCP connection\"] header button').click();document.querySelector('#app-settings-dialog header button').click()");
+  await rpc("initialize",{protocolVersion:"2025-06-18",capabilities:{},clientInfo:{name:"native-acceptance",version:"1"}});
+  const initialized=await fetch(mcpUrl,{method:"POST",headers:{"Content-Type":"application/json",Accept:"application/json, text/event-stream"},body:JSON.stringify({jsonrpc:"2.0",method:"notifications/initialized"}),signal:AbortSignal.timeout(5000)});
+  assert.equal(initialized.status,202);
   const tools=(await rpc("tools/list")).tools.map(tool=>tool.name);assert.equal(tools.length,8);assert.ok(tools.includes("coterm_terminal_command"));assert.ok(!tools.includes("coterm_local_command"));
   await approve("Native local",local.driverInstanceId,"coterm_terminal_command",["$env:COTERM_ACCEPTANCE='retained'; Write-Output 'native-local-first'"]);
   await approve("Native local",local.driverInstanceId,"coterm_terminal_command",["Write-Output $env:COTERM_ACCEPTANCE"]);
@@ -100,6 +123,8 @@ try{
     const result=await tool("coterm_read_output",{name,mode:"dialogue",count:1});
     assert.ok(result.structuredContent.pairs[0].stdout.includes(`${protocol}-native-result`));
     assert.equal(result.structuredContent.pairs[0].stderr,"");assert.equal(result.structuredContent.pairs[0].exitCode,null);
+    const [localReply,networkReply]=await Promise.all([tool("coterm_read_output",{name:"Native local",mode:"dialogue",count:1}),tool("coterm_read_output",{name,mode:"dialogue",count:1})]);
+    assert.ok(localReply.structuredContent.pairs[0].stdout.includes("retained"));assert.ok(networkReply.structuredContent.pairs[0].stdout.includes(`${protocol}-native-result`));
     const entry=(await invoke("workspace_snapshot")).entries.find(entry=>entry.instanceId===instance.driverInstanceId);
     await invoke("stop_driver",{driverId});const restored=await invoke("restore_saved_instance",{configRef:entry.configRef});
     const status=await operation(restored.driverInstanceId,`${protocol}.status`);
@@ -122,16 +147,27 @@ try{
     const status=await operation(restored.driverInstanceId,"serial.status");assert.equal(status.config.mode,"shell");assert.equal(status.config.prompt,config.prompt);assert.equal(status.connected,false);
     console.log("PASS physical Serial: MCP -> approval UI -> driver -> board -> backend reads; saved Shell restore without reconnect");
   }
-  console.log("PASS native in-process drivers, MCP Stdio, approval UI and shared PowerShell state");
+  console.log("PASS native in-process drivers, MCP HTTP, approval UI and shared PowerShell state");
+  const oldIdle=await idleConnection(mcpUrl),newPort=net.createServer();
+  await new Promise(resolve=>newPort.listen(0,"127.0.0.1",resolve));const nextPort=newPort.address().port;await new Promise(resolve=>newPort.close(resolve));
+  const updated=await invoke("set_mcp_port",{request:{port:nextPort}});await expectClosed(oldIdle);mcpUrl=updated.url;
+  assert.equal(mcpUrl,`http://127.0.0.1:${nextPort}/mcp`);assert.equal((await rpc("tools/list")).tools.length,8);
+  const savedMcp=JSON.parse(await fs.readFile(path.join(profile,"mcp-settings.v1.json"),"utf8"));assert.equal(savedMcp.version,1);assert.equal(savedMcp.port,nextPort);
+  const stoppedIdle=await idleConnection(mcpUrl);await invoke("set_mcp_enabled",{enabled:false});await expectClosed(stoppedIdle);
+  await assert.rejects(fetch(mcpUrl,{signal:AbortSignal.timeout(3000)}));
+  const restarted=await invoke("set_mcp_enabled",{enabled:true});assert.equal(restarted.url,mcpUrl);assert.equal((await rpc("tools/list")).tools.length,8);
+  console.log("PASS HTTP port changes, stop/start, unchanged settings format and independent concurrent instance results");
+  const endpoint=new URL(mcpUrl),idle=await idleConnection(mcpUrl);
   await closeAppWindow();
   await expectExit(app,"Desktop after closing its window",10000);
-  // Windows can reset the bridge socket when the desktop exits: EOF is 0, IO error is 1.
-  await expectExit(adapter,"Idle MCP adapter with client stdin still open",5000,[0,1]);
-  console.log(`PASS window close releases the desktop and idle MCP adapter without closing client stdin (adapter code ${adapter.exitCode})`);
+  await expectClosed(idle);
+  const reservation=net.createServer();await new Promise((resolve,reject)=>{reservation.once("error",reject);reservation.listen(Number(endpoint.port),endpoint.hostname,resolve);});
+  await new Promise(resolve=>reservation.close(resolve));
+  console.log("PASS window close releases the desktop, idle HTTP connections and MCP port without an adapter process");
 }finally{
   for(const socket of networkPeers)socket.destroy();
   for(const server of networkServers)if(server.listening)await new Promise(resolve=>server.close(resolve));
-  adapter?.kill();for(const call of calls.values()){clearTimeout(call.timer);call.reject(new Error("Acceptance ended"));}
+  for(const controller of requests)controller.abort();
   if(app.exitCode===null){
     await closeAppWindow();for(let i=0;i<200&&app.exitCode===null;i++)await delay(50);if(app.exitCode===null)app.kill();
   }

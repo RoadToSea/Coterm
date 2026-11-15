@@ -15,6 +15,7 @@
 | DriverAPI 2.0 | 绑定 driverId、driverInstanceId、sessionId；可选 instanceConfigRef 和 saveConfiguration；invoke 不允许改目标或来源 |
 | subscribeEvents | 安装监听后返回注销函数，处理完成确认消费；卸载不销毁实例 |
 | host_attention | version、approvals、interactions；host://attention-changed 只发送版本，不带参数和秘密 |
+| MCP 桌面控制 | mcp_status、set_mcp_enabled、set_mcp_port、set_mcp_startup_mode；快照包含 enabled、url、clientConfig、port、startupMode、configurationError，停止时 url／clientConfig 为 null |
 
 字段为 camelCase，标签为 snake_case。普通领域结果不占顶层 _coterm* 保留名。显式诊断适配器将这些控制动作映射成逐行 JSON-RPC，解析错误使用标准码、业务错误为 -32000；它不参与产品驱动控制。
 
@@ -61,7 +62,7 @@ Serial 使用 `serialport` 的跨平台读写接口，单次系统 IO 超时为 
 
 ## 配置与内部操作
 
-MCP 设置文件 mcp-settings.v1.json 保存 version、port、startupMode，启动方式为 auto／manual。文件上限 4 KiB，未知字段和损坏配置明确报错；运行中换端口先绑定新桥并保存，成功后才关闭旧桥。手动启停不修改下次启动方式。
+MCP 设置文件 mcp-settings.v1.json 保存 version、port、startupMode，启动方式为 auto／manual。文件格式不变，上限 4 KiB，未知字段和损坏配置明确报错；运行中换端口先绑定新 HTTP 监听并保存，成功后才关闭旧服务及其连接。手动启停不修改下次启动方式。HTTP 容量和路径集中在 coterm-mcp/http.rs；默认端口由桌面设置复用同一常量，不另存 URL 或可执行文件路径。
 
 配置字段为 port、baudRate、dataBits、stopBits、parity、dtr、rts、mode、prompt。后端省略 mode 默认 stream；界面新建默认 shell，提示符初值为 #，不适用设备须填写完整值。dataBits 默认 8（5–8），stopBits 默认 1（1／2），parity 默认 none（none／odd／even），dtr／rts 默认 true。
 

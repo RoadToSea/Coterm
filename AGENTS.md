@@ -2,7 +2,7 @@
 
 ## 项目定位
 
-Coterm 是面向人类与 Agent 协同的终端交互基座。支持 SSH、串口（Serial）、本地终端、Telnet 与 Raw TCP，基座负责实例路由、命令块呈现、公共交互、操作记录和 MCP Bridge；底层通信由内置驱动负责。
+Coterm 是面向人类与 Agent 协同的终端交互基座。支持 SSH、串口（Serial）、本地终端、Telnet 与 Raw TCP，基座负责实例路由、命令块呈现、公共交互、操作记录和进程内 MCP HTTP 入口；底层通信由内置驱动负责。
 
 系统明确业务边界：放弃对底层非标字节流解码、连续波形分析与信号数学计算的扩展，此类功能划归 Lissio 等虚拟仪器上位机。
 
@@ -24,7 +24,7 @@ apps/desktop/          Tauri + React 桌面应用
 apps/shared/           应用内部前端类型契约；工作台组件位于 desktop/src/workbenches
 apps/desktop/src-tauri Tauri Rust 后端
 crates/coterm-core     共享类型、实例运行时、审批、操作记录和终端工具
-crates/coterm-mcp      MCP Bridge 相关类型和逻辑
+crates/coterm-mcp      MCP 工具映射与进程内 Streamable HTTP 接入
 crates/coterm-driver   进程内驱动，src/{ssh,serial,local,tcp,telnet}；network/stream 复用内部逻辑
 docs/                  需求、技术实现、feedback、对外 API 的集中入口
 ```

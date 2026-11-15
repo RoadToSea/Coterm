@@ -67,12 +67,10 @@ export function makeHostMockSource(initial) {
     let mcpEnabled = savedMcpStartupMode !== null ? mcpStartupMode === 'auto' : scenario.mcp?.enabled ?? mcpStartupMode === 'auto';
     let mcpConfigurationError = scenario.mcp?.configurationError ?? null;
     const mcpStatus = () => {
-      const command = 'C:/Program Files/Coterm/coterm-desktop.exe';
-      const address = '127.0.0.1:' + mcpPort;
-      const args = mcpPort === 51234 ? ['mcp','stdio'] : ['mcp','stdio','--addr',address];
-      return {enabled:mcpEnabled,port:mcpPort,startupMode:mcpStartupMode,configurationError:mcpConfigurationError,command,
-        address:mcpEnabled ? address : null,
-        clientConfig:mcpEnabled ? JSON.stringify({mcpServers:{coterm:{command,args}}},null,2) : null};
+      const url = 'http://127.0.0.1:' + mcpPort + '/mcp';
+      return {enabled:mcpEnabled,port:mcpPort,startupMode:mcpStartupMode,configurationError:mcpConfigurationError,
+        url:mcpEnabled ? url : null,
+        clientConfig:mcpEnabled ? JSON.stringify({mcpServers:{coterm:{type:'http',url}}},null,2) : null};
     };
 
     const pendingSecrets = [];
@@ -206,8 +204,8 @@ export function makeHostMockSource(initial) {
     };
 
     const handlers = {
-      mcp_stdio_status: mcpStatus,
-      set_mcp_stdio_enabled: ({enabled}) => {
+      mcp_status: mcpStatus,
+      set_mcp_enabled: ({enabled}) => {
         if (enabled && mcpConfigurationError) throw mcpConfigurationError;
         mcpEnabled = enabled; return mcpStatus();
       },
@@ -219,7 +217,7 @@ export function makeHostMockSource(initial) {
         if(startupMode==='auto')mcpEnabled=true;
         return mcpStatus();
       },
-      set_mcp_stdio_port: ({request:{port}}) => {
+      set_mcp_port: ({request:{port}}) => {
         if (!Number.isInteger(port) || port < 1 || port > 65535) throw 'mcp_port_invalid';
         if (scenario.mcp?.occupiedPorts?.includes(port)) throw 'mcp_port_unavailable';
         localStorage.setItem('__cotermTest.mcp-port',String(port)); mcpPort=port; mcpConfigurationError=null;

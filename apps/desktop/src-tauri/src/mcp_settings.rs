@@ -7,7 +7,7 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
-pub const DEFAULT_PORT: u16 = 51234;
+pub use coterm_mcp::http::DEFAULT_PORT;
 const MAX_BYTES: u64 = 4096;
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Serialize)]

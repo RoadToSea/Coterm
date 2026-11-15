@@ -1,7 +1,6 @@
-//! MCP 工具路由、本机 Bridge 与 Stdio 适配。
+//! MCP tool routing and an in-process loopback Streamable HTTP endpoint.
 
 pub mod config;
+pub mod http;
 pub mod server;
-pub mod stdio;
-pub mod transport;
 mod unified;

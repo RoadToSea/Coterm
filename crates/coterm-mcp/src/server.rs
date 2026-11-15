@@ -1,5 +1,5 @@
 //! Semantic MCP tools backed by driver operations and host approval.
-use std::{net::SocketAddr, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 
 use coterm_core::model::{
     lifecycle::{InstanceInfo, InstanceStatus},
@@ -12,181 +12,8 @@ use coterm_core::{
     runtime::Runtime,
     runtime::{CallerContext, SubmitOperation},
 };
-use serde::Serialize;
 use serde_json::{json, Value};
-use tokio::{
-    io::BufReader,
-    net::{TcpListener, TcpStream},
-    task::{JoinHandle, JoinSet},
-};
-
-use crate::transport::{read_frame, write_frame};
-
-/// Default loopback endpoint used by the desktop MCP bridge.
-pub const DEFAULT_BRIDGE_ADDRESS: &str = "127.0.0.1:51234";
-
-#[derive(Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct McpConnectionInfo {
-    pub address: String,
-}
-
-pub struct BridgeServer {
-    info: McpConnectionInfo,
-    task: JoinHandle<()>,
-}
-
-impl BridgeServer {
-    /// Bind the production bridge to the stable local endpoint.
-    pub async fn bind(runtime: Arc<Runtime>) -> std::io::Result<Self> {
-        let address = DEFAULT_BRIDGE_ADDRESS
-            .parse()
-            .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidInput, error))?;
-        Self::bind_at(runtime, address).await
-    }
-
-    /// Bind a bridge at an explicit address. Tests use port `0` to avoid
-    /// competing with another bridge process.
-    pub async fn bind_at(runtime: Arc<Runtime>, address: SocketAddr) -> std::io::Result<Self> {
-        if !address.ip().is_loopback() {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::PermissionDenied,
-                "Coterm MCP requires a loopback address",
-            ));
-        }
-        let listener = TcpListener::bind(address).await?;
-        let info = McpConnectionInfo {
-            address: listener.local_addr()?.to_string(),
-        };
-        let task = tokio::spawn(async move {
-            let mut clients = JoinSet::new();
-            loop {
-                tokio::select! {
-                    accepted = listener.accept() => {
-                        let Ok((socket, peer)) = accepted else { break };
-                        if !peer.ip().is_loopback() || clients.len() >= 8 { continue; }
-                        let runtime = runtime.clone();
-                        clients.spawn(async move { let _ = serve_client(socket, runtime).await; });
-                    }
-                    _ = clients.join_next(), if !clients.is_empty() => {}
-                }
-            }
-        });
-        Ok(Self { info, task })
-    }
-
-    pub fn connection_info(&self) -> McpConnectionInfo {
-        self.info.clone()
-    }
-}
-
-impl Drop for BridgeServer {
-    fn drop(&mut self) {
-        self.task.abort();
-    }
-}
-
-async fn serve_client(socket: TcpStream, runtime: Arc<Runtime>) -> anyhow::Result<()> {
-    let (reader, mut writer) = socket.into_split();
-    let mut reader = BufReader::new(reader);
-    let mut initialized = false;
-    let mut ready = false;
-    let (responses, mut completed) = tokio::sync::mpsc::channel::<Value>(16);
-    let slots = Arc::new(tokio::sync::Semaphore::new(16));
-    let mut calls = JoinSet::new();
-    loop {
-        // Keep the read future alive across responses: cancelling a partial
-        // newline frame would otherwise discard its prefix and corrupt the wire.
-        let incoming = read_frame(&mut reader);
-        tokio::pin!(incoming);
-        let frame = loop {
-            tokio::select! {
-                frame = &mut incoming => break frame?,
-                Some(response) = completed.recv() => { write_frame(&mut writer, &response).await?; }
-                _ = calls.join_next(), if !calls.is_empty() => {}
-            }
-        };
-        let Some(frame) = frame else { break };
-        let value: Value = match serde_json::from_slice(&frame) {
-            Ok(value) => value,
-            Err(_) => {
-                write_frame(&mut writer, &rpc_error(Value::Null, -32700, "Parse error")).await?;
-                continue;
-            }
-        };
-        let id = value.get("id").cloned();
-        let valid_id = id
-            .as_ref()
-            .is_none_or(|id| id.is_string() || id.is_number());
-        if !value.is_object()
-            || value["jsonrpc"] != "2.0"
-            || !value["method"].is_string()
-            || !valid_id
-        {
-            write_frame(
-                &mut writer,
-                &rpc_error(Value::Null, -32600, "Invalid Request"),
-            )
-            .await?;
-            continue;
-        }
-        let method = value["method"].as_str().unwrap_or_default();
-        if id.is_none() {
-            if method == "notifications/initialized" && initialized {
-                ready = true;
-            }
-            // Waiting calls do not block reading; operation cancellation is explicit.
-            continue;
-        }
-        let id = id.unwrap_or(Value::Null);
-        let params = value.get("params").cloned().unwrap_or_else(|| json!({}));
-        if ready
-            && method == "tools/call"
-            && params["name"].is_string()
-            && params.get("arguments").is_none_or(Value::is_object)
-        {
-            let Ok(permit) = slots.clone().try_acquire_owned() else {
-                write_frame(
-                    &mut writer,
-                    &rpc_error(id, -32000, "Too many in-flight calls"),
-                )
-                .await?;
-                continue;
-            };
-            let runtime = runtime.clone();
-            let responses = responses.clone();
-            calls.spawn(async move {
-                let _permit = permit;
-                let result = match call_tool(&runtime, &params).await {
-                    Ok(value) => value,
-                    Err(error) => {
-                        json!({"content":[{"type":"text","text":error.to_string()}],"isError":true})
-                    }
-                };
-                let _ = responses
-                    .send(json!({"jsonrpc":"2.0","id":id,"result":result}))
-                    .await;
-            });
-            continue;
-        }
-        let result = match method {
-            "initialize" if !initialized => {
-                let result = initialize_result(&params);
-                initialized = result.is_ok();
-                result
-            }
-            "ping" if initialized => Ok(json!({})),
-            _ if !ready => Err((-32000, "MCP initialization required".to_owned())),
-            _ => ready_request(&runtime, method, &params).await,
-        };
-        let response = match result {
-            Ok(result) => json!({"jsonrpc":"2.0","id":id,"result":result}),
-            Err((code, message)) => rpc_error(id, code, &message),
-        };
-        write_frame(&mut writer, &response).await?;
-    }
-    Ok(())
-}
+use tokio::task::JoinSet;
 
 pub(crate) fn initialize_result(params: &Value) -> Result<Value, (i32, String)> {
     if !params["protocolVersion"].is_string()
@@ -197,7 +24,7 @@ pub(crate) fn initialize_result(params: &Value) -> Result<Value, (i32, String)> 
         return Err((-32602, "Invalid initialize parameters".into()));
     }
     let requested = params["protocolVersion"].as_str().unwrap_or_default();
-    let version = if ["2025-06-18", "2025-03-26", "2024-11-05"].contains(&requested) {
+    let version = if crate::http::PROTOCOL_VERSIONS.contains(&requested) {
         requested
     } else {
         "2025-06-18"
@@ -750,14 +577,6 @@ pub(crate) async fn call_legacy_tool(runtime: &Runtime, params: &Value) -> anyho
     Ok(result)
 }
 
-pub fn loopback_address(value: &str) -> anyhow::Result<SocketAddr> {
-    let address: SocketAddr = value.parse()?;
-    if !address.ip().is_loopback() {
-        anyhow::bail!("Coterm MCP requires a loopback address");
-    }
-    Ok(address)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -781,18 +600,6 @@ mod tests {
         assert_eq!(
             public_tool_name("a-b", "read"),
             public_tool_name("a_b", "read")
-        );
-    }
-
-    #[tokio::test]
-    async fn bridge_rejects_non_loopback_bind_addresses() {
-        let runtime = Arc::new(Runtime::new(coterm_core::model::lifecycle::RuntimeLimits {
-            max_control_bytes: 1024,
-        }));
-        let address: SocketAddr = "192.0.2.1:51234".parse().expect("address");
-        let result = BridgeServer::bind_at(runtime, address).await;
-        assert!(
-            matches!(result, Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied)
         );
     }
 

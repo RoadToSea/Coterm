@@ -53,7 +53,7 @@ struct AppState {
     exiting: std::sync::atomic::AtomicBool,
     event_subscriptions: EventSubscriptions,
     driver_runtime: Arc<Runtime>,
-    stdio_bridge: mcp_commands::StdioBridge,
+    mcp_service: Arc<mcp_commands::McpService>,
 }
 
 #[derive(Serialize)]
@@ -325,21 +325,21 @@ async fn respond_secret(
         .await
 }
 
-/// Stdio 适配器状态：是否已允许本机客户端连接，以及可粘贴的客户端配置。
+/// HTTP 服务状态及可粘贴的客户端 URL 配置。
 #[tauri::command]
-async fn mcp_stdio_status(
+async fn mcp_status(
     state: tauri::State<'_, AppState>,
-) -> Result<mcp_commands::StdioStatus, String> {
-    Ok(state.stdio_bridge.status().await)
+) -> Result<mcp_commands::McpStatus, String> {
+    Ok(state.mcp_service.status().await)
 }
 
-/// 用户显式启用或停用私有 Stdio Bridge。
+/// 用户显式启用或停用进程内 MCP HTTP 服务。
 #[tauri::command]
-async fn set_mcp_stdio_enabled(
+async fn set_mcp_enabled(
     enabled: bool,
     state: tauri::State<'_, AppState>,
-) -> Result<mcp_commands::StdioStatus, String> {
-    state.stdio_bridge.set_enabled(enabled).await
+) -> Result<mcp_commands::McpStatus, String> {
+    state.mcp_service.set_enabled(enabled).await
 }
 
 #[tauri::command]
@@ -720,42 +720,10 @@ async fn summary(state: &AppState, manifest: DriverManifest) -> DriverSummary {
     }
 }
 
-/// MCP 客户端以 `mcp stdio` 启动本程序；该模式不创建窗口或驱动运行时，
-/// stdout 只承载 MCP 帧。前缀匹配后由适配器校验选项，错误选项不会启动窗口。
-fn is_stdio_adapter(args: &[String]) -> bool {
-    coterm_mcp::stdio::is_adapter_command(args)
-}
-
-/// 适配器使用独立的单线程运行时，避免与桌面 UI 运行时共享线程池。
-/// 诊断只写 stderr：stdout 是 MCP 协议通道。
-fn run_stdio_adapter(args: &[String]) -> i32 {
-    let runtime = match tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-    {
-        Ok(runtime) => runtime,
-        Err(error) => {
-            eprintln!("Coterm MCP adapter could not start: {error}");
-            return 1;
-        }
-    };
-    let result = runtime.block_on(coterm_mcp::stdio::run(args));
-    // Tokio stdin can leave an uncancellable blocking read after the bridge closes.
-    // Dropping the runtime would wait for the MCP client to close its input pipe.
-    runtime.shutdown_background();
-    match result {
-        Ok(()) => 0,
-        Err(error) => {
-            eprintln!("Coterm MCP adapter: {error:#}");
-            1
-        }
-    }
-}
-
 fn main() {
-    let arguments: Vec<String> = std::env::args().skip(1).collect();
-    if is_stdio_adapter(&arguments) {
-        std::process::exit(run_stdio_adapter(&arguments[2..]));
+    if std::env::args().skip(1).take(2).eq(["mcp", "stdio"]) {
+        eprintln!("Coterm MCP now uses Streamable HTTP. Copy the HTTP URL from Coterm Settings; remove command/args from the MCP client configuration.");
+        std::process::exit(2);
     }
     let runtime_limits = RuntimeLimits {
         max_control_bytes: 1024 * 1024,
@@ -771,14 +739,12 @@ fn main() {
             let driver_runtime = Arc::new(Runtime::new(runtime_limits));
             tauri::async_runtime::block_on(builtin_drivers::register(&driver_runtime))?;
 
-            // 适配器就是本可执行文件的 `mcp stdio` 子命令：不搜索 PATH，也不依赖旁路文件。
-            let stdio_bridge = mcp_commands::StdioBridge::new(
+            let mcp_service = Arc::new(mcp_commands::McpService::new(
                 driver_runtime.clone(),
-                std::env::current_exe().ok(),
                 app_data.join("mcp-settings.v1.json"),
-            );
-            if let Err(error) = tauri::async_runtime::block_on(stdio_bridge.start_on_launch()) {
-                eprintln!("Failed to auto-start MCP Stdio bridge: {error}");
+            ));
+            if let Err(error) = tauri::async_runtime::block_on(mcp_service.start_on_launch()) {
+                eprintln!("Failed to auto-start MCP HTTP server: {error}");
             }
             let expiry_runtime = driver_runtime.clone();
             let app_handle = app.handle().clone();
@@ -809,7 +775,7 @@ fn main() {
                     std::collections::HashMap::new(),
                 )),
                 driver_runtime,
-                stdio_bridge,
+                mcp_service,
             });
             Ok(())
         })
@@ -838,9 +804,9 @@ fn main() {
             pending_interactions,
             host_attention,
             respond_secret,
-            mcp_stdio_status,
-            set_mcp_stdio_enabled,
-            mcp_commands::set_mcp_stdio_port,
+            mcp_status,
+            set_mcp_enabled,
+            mcp_commands::set_mcp_port,
             mcp_commands::set_mcp_startup_mode,
             create_instance,
             destroy_instance,
@@ -885,8 +851,10 @@ fn main() {
             api.prevent_exit();
             let handle = app.clone();
             let runtime = state.driver_runtime.clone();
+            let mcp_service = state.mcp_service.clone();
             let subscriptions = state.event_subscriptions.clone();
             tauri::async_runtime::spawn(async move {
+                let _ = mcp_service.set_enabled(false).await;
                 for (_, subscription) in subscriptions.lock().await.drain() {
                     subscription.task.abort();
                 }

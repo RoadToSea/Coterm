@@ -3,6 +3,62 @@ use anyhow::{anyhow, Result};
 use coterm_core::{model::lifecycle::RuntimeLimits, runtime::Runtime};
 use coterm_mcp::server::{call_tool, tools_list};
 use serde_json::{json, Value};
+#[path = "../../../tests/support/mcp_http.rs"]
+mod http_wire;
+
+#[tokio::test]
+async fn http_agents_keep_concurrent_proposals_and_results_on_the_named_instances() -> Result<()> {
+    let runtime = std::sync::Arc::new(serial_runtime().await?);
+    let server =
+        coterm_mcp::http::HttpServer::bind_at(runtime.clone(), "127.0.0.1:0".parse()?).await?;
+    let connect = |name: &str| {
+        json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{
+            "name":"coterm_connection","arguments":{"name":name,"action":"connect"}
+        }})
+    };
+    let first_request = connect("board");
+    let second_request = connect("other");
+    let (first, second) = tokio::join!(
+        http_wire::post(server.address(), &first_request),
+        http_wire::post(server.address(), &second_request),
+    );
+    let first = first?.json()?;
+    let second = second?.json()?;
+    assert_eq!(first["id"], 1);
+    assert_eq!(second["id"], 1);
+    for reply in [&first, &second] {
+        assert_eq!(
+            reply["result"]["structuredContent"]["status"],
+            "pending_approval"
+        );
+    }
+    let first_id = &first["result"]["structuredContent"]["operationId"];
+    let second_id = &second["result"]["structuredContent"]["operationId"];
+    assert_ne!(first_id, second_id);
+    let query = |name: &str, id: &Value, action: &str| {
+        json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{
+            "name":"coterm_operation","arguments":{"name":name,"operationId":id,"action":action}
+        }})
+    };
+    let mismatch = http_wire::post(server.address(), &query("other", first_id, "query"))
+        .await?
+        .json()?;
+    assert_eq!(mismatch["result"]["isError"], true);
+    let cancelled = http_wire::post(server.address(), &query("board", first_id, "cancel"))
+        .await?
+        .json()?;
+    assert_eq!(cancelled["result"]["isError"], false);
+    let second = http_wire::post(server.address(), &query("other", second_id, "query"))
+        .await?
+        .json()?;
+    assert_eq!(
+        second["result"]["structuredContent"]["status"],
+        "awaiting_approval"
+    );
+    server.shutdown().await;
+    runtime.shutdown().await;
+    Ok(())
+}
 
 async fn serial_runtime() -> Result<Runtime> {
     let runtime = Runtime::new(RuntimeLimits {

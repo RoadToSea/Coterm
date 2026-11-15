@@ -28,7 +28,7 @@ crates/
     network/                   TCP 生命周期、代理与网络命令共用实现
     stream/                    串口与网络共用缓冲及提示符观察
   coterm-driver/manifests/     编译期固定声明
-  coterm-mcp/src/              工具映射、Bridge 与 Stdio 适配
+  coterm-mcp/src/              工具映射与进程内 Streamable HTTP 入口
 scripts/                       构建、验收和调试清理
 tests/                         跨模块与浏览器验收
 docs/                          唯一长文档目录
@@ -36,14 +36,14 @@ docs/                          唯一长文档目录
 
 生产依赖方向为桌面组合根依赖 core、driver、MCP；driver 和 MCP 各自依赖 core；core 不反向依赖具体驱动或桌面。驱动测试对 MCP 的开发依赖不属于生产调用链。
 
-驱动是链接到桌面主进程的 Rust 库；每种驱动独立异步任务，任务内管理多个实例。不是五个外部 driver.exe，也不是五个进程级沙箱。本地 Shell 与 MCP Stdio 适配器按用途仍可使用子进程。
+驱动是链接到桌面主进程的 Rust 库；每种驱动独立异步任务，任务内管理多个实例。不是五个外部 driver.exe，也不是五个进程级沙箱。本地 Shell 按用途使用子进程；MCP 接入和工具分发在桌面进程内运行。
 
 ### 控制与数据路径
 
 ```text
 宿主 React 工作台 → 实例绑定 Host API → Tauri 命令 ─┐
                                              ├→ Runtime → 实例审批 → DriverTask → 驱动
-Agent → 桌面 EXE 的 mcp stdio → 本机 Bridge ──┘
+Agent → 进程内 HTTP /mcp → 工具分发 ──────────────┘
 
 驱动 → 后端有界数据／命令记录 → read_* 快照 → Runtime → 调用方
 驱动 → 独立通知队列 → Runtime 事件 → 视图显示副本
@@ -161,11 +161,11 @@ apps/shared 只保留内部类型契约与可执行示例，不导出 UI 实现�
 
 ### Agent 接入
 
-[coterm-mcp](../../crates/coterm-mcp/src) 只承担 MCP 会话、工具映射、目标名称解析和操作结果包装，直接复用 Runtime，不再增加独立操作服务。
+[coterm-mcp](../../crates/coterm-mcp/src) 只承担 MCP 协议处理、工具映射、目标名称解析和操作结果包装，直接复用 Runtime，不再增加独立操作服务。
 
-桌面 EXE 的 mcp stdio 模式不创建窗口或驱动运行时，只转发本机私有 Bridge。[unified.rs](../../crates/coterm-mcp/src/unified.rs) 固定公开八个语义工具，校验参数、解析全局目标，并映射到驱动已经注册的 MCP 操作；Agent 始终以 Agent 来源提交。驱动工具名保留为隐藏兼容入口，不出现在公开目录；兼容入口保留原有按驱动选择默认目标的规则。
+[http.rs](../../crates/coterm-mcp/src/http.rs) 使用 Hyper 在桌面进程内提供回环 Streamable HTTP 入口，负责有界连接、Host／Origin 和媒体类型校验、JSON 请求及响应；不建立会话注册表或独立转接进程。初始化和普通请求不依赖同一条 TCP 连接。[unified.rs](../../crates/coterm-mcp/src/unified.rs) 固定公开八个语义工具，校验参数、解析全局目标，并映射到驱动已经注册的 MCP 操作；Agent 始终以 Agent 来源提交。驱动工具名保留为隐藏兼容入口，不出现在公开目录；兼容入口保留原有按驱动选择默认目标的规则。
 
-窗口关闭走 ExitRequested → 停止前端事件订阅 → 有界等待 Runtime 关闭驱动 → 退出桌面进程，Bridge 连接随之断开。MCP 适配器通常由外部客户端启动，不能依赖桌面父子进程关系回收；其转发在 Bridge EOF 或错误后结束。两个适配器入口都显式使用非等待式运行时关闭：Tokio stdin 的底层阻塞读取不能取消，默认析构会等待仍由客户端持有的输入管道；此时转发已经结束，适配进程应立即结束并由操作系统回收线程，不能继续占用桌面 EXE。
+桌面的 McpService 持有 HTTP 监听器和配置。换端口先绑定并保存新设置，失败保留旧服务；成功后主动关闭旧连接。窗口关闭走 ExitRequested → 停止 MCP 监听及连接任务 → 停止前端事件订阅 → 有界等待 Runtime 关闭驱动 → 退出桌面进程。HTTP 停止只结束接入等待，已提交操作仍由 Runtime 收敛，不能自动取消或重放。旧 mcp stdio 启动参数只返回 HTTP 配置迁移提示并立即退出，不启动窗口或适配器。
 
 ## 四、实现变更的约束
 

@@ -104,17 +104,13 @@ export interface BackendSecretRequest extends InteractionOptions {
   kind: { kind: "secret"; purpose: string };
 }
 
-/**
- * Stdio 适配器状态。适配器是桌面可执行文件的 `mcp stdio` 子命令；
- * `clientConfig` 是不含秘密的 Stdio 客户端配置，只用于用户复制。
- */
+/** Desktop-owned Streamable HTTP service state and copyable client configuration. */
 export type McpStartupMode = "auto" | "manual";
 
-export interface McpStdioStatus {
+export interface McpStatus {
   enabled: boolean;
-  /** 适配器入口，即桌面可执行文件；路径不可用时为 null。 */
-  command: string | null;
-  address: string | null;
+  /** Active loopback endpoint; null while stopped. */
+  url: string | null;
   clientConfig: string | null;
   port: number;
   startupMode: McpStartupMode;
@@ -146,10 +142,10 @@ export interface HostAPI {
   saveInstanceConfiguration(instanceId: string, config: unknown): Promise<void>;
   pendingInteractions(): Promise<BackendSecretRequest[]>;
   respondSecret(interactionId: string, value: string | null): Promise<void>;
-  mcpStdioStatus(): Promise<McpStdioStatus>;
-  setMcpStdioEnabled(enabled: boolean): Promise<McpStdioStatus>;
-  setMcpStdioPort(port: number): Promise<McpStdioStatus>;
-  setMcpStartupMode(startupMode: McpStartupMode): Promise<McpStdioStatus>;
+  mcpStatus(): Promise<McpStatus>;
+  setMcpEnabled(enabled: boolean): Promise<McpStatus>;
+  setMcpPort(port: number): Promise<McpStatus>;
+  setMcpStartupMode(startupMode: McpStartupMode): Promise<McpStatus>;
   listDrivers(): Promise<DriverCatalog>;
   startDriver(driverId: string): Promise<void>;
   stopDriver(driverId: string): Promise<void>;
@@ -377,10 +373,10 @@ export const hostAPI: HostAPI = {
   hostAttention: () => invoke<HostAttention>("host_attention"),
   pendingInteractions: () => invoke<BackendSecretRequest[]>("pending_interactions"),
   respondSecret: (interactionId, value) => invoke<void>("respond_secret", { interactionId, value }),
-  mcpStdioStatus: () => invoke<McpStdioStatus>("mcp_stdio_status"),
-  setMcpStdioEnabled: (enabled) => invoke<McpStdioStatus>("set_mcp_stdio_enabled", { enabled }),
-  setMcpStdioPort: (port) => invoke<McpStdioStatus>("set_mcp_stdio_port", { request: { port } }),
-  setMcpStartupMode: (startupMode) => invoke<McpStdioStatus>("set_mcp_startup_mode", { request: { startupMode } }),
+  mcpStatus: () => invoke<McpStatus>("mcp_status"),
+  setMcpEnabled: (enabled) => invoke<McpStatus>("set_mcp_enabled", { enabled }),
+  setMcpPort: (port) => invoke<McpStatus>("set_mcp_port", { request: { port } }),
+  setMcpStartupMode: (startupMode) => invoke<McpStatus>("set_mcp_startup_mode", { request: { startupMode } }),
   frontendSource: (driverId) => invoke<string | null>("driver_frontend_source", { driverId }),
   provideSecret: (driverInstanceId, purpose, value) => invoke<SecretHandle>("provide_secret", { driverInstanceId, purpose, value }),
   listDrivers: () => invoke<DriverCatalog>("list_drivers"),

@@ -4,24 +4,33 @@
 
 ## 接入
 
-桌面必须已运行且启用 Bridge。客户端启动当前安装的桌面可执行文件并传入 `mcp stdio`；适配进程不创建窗口、驱动或桌面服务。
+桌面必须已运行且启用 MCP HTTP 服务。客户端使用 Streamable HTTP 直接连接设置页提供的 URL；入口与工具分发都在 Coterm 进程内，不启动适配进程。
 
-桌面退出、Bridge 停用或端口变更会结束原连接及适配进程，即使客户端仍保持 stdin 打开也会退出。桌面或服务重新启动后，由 MCP 客户端重新建立连接，不自动重放请求。正常 EOF 退出码为 0；连接重置、帧错误等 IO／协议错误以非零码退出，诊断只写 stderr，stdout 只包含 MCP 帧。
+桌面退出、服务停用或端口变更会关闭原监听及连接；重新启用后由客户端重新连接，不自动重放请求。HTTP 断开不等于设备操作已取消，写入返回不确定时应查询原操作，不能重复发送。
+
+通用 JSON 配置如下；客户端也可直接填写 URL。不同客户端的配置文件结构以其 Streamable HTTP 接入要求为准，不配置 command、args 或 Stdio 转接程序。
 
 ```json
 {
   "mcpServers": {
     "coterm": {
-      "command": "<当前安装目录>/coterm-desktop.exe",
-      "args": ["mcp", "stdio"]
+      "type": "http",
+      "url": "http://127.0.0.1:51234/mcp"
     }
   }
 }
 ```
 
-Bridge 只监听回环地址，默认 `127.0.0.1:51234`。自定义地址使用 `--addr` 或 `COTERM_MCP_ADDR`，优先级为参数、环境变量、默认值；地址必须回环且端口非零。没有 HTTP 或 Token 入口。本机回环不是调用方身份认证，Agent 操作仍经过来源识别和审批。
+默认 URL 为 `http://127.0.0.1:51234/mcp`；端口和自动／手动启动方式在桌面设置中修改。只监听本机回环地址，校验 Host；存在 Origin 时仅接受当前监听地址或同端口 localhost 的 HTTP Origin，不开放跨域访问。没有 Token 认证；本机回环和 Origin 校验不提供 Agent 身份隔离，写操作仍经过来源识别和实例审批。
 
-协议支持 `2025-06-18`、`2025-03-26`、`2024-11-05`；initialize 后发送 `notifications/initialized`。单行 JSON 帧至多 1 MiB，每连接最多 16 个在途调用、最多 8 个连接。工具目录固定，`listChanged=false`；实例和连接变化通过 `coterm_instances` 查询。没有 Resources、Prompts、进度订阅或 MCP cancellation notification。
+协议支持 `2025-06-18`、`2025-03-26`；initialize 后发送 `notifications/initialized`。采用无会话模式，不分配 Mcp-Session-Id；初始化不绑定某条 TCP 连接。后续请求携带协商的 MCP-Protocol-Version，省略时按 2025-03-26 兼容，显式不支持的版本返回 400。
+
+- 每条消息用 POST /mcp 发送单个 UTF-8 JSON-RPC 对象，不支持数组批处理。Content-Type 为 application/json，Accept 同时包含 application/json 和 text/event-stream。
+- 请求返回 HTTP 200 和 application/json；接受通知或客户端响应时返回 202 空正文。GET／DELETE 返回 405，不提供 SSE、推送或会话销毁。
+- JSON 解析错误和非法请求返回 400 及 JSON-RPC 错误；Host／Origin 不可信返回 403，未知路径返回 404，Accept 不匹配返回 406，正文超限返回 413，媒体类型不支持返回 415。在有效请求内，工具参数／领域错误继续按下文的 JSON-RPC／CallToolResult 表示，不把 HTTP 200 当作业务成功。
+- 请求和响应 JSON 正文分别至多 1 MiB；HTTP 头最多 64 项，读取请求头和正文各限 10 秒，这不是设备操作的执行期限。最多 256 个 HTTP 连接、128 个正在处理的请求；请求容量已满返回 503，连接容量已满关闭新连接。
+
+多个客户端可并发按 name 操作不同实例，各请求的结果只返回其调用方；没有按 Agent 划分的实例访问权限。工具目录固定，listChanged=false；实例和连接变化通过 coterm_instances 查询。没有 Resources、Prompts、进度订阅或 MCP cancellation notification；取消仍使用 coterm_operation。
 
 ## 工具目录与公共规则
 
@@ -61,6 +70,7 @@ Bridge 只监听回环地址，默认 `127.0.0.1:51234`。自定义地址使用 
 }
 ```
 
+- bridgeEnabled 保留为兼容字段，表示 MCP 接入服务可用，不代表存在独立 Bridge 进程或转发链路。
 - driver 为 ssh、serial、local、tcp 或 telnet。status 是实例运行状态：starting、ready、stopping、stopped、failed；ready 不代表连接成功。连接事实由 `connected: boolean | null` 表示，null 表示未确认。
 - capabilities 包含可用入口：terminal、stream、hex、files、lines、selection、dialogue。stream 表示流式发送入口，不等于当前配置为字节流模式；Serial／TCP／Telnet 的后两项按当前状态声明。
 - 指定 name 时返回单项 instances 和 selectedInstance；后者保留驱动原生状态字段，如端口、配置、Shell 就绪信息，不保证统一字段，也不返回凭据。读取尚未完成或失败时返回原收据，不把收据当作状态快照。

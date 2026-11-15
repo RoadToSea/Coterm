@@ -61,11 +61,11 @@ export function AppSettings({ onClose }: { onClose: () => void }) {
       </Select> },
     { id: "cursor-blink", category: "terminal", title: "Blinking cursor", description: "Blink the cursor in terminal views.", keywords: "caret cursor blink 光标 闪烁",
       control: <Switch id="cursor-blink" aria-label={t("Blinking cursor")} checked={preferences.cursorBlink} onCheckedChange={cursorBlink => setPreferences({ cursorBlink })} /> },
-    { id: "mcp-port", category: "mcp", title: "MCP port", description: "MCP port changes apply after saving.", keywords: "MCP Stdio bridge interface port localhost 端口 接口 本机 桥接",
+    { id: "mcp-port", category: "mcp", title: "MCP port", description: "MCP port changes apply after saving.", keywords: "MCP HTTP endpoint interface port localhost 端口 接口 本机",
       control: <McpPortSetting mcp={mcp} /> },
-    { id: "mcp-connection", category: "mcp", title: "MCP connection", keywords: "MCP Stdio auto manual startup connection client 自启动 手动启动 开关 连接 客户端",
+    { id: "mcp-connection", category: "mcp", title: "MCP connection", keywords: "MCP HTTP auto manual startup connection client 自启动 手动启动 开关 连接 客户端",
       control: <McpConnectionSetting mcp={mcp} /> },
-    { id: "mcp-client-configuration", category: "mcp", title: "Client configuration", keywords: "MCP Stdio client configuration copy agent 客户端 配置 复制",
+    { id: "mcp-client-configuration", category: "mcp", title: "Client configuration", keywords: "MCP HTTP client configuration copy agent url 客户端 配置 复制 地址",
       control: <McpClientConfigurationSetting mcp={mcp} /> },
   ];
   const words = query.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);

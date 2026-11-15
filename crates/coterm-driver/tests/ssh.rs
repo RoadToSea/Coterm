@@ -1,4 +1,6 @@
 type Backend = coterm_core::diagnostic::Backend<DriverBackend>;
+#[path = "../../../tests/support/mcp_http.rs"]
+mod http_wire;
 use std::{sync::Arc, time::Duration};
 
 use anyhow::Result;
@@ -1244,23 +1246,18 @@ async fn proposals_never_send_until_approved_and_secrets_are_instance_bound() ->
 }
 
 struct McpWire {
-    reader: tokio::io::BufReader<tokio::net::tcp::OwnedReadHalf>,
-    writer: tokio::net::tcp::OwnedWriteHalf,
+    address: std::net::SocketAddr,
     next_id: u64,
     instance_names: std::collections::HashMap<String, String>,
 }
 
 impl McpWire {
     async fn connect(
-        info: coterm_mcp::server::McpConnectionInfo,
+        address: std::net::SocketAddr,
         instances: &[coterm_core::model::lifecycle::InstanceInfo],
     ) -> Result<Self> {
-        use coterm_mcp::transport::write_frame;
-        let socket = tokio::net::TcpStream::connect(info.address).await?;
-        let (reader, writer) = socket.into_split();
         let mut client = Self {
-            reader: tokio::io::BufReader::new(reader),
-            writer,
+            address,
             next_id: 0,
             instance_names: instances
                 .iter()
@@ -1268,26 +1265,24 @@ impl McpWire {
                 .collect(),
         };
         client.rpc("initialize", json!({"protocolVersion":"2025-06-18","clientInfo":{"name":"ssh-test","version":"1"},"capabilities":{}})).await?;
-        write_frame(
-            &mut client.writer,
+        let initialized = http_wire::post(
+            client.address,
             &json!({"jsonrpc":"2.0","method":"notifications/initialized"}),
         )
         .await?;
+        assert_eq!(initialized.status, 202);
         Ok(client)
     }
 
     async fn rpc(&mut self, method: &str, params: Value) -> Result<Value> {
-        use coterm_mcp::transport::{read_frame, write_frame};
         self.next_id += 1;
-        write_frame(
-            &mut self.writer,
+        let reply = http_wire::post(
+            self.address,
             &json!({"jsonrpc":"2.0","id":self.next_id,"method":method,"params":params}),
         )
         .await?;
-        let frame = timeout(Duration::from_secs(10), read_frame(&mut self.reader))
-            .await??
-            .ok_or_else(|| anyhow::anyhow!("MCP disconnected"))?;
-        let response: Value = serde_json::from_slice(&frame)?;
+        assert_eq!(reply.status, 200);
+        let response = reply.json()?;
         assert_eq!(response["id"], self.next_id);
         if response.get("error").is_some() {
             anyhow::bail!("MCP error: {}", response["error"]);
@@ -1340,9 +1335,8 @@ async fn external_mcp_uses_shared_ssh_and_host_secret_and_approval_paths() -> Re
         .create_instance("coterm-driver-ssh", serde_json::to_value(&ssh.config)?)
         .await?;
     let bridge =
-        coterm_mcp::server::BridgeServer::bind_at(runtime.clone(), "127.0.0.1:0".parse()?).await?;
-    let mut client =
-        McpWire::connect(bridge.connection_info(), &[instance.clone(), other.clone()]).await?;
+        coterm_mcp::http::HttpServer::bind_at(runtime.clone(), "127.0.0.1:0".parse()?).await?;
+    let mut client = McpWire::connect(bridge.address(), &[instance.clone(), other.clone()]).await?;
     let tools = client.rpc("tools/list", json!({})).await?;
     let tools = tools["tools"]
         .as_array()
@@ -1446,25 +1440,20 @@ async fn external_mcp_uses_shared_ssh_and_host_secret_and_approval_paths() -> Re
         )
         .await?;
     assert_eq!(mismatched["isError"], true);
-    // Approval is immediately visible to the Agent. A second call on the SAME
-    // connection remains usable, and the original operation is queried after approval.
+    // Approval returns immediately; another HTTP request can query the original operation.
     let mut pushed = runtime
         .subscribe_events(&instance.driver_instance_id)
         .await?;
     client.next_id += 1;
     let waiting_id = client.next_id;
-    coterm_mcp::transport::write_frame(&mut client.writer, &json!({
+    let waiting = http_wire::start(client.address, &json!({
         "jsonrpc":"2.0","id":waiting_id,"method":"tools/call","params":{
             "name":"coterm_ssh_command","arguments":{"name":instance.name,"commands":["original-waiting-command"]}
         }
     })).await?;
-    let pending = timeout(
-        Duration::from_millis(500),
-        coterm_mcp::transport::read_frame(&mut client.reader),
-    )
-    .await??
-    .ok_or_else(|| anyhow::anyhow!("No approval receipt"))?;
-    let pending: Value = serde_json::from_slice(&pending)?;
+    let pending = timeout(Duration::from_millis(500), http_wire::receive(waiting))
+        .await??
+        .json()?;
     assert_eq!(pending["id"], waiting_id);
     assert_eq!(
         pending["result"]["structuredContent"]["status"],
@@ -1506,17 +1495,11 @@ async fn external_mcp_uses_shared_ssh_and_host_secret_and_approval_paths() -> Re
         .is_some_and(|text| text.contains("approved-default-wait false")));
     // A second MCP client gets its own approval receipt for the same SSH instance.
     // Closing that client must never approve, cancel, or replay a write.
-    let second_bridge =
-        coterm_mcp::server::BridgeServer::bind_at(runtime.clone(), "127.0.0.1:0".parse()?).await?;
-    let mut second = McpWire::connect(
-        second_bridge.connection_info(),
-        std::slice::from_ref(&instance),
-    )
-    .await?;
+    let mut second = McpWire::connect(bridge.address(), std::slice::from_ref(&instance)).await?;
     second.next_id += 1;
     let second_waiting_id = second.next_id;
-    coterm_mcp::transport::write_frame(
-        &mut second.writer,
+    let waiting = http_wire::start(
+        second.address,
         &json!({"jsonrpc":"2.0","id":second_waiting_id,"method":"tools/call","params":{
             "name":"coterm_ssh_command",
             "arguments":{"name":instance.name,"commands":["second-client-command"]}
@@ -1524,12 +1507,9 @@ async fn external_mcp_uses_shared_ssh_and_host_secret_and_approval_paths() -> Re
     )
     .await?;
     {
-        let waiting = coterm_mcp::transport::read_frame(&mut second.reader);
-        tokio::pin!(waiting);
-        let frame = timeout(Duration::from_millis(500), &mut waiting)
+        let response = timeout(Duration::from_millis(500), http_wire::receive(waiting))
             .await??
-            .ok_or_else(|| anyhow::anyhow!("Missing second-client approval receipt"))?;
-        let response: Value = serde_json::from_slice(&frame)?;
+            .json()?;
         assert_eq!(response["id"], second_waiting_id);
         assert_eq!(
             response["result"]["structuredContent"]["status"],
@@ -1602,7 +1582,6 @@ async fn external_mcp_uses_shared_ssh_and_host_secret_and_approval_paths() -> Re
         OperationStatus::Accepted | OperationStatus::AwaitingApproval
     ));
     runtime.cancel(human(), &pending_id).await?;
-    drop(second_bridge);
     // Visible data is pushed without any ssh.read calls and contains no marker.
     let visible = timeout(Duration::from_secs(3), async {
         let mut visible = Vec::new();
@@ -1812,7 +1791,7 @@ async fn external_mcp_uses_shared_ssh_and_host_secret_and_approval_paths() -> Re
         .await?;
     client.next_id += 1;
     let interrupted_id = client.next_id;
-    coterm_mcp::transport::write_frame(&mut client.writer, &json!({"jsonrpc":"2.0","id":interrupted_id,"method":"tools/call","params":{
+    let interrupted = http_wire::start(client.address, &json!({"jsonrpc":"2.0","id":interrupted_id,"method":"tools/call","params":{
         "name":"coterm_ssh_command","arguments":{"name":instance.name,"commands":["never-completes"]}
     }})).await?;
     timeout(Duration::from_secs(3), async {
@@ -1839,13 +1818,9 @@ async fn external_mcp_uses_shared_ssh_and_host_secret_and_approval_paths() -> Re
         .ok_or_else(|| anyhow::anyhow!("Running MCP operation not found"))?;
     let cancel = client.tool("coterm.cancel_operation", json!({"driverInstanceId":instance.driver_instance_id,"operationId":active.operation_id})).await?;
     assert_eq!(cancel["structuredContent"]["status"], "unknown");
-    let interrupted = timeout(
-        Duration::from_secs(3),
-        coterm_mcp::transport::read_frame(&mut client.reader),
-    )
-    .await??
-    .ok_or_else(|| anyhow::anyhow!("No disconnect response"))?;
-    let interrupted: Value = serde_json::from_slice(&interrupted)?;
+    let interrupted = timeout(Duration::from_secs(3), http_wire::receive(interrupted))
+        .await??
+        .json()?;
     assert_eq!(interrupted["id"], interrupted_id);
     assert_eq!(
         interrupted["result"]["_meta"]["coterm/operation"]["status"],
@@ -2315,9 +2290,8 @@ async fn agent_feedback_exec_keeps_32k_in_one_result() -> Result<()> {
         .set_bypass(&instance.driver_instance_id, true)
         .await?;
     let bridge =
-        coterm_mcp::server::BridgeServer::bind_at(runtime.clone(), "127.0.0.1:0".parse()?).await?;
-    let mut client =
-        McpWire::connect(bridge.connection_info(), std::slice::from_ref(&instance)).await?;
+        coterm_mcp::http::HttpServer::bind_at(runtime.clone(), "127.0.0.1:0".parse()?).await?;
+    let mut client = McpWire::connect(bridge.address(), std::slice::from_ref(&instance)).await?;
     let source = "0".repeat(32 * 1024);
     let result = client
         .rpc(
@@ -2333,7 +2307,7 @@ async fn agent_feedback_exec_keeps_32k_in_one_result() -> Result<()> {
     assert!(result["content"][0]["text"]
         .as_str()
         .is_some_and(|text| text.contains(&source)));
-    assert!(serde_json::to_vec(&result)?.len() < coterm_mcp::transport::MAX_FRAME_BYTES);
+    assert!(serde_json::to_vec(&result)?.len() < coterm_mcp::http::MAX_MESSAGE_BYTES);
     let queried = client
         .tool(
             "coterm.get_operation",
@@ -2914,9 +2888,8 @@ async fn real_mcp_file_tools_and_multiline_exec_preserve_content_and_stop_on_fai
     let (runtime, instance) = load_runtime(&ssh, "scripts").await?;
     connect_instance(&runtime, &instance, &ssh).await?;
     let bridge =
-        coterm_mcp::server::BridgeServer::bind_at(runtime.clone(), "127.0.0.1:0".parse()?).await?;
-    let mut client =
-        McpWire::connect(bridge.connection_info(), std::slice::from_ref(&instance)).await?;
+        coterm_mcp::http::HttpServer::bind_at(runtime.clone(), "127.0.0.1:0".parse()?).await?;
+    let mut client = McpWire::connect(bridge.address(), std::slice::from_ref(&instance)).await?;
     let human = CallerContext {
         source: OperationSource::Human,
         session_id: instance.session_id.clone(),

@@ -20,7 +20,7 @@ export function McpConnectionSetting({ mcp }: { mcp: McpSettingsController }) {
       <ToggleGroupItem value="manual" className="min-w-0 rounded-md">{t("Manual start")}</ToggleGroupItem>
     </ToggleGroup>
     {status?.startupMode === "manual" && <Button id="mcp-toggle" type="button" variant={status.enabled ? "outline" : "default"}
-      disabled={busy} onClick={() => void perform(() => hostAPI.setMcpStdioEnabled(!status.enabled))}>
+      disabled={busy} onClick={() => void perform(() => hostAPI.setMcpEnabled(!status.enabled))}>
       {t(status.enabled ? "Stop MCP" : "Start MCP")}
     </Button>}
   </div>;

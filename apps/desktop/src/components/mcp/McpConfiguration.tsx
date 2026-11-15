@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { McpStdioStatus } from "../../host-api";
+import type { McpStatus } from "../../host-api";
 import { useI18n } from "../../use-i18n";
 import { Modal } from "../ui/Modal";
 import { Button } from "../ui/button";
@@ -7,16 +7,14 @@ import { Textarea } from "../ui/input";
 import { Alert, AlertDescription } from "../ui/alert";
 
 /** Client configuration only; startup and manual controls live in the Settings row. */
-export function McpConfiguration({ status, onClose }: { status: McpStdioStatus; onClose: () => void }) {
+export function McpConfiguration({ status, onClose }: { status: McpStatus; onClose: () => void }) {
   const { t } = useI18n();
   const [error, setError] = useState("");
   const [copied, setCopied] = useState(false);
   return <Modal title={t("MCP connection")} onClose={onClose}>
     {error && <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert>}
-    {status.command === null ? <p className="text-xs text-muted-foreground">
-      {t("This build cannot start the local Stdio adapter because its executable path is unavailable.")}
-    </p> : status.clientConfig ? <>
-      <Textarea aria-label={t("Stdio client configuration")} readOnly rows={10} value={status.clientConfig}
+    {status.clientConfig ? <>
+      <Textarea aria-label={t("HTTP client configuration")} readOnly rows={10} value={status.clientConfig}
         title={t("Paste this into the agent's MCP settings. Host-side Agent approval still applies to write operations.")}
         aria-description={t("Paste this into the agent's MCP settings. Host-side Agent approval still applies to write operations.")}
         spellCheck={false} className="p-3 text-xs"
