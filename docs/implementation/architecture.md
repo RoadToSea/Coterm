@@ -140,6 +140,8 @@ Serial 使用阻塞工作线程和 `serialport` 跨平台接口；读写句柄�
 
 React 桌面使用 Tailwind 与现有 shadcn 源码组件；驱动前端仍是当前已有的内置模块，不在整理文档时改写框架。driver-loader 按实例挂载可信前端，Host API 固定目标和来源。
 
+设置、连接表单及工具栏的辅助说明使用原生 title 悬浮提示，不另引入 Tooltip 依赖；无障碍描述通过 aria-description 提供。语言切换只更新文案，不重新挂载连接。Local 的退出码仍在状态栏显示，重启操作说明放在重启按钮上，错误区域不被状态刷新覆盖。
+
 | 共享入口 | 当前职责 |
 |---|---|
 | [terminal-surface.ts](../../apps/shared/components/terminal-surface.ts) | xterm、主题、字号、搜索、快捷键、尺寸监听和释放 |

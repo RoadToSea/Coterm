@@ -184,6 +184,8 @@ test("human Shell uses terminal keys, UART uses its sender, and MCP queues stay 
     await run(`root.querySelector('.toolbar-toggle').click()`);
     assert.equal(await run(`root.querySelector('.settings-panel').inert`), true);
     assert.equal(await run(`root.querySelector('.toolbar-customization').hidden`), false);
+    assert.equal(await run(`root.querySelector('.toolbar-customization .hint')`),null);
+    assert.ok((await run(`root.querySelector('.toolbar-customization').title`)).length>0);
     assert.equal(await run(`root.querySelectorAll('.toolbar-customization input,.toolbar-settings-list,.toolbar-setting').length`), 0, 'the checkbox list is removed');
     assert.equal(await run(`root.querySelector('.toolbar-trash').hidden`), true);
     assert.equal(await run(`getComputedStyle(root.querySelector('.export-receive')).animationName`), 'serial-toolbar-wiggle');

@@ -39,6 +39,12 @@ for (const protocol of ["tcp","telnet"]) {
       assert.equal(await run(`root.querySelector('[name=autoReconnect]').checked`),false);
       assert.equal(await run(`root.querySelector('[name=localEcho]').value`),protocol==="telnet"?"auto":"on");
       assert.equal(await run(`root.querySelector('[name=baudRate]')===null&&root.querySelector('[name=dtr]')===null`),true);
+      assert.equal(await run(`root.querySelectorAll('p.hint').length`),0,'network configuration help does not occupy a form row');
+      assert.ok((await run(`root.querySelector('[name=host]').title`)).includes(protocol==='telnet'?'Telnet 不加密':'Raw TCP 按原始字节收发'));
+      await run(`i18n.locale='en';for(const listener of listeners)listener()`);
+      assert.ok((await run(`root.querySelector('[name=host]').title`)).includes(protocol==='telnet'?'Telnet is unencrypted':'Raw TCP sends exact bytes'));
+      assert.ok((await run(`root.querySelector('[name=prompt]').getAttribute('aria-description')`)).includes('Shell reads require terminal mode'));
+      await run(`i18n.locale='zh-CN';for(const listener of listeners)listener()`);
       await run(`root.querySelector('[name=host]').value='127.0.0.1';root.querySelector('[name=proxyType]').value='http';root.querySelector('[name=proxyType]').dispatchEvent(new Event('change',{bubbles:true}));root.querySelector('[name=proxyHost]').value='localhost';root.querySelector('[name=proxyPort]').value='8081'`);
       await screenshot("configuration");
       await run(`root.querySelector('form').dispatchEvent(new Event('submit',{cancelable:true}))`);

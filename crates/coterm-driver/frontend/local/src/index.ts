@@ -158,7 +158,7 @@ export function configure(container: HTMLElement, api: DriverConfigurationAPI): 
   shell.type = "text";
   shell.spellcheck = false;
   shell.placeholder = isWindows() ? "pwsh.exe" : "/bin/bash";
-  shellLabel.append(shell, hint(t("Leave empty to detect the system shell.")));
+  shellLabel.append(shell);
 
   const quick = document.createElement("div");
   quick.className = "quick";
@@ -184,7 +184,7 @@ export function configure(container: HTMLElement, api: DriverConfigurationAPI): 
   cwd.type = "text";
   cwd.spellcheck = false;
   cwd.placeholder = isWindows() ? "C:\\Users\\me\\project" : "/home/me/project";
-  cwdLabel.append(cwd, hint(t("Leave empty to start in your home directory.")));
+  cwdLabel.append(cwd);
 
   const error = document.createElement("p");
   error.className = "error";
@@ -199,14 +199,20 @@ export function configure(container: HTMLElement, api: DriverConfigurationAPI): 
   let disposed = false;
   let busy = false;
 
+  const applyHelp = (translate: typeof t) => {
+    for (const [control, message] of [[shell, "Leave empty to detect the system shell."], [cwd, "Leave empty to start in your home directory."]] as const) {
+      control.title = translate(message);
+      control.setAttribute("aria-description", control.title);
+    }
+  };
+  applyHelp(t);
   const stopLocale = api.i18n?.subscribe(() => {
     const next = createTranslator(api.i18n);
     retitle(shellLabel, next("Shell"));
     retitle(cwdLabel, next("Working directory"));
     quickLabel.textContent = next("Common shells");
     submit.textContent = next("Open terminal");
-    shellLabel.querySelector("p")!.textContent = next("Leave empty to detect the system shell.");
-    cwdLabel.querySelector("p")!.textContent = next("Leave empty to start in your home directory.");
+    applyHelp(next);
   });
 
   form.addEventListener("submit", async (event) => {
@@ -239,13 +245,6 @@ export function configure(container: HTMLElement, api: DriverConfigurationAPI): 
 
 function isWindows(): boolean {
   return /Windows/i.test(navigator.userAgent);
-}
-
-function hint(text: string): HTMLParagraphElement {
-  const element = document.createElement("p");
-  element.className = "hint";
-  element.textContent = text;
-  return element;
 }
 
 /** 实例界面：一个人机共用的真实终端。 */
@@ -321,6 +320,8 @@ export function mount(container: HTMLElement, api: DriverAPI): DriverFrontend {
     searchView.refreshLocale();
     label.textContent = t("Local");
     restart.textContent = t("Restart shell");
+    restart.title = t("The shell exited. Restart it to keep using this instance.");
+    restart.setAttribute("aria-description", restart.title);
     renderState();
   };
 
@@ -337,7 +338,6 @@ export function mount(container: HTMLElement, api: DriverAPI): DriverFrontend {
     }
     state.textContent = status_?.exitCode != null ? t("exit {code}", { code: status_.exitCode }) : t("exited");
     restart.hidden = false;
-    notice.textContent = t("The shell exited. Restart it to keep using this instance.");
   };
 
   const applyStatus = (next: Status) => {

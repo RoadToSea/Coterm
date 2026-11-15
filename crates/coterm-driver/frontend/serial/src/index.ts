@@ -103,12 +103,14 @@ export function configure(container: HTMLElement, api: DriverConfigurationAPI): 
   checks.className = "checks";
   checks.append(dtrLabel, rtsLabel);
 
-  const hint = document.createElement("p");
-  hint.className = "hint";
-  hint.textContent = t("Port names come from the operating system, e.g. COM6 or /dev/ttyUSB0.");
-  const lineHint = document.createElement("p");
-  lineHint.className = "hint";
-  lineHint.textContent = t("Some boards reset when DTR changes; clear it if the device reboots unexpectedly.");
+  const applyHelp = (translate: typeof t) => {
+    for (const [control, message] of [[port, "Port names come from the operating system, e.g. COM6 or /dev/ttyUSB0."], [dtr, "Some boards reset when DTR changes; clear it if the device reboots unexpectedly."]] as const) {
+      control.title = translate(message);
+      control.setAttribute("aria-description", control.title);
+    }
+    dtrLabel.title = dtr.title;
+  };
+  applyHelp(t);
   const error = document.createElement("p");
   error.className = "error";
   error.setAttribute("role", "alert");
@@ -116,7 +118,7 @@ export function configure(container: HTMLElement, api: DriverConfigurationAPI): 
   submit.type = "submit";
   submit.className = "primary";
   submit.textContent = t("Open serial port");
-  form.append(portRow, framing, checks, hint, lineHint, error, submit);
+  form.append(portRow, framing, checks, error, submit);
   root.append(form);
 
   const stopLocale = api.i18n?.subscribe(() => {
@@ -131,8 +133,7 @@ export function configure(container: HTMLElement, api: DriverConfigurationAPI): 
     parity.options[2].textContent = next("Even");
     dtrLabelText.textContent = next("DTR high on open");
     rtsLabelText.textContent = next("RTS high on open");
-    hint.textContent = next("Port names come from the operating system, e.g. COM6 or /dev/ttyUSB0.");
-    lineHint.textContent = next("Some boards reset when DTR changes; clear it if the device reboots unexpectedly.");
+    applyHelp(next);
     if (portPlaceholder && port.options[0]) {
       port.options[0].textContent = next(portPlaceholder);
     }

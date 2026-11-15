@@ -126,7 +126,6 @@ export const css = `
   .toolbar-customization { position: absolute; z-index: 3; inset: var(--toolbar-height, 0px) 0 auto; width: 100%;
     max-height: calc(100% - var(--toolbar-height, 0px)); overflow: auto; padding: 8px 14px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
     border-bottom: 1px solid var(--coterm-border, #333333); background: var(--coterm-surface-raised, #252526); }
-  .toolbar-customization > .hint { flex: 1 1 180px; }
   .toolbar-edit-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-left: auto; }
   .toolbar-customization button { font-size: 11px; padding: 4px 8px; }
   .toolbar-removed { flex: 1 1 100%; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }

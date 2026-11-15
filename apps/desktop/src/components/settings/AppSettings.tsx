@@ -5,7 +5,7 @@ import { DEFAULT_PREFERENCES, getPreferences, setPreferences, subscribePreferenc
 import { ThemeSwitcher } from "../ThemeSwitcher";
 import { Modal } from "../ui/Modal";
 import { Button } from "../ui/button";
-import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "../ui/empty";
+import { Empty, EmptyContent, EmptyHeader, EmptyMedia, EmptyTitle } from "../ui/empty";
 import { cn } from "../../lib/utils";
 import { McpPortSetting } from "./McpPortSetting";
 import { McpClientConfigurationSetting, McpConnectionSetting } from "./McpConnectionSetting";
@@ -59,7 +59,7 @@ export function AppSettings({ onClose }: { onClose: () => void }) {
       </select> },
     { id: "cursor-blink", category: "terminal", title: "Blinking cursor", description: "Blink the cursor in terminal views.", keywords: "caret cursor blink 光标 闪烁",
       control: <input id="cursor-blink" type="checkbox" role="switch" className="settings-switch" aria-label={t("Blinking cursor")} checked={preferences.cursorBlink} onChange={event => setPreferences({ cursorBlink: event.target.checked })} /> },
-    { id: "mcp-port", category: "mcp", title: "MCP port", keywords: "MCP Stdio bridge interface port localhost 端口 接口 本机 桥接",
+    { id: "mcp-port", category: "mcp", title: "MCP port", description: "MCP port changes apply after saving.", keywords: "MCP Stdio bridge interface port localhost 端口 接口 本机 桥接",
       control: <McpPortSetting mcp={mcp} /> },
     { id: "mcp-connection", category: "mcp", title: "MCP connection", keywords: "MCP Stdio auto manual startup connection client 自启动 手动启动 开关 连接 客户端",
       control: <McpConnectionSetting mcp={mcp} /> },
@@ -105,21 +105,24 @@ export function AppSettings({ onClose }: { onClose: () => void }) {
                   {!mcp.status && <Button type="button" variant="outline" size="sm" disabled={mcp.busy} onClick={() => void mcp.refresh()}>{t("Retry")}</Button>}
                 </AlertDescription>
               </Alert>}
-              {settings.map(setting => <div key={setting.id} className="settings-row" data-setting={setting.id}>
-                <div className="min-w-0">{setting.id === "theme" || setting.id === "mcp-connection" ? <p id={`${setting.id}-label`} className="text-sm font-medium">{t(setting.title)}</p> : <label className="text-sm font-medium" htmlFor={setting.id === "language" ? "locale-select" : setting.id}>{t(setting.title)}</label>}
-                  {setting.description && <p id={`${setting.id}-description`} className="mt-1 text-xs leading-relaxed text-muted-foreground">{t(setting.description)}</p>}
+              {settings.map(setting => {
+                const description = setting.description ? [t(setting.description),
+                  ...(["general", "appearance", "terminal"].includes(setting.category) ? [t("Display changes apply immediately.")] : [])].join("\n") : undefined;
+                return <div key={setting.id} className="settings-row" data-setting={setting.id} role="group"
+                aria-labelledby={`${setting.id}-label`} aria-description={description}
+                title={description}>
+                <div className="min-w-0">{setting.id === "theme" || setting.id === "mcp-connection" ? <p id={`${setting.id}-label`} className="text-sm font-medium">{t(setting.title)}</p> : <label id={`${setting.id}-label`} className="text-sm font-medium" htmlFor={setting.id === "language" ? "locale-select" : setting.id}>{t(setting.title)}</label>}
                 </div>
                 <div className={cn("settings-control", setting.id === "cursor-blink" && "settings-control-switch")}>{setting.control}</div>
-              </div>)}
+              </div>; })}
             </section> : null;
           })}
-          {!visible.length && <Empty><EmptyHeader><EmptyMedia variant="icon"><Search /></EmptyMedia><EmptyTitle>{t("No settings found")}</EmptyTitle><EmptyDescription>{t("Try another keyword, such as language, font, or cursor.")}</EmptyDescription></EmptyHeader><EmptyContent><Button type="button" variant="outline" onClick={clearSearch}>{t("Clear search")}</Button></EmptyContent></Empty>}
+          {!visible.length && <Empty title={t("Try another keyword, such as language, font, or cursor.")}><EmptyHeader><EmptyMedia variant="icon"><Search /></EmptyMedia><EmptyTitle>{t("No settings found")}</EmptyTitle></EmptyHeader><EmptyContent><Button type="button" variant="outline" onClick={clearSearch}>{t("Clear search")}</Button></EmptyContent></Empty>}
           {visible.some(item => item.category === "terminal") && <div className="settings-preview" aria-label={t("Font preview")}><span>coterm &gt; </span>{t("The quick brown fox jumps over the lazy dog.")}<br />0123456789 · 中文终端预览</div>}
         </main>
       </div>
       <footer className="settings-footer">
-        <p className="text-xs text-muted-foreground">{t("Display changes apply immediately. MCP port changes apply after saving.")}</p>
-        <Button type="button" variant="ghost" size="sm" onClick={() => setPreferences({ ...DEFAULT_PREFERENCES })}><RotateCcw data-icon="inline-start" />{t("Reset font and cursor settings")}</Button>
+        <Button type="button" variant="ghost" size="sm" className="ml-auto" onClick={() => setPreferences({ ...DEFAULT_PREFERENCES })}><RotateCcw data-icon="inline-start" />{t("Reset font and cursor settings")}</Button>
       </footer>
     </div>
   </Modal>;

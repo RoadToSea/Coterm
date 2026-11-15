@@ -59,11 +59,12 @@ export function ApprovalGroupEditor({ draft, onChange, custom, onCustomChange, b
     <Field>
       <span id="approval-mode-label" className="text-sm font-medium">{t("Matching mode")}</span>
       <ToggleGroup type="single" value={draft.mode} variant="outline" aria-labelledby="approval-mode-label" className="flex-wrap justify-start"
+        title={t(draft.mode === "allow_matches" ? "Unmatched commands require approval." : "Unmatched commands skip approval.")}
+        aria-description={t(draft.mode === "allow_matches" ? "Unmatched commands require approval." : "Unmatched commands skip approval.")}
         onValueChange={value => { if (value === "allow_matches" || value === "approve_matches") onChange({ ...draft, mode: value }); }}>
         <ToggleGroupItem value="allow_matches">{t("Matching commands skip approval")}</ToggleGroupItem>
         <ToggleGroupItem value="approve_matches">{t("Matching commands require approval")}</ToggleGroupItem>
       </ToggleGroup>
-      <p className="text-xs text-muted-foreground">{t(draft.mode === "allow_matches" ? "Unmatched commands require approval." : "Unmatched commands skip approval.")}</p>
       {draft.patterns.length === 0 && <p role="status" className="text-xs text-muted-foreground">{t(draft.mode === "allow_matches"
         ? "Empty group: all commands require approval." : "Empty group: all commands eligible for matching skip approval.")}</p>}
     </Field>

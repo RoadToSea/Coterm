@@ -44,6 +44,9 @@ test("Serial creation lists COM6 from a stopped driver before any instance is su
     assert.ok(calls.indexOf("start_driver") >= 0 && calls.indexOf("start_driver") < calls.indexOf("invoke_driver_operation"),
       "the host must start the backend before requesting driver-level data");
     assert.equal(calls.includes("create_instance"), false, "enumeration does not create or open a serial connection");
+    assert.equal(await run(`configuration().querySelectorAll('p.hint').length`),0);
+    assert.ok((await run(`configuration().querySelector('select').title`)).includes('Port names come from'));
+    assert.ok((await run(`configuration().querySelector('input[type=checkbox]').title`)).includes('DTR changes'));
     await screenshot("serial-creation-com6");
 
     // Exercise an actual mouse opening, not just a scripted click on the element.
@@ -76,6 +79,8 @@ test("Serial creation lists COM6 from a stopped driver before any instance is su
     await run(`window.lookup=__cotermTest.gate('invoke_driver_operation');configuration().querySelector('select').dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,button:0}))`);
     await wait(`lookup.size()===1`);
     await setAppLocale(client, "zh-CN");
+    assert.ok((await run(`configuration().querySelector('select').title`)).includes('端口名由操作系统提供'));
+    assert.ok((await run(`configuration().querySelector('input[type=checkbox]').title`)).includes('复位'));
     assert.equal(await run(`configuration().querySelector('select').textContent`), "正在加载端口…",
       "locale changes preserve the loading state instead of claiming there are no ports");
     await run(`lookup.release({status:'completed',output:{ports:[]}})`);

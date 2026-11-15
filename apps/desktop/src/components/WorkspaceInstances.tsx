@@ -113,7 +113,7 @@ export function WorkspaceInstances(props: Props) {
           <button type="button" className="flex min-w-0 flex-1 items-center gap-2 px-2 py-2 text-left text-xs"
             title={t("Restore instance")} disabled={busy} onClick={() => props.onRestore(entry.configRef)}>
             <PlugZap size={15} strokeWidth={1.5} className="shrink-0 text-muted-foreground" data-driver-icon />
-            <span className="min-w-0"><span className="block truncate">{entry.name}</span><span className="block text-[10px] text-muted-foreground">{t("Restore instance")}</span></span>
+            <span className="min-w-0 truncate">{entry.name}</span>
           </button>
           <Button type="button" variant="ghost" size="icon" disabled={busy}
             className="size-6 shrink-0 opacity-0 group-hover/instance:opacity-100 group-focus-within/instance:opacity-100"

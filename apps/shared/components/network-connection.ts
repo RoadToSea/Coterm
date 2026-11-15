@@ -61,7 +61,12 @@ function createSettings(telnet: boolean, translate: Translator) {
   field("Local echo",echo); field("Receive newline completion",newlines); field("Backspace key",backspace);
   if (telnet) field("Terminal type",terminal);
   const prompt = text("prompt",256); const promptLabel = field("Shell prompt",prompt);
-  const hint = document.createElement("p"); hint.className = "hint"; hint.style.gridColumn = "1 / -1"; element.append(hint);
+  const help: [HTMLElement, string][] = [
+    [host, telnet ? "Telnet is unencrypted. Enter passwords only in the terminal." : "Raw TCP sends exact bytes."],
+    [prompt, "Use the complete visible Shell prompt; trailing spaces are ignored. Shell reads require terminal mode."],
+    [reconnect, "Reconnecting never replays input."],
+  ];
+  if (telnet) help.push([username, "Telnet is unencrypted. Enter passwords only in the terminal."]);
   const refresh = () => {
     for (const [node,label] of labels) node.textContent = t(label);
     for (const [node,label] of choices) node.textContent = t(label);
@@ -70,9 +75,11 @@ function createSettings(telnet: boolean, translate: Translator) {
     proxyHost.disabled = proxyPort.disabled = locked || proxy.value === "direct";
     interval.disabled = locked || !reconnect.checked;
     promptLabel.hidden = initial.mode !== "shell"; prompt.disabled = locked || initial.mode !== "shell";
-    hint.textContent = t(telnet
-      ? "Telnet is unencrypted. Enter passwords only in the terminal. Use the complete visible Shell prompt; trailing spaces are ignored. Settings apply on the next connection."
-      : "Raw TCP sends exact bytes. Shell reads require terminal mode and a complete visible prompt. Settings apply on the next connection; reconnect never replays input.");
+    element.title = t("Settings apply on the next connection.");
+    for (const [control, message] of help) {
+      control.title = `${t(message)}\n${element.title}`;
+      control.setAttribute("aria-description", control.title);
+    }
   };
   const write = (config: NetworkConfig) => {
     host.value = config.host; port.value = String(config.port); username.value = config.username ?? "";

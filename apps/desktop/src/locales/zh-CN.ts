@@ -1,5 +1,7 @@
 /** Source phrases are keys, so diagnostics and third-party text fall back to English. */
 export const zhCN: Readonly<Record<string, string>> = {
+  "Display changes apply immediately.": "显示设置立即生效。",
+  "MCP port changes apply after saving.": "MCP 端口在保存后生效。",
   "Approval": "审批",
   "Approval rule groups": "审批规则组",
   "Create reusable rules and assign one group to each instance.": "创建可复用的规则，为每个实例分配一个规则组。",
@@ -222,7 +224,6 @@ export const zhCN: Readonly<Record<string, string>> = {
   "Port saved. It will be used when MCP is enabled.": "端口已保存，将在启用 MCP 时使用。",
   "Local bridge: {address}": "本机桥接地址：{address}",
   "MCP is disabled.": "MCP 已停用。",
-  "Display changes apply immediately. MCP port changes apply after saving.": "显示设置立即生效；MCP 端口在保存后生效。",
   "Enabling opens the local loopback bridge on the port configured in Settings. Disabling, or closing Coterm, stops it.": "启用后使用设置中的端口开启本机回环桥；停用或关闭 Coterm 即停止。",
   mcp_port_invalid: "请输入 1–65535 之间的整数端口号。",
   mcp_port_unavailable: "端口不可用或已被占用，原有 MCP 服务和配置保持不变。",

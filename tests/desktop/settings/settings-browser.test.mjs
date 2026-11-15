@@ -37,9 +37,14 @@ test("categorized settings search, apply live fonts, persist and preserve mounte
     await wait(`document.getElementById('app-settings-dialog')?.open`);
     await wait(`document.activeElement.id==='settings-search'`);
     assert.equal(await run(`document.querySelectorAll('[data-setting]').length`),10);
+    assert.ok((await run(`document.querySelector('[data-setting=language]').title`)).includes('Choose the language'));
+    assert.equal(await run(`document.querySelector('[data-setting=language]').getAttribute('aria-description')`),await run(`document.querySelector('[data-setting=language]').title`),'help stays accessible without a visible paragraph');
+    assert.equal(await run(`document.querySelector('.settings-footer p')`),null);
     await shot('settings-light.png');
     await category('general');
     assert.equal(await run(`document.querySelectorAll('[data-setting]').length`),1);
+    await search('Default: 14 px.');
+    await wait(`document.querySelectorAll('[data-setting]').length===1 && !!document.getElementById('interface-font-size')`);
     await search('font');
     await wait(`document.querySelectorAll('[data-setting]').length===2`);
     assert.equal(await run(`!!document.getElementById('terminal-font-size')`),true,'search spans all categories');
@@ -66,6 +71,7 @@ test("categorized settings search, apply live fonts, persist and preserve mounte
     await shot('settings-dark-terminal.png');
     await category('general'); await select('locale-select','zh-CN');
     await wait(`document.getElementById('app-settings-dialog').getAttribute('aria-label')==='设置'`);
+    assert.ok((await run(`document.querySelector('[data-setting=language]').title`)).includes('设置应用及支持的驱动所使用的语言'));
     await shot('settings-zh.png');
     await category('terminal');
     for (const width of [768,360]) {

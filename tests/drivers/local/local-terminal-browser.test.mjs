@@ -45,8 +45,17 @@ test("Local starts explicitly on first mount and preserves running or exited she
           return {operationId:'local-op',status:'completed',output,error:null,proposalId:null,waitExpired:false};
         },
       };
-      window.view = frontend.mount(container, api);
+      window.view = frontend.configure(container, {i18n:api.i18n, submit:async()=>{throw new Error('configuration-rejected')}});
     })()`);
+    await run("window.root=container.firstElementChild.shadowRoot");
+    assert.equal(await run("root.querySelectorAll('label p').length"),0);
+    assert.equal(await run("root.querySelector('input').title"),'Leave empty to detect the system shell.');
+    await run("window.locale='zh-CN';window.onLocale()");
+    assert.ok((await run("root.querySelector('input').title")).includes('系统'));
+    assert.equal(await run("root.querySelector('input').getAttribute('aria-description')"),await run("root.querySelector('input').title"));
+    await run("root.querySelector('form').requestSubmit()");
+    await waitForValue(session.client,"root.querySelector('[role=alert]').textContent.includes('configuration-rejected')");
+    await run("view.unmount();window.locale='en';window.view=frontend.mount(container,api)");
     await waitForValue(session.client, "calls.some(call=>call.operation==='local.status')");
     await run("window.root=container.firstElementChild.shadowRoot");
     assert.equal(await run("root.querySelector('.notice').textContent"), "", "an unread shell status must not be reported as an exit");
@@ -74,7 +83,8 @@ test("Local starts explicitly on first mount and preserves running or exited she
       await run(`view.unmount(); window.localStatus.running=${running}; calls.length=0; view=frontend.mount(container,api);window.root=container.firstElementChild.shadowRoot;`);
       await waitForValue(session.client, "calls.some(call=>call.operation==='local.read')");
       assert.equal(await run("calls.some(call=>call.operation==='local.restart')"), false);
-      assert.equal(await run("container.firstElementChild.shadowRoot.querySelector('.notice').textContent"), running ? "" : "The shell exited. Restart it to keep using this instance.");
+      assert.equal(await run("container.firstElementChild.shadowRoot.querySelector('.notice').textContent"), "");
+      if (!running) assert.equal(await run("root.querySelector('.bar > button').title"), "The shell exited. Restart it to keep using this instance.");
     }
     await run("root.querySelector('.bar > button').click()");
     await waitForValue(session.client, "localStatus.shellId==='shell-two' && root.querySelector('.state').textContent==='running'");
@@ -92,7 +102,8 @@ test("Local starts explicitly on first mount and preserves running or exited she
     await run("window.locale='en';window.onLocale()");
     await run("window.localStatus.running=false;window.localStatus.exitCode=7;window.onEvent({name:'local.status',payload:{shellId:'shell-two',running:false,exitCode:7}})");
     await waitForValue(session.client, "root.querySelector('.state').textContent==='exit 7'");
-    assert.equal(await run("root.querySelector('.notice').textContent"), "The shell exited. Restart it to keep using this instance.");
+    assert.ok((await run("root.querySelector('.notice').textContent")).includes('local-input-test-failure'), 'exit rendering preserves real failures');
+    assert.equal(await run("root.querySelector('.bar > button').title"), "The shell exited. Restart it to keep using this instance.");
     assert.equal(await run("root.querySelector('.bar > button').hidden"), false);
     await run("view.unmount()");
     assert.equal(await run("window.unsubscribed"), 3);

@@ -391,7 +391,7 @@ export default function App() {
               <button
                 key={driver.id}
                 type="button"
-                title={`${driver.name} · ${driver.version} · ${driver.running ? t("Running") : t("Stopped")}`}
+                title={`${driver.name} · ${driver.version} · ${driver.running ? t("Running") : t("Stopped")}\n${t("Select a driver on the left to create one.")}`}
                 aria-label={t("Manage {name}", { name: driver.name })}
                 aria-controls="driver-configuration"
                 aria-pressed={selectedDriverId === driver.id}
@@ -469,9 +469,8 @@ export default function App() {
               onApproval={(configRef, name) => setApprovalTarget({ configRef, name })}
               onForget={ref => { void runDriverAction(ref, () => hostAPI.forgetInstance(ref)); }} />}
             {!loading && instances.length === 0 && (workspace?.entries.length ?? 0) === 0 && (
-              <div className="px-5 py-5 text-xs leading-5 text-coterm-text-muted">
+              <div className="px-5 py-5 text-xs leading-5 text-coterm-text-muted" title={t("Select a driver on the left to create one.")}>
                 <p>{t("No instances yet.")}</p>
-                <p className="mt-1">{t("Select a driver on the left to create one.")}</p>
               </div>
             )}
           </nav>

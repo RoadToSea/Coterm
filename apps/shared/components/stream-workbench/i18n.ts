@@ -25,8 +25,11 @@ const zhCN: Readonly<Record<string, string>> = {
   "Create instance": "创建实例",
   "Check the connection parameters.": "请检查连接参数。",
   "Enter a hostname or IP address without a scheme, path or port.": "请填写主机名或 IP 地址，不包含协议、路径或端口。",
-  "Telnet is unencrypted. Enter passwords only in the terminal. Use the complete visible Shell prompt; trailing spaces are ignored. Settings apply on the next connection.": "Telnet 不加密。密码只在终端中输入。请填写完整的 Shell 提示符；匹配忽略末尾空格。配置在下次连接时生效。",
-  "Raw TCP sends exact bytes. Shell reads require terminal mode and a complete visible prompt. Settings apply on the next connection; reconnect never replays input.": "Raw TCP 按原始字节收发。Shell 读取需要终端视图和完整提示符。配置在下次连接时生效；重连不会重放输入。",
+  "Telnet is unencrypted. Enter passwords only in the terminal.": "Telnet 不加密。密码只在终端中输入。",
+  "Raw TCP sends exact bytes.": "Raw TCP 按原始字节收发。",
+  "Use the complete visible Shell prompt; trailing spaces are ignored. Shell reads require terminal mode.": "请填写完整的 Shell 提示符；匹配忽略末尾空格。Shell 读取需要终端视图。",
+  "Settings apply on the next connection.": "配置在下次连接时生效。",
+  "Reconnecting never replays input.": "重连不会重放输入。",
 
   "Find in terminal": "在终端中查找",
   "No matches": "未找到匹配项",

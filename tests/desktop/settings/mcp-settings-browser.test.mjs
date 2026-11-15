@@ -85,6 +85,8 @@ test("MCP settings validate, save ports, preserve failures and publish matching 
     await shot('mcp-settings-light');
     await openConnection();
     await wait(`!!document.querySelector('textarea[aria-label="Stdio client configuration"]')`);
+    assert.ok((await run(`document.querySelector('textarea[aria-label="Stdio client configuration"]').title`)).includes("Paste this into the agent's MCP settings."));
+    assert.equal(await run(`document.querySelector('dialog[aria-label="MCP connection"] p')`),null,'configuration instructions are hover help');
     assert.deepEqual(await run(`JSON.parse(document.querySelector('textarea[aria-label="Stdio client configuration"]').value).mcpServers.coterm.args`),['mcp','stdio','--addr','127.0.0.1:51237']);
     await closeConnection();
     await run(`document.querySelector('#mcp-connection button[data-state=off]').click()`);

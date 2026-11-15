@@ -43,6 +43,8 @@ test("independent rule groups work without instances and preserve failed saves a
     await wait(`!!document.getElementById('approval-rule-groups-dialog') && !!document.querySelector('button')`);
     await wait(`[...document.querySelectorAll('dialog button')].some(button=>button.textContent==='New rule group')`);
     await click('New rule group');await input('approval-group-name','Board rules');await input('approval-pattern','^ls$');await click('Add rule');
+    assert.equal(await run(`document.querySelector('[aria-labelledby=approval-mode-label]').getAttribute('aria-description')`),'Unmatched commands require approval.');
+    assert.equal(await run(`document.querySelector('[aria-labelledby=approval-mode-label]').title`),'Unmatched commands require approval.');
     await run(`window.saveGate=__cotermTest.gate('save_approval_group')`);await click('Save group');await wait(`saveGate.size()===1`);
     await run(`saveGate.fail('disk unavailable')`);await wait(`document.querySelector('[role=alert]')?.textContent.includes('disk unavailable')`);
     assert.equal(await run(`document.getElementById('approval-group-name').value`),'Board rules');
@@ -53,6 +55,7 @@ test("independent rule groups work without instances and preserve failed saves a
     assert.deepEqual(await run(`Object.keys(__cotermTest.invocations.find(call=>call.command==='preview_approval_policy').args.policy).sort()`),['mode','patterns']);
     await click('Matching commands require approval');await click('Save group');
     await wait(`__cotermTest.workspace().approvalRuleGroups[0].mode==='approve_matches'`);
+    assert.equal(await run(`document.querySelector('[aria-labelledby=approval-mode-label]').title`),'Unmatched commands skip approval.');
     await click('Duplicate');await click('Save group');await wait(`__cotermTest.workspace().approvalRuleGroups.length===2`);
     await input('approval-group-name','Edited copy');await click('Delete group');
     await wait(`[...document.querySelectorAll('dialog button')].some(button=>button.textContent==='Save and continue')`);

@@ -15,10 +15,9 @@ export function McpConfiguration({ status, onClose }: { status: McpStdioStatus; 
     {status.command === null ? <p className="text-xs text-muted-foreground">
       {t("This build cannot start the local Stdio adapter because its executable path is unavailable.")}
     </p> : status.clientConfig ? <>
-      <p className="mb-3 text-xs text-muted-foreground">
-        {t("Paste this into the agent's MCP settings. Host-side Agent approval still applies to write operations.")}
-      </p>
       <textarea aria-label={t("Stdio client configuration")} readOnly rows={10} value={status.clientConfig}
+        title={t("Paste this into the agent's MCP settings. Host-side Agent approval still applies to write operations.")}
+        aria-description={t("Paste this into the agent's MCP settings. Host-side Agent approval still applies to write operations.")}
         spellCheck={false} className="w-full rounded-md border border-input bg-background p-3 font-mono text-xs"
         onFocus={event => event.target.select()} />
       <Button type="button" variant="outline" size="sm" className="mt-2" onClick={() => {

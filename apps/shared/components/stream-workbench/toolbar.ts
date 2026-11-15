@@ -24,7 +24,6 @@ export function createToolbar(bar: HTMLElement, items: Item[], translate: Transl
   }
   const panel = document.createElement("section");
   panel.className = "toolbar-customization"; panel.hidden = true;
-  const hint = document.createElement("p"); hint.className = "hint";
   const actions = document.createElement("div"); actions.className = "toolbar-edit-actions";
   const reset = document.createElement("button"); reset.type = "button";
   reset.className = "toolbar-reset";
@@ -34,7 +33,7 @@ export function createToolbar(bar: HTMLElement, items: Item[], translate: Transl
   trash.setAttribute("role", "group");
   trash.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M9 6V3h6v3M6 6l1 15h10l1-15M10 10v7m4-7v7"/></svg>';
   const trashText = document.createElement("span"); trash.append(trashText);
-  actions.append(reset, done); panel.append(hint, actions, removed);
+  actions.append(reset, done); panel.append(actions, removed);
   const controller = new AbortController();
   let editing = false;
   let dragged: string | null = null;
@@ -64,7 +63,8 @@ export function createToolbar(bar: HTMLElement, items: Item[], translate: Transl
   };
   const render = () => {
     panel.setAttribute("aria-label", t("Customize toolbar"));
-    hint.textContent = t("Drag to reorder. Drop on the trash to remove.");
+    panel.title = t("Drag to reorder. Drop on the trash to remove.");
+    panel.setAttribute("aria-description", panel.title);
     reset.textContent = t("Restore default toolbar"); done.textContent = t("Done");
     trashText.textContent = t("Drop here to remove from toolbar"); trash.setAttribute("aria-label", trashText.textContent);
     removed.replaceChildren(); removed.hidden = hidden.size === 0;
