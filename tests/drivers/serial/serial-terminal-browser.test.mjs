@@ -157,7 +157,12 @@ test("human Shell uses terminal keys, UART uses its sender, and MCP queues stay 
       observedFailures.push('pause changed visible UART output while receive capture continued');
     }
     await run(`root.querySelector('[data-control=pause] button').click()`);
-    await waitForValue(client, `root.querySelector('.uart-output').textContent.includes('paused-output')`);
+    assert.equal(await run(`root.querySelector('.uart-output').textContent.includes('paused-output')`), false,
+      'resuming must not replay bytes received while paused');
+    await emitOutput('resumed-output');
+    await waitForValue(client, `root.querySelector('.uart-output').textContent.includes('resumed-output')`);
+    assert.equal(await run(`root.querySelector('.uart-output').textContent.includes('paused-output')`), false,
+      'new output after resuming must not include bytes received while paused');
 
     await run(`root.querySelector('[data-control=timestamps] input').click()`);
     await emitOutput('cntA is :');

@@ -422,6 +422,14 @@ export function mountStreamWorkbench<C extends StreamConfig>(container: HTMLElem
   const appendOutput = (text: string, bytes: number) => {
     if (!bytes && !text) return;
     const now = Date.now();
+    statsRx += bytes;
+    if (paused) {
+      pendingWhilePaused += bytes;
+      receiveBoundary = true;
+      receiveNormalizer.reset();
+      renderStats();
+      return;
+    }
     entries.push({
       time: now,
       bytes,
@@ -431,13 +439,11 @@ export function mountStreamWorkbench<C extends StreamConfig>(container: HTMLElem
     });
     receiveBoundary = false;
     logBytes += bytes;
-    statsRx += bytes;
     while (logBytes > LOG_LIMIT && entries.length > 1) {
       const dropped = entries.shift();
       if (!dropped) break;
       logBytes -= dropped.bytes;
     }
-    if (paused) pendingWhilePaused += bytes;
     renderStats();
     scheduleRender();
   };
@@ -456,12 +462,14 @@ export function mountStreamWorkbench<C extends StreamConfig>(container: HTMLElem
       if (data.gap) { hexEntries.length = 0; hexLogBytes = 0; hexOffset = 0; }
       if (data.hex) {
         const bytes = fromHex(data.hex);
-        hexEntries.push({ time: Date.now(), bytes: bytes.length, text: "", hex: hexDump(bytes, hexOffset) });
+        if (!paused) hexEntries.push({ time: Date.now(), bytes: bytes.length, text: "", hex: hexDump(bytes, hexOffset) });
         hexOffset += bytes.length;
-        hexLogBytes += bytes.length;
-        while (hexLogBytes > LOG_LIMIT && hexEntries.length > 1) {
-          const dropped = hexEntries.shift();
-          if (dropped) hexLogBytes -= dropped.bytes;
+        if (!paused) {
+          hexLogBytes += bytes.length;
+          while (hexLogBytes > LOG_LIMIT && hexEntries.length > 1) {
+            const dropped = hexEntries.shift();
+            if (dropped) hexLogBytes -= dropped.bytes;
+          }
         }
       }
       hexCursor = data.cursor;
@@ -512,7 +520,8 @@ export function mountStreamWorkbench<C extends StreamConfig>(container: HTMLElem
         terminal.reset();
         terminal.write(`\r\n[${t("Output gap: older data expired from the replay buffer")}]\r\n`);
       }
-      await write(data.text);
+      if (paused) receiveNormalizer.reset();
+      else await write(data.text);
       appendOutput(data.text, data.bytes);
       cursor = data.cursor;
       if (!data.more) break;
@@ -647,7 +656,8 @@ export function mountStreamWorkbench<C extends StreamConfig>(container: HTMLElem
       if (data.connectionId !== connectionId || data.cursor <= cursor) return;
       // One network read may append several replay chunks to a single output event.
       if (data.cursor !== cursor + Math.ceil(data.bytes / REPLAY_CHUNK_BYTES)) { await refreshSnapshot(); return; }
-      await write(data.text);
+      if (paused) receiveNormalizer.reset();
+      else await write(data.text);
       appendOutput(data.text, data.bytes);
       cursor = data.cursor;
       await refreshHex();
