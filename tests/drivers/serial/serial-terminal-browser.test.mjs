@@ -189,6 +189,7 @@ test("human Shell uses terminal keys, UART uses its sender, and MCP queues stay 
       }, {once:true});
       output.focus();
     })()`);
+    await waitForValue(client, `document.activeElement===root.querySelector('.uart-output')&&window.getSelection()?.toString()==='copy-this-content'`);
     await key('c', 'KeyC', 67, { modifiers: 2 });
     assert.equal(await run(`window.nativeCopied`), 'copy-this-content',
       'Ctrl+C copies the selected UART text through the native browser copy event');
