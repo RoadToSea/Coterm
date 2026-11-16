@@ -48,9 +48,6 @@ export const StreamView = memo(function StreamView({ namespace }: { namespace: "
       <div className="modes" role="group" data-ui="modes"><Button variant="ghost" size="sm" data-ui="terminalMode" /><Button variant="ghost" size="sm" data-ui="uartMode" /></div>
       <span className="spacer" /><Button variant="ghost" size="sm" className="connect-button" data-ui="connect" disabled />
       <Button variant="ghost" size="sm" className="settings-toggle" data-ui="settingsButton" aria-expanded="false" aria-controls={`${namespace}-settings`} />
-      <Button variant="ghost" size="icon" className="toolbar-toggle" data-ui="toolbarButton" aria-expanded="false" aria-controls={`${namespace}-toolbar-settings`} title={t("Customize toolbar")}>
-        <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor"><path d="M4 7h7m4 0h5M4 17h2m4 0h10M11 4v6M6 14v6" /></svg>
-      </Button>
     </div>
     <TerminalSearchView />
     <div className="receive-area" data-ui="receiveArea">

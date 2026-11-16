@@ -115,16 +115,16 @@
     border-color: var(--coterm-success);
     background: color-mix(in srgb, var(--coterm-success) 26%, var(--coterm-surface-raised));
   }
-  :where([data-workbench="stream"]) .icon-button { display: inline-grid; place-items: center; min-width: 30px; min-height: 28px; padding: 5px; }
-  :where([data-workbench="stream"]) .icon-button svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.5; }
-  :where([data-workbench="stream"]) .format-switch { position: relative; display: inline-grid; grid-template-columns: 1fr 1fr; width: 116px;
+  :where([data-workbench="stream"]) .icon-button { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 30px; width: 30px; height: 30px; padding: 0; }
+  :where([data-workbench="stream"]) .icon-button svg { flex: 0 0 16px; width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+  :where([data-workbench="stream"]) .format-switch { position: relative; display: inline-grid; grid-template-columns: 1fr 1fr; width: 116px; height: 30px;
     padding: 2px; border: 1px solid var(--coterm-border-input); border-radius: var(--radius);
     background: var(--coterm-surface); touch-action: pan-y; }
   :where([data-workbench="stream"]) .format-thumb { position: absolute; inset: 2px auto 2px 2px; width: calc((100% - 4px) / 2);
     border-radius: var(--radius-md); background: var(--coterm-surface-active);
     transition: transform 160ms ease-out; pointer-events: none; }
   :where([data-workbench="stream"]) .format-switch[data-value="hex"] .format-thumb { transform: translateX(100%); }
-  :where([data-workbench="stream"]) .format-switch button { position: relative; min-height: 25px; padding: 3px 8px; background: transparent; border: 0; border-radius: var(--radius-md); font-size: 11px; }
+  :where([data-workbench="stream"]) .format-switch button { position: relative; height: 24px; min-height: 0; padding: 0 8px; background: transparent; border: 0; border-radius: var(--radius-md); font-size: 11px; }
   :where([data-workbench="stream"]) .format-switch button[aria-pressed="true"] { background: transparent; color: var(--coterm-text-bright); }
   :where([data-workbench="stream"]) .modes { display: inline-flex; }
   :where([data-workbench="stream"]) .modes button { border-radius: var(--radius-md); }
@@ -190,19 +190,11 @@
   :where([data-workbench="stream"]) .settings-grid label:has(.receive-filename) { min-width: 0; }
   :where([data-workbench="stream"]) .toolbar-item { position: relative; display: inline-flex; flex: 0 0 auto; align-items: center; }
   :where([data-workbench="stream"]) .toolbar-item[data-control="stats"] { margin-left: auto; }
-  :where([data-workbench="stream"]) .uart-bar[data-customizing="true"] .toolbar-item { cursor: grab; user-select: none;
+  :where([data-workbench="stream"]) .uart-bar[data-customizing="true"] .toolbar-item { cursor: grab; user-select: none; touch-action: none;
     outline: 1px dashed var(--coterm-border-input); outline-offset: 2px; border-radius: var(--radius-md); }
   :where([data-workbench="stream"]) .uart-bar[data-customizing="true"] .toolbar-item:focus-visible { outline: 2px solid var(--coterm-focus); }
-  :where([data-workbench="stream"]) .uart-bar[data-customizing="true"] .toolbar-item > * { transform-origin: 50% 50%;
-    animation: serial-toolbar-wiggle var(--wiggle-period, 280ms) ease-in-out var(--wiggle-delay, 0ms) infinite; will-change: transform; }
-  :where([data-workbench="stream"]) .uart-bar[data-customizing="true"] .toolbar-item[data-dragging="true"] > * { animation-play-state: paused; }
-  @keyframes serial-toolbar-wiggle {
-    0%, 100% { transform: translate3d(-.4px, 0, 0) rotate(-1.4deg); }
-    25% { transform: translate3d(0, -.4px, 0) rotate(.5deg); }
-    50% { transform: translate3d(.4px, 0, 0) rotate(1.4deg); }
-    75% { transform: translate3d(0, .4px, 0) rotate(-.5deg); }
-  }
-  :where([data-workbench="stream"]) .toolbar-item[data-dragging="true"] { opacity: .5; cursor: grabbing; }
+  :where([data-workbench="stream"]) .toolbar-item[data-dragging="true"] { z-index: 4; cursor: grabbing; will-change: transform;
+    background: var(--coterm-surface-raised); box-shadow: var(--coterm-shadow-panel); outline: 1px solid var(--coterm-focus); }
   :where([data-workbench="stream"]) .toolbar-item[data-drop-side]::before { content: ""; position: absolute; top: -3px; bottom: -3px; width: 2px;
     background: var(--coterm-focus); pointer-events: none; }
   :where([data-workbench="stream"]) .toolbar-item[data-drop-side="before"]::before { left: -5px; }
@@ -240,6 +232,9 @@
   :where([data-workbench="stream"]) .uart-bar label { display: inline-flex; align-items: center; gap: 5px; color: var(--coterm-text-subtle); }
   :where([data-workbench="stream"]) .uart-bar input { width: auto; }
   :where([data-workbench="stream"]) .uart-bar button { font-size: 11px; padding: 3px 9px; }
+  :where([data-workbench="stream"]) .uart-bar .icon-button { width: 30px; height: 30px; padding: 0; }
+  :where([data-workbench="stream"]) .uart-bar .toolbar-toggle { margin-left: auto; }
+  :where([data-workbench="stream"]) .uart-bar:has([data-control="stats"]:not([hidden])) .toolbar-toggle { margin-left: 0; }
   :where([data-workbench="stream"]) .uart-output {
     flex: 1;
     min-height: 0;
@@ -296,7 +291,6 @@
   :where([data-workbench="stream"]) .layout { container: serial-console / inline-size; }
   @media (prefers-reduced-motion: reduce) {
     :where([data-workbench="stream"]) .settings-panel, :where([data-workbench="stream"]) .format-thumb { transition: none; }
-    :where([data-workbench="stream"]) .uart-bar[data-customizing="true"] .toolbar-item > * { animation: none; will-change: auto; }
   }
 
 :where([data-workbench="ssh"]) .ssh-workbench { display:flex; flex:1; min-width:0; min-height:0; overflow:hidden; }

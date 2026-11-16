@@ -256,7 +256,6 @@ export function mountStreamWorkbench<C extends StreamConfig>(container: HTMLElem
     modes.hidden = !!options.terminalOnly;
   };
   const renderPause = () => {
-    pause.className = "icon-button";
     pause.title = paused ? t("Resume") : t("Pause"); pause.setAttribute("aria-label", pause.title);
     pause.setAttribute("aria-pressed", String(paused));
     node<SVGPathElement & HTMLElement>('pauseIcon').setAttribute('d', paused ? 'm8 5 11 7-11 7Z' : 'M8 5v14M16 5v14');
@@ -676,6 +675,7 @@ export function mountStreamWorkbench<C extends StreamConfig>(container: HTMLElem
   const renderMode = (next: "terminal" | "uart", remember = true) => {
     if (mode !== next) { stopRepeat(); inputGeneration++; closeHistory(); terminal.clearSelection(); }
     if (options.terminalOnly) next = "terminal";
+    if (next !== "uart") setToolbarOpen(false, false);
     mode = next;
     if (remember) saveDisplayPreferences();
     terminalMode.setAttribute("aria-pressed", String(next === "terminal"));
