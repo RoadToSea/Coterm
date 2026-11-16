@@ -12,7 +12,7 @@ use std::{
 };
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
-    net::TcpStream,
+    net::{TcpListener, TcpStream},
     sync::{mpsc, oneshot, watch, Mutex},
     task::JoinHandle,
     time::{sleep, timeout},
@@ -23,6 +23,7 @@ const READ_BATCH_BYTES: usize = 64 * 1024;
 #[derive(Default)]
 pub(crate) struct State {
     pub connected: bool,
+    pub listening: bool,
     pub reconnecting: bool,
     pub connection_id: Option<String>,
     pub remote_echo: bool,
@@ -172,10 +173,16 @@ impl Session {
                 .is_err()
         {
             self.task.abort();
+            let _ = self.task.await;
         }
         self.client.closed.store(true, Ordering::Release);
-        self.client.state.lock().await.connected = false;
-        self.client.state.lock().await.reconnecting = false;
+        {
+            let mut state = self.client.state.lock().await;
+            state.connected = false;
+            state.listening = false;
+            state.reconnecting = false;
+            state.connection_id = None;
+        }
         self.client.output.lock().await.close();
     }
 }
@@ -210,6 +217,10 @@ impl Worker {
 
     async fn run(mut self) {
         let _closed = Closed(self.client.closed.clone());
+        if self.config.connection_mode == super::config::ConnectionMode::Server {
+            self.run_server().await;
+            return;
+        }
         let mut established = false;
         let mut attempt = 0_u32;
         loop {
@@ -313,6 +324,98 @@ impl Worker {
                 .await;
         }
         self.notify("status", json!({"connected":false,"reconnecting":false}))
+            .await;
+    }
+
+    async fn run_server(&mut self) {
+        let listener = match TcpListener::bind((self.config.host.as_str(), self.config.port)) {
+            Ok(listener) => listener,
+            Err(error) => {
+                self.client.state.lock().await.error = Some(error.to_string());
+                if let Some((operation_id, _)) = self.operation.take() {
+                    let _ = self.events.send(DriverNotification::OperationFailed {
+                        operation_id,
+                        error: super::backend::error("network_listen_failed", error.to_string()),
+                    }).await;
+                }
+                self.finish_server().await;
+                return;
+            }
+        };
+
+        self.client.state.lock().await.listening = true;
+        self.notify("status", json!({"connected":false,"listening":true}))
+            .await;
+        if let Some((operation_id, mcp)) = self.operation.take() {
+            let result = json!({"connected":false,"listening":true});
+            let _ = self.events.send(DriverNotification::OperationCompleted {
+                operation_id,
+                result: if mcp { crate::stream::result::tool_result(result) } else { result },
+            }).await;
+        }
+
+        loop {
+            let accepted = tokio::select! {
+                _ = self.stopped.changed() => break,
+                result = listener.accept() => result,
+            };
+            let (mut stream, _) = match accepted {
+                Ok(value) => value,
+                Err(error) => {
+                    self.client.state.lock().await.error = Some(error.to_string());
+                    break;
+                }
+            };
+            let epoch = uuid::Uuid::new_v4().to_string();
+            let (mode, prompt) = self.client.interpretation.lock().await.clone();
+            *self.client.output.lock().await = OutputBuffer::with_shell(mode, prompt.as_deref());
+            {
+                let mut state = self.client.state.lock().await;
+                *state = State {
+                    connected: true,
+                    connection_id: Some(epoch.clone()),
+                    ..State::default()
+                };
+            }
+            self.notify("status", json!({"connected":true,"listening":false,"connectionId":epoch}))
+                .await;
+            let result = self.connected(&mut stream, &epoch).await;
+            self.client.output.lock().await.close();
+            let listening = !*self.stopped.borrow();
+            {
+                let mut state = self.client.state.lock().await;
+                state.connected = false;
+                state.connection_id = None;
+                state.listening = listening;
+                state.remote_echo = false;
+                state.error = result.err().map(|error| error.to_string());
+            }
+            self.notify("status", json!({"connected":false,"listening":listening}))
+                .await;
+            if !listening {
+                break;
+            }
+        }
+
+        self.finish_server().await;
+    }
+
+    async fn finish_server(&mut self) {
+        {
+            let mut state = self.client.state.lock().await;
+            state.connected = false;
+            state.listening = false;
+            state.reconnecting = false;
+            state.connection_id = None;
+        }
+        self.client.output.lock().await.close();
+        if let Some((operation_id, _)) = self.operation.take() {
+            let _ = self.events.send(DriverNotification::OperationFailed {
+                operation_id,
+                error: super::backend::error("network_listen_cancelled", "TCP server start cancelled"),
+            }).await;
+        }
+        self.notify("status", json!({"connected":false,"listening":false,"reconnecting":false}))
             .await;
     }
 

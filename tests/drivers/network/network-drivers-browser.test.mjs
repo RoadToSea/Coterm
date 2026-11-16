@@ -45,24 +45,39 @@ for (const protocol of ["tcp","telnet"]) {
       assert.ok((await run(`root.querySelector('[name=host]').title`)).includes(protocol==='telnet'?'Telnet is unencrypted':'Raw TCP sends exact bytes'));
       assert.ok((await run(`root.querySelector('[name=prompt]').getAttribute('aria-description')`)).includes('Shell reads require terminal mode'));
       await run(`i18n.locale='zh-CN';for(const listener of listeners)listener()`);
-      await run(`root.querySelector('[name=host]').value='127.0.0.1';root.querySelector('[name="proxy.type"]').value='http';root.querySelector('[name="proxy.type"]').dispatchEvent(new Event('change',{bubbles:true}));root.querySelector('[name="proxy.host"]').value='localhost';root.querySelector('[name="proxy.port"]').value='8081'`);
+      if (protocol==="tcp") {
+        assert.equal(await run(`root.querySelector('[name=connectionMode]').value`),"client","legacy/new TCP config defaults to client mode");
+        await run(`const mode=root.querySelector('[name=connectionMode]');mode.value='server';mode.dispatchEvent(new Event('change',{bubbles:true}))`);
+        assert.equal(await run(`root.querySelector('[name=host]').value`),"0.0.0.0","server mode suggests a wildcard local bind address");
+        await run(`root.querySelector('[name=host]').value='127.0.0.1'`);
+        assert.deepEqual(await run(`['connectTimeoutMs','autoReconnect','proxy'].map(name=>root.querySelector('[data-field="'+name+'"]').hidden)`),[true,true,true],
+          "server mode hides client-only timeout, reconnect and proxy settings");
+        assert.equal(await run(`root.querySelector('[data-field=host] label').textContent`),"远程主机或监听地址");
+        await run(`root.querySelector('form').dispatchEvent(new Event('submit',{cancelable:true,bubbles:true}))`);
+        await wait(`submitted.length===1`);
+        assert.equal(await run(`submitted[0].connectionMode`),"server");
+        assert.equal(await run(`submitted[0].host`),"127.0.0.1");
+        await run(`const mode=root.querySelector('[name=connectionMode]');mode.value='client';mode.dispatchEvent(new Event('change',{bubbles:true}));root.querySelector('[name=host]').value='127.0.0.1'`);
+      }
+      await run(`root.querySelector('[name="proxy.type"]').value='http';root.querySelector('[name="proxy.type"]').dispatchEvent(new Event('change',{bubbles:true}));root.querySelector('[name="proxy.host"]').value='localhost';root.querySelector('[name="proxy.port"]').value='8081'`);
       await screenshot("configuration");
       await run(`root.querySelector('form').dispatchEvent(new Event("submit",{cancelable:true,bubbles:true}))`);
-      await wait(`submitted.length===1`);
-      assert.deepEqual(await run(`submitted[0].proxy`),{type:"http",host:"localhost",port:8081});
-      assert.equal(await run(`'password' in submitted[0]`),false);
-      await run(`view.unmount();window.config={...submitted[0],proxy:{type:'direct'},prompt:'root# '};
-        window.connected=false;window.reconnecting=false;window.epoch=null;window.remoteEcho=true;window.unsubscribed=0;
+      await wait(`submitted.length===${protocol==="tcp"?2:1}`);
+      const submittedIndex=protocol==="tcp"?1:0;
+      assert.deepEqual(await run(`submitted[${submittedIndex}].proxy`),{type:"http",host:"localhost",port:8081});
+      assert.equal(await run(`'password' in submitted[${submittedIndex}]`),false);
+      await run(`view.unmount();window.config={...submitted[${submittedIndex}],proxy:{type:'direct'},prompt:'root# '};
+        window.connected=false;window.listening=false;window.reconnecting=false;window.epoch=null;window.remoteEcho=true;window.unsubscribed=0;
         window.receipt=output=>({status:'completed',error:null,output});
-        window.snapshot=()=>({config:{...config},connected,reconnecting,connectionId:epoch,rxBytes:20,txBytes:0,commandQueue:0,remoteEcho});
+        window.snapshot=()=>({config:{...config},connected,listening,reconnecting,connectionId:epoch,rxBytes:20,txBytes:0,commandQueue:0,remoteEcho});
         window.api={i18n,driverInstanceId:protocol+'-instance',instanceConfigRef:protocol+'-saved',
           async saveConfiguration(value){if(window.failSave)throw new Error('save denied');saved.push({...value})},
           async subscribeEvents(fn){window.event=fn;return()=>{unsubscribed++}},
           async invoke(operation,args){calls.push({operation,args});const name=operation.slice(protocol.length+1);
             if(name==='status')return receipt(snapshot());
             if(name==='configure'){Object.assign(config,args);return receipt(snapshot())}
-            if(name==='connect'){connected=true;reconnecting=false;epoch='epoch-1';return receipt({connected:true,connectionId:epoch})}
-            if(name==='disconnect'){connected=false;reconnecting=false;return receipt(snapshot())}
+            if(name==='connect'){reconnecting=false;if(config.connectionMode==='server'){listening=true;return receipt({connected:false,listening:true})}connected=true;epoch='epoch-1';return receipt({connected:true,connectionId:epoch})}
+            if(name==='disconnect'){connected=false;listening=false;reconnecting=false;return receipt(snapshot())}
             if(name==='read')return receipt({connectionId:epoch,text:args.cursor?'':'hello\\r\\nworld\\r\\nroot# ',bytes:args.cursor?0:20,cursor:Math.max(1,args.cursor??0),gap:false,closed:!connected,more:false});
             if(name==='read_hex')return receipt({connectionId:epoch,hex:args.cursor?'':'00ff80',bytes:args.cursor?0:3,cursor:1,gap:false,closed:!connected,more:false});
             if(name==='write'||name==='write_hex')return receipt({bytes:args.text?.length??args.hex.length/2});
@@ -145,6 +160,16 @@ for (const protocol of ["tcp","telnet"]) {
       assert.equal(await run(`listeners.size`),0);
       await run(`new Promise(resolve=>setTimeout(resolve,2200))`);
       assert.equal(await run(`calls.length`),await run(`afterUnmount`),"unmount removes the polling timer");
+      if (protocol==="tcp") {
+        await run(`config.connectionMode='server';config.host='127.0.0.1';mount()`);
+        await wait(`!root.querySelector('.connect-button').disabled`);
+        await run(`root.querySelector('.connect-button').click()`);
+        await wait(`root.querySelector('.connect-button').dataset.listening==='true'&&root.querySelector('.connect-button').textContent==='Listening'`);
+        assert.equal(await run(`root.querySelector('.connect-button').dataset.connected`),"false");
+        await run(`root.querySelector('.connect-button').click()`);
+        await wait(`root.querySelector('.connect-button').dataset.listening==='false'&&root.querySelector('.connect-button').textContent==='Connect'`);
+        await run(`view.unmount()`);
+      }
     } finally {await session.close();}
   });
 }

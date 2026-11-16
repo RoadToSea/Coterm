@@ -18,6 +18,7 @@ export interface ConfigurationSchema {
   "x-suggestions"?: readonly number[];
   "x-enumNames"?: readonly string[];
   "x-enabledBy"?: string;
+  "x-visibleWhen"?: { field: string; equals: string };
 }
 export interface WorkbenchDefinition {
   workbench: "terminal" | "stream";

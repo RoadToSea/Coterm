@@ -502,12 +502,13 @@ async fn stop(instance: &mut Instance) {
     instance.revision += 1;
 }
 async fn status(instance: &Instance) -> Value {
-    let mut value = json!({"config":instance.config,"connected":false,"reconnecting":false,"connectionId":null,"remoteEcho":false,
+    let mut value = json!({"config":instance.config,"connected":false,"listening":false,"reconnecting":false,"connectionId":null,"remoteEcho":false,
         "rxBytes":0,"txBytes":0,"commandQueue":instance.jobs.values().filter(|j| !j.finished()).count(),
         "shellReady":false,"capabilities":{"readLines":true,"readSelectedLines":instance.config.mode == Mode::Shell,"readDialoguePairs":instance.config.mode == Mode::Shell}});
     if let Some(session) = &instance.session {
         let state = session.client.state.lock().await;
         value["connected"] = json!(state.connected && session.active());
+        value["listening"] = json!(state.listening && session.active());
         value["reconnecting"] = json!(state.reconnecting && session.active());
         value["connectionId"] = json!(state.connection_id);
         value["remoteEcho"] = json!(state.remote_echo);

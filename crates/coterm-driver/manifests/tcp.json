@@ -34,11 +34,23 @@
         "port"
       ],
       "properties": {
+        "connectionMode": {
+          "type": "string",
+          "title": "Connection mode",
+          "enum": [
+            "client",
+            "server"
+          ],
+          "x-enumNames": [
+            "Client",
+            "Server"
+          ]
+        },
         "host": {
           "type": "string",
-          "title": "Remote host",
+          "title": "Remote host or bind address",
           "maxLength": 253,
-          "x-help": "Raw TCP sends exact bytes."
+          "x-help": "Raw TCP sends exact bytes. For server mode, enter the local IPv4 or IPv6 address to bind."
         },
         "port": {
           "type": "integer",
@@ -50,23 +62,27 @@
           "type": "integer",
           "title": "Connection timeout (ms)",
           "minimum": 100,
-          "maximum": 60000
+          "maximum": 60000,
+          "x-visibleWhen": { "field": "connectionMode", "equals": "client" }
         },
         "autoReconnect": {
           "type": "boolean",
           "title": "Reconnect after disconnection",
-          "x-help": "Reconnecting never replays input."
+          "x-help": "Reconnecting never replays input.",
+          "x-visibleWhen": { "field": "connectionMode", "equals": "client" }
         },
         "reconnectIntervalMs": {
           "type": "integer",
           "title": "Reconnect interval (ms)",
           "minimum": 250,
           "maximum": 60000,
-          "x-enabledBy": "autoReconnect"
+          "x-enabledBy": "autoReconnect",
+          "x-visibleWhen": { "field": "connectionMode", "equals": "client" }
         },
         "proxy": {
           "type": "object",
           "title": "Proxy",
+          "x-visibleWhen": { "field": "connectionMode", "equals": "client" },
           "properties": {
             "type": {
               "type": "string",
@@ -148,6 +164,7 @@
     "defaults": {
       "host": "",
       "port": 8080,
+      "connectionMode": "client",
       "username": null,
       "connectTimeoutMs": 5000,
       "autoReconnect": false,

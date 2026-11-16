@@ -35,8 +35,10 @@ export function ConfigurationFields({ schema, defaults, translate: t, ports = []
   return <>{Object.entries(schema.properties ?? {}).map(([key, field]) => {
     const name = `${prefix}${key}`;
     const value = defaults[key];
-    if (field.type === "object") return <Field key={name} className="col-span-full">
-      <ConfigurationFields schema={field} defaults={(value ?? {}) as Record<string, unknown>} translate={t} prefix={`${name}.`} manageConditions={manageConditions} />
+    const conditionHidden = manageConditions && !!field["x-visibleWhen"]
+      && values[field["x-visibleWhen"]!.field] !== field["x-visibleWhen"]!.equals;
+    if (field.type === "object") return <Field key={name} data-field={name} hidden={conditionHidden} className="col-span-full">
+      <ConfigurationFields schema={field} defaults={(value ?? {}) as Record<string, unknown>} translate={t} prefix={`${name}.`} manageConditions={manageConditions && !conditionHidden} />
     </Field>;
     const controlId = `${id}-${name}`;
     const conditional = manageConditions && proxy && key !== "type";
@@ -47,7 +49,7 @@ export function ConfigurationFields({ schema, defaults, translate: t, ports = []
     const serialPort = field["x-source"] === "serial.ports";
     if (field.type === "boolean") {
       return (
-        <Field key={name} data-field={name} hidden={conditional && proxyType === "direct"} className="justify-end">
+        <Field key={name} data-field={name} hidden={conditionHidden || (conditional && proxyType === "direct")} className="justify-end">
           <label htmlFor={controlId} className="signal-check flex h-9 items-center gap-2.5 cursor-pointer select-none rounded-sm px-2.5 border border-input bg-background/80 hover:bg-muted/60 hover:border-border transition-colors">
             <Input {...common} type="checkbox" defaultChecked={value === true} className="size-4 rounded-sm accent-primary cursor-pointer shrink-0"
               onChange={manageConditions ? event => setValues({ ...values, [key]: event.currentTarget.checked }) : undefined} />
@@ -56,13 +58,23 @@ export function ConfigurationFields({ schema, defaults, translate: t, ports = []
         </Field>
       );
     }
-    return <Field key={name} data-field={name} hidden={conditional && proxyType === "direct"}>
+    return <Field key={name} data-field={name} hidden={conditionHidden || (conditional && proxyType === "direct")}>
       <FieldLabel htmlFor={controlId} className="text-xs font-medium text-muted-foreground truncate">{t(field.title ?? key)}</FieldLabel>
       {serialPort ? <Select {...common} defaultValue={String(value ?? "")} {...portEvents} className="h-9 text-xs">
         {!ports.length && <option value="">{t(portMessage ?? "No serial ports detected")}</option>}
         {ports.map(port => <option key={port.portName} value={port.portName}>{portDisplayName(port)}</option>)}
       </Select> : field.enum ? <Select {...common} defaultValue={String(value ?? field.enum[0])} className="h-9 text-xs"
-        onChange={proxy && key === "type" && manageConditions ? event => setValues({ ...values, type: event.currentTarget.value }) : undefined}>
+        onChange={manageConditions ? event => {
+          const next = event.currentTarget.value;
+          setValues({ ...values, [key]: next });
+          if (key === "connectionMode") {
+            const host = event.currentTarget.form?.elements.namedItem("host");
+            if (host instanceof HTMLInputElement) {
+              if (next === "server" && !host.value) host.value = "0.0.0.0";
+              else if (next === "client" && host.value === "0.0.0.0") host.value = "";
+            }
+          }
+        } : undefined}>
         {field.enum.map((option, index) => <option key={option} value={option}>{t(field["x-enumNames"]?.[index] ?? String(option))}</option>)}
       </Select> : <Input {...common} type={field.type === "integer" ? "number" : "text"} defaultValue={value == null ? "" : String(value)}
           min={field.minimum} max={field.maximum} maxLength={field.maxLength} step={field.type === "integer" ? 1 : undefined}

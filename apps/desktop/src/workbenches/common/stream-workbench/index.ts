@@ -11,7 +11,7 @@ import { viewNodes } from "../../view";
 
 export interface StreamConfig { mode?: "stream" | "shell"; prompt?: string | null }
 export interface StreamStatus<C> {
-  config: C; connected: boolean; connectionId: string | null; reconnecting?: boolean;
+  config: C; connected: boolean; connectionId: string | null; listening?: boolean; reconnecting?: boolean;
   rxBytes: number; txBytes: number; commandQueue: number; remoteEcho?: boolean;
   [key: string]: unknown;
 }
@@ -178,6 +178,7 @@ export function mountStreamWorkbench<C extends StreamConfig>(container: HTMLElem
 
   let disposed = false;
   let connected = false;
+  let listening = false;
   let currentConfig: C | null = null;
   let pendingConfiguration: C | null = null;
   let working = false;
@@ -244,10 +245,11 @@ export function mountStreamWorkbench<C extends StreamConfig>(container: HTMLElem
   });
   const renderConnection = () => {
     connect.dataset.connected = String(connected);
-    connect.textContent = working ? t("Working…") : connected ? t("Connected") : reconnecting ? t("Stop reconnecting") : t("Connect");
-    connect.title = connected || reconnecting ? t("Disconnect") : t("Connect");
+    connect.dataset.listening = String(listening);
+    connect.textContent = working ? t("Working…") : connected ? t("Connected") : listening ? t("Listening") : reconnecting ? t("Stop reconnecting") : t("Connect");
+    connect.title = connected || listening || reconnecting ? t("Disconnect") : t("Connect");
     connect.setAttribute("aria-label", connect.title);
-    connect.setAttribute("aria-pressed", String(connected));
+    connect.setAttribute("aria-pressed", String(connected || listening));
     connect.disabled = working;
     terminalMode.disabled = working || !currentConfig;
     uartMode.disabled = working || !currentConfig;
@@ -353,13 +355,15 @@ export function mountStreamWorkbench<C extends StreamConfig>(container: HTMLElem
     stats.textContent = t("RX {rx} B · TX {tx} B", { rx: statsRx, tx: statsTx });
   };
 
-  const setConnected = (next: boolean) => {
+  const setConnected = (next: boolean, isListening = false) => {
     connected = next;
-    if (currentConfig) communication.update(currentConfig, next);
+    listening = isListening;
+    const active = next || isListening;
+    if (currentConfig) communication.update(currentConfig, active);
     renderConnection();
     repeatButton.disabled = !next || working;
     if (!next) { inputGeneration++; stopRepeat(t("Repeat stopped: the port is disconnected.")); }
-    communication.setBusy(working || reconnecting);
+    communication.setBusy(working || reconnecting || isListening);
   };
 
   const resize = () => {
@@ -504,7 +508,7 @@ export function mountStreamWorkbench<C extends StreamConfig>(container: HTMLElem
     if (commandQueue > 0) stopRepeat(t("MCP command queue is busy. Wait for it to finish before sending."));
     statsTx = status.txBytes;
     renderStats();
-    setConnected(status.connected);
+    setConnected(status.connected, status.listening ?? false);
     connect.disabled = working;
     if (!connectionId) return;
     // Replay only on mount, connection change or a reported gap; never idle polling.
@@ -602,9 +606,9 @@ export function mountStreamWorkbench<C extends StreamConfig>(container: HTMLElem
     inputGeneration++;
     toasts.clear();
     try {
-      if (connected || reconnecting) {
+      if (connected || listening || reconnecting) {
         await invoke(`${prefix}.disconnect`, {});
-        reconnecting = false; setConnected(false);
+        reconnecting = false; setConnected(false, false);
       } else {
         let parameters: ReturnType<typeof communication.prepare>;
         try { parameters = communication.prepare(); }
@@ -629,12 +633,12 @@ export function mountStreamWorkbench<C extends StreamConfig>(container: HTMLElem
         if (!settingsOpen) { if (mode === "terminal") terminal.focus(); else uartText.focus(); }
       }
     } catch (reason) { showError(reason); }
-    finally { if (!disposed) { working = false; connect.disabled = false; setConnected(connected); } }
+    finally { if (!disposed) { working = false; connect.disabled = false; setConnected(connected, listening); } }
   };
 
   const startEvents = async () => {
     const cancel = await api.subscribeEvents((event) => enqueue(async () => {
-      if (event.name === "runtime.closed") { setConnected(false); notify(t("Driver connection closed."), "warning"); return; }
+      if (event.name === "runtime.closed") { setConnected(false, false); notify(t("Driver connection closed."), "warning"); return; }
       if (event.name === "runtime.gap" || event.name === `${prefix}.status`) { await refreshSnapshot(); return; }
       if (event.name === `${prefix}.command`) {
         const progress = event.payload as { connectionId: string; txBytes: number; finished: boolean };
@@ -723,7 +727,7 @@ export function mountStreamWorkbench<C extends StreamConfig>(container: HTMLElem
         }
       }
     } catch (reason) { showError(reason); }
-    finally { if (!disposed) { working = false; setConnected(connected); } }
+    finally { if (!disposed) { working = false; setConnected(connected, listening); } }
   };
   terminalMode.addEventListener("click", () => { void enqueue(() => switchMode("terminal")); }, { signal: controller.signal });
   uartMode.addEventListener("click", () => { void enqueue(() => switchMode("uart")); }, { signal: controller.signal });

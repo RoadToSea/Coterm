@@ -121,6 +121,7 @@ fn config(listener: &TcpListener) -> Result<Value> {
 #[test]
 fn configuration_and_catalog_do_not_import_ssh_or_uart_semantics() -> Result<()> {
     let tcp = Config::parse(json!({"host":"board.local"}), false)?;
+    assert_eq!(tcp.connection_mode, super::config::ConnectionMode::Client);
     assert_eq!(tcp.port, 8080);
     assert_eq!(tcp.receive_newlines, "lf");
     let telnet = Config::parse(json!({"host":"::1"}), true)?;
@@ -134,9 +135,11 @@ fn configuration_and_catalog_do_not_import_ssh_or_uart_semantics() -> Result<()>
         json!({"proxy":{"type":"http","host":"a\r\nb","port":80}}),
         json!({"username":"root"}),
         json!({"mode":"shell","prompt":""}),
+        json!({"connectionMode":"server","host":"board.local"}),
     ] {
         assert!(tcp.patch(&patch, false).is_err(), "{patch}");
     }
+    assert!(Config::parse(json!({"host":"127.0.0.1","connectionMode":"server"}), true).is_err());
     for telnet in [false, true] {
         let definition = catalog::catalog(telnet);
         assert!(definition.iter().all(|d| !d.name.contains("exec")
@@ -153,6 +156,67 @@ fn configuration_and_catalog_do_not_import_ssh_or_uart_semantics() -> Result<()>
     assert!(!catalog::catalog(true)
         .iter()
         .any(|d| d.name.ends_with("command_hex")));
+    Ok(())
+}
+
+#[tokio::test]
+async fn raw_tcp_server_listens_accepts_one_client_and_listens_again_after_disconnect() -> Result<()> {
+    let reservation = listener().await?;
+    let address = reservation.local_addr()?;
+    drop(reservation);
+
+    let mut h = Harness::<false>::new();
+    h.create("server", json!({
+        "host": address.ip().to_string(),
+        "port": address.port(),
+        "connectionMode": "server",
+    })).await?;
+    let deferred = h.call("server", "connect", json!({})).await?;
+    let operation_id = deferred["_cotermDeferred"].as_str().ok_or_else(|| anyhow!("missing deferred operation"))?;
+    let started = h.completion(operation_id).await?;
+    assert_eq!(started["listening"], true);
+    assert_eq!(started["connected"], false);
+
+    let mut peer = timeout(Duration::from_secs(2), TcpStream::connect(address)).await??;
+    let first_status = timeout(Duration::from_secs(2), async {
+        loop {
+            let status = h.call("server", "status", json!({})).await?;
+            if status["connected"] == true { return Ok::<_, anyhow::Error>(status); }
+            sleep(Duration::from_millis(5)).await;
+        }
+    }).await??;
+    let first_epoch = first_status["connectionId"].clone();
+    peer.write_all(b"client-one\n").await?;
+    h.observed("server", "client-one").await?;
+    h.call("server", "write", json!({"connectionId":first_epoch.clone(),"text":"reply"})).await?;
+    let mut reply = [0; 5];
+    timeout(Duration::from_secs(1), peer.read_exact(&mut reply)).await??;
+    assert_eq!(&reply, b"reply");
+
+    drop(peer);
+    timeout(Duration::from_secs(2), async {
+        loop {
+            let status = h.call("server", "status", json!({})).await?;
+            if status["connected"] == false && status["listening"] == true { return Ok::<_, anyhow::Error>(()); }
+            sleep(Duration::from_millis(5)).await;
+        }
+    }).await??;
+    let next_peer = timeout(Duration::from_secs(2), TcpStream::connect(address)).await??;
+    let second_status = timeout(Duration::from_secs(2), async {
+        loop {
+            let status = h.call("server", "status", json!({})).await?;
+            if status["connected"] == true { return Ok::<_, anyhow::Error>(status); }
+            sleep(Duration::from_millis(5)).await;
+        }
+    }).await??;
+    assert_ne!(second_status["connectionId"], first_epoch);
+    drop(next_peer);
+    h.call("server", "disconnect", json!({})).await?;
+    let stopped = h.call("server", "status", json!({})).await?;
+    assert_eq!(stopped["listening"], false);
+    let rebound = TcpListener::bind(address).await?;
+    drop(rebound);
+    h.backend.request(HostCommand::Shutdown).await.map_err(|e| anyhow!(e.message))?;
     Ok(())
 }
 

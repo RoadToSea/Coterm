@@ -80,6 +80,8 @@
 
 参数：`name: string`、`action: "connect" | "disconnect" | "reset" | "probe"`、`fingerprint?: string`。
 
+Raw TCP 配置可选择 client 或 server。服务端 connect 启动监听；驱动 `status` 结果中的 `listening` 区分监听中与已有客户端连接。单个实例一次接入一个客户端，客户端断开后继续监听，disconnect 停止监听。
+
 - connect／disconnect 支持 SSH、Serial、TCP、Telnet。connect 使用桌面配置；SSH 还必须提供已确认的服务端 SHA256 指纹，密码通过桌面秘密交互输入。
 - reset 仅 SSH，重建共享 PTY；不表示撤销远端效果，也不清空任意驱动缓冲。
 - probe 仅 SSH／Serial，分别探测服务端指纹或枚举端口，不完成认证。Local 生命周期由桌面管理，不通过此工具控制。

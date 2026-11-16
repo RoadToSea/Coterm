@@ -2,6 +2,7 @@ use crate::stream::shell::{validate_prompt, Mode};
 use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::net::IpAddr;
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
@@ -27,11 +28,21 @@ pub(crate) enum LocalEcho {
     Off,
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum ConnectionMode {
+    #[default]
+    Client,
+    Server,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct Config {
     pub host: String,
     pub port: u16,
+    #[serde(default)]
+    pub connection_mode: ConnectionMode,
     #[serde(default)]
     pub username: Option<String>,
     pub connect_timeout_ms: u64,
@@ -77,6 +88,11 @@ impl Config {
 
     pub(crate) fn validate(&self, telnet: bool) -> Result<()> {
         validate_host(&self.host)?;
+        if self.connection_mode == ConnectionMode::Server {
+            if telnet || self.host.parse::<IpAddr>().is_err() {
+                bail!("TCP server mode requires a bind IP address and is not supported by Telnet")
+            }
+        }
         if self.port == 0
             || !(100..=60_000).contains(&self.connect_timeout_ms)
             || !(250..=60_000).contains(&self.reconnect_interval_ms)

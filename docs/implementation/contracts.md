@@ -68,11 +68,11 @@ MCP 设置文件 mcp-settings.v1.json 保存 version、port、startupMode，启�
 
 内部 configure、write／write_hex、signals、set_selection 和 read／read_hex 不作为 MCP 工具公开；人工单次写至多 16 KiB，文本默认不补行尾。signals 可在连接中单独改变 DTR／RTS，有命令批次时拒绝；这不代表硬件流控握手。每驱动最多 32 实例，同一端口不重复分配。
 
-连接配置字段为 host、port、username、connectTimeoutMs、autoReconnect、reconnectIntervalMs、proxy、localEcho、receiveNewlines、backspace、terminalType、mode、prompt。host 为 1–253 ASCII 字节，不带协议／路径／端口；IPv6 不加方括号。Telnet username 可选，1–128 UTF-8 字节；Raw TCP 拒绝用户名。
+连接配置字段为 host、port、connectionMode、username、connectTimeoutMs、autoReconnect、reconnectIntervalMs、proxy、localEcho、receiveNewlines、backspace、terminalType、mode、prompt。旧配置缺少 connectionMode 时默认为 client。客户端 host 是远端主机；服务端 host 是本机 IPv4／IPv6 绑定地址，服务端只支持 Raw TCP。host 不带协议／路径／端口；IPv6 不加方括号。Telnet username 可选，1–128 UTF-8 字节；Raw TCP 拒绝用户名。
 
 connectTimeoutMs 默认 5000（100–60000），包含 DNS、连接和代理握手；reconnectIntervalMs 默认 1000（250–60000），autoReconnect 默认 false。proxy 是 direct 或无认证 socks5／http 的 host、port。localEcho 为 auto／on／off，receiveNewlines 为 none／lf／cr／both，backspace 为 bs／del，terminalType 为 xterm／xterm-256color／vt100。
 
-Telnet 默认 shell、auto 回显、不补换行、DEL；Raw TCP 默认 stream、on 回显、LF 补 CR、BS。两者 Shell 默认提示符 #，需与设备完整提示符匹配。Telnet 支持服务端发起的 BINARY、ECHO、SGA、NAWS、TTYPE 协商；子协商上限 512 字节，不声明完整通用状态机。
+Telnet 默认 shell、auto 回显、不补换行、DEL；Raw TCP 默认 client、stream、on 回显、LF 补 CR、BS。Raw TCP server 状态有 listening 与 connected 两种；单实例只服务一个活动客户端，客户端断开后继续监听，关闭实例停止监听。两者 Shell 默认提示符 #，需与设备完整提示符匹配。Telnet 支持服务端发起的 BINARY、ECHO、SGA、NAWS、TTYPE 协商；子协商上限 512 字节，不声明完整通用状态机。
 
 ## 对外接口实现定位
 
