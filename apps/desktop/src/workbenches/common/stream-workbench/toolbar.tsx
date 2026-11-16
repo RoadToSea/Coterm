@@ -75,8 +75,8 @@ export function StreamToolbarView({ namespace }: { namespace: string }) {
     const visible = layout.order.filter(value => !layout.hidden.includes(value)), index = visible.indexOf(id);
     save({ ...layout, hidden: [...layout.hidden, id] }); focus(visible[index + 1] ?? visible[index - 1]);
   };
-  const { dragged, drop, overTrash, handlers } = useToolbarDrag({ editing, bar, trash,
-    move: (id, target, after) => move(id as Id, target as Id, after), remove: id => remove(id as Id) });
+  const { dragged, order, overTrash, onPointerDown, handlers } = useToolbarDrag({ editing, order: layout.order, bar, trash,
+    commit: next => { save({ ...currentLayout.current, order: next as Id[] }); }, remove: id => remove(id as Id) });
   useLayoutEffect(() => {
     const element = bar.current!, settings = panel.current!;
     const position = () => settings.style.setProperty("--toolbar-height", `${element.offsetHeight}px`);
@@ -98,16 +98,16 @@ export function StreamToolbarView({ namespace }: { namespace: string }) {
     stats: <span className="stats" data-ui="stats" />,
   };
   return <>
-    <div ref={bar} className="uart-bar" data-ui="uartBar" data-customizing={String(editing)}
+    <div ref={bar} className="uart-bar" data-ui="uartBar" data-customizing={String(editing)} {...handlers}
       onClickCapture={event => { if (editing && !(event.target as Element).closest(".toolbar-toggle")) { event.preventDefault(); event.stopPropagation(); } }}>
-      {layout.order.map(id => <div key={id} className="toolbar-item" data-control={id} hidden={layout.hidden.includes(id)}
+      {(order as Id[]).map(id => <div key={id} className="toolbar-item" data-control={id} hidden={layout.hidden.includes(id)}
         tabIndex={editing ? 0 : undefined} role={editing ? "group" : undefined}
         aria-label={editing ? t("Reorder {item}", { item: t(labels[id]) }) : undefined}
         aria-keyshortcuts={editing ? "Alt+ArrowLeft Alt+ArrowRight Delete Backspace" : undefined}
         title={editing ? t("Hold and drag to reorder; drop on the trash to remove. Delete removes; Alt + Left / Right moves.") : undefined}
-        data-dragging={dragged === id || undefined} data-drop-side={drop?.id === id ? drop.after ? "after" : "before" : undefined}
+        data-dragging={dragged === id || undefined}
         ref={element => { if (element?.firstElementChild instanceof HTMLElement) element.firstElementChild.inert = editing; }}
-        {...handlers}
+        onPointerDown={onPointerDown}
         onKeyDown={event => {
           if (!editing || event.ctrlKey || event.metaKey) return;
           if (!event.altKey && ["Delete", "Backspace"].includes(event.key)) { event.preventDefault(); event.stopPropagation(); remove(id); }

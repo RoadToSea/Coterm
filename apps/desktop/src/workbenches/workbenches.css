@@ -193,12 +193,11 @@
   :where([data-workbench="stream"]) .uart-bar[data-customizing="true"] .toolbar-item { cursor: grab; user-select: none; touch-action: none;
     outline: 1px dashed var(--coterm-border-input); outline-offset: 2px; border-radius: var(--radius-md); }
   :where([data-workbench="stream"]) .uart-bar[data-customizing="true"] .toolbar-item:focus-visible { outline: 2px solid var(--coterm-focus); }
-  :where([data-workbench="stream"]) .toolbar-item[data-dragging="true"] { z-index: 4; cursor: grabbing; will-change: transform;
-    background: var(--coterm-surface-raised); box-shadow: var(--coterm-shadow-panel); outline: 1px solid var(--coterm-focus); }
-  :where([data-workbench="stream"]) .toolbar-item[data-drop-side]::before { content: ""; position: absolute; top: -3px; bottom: -3px; width: 2px;
-    background: var(--coterm-focus); pointer-events: none; }
-  :where([data-workbench="stream"]) .toolbar-item[data-drop-side="before"]::before { left: -5px; }
-  :where([data-workbench="stream"]) .toolbar-item[data-drop-side="after"]::before { right: -5px; }
+  :where([data-workbench="stream"]) .toolbar-item[data-dragging="true"] { z-index: 4; cursor: grabbing; }
+  :where([data-workbench="stream"]) .toolbar-item[data-dragging="true"]::before { content: ""; position: absolute; inset: 0;
+    border: 1px dashed var(--coterm-focus); border-radius: var(--radius-md); background: var(--coterm-surface-active); pointer-events: none; }
+  :where([data-workbench="stream"]) .toolbar-item[data-dragging="true"] > * { position: relative; will-change: transform;
+    border-radius: var(--radius-md); background: var(--coterm-surface-raised); box-shadow: var(--coterm-shadow-panel); outline: 1px solid var(--coterm-focus); }
   :where([data-workbench="stream"]) .toolbar-customization { position: absolute; z-index: 3; inset: var(--toolbar-height, 0px) 0 auto; width: 100%;
     max-height: calc(100% - var(--toolbar-height, 0px)); overflow: auto; padding: 8px 14px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
     border-bottom: 1px solid var(--coterm-border); background: var(--coterm-surface-raised); }
@@ -219,6 +218,7 @@
   :where([data-workbench="stream"]) .terminal { flex: 1; min-height: 0; overflow: hidden; padding: 10px 4px 0 10px; }
   :where([data-workbench="stream"]) .uart { flex: 1; min-height: 0; display: flex; flex-direction: column; }
   :where([data-workbench="stream"]) .uart-bar {
+    position: relative;
     display: flex;
     flex-wrap: wrap;
     align-items: center;

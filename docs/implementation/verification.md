@@ -18,7 +18,7 @@
 
 Raw TCP 服务端：`cargo check --workspace` 和 `cargo test -p coterm-driver network:: -- --test-threads=1` 通过，14 项网络驱动测试覆盖监听启动、双向收发、客户端断开后继续监听、连接身份更新以及显式停止后端口可重新绑定。服务端会话文件通过 rustfmt 检查。
 
-字节调试工具栏：`pnpm build`、`pnpm test:build` 与串口终端、模式切换、显示偏好及 TCP／Telnet 浏览器专项通过，共 7 项。真实鼠标输入覆盖按住抓起、跟随鼠标、左右拖动、取消、垃圾桶移除、短按不触发业务动作、键盘排序及保存布局；终端模式隐藏调整入口。尺寸检查确认图标按钮与格式切换器均高 30 px、SVG 为 16×16，已查看宽窄窗口及抓起状态截图。
+字节调试工具栏：`pnpm build`、`pnpm test:build` 与串口终端、模式切换、显示偏好及 TCP／Telnet 浏览器专项通过，共 7 项。真实鼠标输入覆盖按住抓起、跟随鼠标、不同宽度控件占位与邻居提前让位、松手及取消归位动画、窄窗口换行、减少动画设置、垃圾桶移除、取消移除后原位释放、短按不触发业务动作、键盘排序及保存布局；拖动预览不落盘，终端模式隐藏调整入口。尺寸检查确认图标按钮与格式切换器均高 30 px、SVG 为 16×16，已查看宽窄窗口及抓起状态截图。
 
 软件检查：`cargo check --workspace --all-targets --locked`、`cargo test --workspace --locked -- --test-threads=1` 和 `cargo clippy --workspace --all-targets --locked -- -D warnings` 通过。完整 Rust 回归 287 项通过，3 项设备／虚拟串口用例按默认设置 ignored；包含 36 项桌面后端测试、7 项统一 MCP 集成测试、27 项 SSH 集成测试和 7 项 HTTP 协议测试。`pnpm build`、`pnpm test:build` 和完整 `pnpm test` 通过，105 项前端测试通过，无失败、无跳过。
 

@@ -46,30 +46,57 @@ test("human Shell uses terminal keys, UART uses its sender, and MCP queues stay 
     fs.writeFileSync(new URL(`${name}.png`, directory), Buffer.from(data, "base64"));
   };
   const dragToolbar = async (from, to, after, cancel = false) => {
+    await run(`new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))`);
+    await waitForValue(client, `root.querySelector('.uart-bar').getAnimations({subtree:true}).every(animation=>animation.playState!=='running')`);
+    const saved = await run(`localStorage.getItem('coterm.serial.toolbar.v1')`);
+    const initialOrder = await run(`[...root.querySelectorAll('.toolbar-item')].map(item=>item.dataset.control)`);
     const start = await run(`(() => {
       const a=root.querySelector('[data-control=${from}]').getBoundingClientRect();
       return {x:a.left+a.width/2,y:a.top+a.height/2};
     })()`);
     let end = start;
     try {
+      assert.equal(await run(`root.querySelector('.uart-bar').dataset.customizing`), 'true');
+      assert.equal(await run(`document.elementFromPoint(${start.x},${start.y})?.closest('[data-control]')?.dataset.control`), from,
+        `the ${from} slot must be reachable by the mouse at ${JSON.stringify(start)}`);
       await client.send("Input.dispatchMouseEvent", { type: "mouseMoved", ...start });
       await client.send("Input.dispatchMouseEvent", { type: "mousePressed", ...start, button: "left", clickCount: 1 });
       await waitForValue(client, `root.querySelector('[data-control=${from}]').dataset.dragging==='true'`);
       assert.equal(await run(`root.querySelector('[data-control=${from}]').draggable`), false, 'pointer dragging never exports text or a native drag image');
       await client.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: start.x + 12, y: start.y, button: "left", buttons: 1 });
       assert.equal(await run(`root.querySelector('.toolbar-trash').hidden`), false, 'the trash appears only while dragging');
-      assert.equal(await run(`getComputedStyle(root.querySelector('[data-control=${from}]')).transform`), 'matrix(1, 0, 0, 1, 12, 0)', 'the lifted control follows the pointer');
+      const lifted = await run(`(() => {const r=root.querySelector('[data-control=${from}] > *').getBoundingClientRect();return {x:r.left+r.width/2,y:r.top+r.height/2}})()`);
+      assert.ok(Math.abs(lifted.x-start.x-12)<1 && Math.abs(lifted.y-start.y)<1, 'the lifted control follows the pointer');
+      assert.equal(await run(`getComputedStyle(root.querySelector('[data-control=${from}]'),'::before').borderStyle`), 'dashed', 'the original-size slot stays in the flow');
       end = await run(`(() => {
         const b=root.querySelector(${JSON.stringify(to === 'trash' ? '.toolbar-trash' : `[data-control=${to}]`)}).getBoundingClientRect();
         return {x:b.left+b.width*${to === 'trash' ? .5 : after ? .8 : .2},y:b.top+b.height/2};
       })()`);
       await client.send("Input.dispatchMouseEvent", { type: "mouseMoved", ...end, button: "left", buttons: 1 });
       if (to === 'trash') assert.equal(await run(`root.querySelector('.toolbar-trash').dataset.over`), 'true');
-      else assert.equal(await run(`root.querySelector('[data-control=${to}]').dataset.dropSide`), after ? 'after' : 'before');
+      else {
+        const expected = initialOrder.filter(id=>id!==from);
+        expected.splice(expected.indexOf(to)+Number(after),0,from);
+        assert.deepEqual(await run(`[...root.querySelectorAll('.toolbar-item')].map(item=>item.dataset.control)`), expected,
+          'neighbours make space before the mouse is released');
+        assert.equal(await run(`localStorage.getItem('coterm.serial.toolbar.v1')`), saved, 'preview never persists while the mouse is down');
+        const reduced = await run(`matchMedia('(prefers-reduced-motion: reduce)').matches`);
+        if (!reduced) assert.equal(await run(`root.querySelector('.uart-bar').getAnimations({subtree:true}).some(animation=>animation.playState==='running')`), true,
+          'neighbours animate into the preview layout');
+        const actual = await run(`(() => {const r=root.querySelector('[data-control=${from}] > *').getBoundingClientRect();return {x:r.left+r.width/2,y:r.top+r.height/2}})()`);
+        assert.ok(Math.abs(actual.x-end.x)<1 && Math.abs(actual.y-end.y)<1, 'layout changes do not pull the lifted control away from the pointer');
+      }
       if (from === 'save' && to === 'clear' && !after && !cancel) await screenshot('lifted');
       if (cancel) await run(`root.querySelector('[data-control=${from}]').dispatchEvent(new PointerEvent('pointercancel',{bubbles:true}))`);
       await client.send("Input.dispatchMouseEvent", { type: "mouseReleased", ...end, button: "left", clickCount: 1 });
       assert.equal(await run(`root.querySelector('.toolbar-trash').hidden`), true, 'drop or cancel releases the trash target');
+      if (cancel) assert.deepEqual(await run(`[...root.querySelectorAll('.toolbar-item')].map(item=>item.dataset.control)`), initialOrder, 'cancellation restores the original order');
+      if (to !== 'trash' && !await run(`matchMedia('(prefers-reduced-motion: reduce)').matches`)) {
+        assert.equal(await run(`new Promise(resolve=>requestAnimationFrame(()=>resolve(root.querySelector('[data-control=${from}] > *').getAnimations().some(animation=>animation.playState==='running'))))`), true,
+          'release or cancellation animates the lifted control into its slot');
+      }
+      await waitForValue(client, `root.querySelector('.uart-bar').getAnimations({subtree:true}).every(animation=>animation.playState!=='running')`);
+      assert.equal(await run(`root.querySelector('[data-control=${from}] > *').style.transform`), '', 'release clears pointer transforms after settling');
     } finally { await client.send("Input.dispatchMouseEvent", { type: "mouseReleased", ...end, button: "left", clickCount: 1 }); }
   };
   try {
@@ -281,8 +308,22 @@ test("human Shell uses terminal keys, UART uses its sender, and MCP queues stay 
     assert.equal(await run(`root.querySelector('[data-control=pause] button').getAttribute('aria-pressed')`), pauseState, 'a short click while editing never toggles pause');
     assert.equal(await run(`root.querySelector('.toolbar-trash').hidden`), true, 'a short click does not pick up a control');
     await screenshot('customization');
+    await dragToolbar('format', 'clear', true, true);
+    await run(`root.querySelectorAll('.coterm-toast-close').forEach(button=>button.click())`);
+    await run(`document.body.style.width='360px'`);
+    await waitForValue(client, `root.querySelector('.toolbar-customization').getBoundingClientRect().top>=root.querySelector('.uart-bar').getBoundingClientRect().bottom-1`);
+    await dragToolbar('save', 'format', false, true);
+    await run(`document.body.style.width='1100px'`);
+    await client.send("Emulation.setEmulatedMedia", { features: [{name: "prefers-reduced-motion", value: "reduce"}] });
+    await dragToolbar('save', 'format', false, true);
+    await client.send("Emulation.setEmulatedMedia", { features: [{name: "prefers-reduced-motion", value: "no-preference"}] });
     await dragToolbar('timestamps', 'trash', false, true);
     assert.equal(await run(`root.querySelector('[data-control=timestamps]').hidden`), false, 'cancelling over the trash does not remove a control');
+    const held = await run(`(() => {const r=root.querySelector('[data-control=timestamps]').getBoundingClientRect();return {x:r.left+r.width/2,y:r.top+r.height/2}})()`);
+    await client.send("Input.dispatchMouseEvent", { type: "mousePressed", ...held, button: "left", clickCount: 1 });
+    await waitForValue(client, `root.querySelector('[data-control=timestamps]').dataset.dragging==='true'`);
+    await client.send("Input.dispatchMouseEvent", { type: "mouseReleased", ...held, button: "left", clickCount: 1 });
+    assert.equal(await run(`root.querySelector('[data-control=timestamps]').hidden`), false, 'picking up and releasing in place does not reuse a cancelled trash target');
     await dragToolbar('timestamps', 'trash', false);
     await dragToolbar('save', 'clear', false);
     assert.equal(await run(`root.querySelector('[data-control=timestamps]').hidden`), true);
