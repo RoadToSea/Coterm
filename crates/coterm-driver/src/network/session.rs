@@ -173,7 +173,7 @@ impl Session {
                 .is_err()
         {
             self.task.abort();
-            let _ = self.task.await;
+            let _ = (&mut self.task).await;
         }
         self.client.closed.store(true, Ordering::Release);
         {
@@ -328,15 +328,22 @@ impl Worker {
     }
 
     async fn run_server(&mut self) {
-        let listener = match TcpListener::bind((self.config.host.as_str(), self.config.port)) {
+        let listener = match TcpListener::bind((self.config.host.as_str(), self.config.port)).await
+        {
             Ok(listener) => listener,
             Err(error) => {
                 self.client.state.lock().await.error = Some(error.to_string());
                 if let Some((operation_id, _)) = self.operation.take() {
-                    let _ = self.events.send(DriverNotification::OperationFailed {
-                        operation_id,
-                        error: super::backend::error("network_listen_failed", error.to_string()),
-                    }).await;
+                    let _ = self
+                        .events
+                        .send(DriverNotification::OperationFailed {
+                            operation_id,
+                            error: super::backend::error(
+                                "network_listen_failed",
+                                error.to_string(),
+                            ),
+                        })
+                        .await;
                 }
                 self.finish_server().await;
                 return;
@@ -348,10 +355,17 @@ impl Worker {
             .await;
         if let Some((operation_id, mcp)) = self.operation.take() {
             let result = json!({"connected":false,"listening":true});
-            let _ = self.events.send(DriverNotification::OperationCompleted {
-                operation_id,
-                result: if mcp { crate::stream::result::tool_result(result) } else { result },
-            }).await;
+            let _ = self
+                .events
+                .send(DriverNotification::OperationCompleted {
+                    operation_id,
+                    result: if mcp {
+                        crate::stream::result::tool_result(result)
+                    } else {
+                        result
+                    },
+                })
+                .await;
         }
 
         loop {
@@ -377,8 +391,11 @@ impl Worker {
                     ..State::default()
                 };
             }
-            self.notify("status", json!({"connected":true,"listening":false,"connectionId":epoch}))
-                .await;
+            self.notify(
+                "status",
+                json!({"connected":true,"listening":false,"connectionId":epoch}),
+            )
+            .await;
             let result = self.connected(&mut stream, &epoch).await;
             self.client.output.lock().await.close();
             let listening = !*self.stopped.borrow();
@@ -410,13 +427,22 @@ impl Worker {
         }
         self.client.output.lock().await.close();
         if let Some((operation_id, _)) = self.operation.take() {
-            let _ = self.events.send(DriverNotification::OperationFailed {
-                operation_id,
-                error: super::backend::error("network_listen_cancelled", "TCP server start cancelled"),
-            }).await;
+            let _ = self
+                .events
+                .send(DriverNotification::OperationFailed {
+                    operation_id,
+                    error: super::backend::error(
+                        "network_listen_cancelled",
+                        "TCP server start cancelled",
+                    ),
+                })
+                .await;
         }
-        self.notify("status", json!({"connected":false,"listening":false,"reconnecting":false}))
-            .await;
+        self.notify(
+            "status",
+            json!({"connected":false,"listening":false,"reconnecting":false}),
+        )
+        .await;
     }
 
     async fn connected(&mut self, stream: &mut TcpStream, epoch: &str) -> Result<()> {

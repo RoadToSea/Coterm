@@ -16,6 +16,8 @@
 
 ## 最近有效的软件验收
 
+Raw TCP 服务端：`cargo check --workspace` 和 `cargo test -p coterm-driver network:: -- --test-threads=1` 通过，14 项网络驱动测试覆盖监听启动、双向收发、客户端断开后继续监听、连接身份更新以及显式停止后端口可重新绑定。服务端会话文件通过 rustfmt 检查。
+
 软件检查：`cargo check --workspace --all-targets --locked`、`cargo test --workspace --locked -- --test-threads=1` 和 `cargo clippy --workspace --all-targets --locked -- -D warnings` 通过。完整 Rust 回归 287 项通过，3 项设备／虚拟串口用例按默认设置 ignored；包含 36 项桌面后端测试、7 项统一 MCP 集成测试、27 项 SSH 集成测试和 7 项 HTTP 协议测试。`pnpm build`、`pnpm test:build` 和完整 `pnpm test` 通过，105 项前端测试通过，无失败、无跳过。
 
 HTTP 协议与隔离：初始化、固定八项工具、通知 202、无会话调用、Host／Origin 和媒体类型、非法 JSON／请求／协议版本均有回归。恰好 1 MiB 的有效 JSON 可接收，多 1 字节返回 413；128 个请求占满后返回 503，释放请求容量后继续服务；重复 Origin 被拒绝。关闭服务会结束空闲连接并释放端口。两个独立客户端可使用相同 JSON-RPC id 对不同实例产生独立审批；跨实例查询被拒绝，取消其中一个不改变另一个提案。
