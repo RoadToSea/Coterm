@@ -6,6 +6,7 @@ export const en: Readonly<Record<string, string>> = {
   mcp_settings_invalid: "The saved MCP settings are invalid. Save a valid port to recover.",
   mcp_settings_write_failed: "Could not save the MCP settings. The previous MCP service and settings were kept.",
   "Instance name (optional)": "Instance name (optional)",
+  "Workspace": "Workspace",
   instance_name_exists: "An instance with this name already exists.",
   instance_name_invalid: "Instance name must be at most 256 UTF-8 bytes and contain no control characters.",
   "Leave empty to use the driver default": "Leave empty to use the driver default",

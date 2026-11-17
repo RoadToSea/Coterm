@@ -95,6 +95,7 @@ export const zhCN: Readonly<Record<string, string>> = {
   "failed": "已失败",
   "This driver does not provide a connection configuration screen.": "此驱动暂未提供连接配置界面。",
   "Default workspace": "默认工作区",
+  "Workspace": "工作区",
   "New workspace": "新建工作区",
   "Workspace name (up to 64 characters)": "工作区名称（最多 64 个字符）",
   "Delete workspace": "删除工作区",

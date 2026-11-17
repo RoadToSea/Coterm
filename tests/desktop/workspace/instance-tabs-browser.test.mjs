@@ -11,7 +11,7 @@ test("instance names reject live and offline duplicates inline and preserve the 
   assertFreshBuild();
   const scenario = structuredClone(defaultScenario);
   scenario.catalog.issues = [];
-  scenario.workspace = {entries:[
+  scenario.workspace = {groups:[{id:"default",name:"Default workspace"}],entries:[
     {configRef:"live",driverId:"ssh",instanceId:"inst-1",name:"Prod-Server",workspaceId:"default"},
     {configRef:"offline",driverId:"ssh",instanceId:null,name:"Standby",workspaceId:"default"},
   ]};
@@ -73,6 +73,12 @@ test("inline protocol configuration and instance tabs preserve live frontends an
       fs.statSync(new URL(`../../../apps/desktop/src/workbenches/${driver}/index.ts`, import.meta.url)).mtimeMs, "rebuild the actual driver frontend");
   }
   const scenario = structuredClone(defaultScenario);
+  scenario.workspace = {groups:[
+    {id:"default",name:"Default workspace"},
+    {id:"lab",name:"Lab"},
+  ],layout:{activeWorkspaceId:"default"},entries:[
+    {configRef:"ref-inst-1",driverId:"ssh",instanceId:"inst-1",name:"Prod-Server",workspaceId:"default"},
+  ]};
   scenario.installPreview = {token:"tab-refresh-test",id:"test.tabs",name:"Tabs test",version:"0.1.0",platform:"windows-x64"};
   scenario.catalog.issues = [];
   scenario.catalog.drivers.push(
@@ -105,6 +111,7 @@ test("inline protocol configuration and instance tabs preserve live frontends an
     assert.equal(await run(`document.querySelectorAll('[role=tab]').length`), 1);
     await run(`document.querySelector('button[aria-label="Manage SSH"]').click()`);
     await wait(`!!configuration()?.querySelector('form')`, "SSH inline connection form");
+    assert.equal(await run(`configuration().querySelector('#new-instance-workspace').value`), "default", "creation defaults to the active workspace");
     assert.equal(await run(`document.querySelector('dialog[open]')`), null, "new instance configuration does not open a dialog");
     assert.equal(await run(`document.getElementById('instance-panel-inst-1').hidden && originalHost.isConnected`), true);
     assert.equal(await run(`/Driver operations|Advanced JSON|Configuration \(JSON\)/.test(document.querySelector('main').textContent)`), false);
@@ -114,6 +121,7 @@ test("inline protocol configuration and instance tabs preserve live frontends an
     // Failed creation keeps the same form and values; global busy also blocks other UI submissions.
     await run(`window.formBefore=configuration().querySelector('form');
       (()=>{const fields=configuration().querySelectorAll('input');configuration().querySelector('[name=host]').value='lab.example';configuration().querySelector('[name=username]').value='tester';})();
+      const workspaceSelect=configuration().querySelector('#new-instance-workspace');workspaceSelect.value='lab';workspaceSelect.dispatchEvent(new Event('change',{bubbles:true}));
       window.creationGate=__cotermTest.gate('create_instance');formBefore.requestSubmit();`);
     await wait(`creationGate.size()===1 && document.querySelector('#driver-configuration fieldset').getAttribute('aria-busy')==='true'`, "creation in flight");
     assert.equal(await run(`document.querySelector('#driver-configuration fieldset').disabled`), true);
@@ -121,11 +129,13 @@ test("inline protocol configuration and instance tabs preserve live frontends an
     assert.equal(await run(`__cotermTest.countCalls('create_instance')`), 1, "duplicate submit is suppressed");
     await run(`creationGate.fail('simulated create failure')`);
     await wait(`configuration()?.querySelector('.error').textContent.includes('simulated create failure')`, "creation failure is visible");
-    assert.equal(await run(`formBefore === configuration().querySelector('form') && configuration().querySelector('[name=host]').value==='lab.example'`), true);
+    assert.equal(await run(`formBefore === configuration().querySelector('form') && configuration().querySelector('[name=host]').value==='lab.example' && configuration().querySelector('#new-instance-workspace').value==='lab'`), true);
     await run(`formBefore.requestSubmit()`);
     await wait(`document.querySelectorAll('[role=tab]').length===2 && !document.getElementById('driver-configuration')`, "successful creation opens a tab");
     const created = await run(`__cotermTest.invocations.filter(x=>x.command==='create_instance').at(-1).args`);
-    assert.deepEqual(created, {driverId:"ssh",config:{host:"lab.example",port:22,username:"tester"},workspaceId:"default"});
+    assert.deepEqual(created, {driverId:"ssh",config:{host:"lab.example",port:22,username:"tester"},workspaceId:"lab"});
+    assert.equal(await run(`document.querySelector('[data-workspace-id="lab"] > div > button[aria-current="true"]') !== null`), true, "successful creation activates its destination workspace");
+    assert.equal(await run(`document.querySelector('[data-workspace-id="lab"] [data-instance-id="created-1"]') !== null`), true, "created instance is listed in its destination workspace");
     await wait(`__cotermTest.countCalls('subscribe_driver_events')===baseSubscriptions+1`, "new SSH subscription");
     assert.equal(await run(`originalHost.isConnected && document.getElementById('instance-panel-inst-1').hidden`), true);
 
@@ -145,7 +155,7 @@ test("inline protocol configuration and instance tabs preserve live frontends an
     await wait(`!!configuration()?.querySelector('option[value="COM2"]')`, "serial inline protocol fields and detected ports");
     assert.ok(await run(`[...configuration().querySelectorAll('input:not([type=checkbox]),select,button')].every(el=>parseFloat(getComputedStyle(el).borderRadius)>0)`));
     assert.equal(await run(`configuration().querySelectorAll('textarea').length`), 0);
-    await run(`configuration().querySelector('select').value='COM2';configuration().querySelector('form').requestSubmit()`);
+    await run(`configuration().querySelector('[name=port]').value='COM2';configuration().querySelector('form').requestSubmit()`);
     await wait(`document.querySelectorAll('[role=tab]').length===3 && document.getElementById('instance-tab-created-2')?.getAttribute('aria-selected')==='true'`, "serial created and selected");
     await wait(`__cotermTest.countCalls('subscribe_driver_events')===3`, "serial frontend mounted");
     assert.ok([1, 2].includes(await run(`__cotermTest.countCalls('start_driver')`)), "discovery starts Serial; creation may reuse its refreshed running state");

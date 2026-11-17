@@ -235,16 +235,17 @@ export default function App() {
     }
   };
 
-  const createConfiguredInstance = async (driverId: string, config: unknown, name?: string) => {
+  const createConfiguredInstance = async (driverId: string, config: unknown, name: string | undefined, workspaceId: string) => {
     setBusyId(driverId);
     setError(null);
     try {
       if (!drivers.find((driver) => driver.id === driverId)?.running) {
         await hostAPI.startDriver(driverId);
       }
-      const instance = await hostAPI.createInstance(driverId, config, activeWorkspaceId, name);
+      const instance = await hostAPI.createInstance(driverId, config, workspaceId, name);
       await refresh();
       await refreshWorkspace();
+      setActiveWorkspaceId(workspaceId);
       views.open(instance.driverInstanceId);
     } catch (reason) {
       if (!instanceNameErrorCode(reason)) setError(String(reason));
@@ -493,13 +494,13 @@ export default function App() {
                 <PlugZap className="size-6 shrink-0 text-primary" />
                 <div className="min-w-0">
                   <h1 className="text-lg font-medium">{selectedDriver.name} · {t("New instance")}</h1>
-                  <p className="mt-1 text-xs text-muted-foreground">{t("Workspace:")} {workspaceName((workspace ?? EMPTY_WORKSPACE).groups.find(group => group.id === activeWorkspaceId) ?? EMPTY_WORKSPACE.groups[0])}</p>
                 </div>
               </div>
               {workbenchDefinition(selectedDriver.id)
                 ? <DriverConfiguration key={selectedDriver.id} driverId={selectedDriver.id}
                     existingNames={[...instances.map(instance => instance.name), ...(workspace?.entries.map(entry => entry.name) ?? [])]}
-                    disabled={busyId !== null} onSubmit={(config, name) => createConfiguredInstance(selectedDriver.id, config, name)} />
+                    workspaceGroups={(workspace ?? EMPTY_WORKSPACE).groups} activeWorkspaceId={activeWorkspaceId}
+                    disabled={busyId !== null} onSubmit={(config, name, workspaceId) => createConfiguredInstance(selectedDriver.id, config, name, workspaceId)} />
                 : <p role="status" className="text-sm text-muted-foreground">{t("This driver does not provide a connection configuration screen.")}</p>}
             </div>
           </section>}

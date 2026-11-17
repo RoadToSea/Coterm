@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { flushSync } from "react-dom";
-import { hostAPI } from "../../host-api";
+import { hostAPI, type WorkspaceGroup } from "../../host-api";
 import { useI18n } from "../../use-i18n";
 import { driverI18n } from "../../i18n";
 import { instanceNameErrorCode, validateInstanceName } from "../../instance-name";
 import { Button } from "../ui/button";
 import { Field, FieldGroup, FieldLabel } from "../ui/field";
-import { Input } from "../ui/input";
+import { Input, Select } from "../ui/input";
 import { ConfigurationFields, configurationDraft, type PortEntry } from "../../workbenches/ConfigurationFields";
 import { workbenchDefinition } from "../../workbenches/definitions";
 import { createTranslator } from "../../workbenches/common/stream-workbench/i18n";
@@ -14,20 +14,23 @@ import type { DriverConfigurationAPI } from "../../../../shared/index";
 
 interface Props {
   driverId: string;
-  onSubmit(config: unknown, name?: string): Promise<void>;
+  onSubmit(config: unknown, name: string | undefined, workspaceId: string): Promise<void>;
   existingNames: readonly string[];
+  workspaceGroups: readonly WorkspaceGroup[];
+  activeWorkspaceId: string;
   disabled?: boolean;
   configurationAPI?: DriverConfigurationAPI;
 }
 
 /** Host-owned form. Creating an instance never opens the physical connection. */
-export function DriverConfiguration({ driverId, onSubmit, existingNames, disabled = false, configurationAPI }: Props) {
+export function DriverConfiguration({ driverId, onSubmit, existingNames, workspaceGroups, activeWorkspaceId, disabled = false, configurationAPI }: Props) {
   const { t } = useI18n();
   const [, refreshLocale] = useReducer((value: number) => value + 1, 0);
   const translate = createTranslator(configurationAPI?.i18n ?? driverI18n);
   useEffect(() => configurationAPI?.i18n?.subscribe(refreshLocale), [configurationAPI?.i18n]);
   const definition = workbenchDefinition(driverId);
   const [name, setName] = useState("");
+  const [workspaceId, setWorkspaceId] = useState(activeWorkspaceId);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -36,6 +39,10 @@ export function DriverConfiguration({ driverId, onSubmit, existingNames, disable
   const alive = useRef(false);
   const pending = useRef<Promise<void>>();
   const nameError = validateInstanceName(name, existingNames) ?? submitError;
+  useEffect(() => {
+    if (workspaceGroups.some(group => group.id === workspaceId)) return;
+    setWorkspaceId(workspaceGroups.find(group => group.id === activeWorkspaceId)?.id ?? workspaceGroups[0]?.id ?? "default");
+  }, [workspaceGroups, activeWorkspaceId, workspaceId]);
   const isSerial = driverId === "coterm-driver-serial" || driverId === "serial";
   const loadPorts = useCallback(() => {
     if (pending.current) return pending.current;
@@ -69,11 +76,17 @@ export function DriverConfiguration({ driverId, onSubmit, existingNames, disable
     if (busy || disabled || nameError || (isSerial && loading)) return;
     const config = configurationDraft(definition.schema, definition.defaults, new FormData(event.currentTarget));
     setBusy(true); setError(""); setSubmitError(null);
-    try { await onSubmit(config, name.trim() || undefined); }
+    try { await onSubmit(config, name.trim() || undefined, workspaceId); }
     catch (reason) { if (alive.current) { setSubmitError(instanceNameErrorCode(reason)); setError(String(reason)); } }
     finally { if (alive.current) setBusy(false); }
   }}>
     <FieldGroup disabled={disabled || busy} aria-busy={disabled || busy || loading}>
+      <Field>
+        <FieldLabel htmlFor="new-instance-workspace">{t("Workspace")}</FieldLabel>
+        <Select id="new-instance-workspace" value={workspaceId} onChange={event => setWorkspaceId(event.currentTarget.value)}>
+          {workspaceGroups.map(group => <option key={group.id} value={group.id}>{group.id === "default" ? t("Default workspace") : group.name}</option>)}
+        </Select>
+      </Field>
       <Field data-invalid={!!nameError}>
         <FieldLabel htmlFor="new-instance-name">{t("Instance name (optional)")}</FieldLabel>
         <Input id="new-instance-name" autoComplete="off" maxLength={256} value={name}
