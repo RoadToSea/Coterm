@@ -211,8 +211,8 @@ pub fn mcp_tools() -> Vec<coterm_core::model::lifecycle::McpToolRegistration> {
             json!({}),
             Vec::<&str>::new(),
         ),
-        ("local.command", "Run commands in this instance. Default mode=terminal uses the visible shared PTY and preserves directory/environment. Choose explicit exec only for expected long-running tasks or a user background request; its independent Shell does not inherit PTY state. Never replay on wait expiry. POSIX/PowerShell/cmd use family-specific foreground boundaries. Source max 64 KiB, stop on first failure. Approval may be required.",
-            json!({"commands":{"type":"array","minItems":1,"maxItems":64,"items":{"type":"string","minLength":1}},"mode":{"type":"string","enum":["terminal","exec"],"default":"terminal"}}), vec!["commands"]),
+        ("local.command", "Run commands in this instance. MCP defaults to isolated exec; explicit mode=terminal uses the visible shared PTY and preserves directory/environment, where an interactive foreground program may consume input. Never replay on wait expiry. POSIX/PowerShell/cmd use family-specific foreground boundaries. Source max 64 KiB, stop on first failure. Approval may be required.",
+            json!({"commands":{"type":"array","minItems":1,"maxItems":64,"items":{"type":"string","minLength":1}},"mode":{"type":"string","enum":["terminal","exec"],"default":"exec"}}), vec!["commands"]),
         ("local.read_lines", "Read recent logical terminal lines from the bounded backend, without a cursor. Not xterm screen rows; check truncation and dropped.",
             json!({"lines":{"type":"integer","minimum":1,"maximum":1000,"default":100}}), vec![]),
         ("local.read_dialogue_pairs", "Read recent foreground/background command records newest first, with stdin/stdout/stderr, status and exitCode. Running output is partial; check truncation and dropped.",
@@ -449,7 +449,7 @@ impl Backend {
         }
         if operation == "local.command" {
             let family = self.instance_mut(&instance_id)?.resolved.family;
-            crate::local::command::source(&request.args, family)?;
+            crate::local::command::source(&request.args, family, mcp)?;
         }
         self.execute(
             &instance_id,
@@ -637,7 +637,7 @@ impl Backend {
     ) -> Result<Value> {
         let instance = self.instance_mut(id)?;
         let (source, script, background) =
-            crate::local::command::source(args, instance.resolved.family)?;
+            crate::local::command::source(args, instance.resolved.family, mcp)?;
         if !background {
             return self
                 .session(id)?

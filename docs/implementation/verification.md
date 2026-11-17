@@ -12,7 +12,7 @@
 | 通信驱动 | SSH／Local 前台与显式后台，Serial Shell／stream，Telnet 与 Raw TCP | SSH 认证和 Shell 范围有限；Telnet／TCP 明文，代理无认证 |
 | 数据记录与读取 | 后端有界正文、操作摘要、三种无游标读取、前端回放 | 数据不跨启动；字节流无对话；长期慢消费可产生不可恢复缺口 |
 | 桌面交互 | 宿主 React 配置与两类工作台、统一主题控件、分组、标签、终端、字节调试、横向命令块、审批设置 | 原生跨平台、完整后代进程回收和现场协议兼容仍需验收 |
-| Agent 接入 | 进程内 Streamable HTTP、8 个统一语义工具、名称路由、多客户端并发与操作查询 | 仅本机、无 Agent 身份隔离；无 Resources／Prompts／事件订阅／MCP cancellation notification |
+| Agent 接入 | 进程内 Streamable HTTP、8 个统一语义工具、名称路由、多客户端并发与操作查询；SSH／Local 命令默认隔离 exec | 仅本机、无 Agent 身份隔离；显式 terminal 仍共享 PTY；无 Resources／Prompts／事件订阅／MCP cancellation notification |
 
 ## 最近有效的软件验收
 
@@ -23,6 +23,8 @@ Raw TCP 服务端：`cargo check --workspace` 和 `cargo test -p coterm-driver n
 软件检查：`cargo check --workspace --all-targets --locked`、`cargo test --workspace --locked -- --test-threads=1` 和 `cargo clippy --workspace --all-targets --locked -- -D warnings` 通过。完整 Rust 回归 287 项通过，3 项设备／虚拟串口用例按默认设置 ignored；包含 36 项桌面后端测试、7 项统一 MCP 集成测试、27 项 SSH 集成测试和 7 项 HTTP 协议测试。`pnpm build`、`pnpm test:build` 和完整 `pnpm test` 通过，105 项前端测试通过，无失败、无跳过。
 
 HTTP 协议与隔离：初始化、固定八项工具、通知 202、无会话调用、Host／Origin 和媒体类型、非法 JSON／请求／协议版本均有回归。恰好 1 MiB 的有效 JSON 可接收，多 1 字节返回 413；128 个请求占满后返回 503，释放请求容量后继续服务；重复 Origin 被拒绝。关闭服务会结束空闲连接并释放端口。两个独立客户端可使用相同 JSON-RPC id 对不同实例产生独立审批；跨实例查询被拒绝，取消其中一个不改变另一个提案。
+
+MCP PTY 隔离：Windows Local `cmd` 在 `set /p` 前台等待期间，省略 mode 的 MCP 命令通过独立 exec 完成并返回结果；显式 terminal 保留共享 PTY 模式。SSH MCP 专项验证显式 terminal 命令经审批后，`coterm_operation` 查询包含完整结构化输出；sudo 秘密交互由桌面响应后继续执行。
 
 Windows 原生与 SDK 互通：隔离 smoke 构建使用真实 WebView2、Local PowerShell、回环 TCP／Telnet 和 MCP HTTP，已验证审批 UI、命令与后端结果、前台状态延续、保存恢复不重连、不同实例并发查询、配置 URL、换端口与服务启停。保持 HTTP 空闲连接后发送真实关窗请求，桌面自行退出，连接关闭且端口可重新绑定；强杀不作为通过依据。官方 TypeScript MCP SDK 1.32.2 独立验证版本协商、工具目录、双客户端审批、实例归属与取消互不影响；SDK 只临时安装于调试目录，未加入项目依赖。旧 `mcp stdio` 参数的集成测试确认立即以 2 退出、stdout 为空且 stderr 提示 HTTP 迁移。MCP 设置保持 version 1，工作区保存格式未修改。验收后已恢复普通 debug 构建，确认桌面 EXE 无进程占用、隔离 profile 已删除。
 

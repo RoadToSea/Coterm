@@ -262,7 +262,7 @@ pub fn mcp_tools() -> Vec<McpToolRegistration> {
         ("ssh.connect", "Connect the existing instance. Returns pending_approval as soon as host approval is needed; query the same operation after the human approval/password prompt. Never supply a password.", json!({"fingerprint":{"type":"string"}}), vec!["fingerprint"]),
         ("ssh.disconnect", "Disconnect this instance. May return pending approval.", json!({}), vec![]),
         ("ssh.reset", "Replace the shared interactive shell after a stuck or malformed command. Running commands become unknown; exec jobs are unaffected.", json!({}), vec![]),
-        ("ssh.command", "Run 1-64 commands/scripts sequentially, stopping on the first nonzero exit. Default mode=terminal executes in the shared PTY and displays in xterm, preserving cd/export and interactive identity. Choose mode=exec before submission only for expected long-running tasks or an explicit background request; it uses an independent shell and does not inherit PTY directory, environment or sudo/su identity. Both modes support multiline scripts up to 65536 UTF-8 source bytes total. Never rerun or switch mode because a wait expires. Results always include stdin/stdout/stderr; streamMode tells whether output is separated or merged into stdout. Empty streams remain empty strings. Approval may be required; query the same operation instead of resubmitting. Use read_lines or read_dialogue_pairs for backend snapshots.", json!({"commands":{"type":"array","minItems":1,"maxItems":64,"items":{"type":"string","minLength":1,"maxLength":65536}},"mode":{"type":"string","enum":["terminal","exec"],"default":"terminal"}}), vec!["commands"]),
+        ("ssh.command", "Run 1-64 commands/scripts sequentially, stopping on the first nonzero exit. MCP defaults to isolated mode=exec; it does not inherit PTY state. Choose mode=terminal explicitly only when commands must use the visible PTY and its current state; an interactive foreground program may consume terminal input. Both modes support multiline scripts up to 65536 UTF-8 source bytes total. Never rerun or switch mode because a wait expires. Results always include stdin/stdout/stderr; streamMode tells whether output is separated or merged into stdout. Empty streams remain empty strings. Approval may be required; query the same operation instead of resubmitting. Use read_lines or read_dialogue_pairs for backend snapshots.", json!({"commands":{"type":"array","minItems":1,"maxItems":64,"items":{"type":"string","minLength":1,"maxLength":65536}},"mode":{"type":"string","enum":["terminal","exec"],"default":"exec"}}), vec!["commands"]),
         ("ssh.system_info", "Read basic host, user, kernel and OS information with a fixed read-only query. No approval and no arbitrary shell.", json!({}), vec![]),
         ("ssh.file_info", "Read metadata for one path without arbitrary shell or content.", json!({"path":{"type":"string","minLength":1,"maxLength":FILE_PATH_MAX_BYTES}}), vec!["path"]),
         ("ssh.read_file", "Read a UTF-8 text file within the shared file capacity policy. No sudo or arbitrary shell.", json!({"path":{"type":"string","minLength":1,"maxLength":FILE_PATH_MAX_BYTES}}), vec!["path"]),
@@ -340,7 +340,7 @@ fn validate_mcp_args(operation: &str, args: &Value) -> Result<()> {
     }
     if operation.ends_with("ssh.command") {
         validate_commands(args)?;
-        command_mode(args)?;
+        command_mode(args, operation.starts_with("mcp."))?;
     }
     if operation.ends_with("ssh.read_lines") {
         read_count(args, "lines", 100, 1000)?;
@@ -382,8 +382,9 @@ fn validate_commands(args: &Value) -> Result<Vec<&str>> {
     Ok(result)
 }
 
-fn command_mode(args: &Value) -> Result<&str> {
+fn command_mode(args: &Value, mcp: bool) -> Result<&str> {
     let mode = match args.get("mode") {
+        None if mcp => "exec",
         None => "terminal",
         Some(Value::String(mode)) if matches!(mode.as_str(), "terminal" | "exec") => mode,
         _ => bail!("SSH command mode must be terminal or exec"),
@@ -516,7 +517,7 @@ impl Backend {
         mcp: bool,
         source: OperationSource,
     ) -> Result<Value> {
-        if command_mode(args)? == "exec" {
+        if command_mode(args, mcp)? == "exec" {
             return self.start_exec(id, args, operation_id, mcp, source).await;
         }
         let text = if mcp {
@@ -807,7 +808,7 @@ impl Backend {
                 request.operation.as_str(),
                 "ssh.command" | "mcp.ssh.command"
             ) {
-                command_mode(&request.args)?;
+                command_mode(&request.args, request.operation.starts_with("mcp."))?;
                 if request.operation.starts_with("mcp.") {
                     validate_mcp_args(&request.operation, &request.args)?;
                 } else {
@@ -989,7 +990,7 @@ impl Backend {
     ) -> Result<Value> {
         let native = operation.trim_start_matches("mcp.");
         if native == "ssh.command" {
-            command_mode(&args)?;
+            command_mode(&args, operation.starts_with("mcp."))?;
         }
         if matches!(native, "ssh.command" | "ssh.read_file" | "ssh.write_file")
             && args.get("sudo").and_then(Value::as_bool) == Some(true)
@@ -1426,7 +1427,8 @@ mod tests {
     #[test]
     fn command_modes_and_snapshot_arguments_are_explicit_and_bounded() {
         let args = json!({"driverInstanceId":"one","commands":["pwd"]});
-        assert_eq!(super::command_mode(&args).ok(), Some("terminal"));
+        assert_eq!(super::command_mode(&args, false).ok(), Some("terminal"));
+        assert_eq!(super::command_mode(&args, true).ok(), Some("exec"));
         for mode in ["terminal", "exec"] {
             let mut args = args.clone();
             args["mode"] = json!(mode);
@@ -1443,7 +1445,7 @@ mod tests {
                 "driverInstanceId":"one","commands":["pwd"],"sudo":true
             })
         )
-        .is_err());
+        .is_ok());
         for name in [
             "ssh.read_lines",
             "ssh.read_selected_lines",

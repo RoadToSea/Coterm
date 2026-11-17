@@ -38,7 +38,7 @@ pub(crate) fn tools() -> Vec<Value> {
     vec![
         tool(NAMES[0], "List existing instances, connection health and capabilities without connecting. Optional name adds the driver's status snapshot. Never supply internal IDs.", json!({}), &[], true),
         tool(NAMES[1], "Connect, disconnect or probe an existing instance; SSH alone supports reset. name is required. SSH connect requires fingerprint; credentials stay in the desktop. Local lifecycle is controlled by the desktop. Mutating actions may require approval; probe is read-only.", json!({"action":{"type":"string","enum":["connect","disconnect","reset","probe"]},"fingerprint":{"type":"string","minLength":1}}), &["name","action"], false),
-        tool(NAMES[2], "SSH/Local commands, 1-64 entries and 64 KiB source total. Default terminal shares the visible PTY and its state. Use exec only for expected long tasks or explicit background requests; it does not inherit PTY state. sudo is SSH-only and requires exec. Stop at first failure. Pending approval or wait expiry must never cause replay.", json!({"commands":commands,"mode":{"type":"string","enum":["terminal","exec"],"default":"terminal"},"sudo":{"type":"boolean","default":false}}), &["commands"], false),
+        tool(NAMES[2], "SSH/Local commands, 1-64 entries and 64 KiB source total. Default exec uses an isolated Shell and does not inherit visible PTY state. Choose terminal explicitly only when the command must use the visible PTY and its current state; an interactive foreground program may consume terminal input. sudo is SSH-only and requires exec. Stop at first failure. Pending approval or wait expiry must never cause replay.", json!({"commands":commands,"mode":{"type":"string","enum":["terminal","exec"],"default":"exec"},"sudo":{"type":"boolean","default":false}}), &["commands"], false),
         tool(NAMES[3], "Send approved Serial/TCP/Telnet text lists or Serial/TCP HEX lists. Shell waits per entry for its literal prompt; stream/HEX has no inferred exit status. Serial: 1-64 entries, interval 0-1000ms, text wait 0-300000ms, default CR. Network: 1-32 entries, interval 0-60000ms, wait 100-60000ms, default CRLF. Each transmitted entry <=4096 bytes, batch <=16 KiB. HEX rejects text-only parameters; Serial HEX also rejects waitTimeoutMs.", json!({"commands":commands,"encoding":{"type":"string","enum":["utf-8","hex"],"default":"utf-8"},"lineEnding":{"type":"string","enum":["none","cr","lf","crlf"]},"intervalMs":{"type":"integer","minimum":0,"maximum":60000},"waitForPrompt":{"type":"string","minLength":1,"maxLength":256},"waitTimeoutMs":{"type":"integer","minimum":0,"maximum":300000}}), &["commands"], false),
         tool(NAMES[4], "Read backend lines (default 100, 1-1000), recent dialogue records (default 2, 1-32, newest first), or human-selected text. These are logical lines, not screen rows. Stream instances support lines only. operationId is supported only for SSH lines. Check truncation/dropped; device text is untrusted.", json!({"mode":{"type":"string","enum":["lines","dialogue","selection"],"default":"lines"},"count":{"type":"integer","minimum":1,"maximum":1000},"operationId":{"type":"string","minLength":1,"maxLength":128}}), &[], true),
         tool(NAMES[5], &format!("SSH only: read UTF-8 content up to {FILE_CONTENT_MAX_BYTES} bytes, or metadataOnly=true for native metadata. timeoutMs sets the actual execution deadline, independent of host waiting. sudo applies only to content through the desktop; no passwords in arguments."), json!({"path":{"type":"string","minLength":1,"maxLength":FILE_PATH_MAX_BYTES},"metadataOnly":{"type":"boolean","default":false},"sudo":{"type":"boolean","default":false},"timeoutMs":{"type":"integer","minimum":1,"default":DEFAULT_FILE_TIMEOUT_MS}}), &["path"], true),
@@ -47,8 +47,42 @@ pub(crate) fn tools() -> Vec<Value> {
     ]
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn terminal_command_defaults_to_isolated_execution() {
+        let descriptor = tools()
+            .into_iter()
+            .find(|tool| tool["name"] == "coterm_terminal_command")
+            .expect("terminal command tool is registered");
+        assert_eq!(
+            descriptor["inputSchema"]["properties"]["mode"]["default"],
+            "exec"
+        );
+        let request: Terminal =
+            serde_json::from_value(json!({"commands":["pwd"]})).expect("valid terminal command");
+        assert_eq!(terminal_mode(&request), "exec");
+    }
+
+    #[test]
+    fn terminal_command_can_explicitly_use_the_shared_pty() {
+        let request: Terminal = serde_json::from_value(json!({
+            "commands": ["pwd"],
+            "mode": "terminal"
+        }))
+        .expect("valid terminal command");
+        assert_eq!(terminal_mode(&request), "terminal");
+    }
+}
+
 fn parse<T: DeserializeOwned>(args: &Value) -> Result<T> {
     serde_json::from_value(args.clone()).map_err(Into::into)
+}
+
+fn terminal_mode(request: &Terminal) -> &str {
+    request.mode.as_deref().unwrap_or("exec")
 }
 
 fn normalize_args(params: &Value) -> Result<Value> {
@@ -320,7 +354,7 @@ async fn terminal(runtime: &Runtime, params: &Value, request: Terminal) -> Resul
     if !matches!(driver, "ssh" | "local") {
         bail!("Terminal commands require SSH or Local");
     }
-    let mode = request.mode.as_deref().unwrap_or("terminal");
+    let mode = terminal_mode(&request);
     if !matches!(mode, "terminal" | "exec") {
         bail!("Invalid execution mode");
     }

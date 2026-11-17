@@ -40,7 +40,7 @@
 |---|---|---|
 | `coterm_instances` | 实例、连接状态和能力 | read |
 | `coterm_connection` | 连接、断开、SSH 重置或探测 | probe 为 read，其余 commit |
-| `coterm_terminal_command` | SSH／Local 前台命令或显式后台执行 | commit |
+| `coterm_terminal_command` | SSH／Local 隔离命令或显式共享 PTY 命令 | commit |
 | `coterm_stream_command` | Serial／TCP／Telnet 文本，Serial／TCP HEX | commit |
 | `coterm_read_output` | 后端逻辑行、对话记录或用户选区 | read |
 | `coterm_file_read` | SSH 文件正文或元信息 | read |
@@ -94,7 +94,7 @@ Raw TCP 配置可选择 client 或 server。服务端 connect 启动监听；驱
 参数：`name?: string`、`commands: string[]`、`mode?: "terminal" | "exec"`、`sudo?: boolean`。
 
 - 仅 SSH／Local。commands 为 1–64 项，总源文本不超过 65536 UTF-8 字节；允许多行、CR、Tab，其他控制字符受驱动校验。
-- mode 默认 terminal，在可见共享 PTY 中顺序执行并保留终端状态；只有预计长时间运行或用户明确要求时使用 exec。后台通道不继承前台目录、环境、Shell 状态或身份。
+- mode 默认 exec，在独立 Shell 中顺序执行；不继承可见 PTY 的目录、环境、Shell 状态或身份。只有明确需要这些状态时指定 terminal。terminal 会向共享 PTY 输入命令；若前台正在运行交互程序，该程序可能消费这些输入。
 - exec 至多 8 个作业，最长 30 分钟。sudo 默认 false，true 仅支持 SSH exec，密码由桌面交互提供。批次遇到首个失败停止后续项；命令语法和执行环境由目标 Shell 决定。
 
 完成结果保留 stdin、stdout、stderr、exitCode、status、truncated 等原生字段，以及适用的编码和 streamMode 信息。PTY 不能分离错误流时合并输出并保留 `stderr=""`。输出有界，截断及不可解码数据按原生字段标注；不要假定所有驱动具有相同输出容量。

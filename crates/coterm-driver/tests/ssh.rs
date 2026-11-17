@@ -1448,7 +1448,7 @@ async fn external_mcp_uses_shared_ssh_and_host_secret_and_approval_paths() -> Re
     let waiting_id = client.next_id;
     let waiting = http_wire::start(client.address, &json!({
         "jsonrpc":"2.0","id":waiting_id,"method":"tools/call","params":{
-            "name":"coterm_ssh_command","arguments":{"name":instance.name,"commands":["original-waiting-command"]}
+            "name":"coterm_ssh_command","arguments":{"name":instance.name,"commands":["original-waiting-command"],"mode":"terminal"}
         }
     })).await?;
     let pending = timeout(Duration::from_millis(500), http_wire::receive(waiting))
@@ -1476,7 +1476,7 @@ async fn external_mcp_uses_shared_ssh_and_host_secret_and_approval_paths() -> Re
     runtime.approve(human(), ApproveProposal {
         operation_id:result_id.clone(), proposal_id:pending_record.proposal_id.ok_or_else(|| anyhow::anyhow!("No proposal"))?,
         driver_instance_id:Some(instance.driver_instance_id.clone()),
-        args:json!({"driverInstanceId":instance.driver_instance_id,"commands":["approved-default-wait false"]}),
+        args:json!({"driverInstanceId":instance.driver_instance_id,"commands":["approved-default-wait false"],"mode":"terminal"}),
     }).await?;
     wait_for_test_operation(&runtime, human(), &result_id).await?;
     let response = client
@@ -1502,7 +1502,7 @@ async fn external_mcp_uses_shared_ssh_and_host_secret_and_approval_paths() -> Re
         second.address,
         &json!({"jsonrpc":"2.0","id":second_waiting_id,"method":"tools/call","params":{
             "name":"coterm_ssh_command",
-            "arguments":{"name":instance.name,"commands":["second-client-command"]}
+            "arguments":{"name":instance.name,"commands":["second-client-command"],"mode":"terminal"}
         }}),
     )
     .await?;
@@ -1539,7 +1539,7 @@ async fn external_mcp_uses_shared_ssh_and_host_secret_and_approval_paths() -> Re
                     .proposal_id
                     .ok_or_else(|| anyhow::anyhow!("No proposal ID"))?,
                 driver_instance_id: Some(instance.driver_instance_id.clone()),
-                args: json!({"driverInstanceId":instance.driver_instance_id,"commands":["second-human-approved false"]}),
+                args: json!({"driverInstanceId":instance.driver_instance_id,"commands":["second-human-approved false"],"mode":"terminal"}),
             },
         )
         .await?;
@@ -1681,7 +1681,7 @@ async fn external_mcp_uses_shared_ssh_and_host_secret_and_approval_paths() -> Re
     let pending = client
         .tool(
             "coterm_ssh_command",
-            json!({"driverInstanceId":instance.driver_instance_id,"commands":["not-approved-original"]}),
+            json!({"driverInstanceId":instance.driver_instance_id,"commands":["not-approved-original"],"mode":"terminal"}),
         )
         .await?;
     let receipt = &pending["_meta"]["coterm/operation"];
@@ -1689,7 +1689,7 @@ async fn external_mcp_uses_shared_ssh_and_host_secret_and_approval_paths() -> Re
         operation_id:receipt["operationId"].as_str().ok_or_else(|| anyhow::anyhow!("Missing command"))?.to_owned(),
         proposal_id:receipt["proposalId"].as_str().ok_or_else(|| anyhow::anyhow!("Missing command proposal"))?.to_owned(),
         driver_instance_id:Some(instance.driver_instance_id.clone()),
-        args:json!({"driverInstanceId":instance.driver_instance_id,"commands":["human-approved-edit"]}),
+        args:json!({"driverInstanceId":instance.driver_instance_id,"commands":["human-approved-edit"],"mode":"terminal"}),
     }).await?;
     // Human input goes into exactly the same shell the external Agent uses.
     runtime
@@ -1792,7 +1792,7 @@ async fn external_mcp_uses_shared_ssh_and_host_secret_and_approval_paths() -> Re
     client.next_id += 1;
     let interrupted_id = client.next_id;
     let interrupted = http_wire::start(client.address, &json!({"jsonrpc":"2.0","id":interrupted_id,"method":"tools/call","params":{
-        "name":"coterm_ssh_command","arguments":{"name":instance.name,"commands":["never-completes"]}
+        "name":"coterm_ssh_command","arguments":{"name":instance.name,"commands":["never-completes"],"mode":"terminal"}
     }})).await?;
     timeout(Duration::from_secs(3), async {
         loop {
@@ -2138,7 +2138,7 @@ async fn running_command_output_is_readable_without_cursors_or_resubmission() ->
         .set_bypass(&instance.driver_instance_id, true)
         .await?;
     let submitted = coterm_mcp::server::call_tool(&runtime, &json!({
-        "name":"coterm_ssh_command", "arguments":{"name":instance.name,"commands":["never-completes"]},
+        "name":"coterm_ssh_command", "arguments":{"name":instance.name,"commands":["never-completes"],"mode":"terminal"},
         "_meta":{"coterm/waitTimeoutMs":50}
     })).await?;
     let operation_id = submitted["_meta"]["coterm/operation"]["operationId"].clone();

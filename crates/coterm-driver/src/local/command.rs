@@ -172,7 +172,11 @@ pub(crate) fn lines(bytes: &[u8], count: usize, dropped: bool, closed: bool) -> 
 
 /// Validates a command list and produces source for its configured Shell family.
 /// Unknown modes, unsupported families and source over 64 KiB are rejected before IO.
-pub(crate) fn source(args: &Value, family: ShellFamily) -> Result<(String, String, bool)> {
+pub(crate) fn source(
+    args: &Value,
+    family: ShellFamily,
+    mcp: bool,
+) -> Result<(String, String, bool)> {
     let object = args
         .as_object()
         .ok_or_else(|| anyhow!("Expected local command arguments"))?;
@@ -183,6 +187,7 @@ pub(crate) fn source(args: &Value, family: ShellFamily) -> Result<(String, Strin
         bail!("Unknown local command argument");
     }
     let mode = match args.get("mode") {
+        None if mcp => "exec",
         None => "terminal",
         Some(Value::String(mode)) => mode,
         _ => bail!("Invalid local command mode"),
@@ -426,12 +431,33 @@ mod tests {
         records.select(&"\0".repeat(20000), false);
         assert!(serde_json::to_vec(&records.selected())?.len() <= RESULT_BYTES);
         assert_eq!(records.selected()["truncated"], true);
-        assert!(source(&json!({"commands":[""],"mode":"exec"}), ShellFamily::Posix).is_err());
         assert!(source(
-            &json!({"commands":["echo ok"],"mode":"guess"}),
-            ShellFamily::Posix
+            &json!({"commands":[""],"mode":"exec"}),
+            ShellFamily::Posix,
+            false
         )
         .is_err());
+        assert!(source(
+            &json!({"commands":["echo ok"],"mode":"guess"}),
+            ShellFamily::Posix,
+            false
+        )
+        .is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn local_mcp_command_defaults_to_exec_but_native_command_keeps_terminal() -> Result<()> {
+        assert!(source(&json!({"commands":["pwd"]}), ShellFamily::Posix, true)?.2);
+        assert!(!source(&json!({"commands":["pwd"]}), ShellFamily::Posix, false)?.2);
+        assert!(
+            !source(
+                &json!({"commands":["pwd"],"mode":"terminal"}),
+                ShellFamily::Posix,
+                true
+            )?
+            .2
+        );
         Ok(())
     }
 }

@@ -53,6 +53,7 @@ Python 3.9 的 raw 模式曾留下 IXOFF，捕获过混入的 XOFF；测试已�
 | SSH 现场复合命令返回空输出 | 本地复合命令、目录变化、ANSI 与分包边界回归已过，尚未在原反馈远端复测 | 保留完整 structuredContent、两流编码、截断和字节信息；同一 operationId 比对 read_lines 与对话，确认远端 Shell／提示符。不能只看旧 text 字段判断无输出 |
 | Serial MCP 客户端导出 parameters=null | 服务端工具目录已验证存在 inputSchema；客户端导出缺失尚未归因 | 同一连接比对原始 tools/list 和客户端转换值，不假定服务端漏发 |
 | SSH 认证与终端限制 | 当前为密码认证、一次 sudo／NOPASSWD，POSIX 前台；人工复杂输入观察不保证可靠 | 实际远端 TTY／MFA／自定义提示符与长连接分别验收；不把未支持能力写成已完成 |
+| MCP 显式共享 PTY 与交互程序 | SSH／Local MCP 命令省略 mode 时使用隔离 exec；显式 terminal 仍会把输入送入共享 PTY，交互程序可能消费输入；复现与边界见 [Agent 使用反馈](agent_use.md) | 仅在确认 PTY 处于 Shell 提示符且确需沿用其状态时指定 terminal；跨平台忙碌检测尚无可靠实现 |
 | Local 后台取消范围 | Windows 只保证实际结束的直接子进程，人工原始输入不生成可靠对话 | 独立设计并验收后代进程回收；其他系统真实 Shell 另验 |
 | 网络现场兼容 | Windows 回环与协议夹具已验收，未覆盖实际代理部署和远程 Telnet 设备 | 真设备、代理和断线重连现场复测 |
 | 非 Windows 与发行 | 工作区无明文回退，macOS／Linux 原生、安装与安全存储未完整验收 | 按发行检查执行，不能以浏览器测试替代 |

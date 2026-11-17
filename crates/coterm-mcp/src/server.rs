@@ -33,7 +33,7 @@ pub(crate) fn initialize_result(params: &Value) -> Result<Value, (i32, String)> 
         "protocolVersion": version,
         "capabilities": {"tools": {"listChanged": false}},
         "serverInfo": {"name": "Coterm", "version": env!("CARGO_PKG_VERSION")},
-        "instructions": "Start with coterm_instances for connection state and capabilities. Use coterm_terminal_command for SSH/Local, coterm_stream_command for Serial/TCP/Telnet, and coterm_read_output for lines, dialogues or human selections. Omit name only with one globally confirmed connected instance and no unknown states. Credentials stay in the desktop. Writes may return pending_approval; query the same operation with coterm_operation instead of resubmitting. Waiting expires without cancellation or replay. Choose exec only for expected long tasks or an explicit background request."
+        "instructions": "Start with coterm_instances for connection state and capabilities. Use coterm_terminal_command for SSH/Local, coterm_stream_command for Serial/TCP/Telnet, and coterm_read_output for lines, dialogues or human selections. Omit name only with one globally confirmed connected instance and no unknown states. Credentials stay in the desktop. Writes may return pending_approval; query the same operation with coterm_operation instead of resubmitting. Waiting expires without cancellation or replay. coterm_terminal_command defaults to isolated exec; choose terminal explicitly only when the command must use the visible PTY and its current state."
     }))
 }
 

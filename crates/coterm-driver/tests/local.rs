@@ -631,6 +631,78 @@ async fn mcp_commands_preserve_approval_results_and_idle_terminal() -> Result<()
 }
 
 #[tokio::test]
+async fn mcp_default_exec_does_not_feed_an_active_terminal_prompt() -> Result<()> {
+    use coterm_core::approval_policy::{ApprovalMode, ApprovalPolicy};
+
+    let runtime = runtime();
+    register(&runtime).await?;
+    runtime.start(DRIVER_ID).await?;
+    let instance = runtime
+        .create_instance(DRIVER_ID, json!({"shell":test_shell()}))
+        .await?;
+    let id = &instance.driver_instance_id;
+    let human = CallerContext {
+        source: OperationSource::Human,
+        session_id: instance.session_id.clone(),
+        driver_id: Some(DRIVER_ID.to_owned()),
+    };
+    let agent = CallerContext {
+        source: OperationSource::Agent,
+        ..human.clone()
+    };
+
+    call(&runtime, &human, "local.restart", Some(id), json!({})).await?;
+    let cursor = settle(&runtime, &human, id, "0", Duration::from_millis(800)).await?;
+    let prompt = if cfg!(windows) {
+        "set /p answer=coterm-blocked>"
+    } else {
+        "printf 'coterm-blocked>'; read answer"
+    };
+    call(
+        &runtime,
+        &human,
+        "local.input",
+        Some(id),
+        json!({"data": STANDARD.encode(format!("{prompt}\r").as_bytes())}),
+    )
+    .await?;
+    read_until(&runtime, &human, id, &cursor, "coterm-blocked>", 1).await?;
+
+    runtime
+        .set_approval_policy(
+            id,
+            ApprovalPolicy {
+                mode: ApprovalMode::AllowMatches,
+                patterns: vec!["^echo coterm-isolated$".to_owned()],
+            },
+        )
+        .await?;
+    let mut request = operation(
+        "mcp.local.command",
+        Some(id),
+        json!({"driverInstanceId":id,"commands":["echo coterm-isolated"]}),
+    );
+    request.wait_timeout_ms = Some(3000);
+    let receipt = runtime.submit_until_approval(agent, request).await?;
+    let output = receipt.output.clone().unwrap_or(Value::Null);
+
+    call(&runtime, &human, "local.restart", Some(id), json!({})).await?;
+    runtime.destroy_instance(id).await?;
+    runtime.stop(DRIVER_ID).await?;
+
+    assert_eq!(receipt.status, OperationStatus::Completed, "{receipt:?}");
+    assert_eq!(output["structuredContent"]["mode"], "exec", "{output:?}");
+    assert!(
+        output["structuredContent"]["stdout"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("coterm-isolated"),
+        "{output:?}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn runtime_cancels_local_jobs_before_their_timeout() -> Result<()> {
     let runtime = runtime();
     register(&runtime).await?;
