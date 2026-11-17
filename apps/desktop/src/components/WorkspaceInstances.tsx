@@ -1,10 +1,11 @@
 import { useState, type DragEvent } from "react";
-import { ChevronDown, ChevronRight, MoreHorizontal, PlugZap, ShieldCheck, RotateCcw, Trash2, X } from "lucide-react";
+import { ChevronDown, ChevronRight, MoreHorizontal, ShieldCheck, RotateCcw, Trash2, X } from "lucide-react";
 import { t } from "../i18n";
 import type { InstanceInfo, SavedWorkspace, WorkspaceGroup } from "../host-api";
 import { cn } from "../lib/utils";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
+import { DriverIcon } from "./DriverIcon";
 
 const ENTRY_TYPE = "application/x-coterm-workspace-entry";
 export const workspaceName = (group: WorkspaceGroup) => group.id === "default" ? t("Default workspace") : group.name;
@@ -96,7 +97,7 @@ export function WorkspaceInstances(props: Props) {
             <button type="button" title={`${instance.driverId} · ${instance.status}`}
               aria-current={activeInstanceId === instance.driverInstanceId ? "true" : undefined}
               onClick={() => props.onSelect(instance, group.id)} className="flex h-full min-w-0 flex-1 items-center gap-2 pl-2 pr-1 text-left text-xs">
-              <PlugZap size={15} strokeWidth={1.5} className="shrink-0 text-primary" data-driver-icon />
+              <DriverIcon driverId={instance.driverId} size={15} strokeWidth={1.5} className="shrink-0 text-primary" />
               <span className="truncate">{instance.name}</span>
             </button>
             <div className="flex shrink-0 items-center pr-1 opacity-0 group-hover/instance:opacity-100 group-focus-within/instance:opacity-100">
@@ -117,7 +118,7 @@ export function WorkspaceInstances(props: Props) {
           className="group/instance mb-1 flex min-h-10 items-center rounded-lg border border-border bg-muted/30">
           <button type="button" className="flex min-w-0 flex-1 items-center gap-2 px-2 py-2 text-left text-xs"
             title={t("Restore instance")} disabled={busy} onClick={() => props.onRestore(entry.configRef)}>
-            <PlugZap size={15} strokeWidth={1.5} className="shrink-0 text-muted-foreground" data-driver-icon />
+            <DriverIcon driverId={entry.driverId} size={15} strokeWidth={1.5} className="shrink-0 text-muted-foreground" />
             <span className="min-w-0 truncate">{entry.name}</span>
           </button>
           <Button type="button" variant="ghost" size="icon" disabled={busy}

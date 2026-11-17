@@ -13,6 +13,12 @@ test("workspace groups manage and move live/saved instances without reconnecting
   assertFreshBuild();
   const scenario = structuredClone(defaultScenario);
   scenario.catalog.issues = [];
+  scenario.catalog.drivers.push(
+    {id:"serial",name:"Serial",version:"0.1.0",hasFrontend:true,running:false},
+    {id:"local",name:"Local",version:"0.1.0",hasFrontend:false,running:false},
+    {id:"telnet",name:"Telnet",version:"0.1.0",hasFrontend:true,running:false},
+    {id:"tcp",name:"Raw TCP",version:"0.1.0",hasFrontend:true,running:false},
+  );
   scenario.workspace = {
     groups:[{id:"default",name:"Default workspace"}],
     entries:[
@@ -56,6 +62,8 @@ test("workspace groups manage and move live/saved instances without reconnecting
     assert.equal(await run(`document.querySelector('[role=toolbar]').textContent.includes('MCP')`), false);
     assert.equal(await run(`document.querySelector('[role=toolbar] #toggle-instances-button')`), null);
     assert.equal(await run(`!!document.querySelector('aside[aria-label="Built-in drivers"]')`), true);
+    assert.equal(await run(`new Set([...document.querySelectorAll('nav[aria-label="Driver list"] [data-driver-icon]')].map(icon=>icon.innerHTML)).size`), 5,
+      "the five built-in drivers use distinct icons");
     assert.equal(await run(`document.querySelector('aside[aria-label="Built-in drivers"] h1')`), null);
     assert.equal(await run(`document.querySelectorAll('#toggle-instances-button').length`), 1);
     assert.equal(await run(`document.querySelector('[data-instance-id] [data-driver-icon]').innerHTML === document.querySelector('nav[aria-label="Driver list"] [data-driver-icon]').innerHTML`), true);

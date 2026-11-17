@@ -3,8 +3,9 @@ import { useI18n } from "./use-i18n";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useInstanceViews } from "./use-instance-views";
 import { InstanceTabs, instanceTabId, instancePanelId } from "./components/InstanceTabs";
-import { PanelLeftClose, PanelLeftOpen, Plus, PlugZap, Settings2, ShieldAlert, ShieldCheck, SlidersHorizontal, TerminalSquare, Trash2 } from "lucide-react";
+import { PanelLeftClose, PanelLeftOpen, Plus, Settings2, ShieldAlert, ShieldCheck, SlidersHorizontal, TerminalSquare, Trash2 } from "lucide-react";
 import { WorkspaceInstances, workspaceName } from "./components/WorkspaceInstances";
+import { DriverIcon } from "./components/DriverIcon";
 import { ThemeSwitcher } from "./components/ThemeSwitcher";
 import { AppSettings } from "./components/settings/AppSettings";
 import { Button } from "./components/ui/button";
@@ -402,7 +403,7 @@ export default function App() {
                 className={cn("group relative mx-1 mb-1 flex min-h-16 w-[calc(100%-0.5rem)] rounded-md flex-col items-center justify-center gap-1.5 border px-1 py-3 transition-colors hover:bg-accent", selectedDriverId === driver.id ? "border-primary bg-accent" : "border-transparent")}
               >
                 <span className="relative grid h-7 w-8 place-items-center">
-                  <PlugZap size={25} strokeWidth={1.5} className={driver.running ? "text-primary" : "text-muted-foreground"} data-driver-icon />
+                  <DriverIcon driverId={driver.id} size={25} strokeWidth={1.5} className={driver.running ? "text-primary" : "text-muted-foreground"} />
                   <span className={cn("absolute bottom-0 right-0 size-2 rounded-full ring-2 ring-card", driver.running ? "bg-success" : "bg-muted-foreground")} />
                 </span>
                 <span className="w-full truncate text-center text-[10px] text-coterm-text-subtle">{driver.name}</span>
@@ -492,7 +493,7 @@ export default function App() {
             className="min-h-0 flex-1 overflow-y-auto p-5 sm:p-8">
             <div className="mx-auto max-w-xl rounded-lg border border-border bg-card p-5 sm:p-6">
               <div className="mb-6 flex items-center gap-3">
-                <PlugZap className="size-6 shrink-0 text-primary" />
+                <DriverIcon driverId={selectedDriver.id} className="size-6 shrink-0 text-primary" />
                 <div className="min-w-0">
                   <h1 className="text-lg font-medium">{selectedDriver.name} · {t("New instance")}</h1>
                 </div>

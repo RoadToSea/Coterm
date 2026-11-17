@@ -1,9 +1,10 @@
 import { useEffect, useRef, type KeyboardEvent } from "react";
-import { PlugZap, X } from "lucide-react";
+import { X } from "lucide-react";
 import type { InstanceInfo } from "../host-api";
 import { t } from "../i18n";
 import { cn } from "../lib/utils";
 import { Button } from "./ui/button";
+import { DriverIcon } from "./DriverIcon";
 
 export const instanceTabId = (id: string) => `instance-tab-${id}`;
 export const instancePanelId = (id: string) => `instance-panel-${id}`;
@@ -78,7 +79,7 @@ export function InstanceTabs({ instances, activeId, onSelect, onClose }: Props) 
             tabIndex={active || (!activeId && index === 0) ? 0 : -1}
             title={`${instance.name} · ${instance.driverId}`} className={cn("max-w-52 justify-start font-medium", active ? "text-foreground" : "text-muted-foreground")}
             onClick={() => onSelect(instance.driverInstanceId)} onKeyDown={event => navigate(event, index)}>
-            <PlugZap data-icon="inline-start" /><span className="truncate">{instance.name}</span>
+            <DriverIcon driverId={instance.driverId} data-icon="inline-start" /><span className="truncate">{instance.name}</span>
           </Button>
           <Button type="button" variant="ghost" size="icon" className="mr-1 size-6 shrink-0 rounded-md hover:bg-muted"
             aria-label={t("Close view {name}", { name: instance.name })} title={t("Close view; connection stays open")}
