@@ -66,7 +66,8 @@ test("workspace groups manage and move live/saved instances without reconnecting
     const hover = await run(`(() => {const r=document.querySelector('[data-instance-id]').getBoundingClientRect();return {x:r.left+15,y:r.top+15};})()`);
     await client.send("Input.dispatchMouseEvent", {type:"mouseMoved",...hover});
     await wait(`getComputedStyle(document.querySelector('${actions}')).opacity === '1'`, "hover reveals horizontal actions");
-    assert.ok(await run(`(() => {const [a,b]=document.querySelectorAll('${actions} button');const x=a.getBoundingClientRect(),y=b.getBoundingClientRect();return Math.abs(x.top-y.top)<1 && y.left>=x.right;})()`));
+    assert.equal(await run(`document.querySelectorAll('${actions} button').length`), 3, "open instances expose close, manage, and destroy actions");
+    assert.ok(await run(`(() => {const [close,manage,destroy]=document.querySelectorAll('${actions} button');const x=close.getBoundingClientRect(),y=manage.getBoundingClientRect(),z=destroy.getBoundingClientRect();return close.getAttribute('aria-label')==='Close view Prod-Server' && Math.abs(x.top-y.top)<1 && y.left>=x.right && z.left>=y.right;})()`));
     await client.send("Input.dispatchMouseEvent", {type:"mouseMoved",x:900,y:100});
     await run(`document.querySelector('${actions} button').focus()`);
     assert.equal(await run(`getComputedStyle(document.querySelector('${actions}')).opacity`), "1", "keyboard focus reveals actions too");
@@ -113,6 +114,13 @@ test("workspace groups manage and move live/saved instances without reconnecting
     assert.equal(await run(`__cotermTest.workspace().entries.filter(entry=>entry.configRef==='ref-saved').length`), 1, "restore reuses its saved reference");
     assert.equal(await run(`__cotermTest.countCalls('restore_saved_instance')`), 1);
     assert.equal(await run(`__cotermTest.invocations.some(item=>item.args.operation==='ssh.connect')`), false, "restoration never connects automatically");
+    await run(`document.querySelector('[data-instance-id="inst-1"] button[aria-label="Close view Prod-Server"]').click()`);
+    await wait(`!document.getElementById('instance-tab-inst-1') && !!document.querySelector('[data-instance-id="inst-1"]')`, "sidebar closes the open view");
+    assert.equal(await run(`__cotermTest.countCalls('destroy_instance')`), 0, "closing a view does not destroy its instance");
+    assert.equal(await run(`__cotermTest.workspace().entries.some(entry=>entry.instanceId==='inst-1')`), true, "closing a view keeps its saved entry");
+    await run(`document.querySelector('[data-instance-id="inst-1"] > button').click()`);
+    await wait(`!!document.getElementById('instance-tab-inst-1')`, "sidebar reopens the closed view");
+    assert.equal(await run(`__cotermTest.countCalls('destroy_instance')`), 0);
     await run(`document.querySelector('button[aria-label="Delete instance Standby"]').click()`);
     await confirm();
     await wait(`document.querySelectorAll('[data-instance-id]').length === 1`, "instance deleted directly from its card");

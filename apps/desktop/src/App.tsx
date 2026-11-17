@@ -463,8 +463,9 @@ export default function App() {
                 {["w-3/4", "w-1/2"].map((width) => <Skeleton key={width} className={cn("h-3", width)} />)}
               </div>
             ) : <WorkspaceInstances workspace={workspace ?? EMPTY_WORKSPACE} instances={orderedInstances}
-              activeInstanceId={selectedDriverId ? null : activeInstanceId} activeWorkspaceId={activeWorkspaceId} busy={busyId !== null}
+              openInstanceIds={views.ids} activeInstanceId={selectedDriverId ? null : activeInstanceId} activeWorkspaceId={activeWorkspaceId} busy={busyId !== null}
               onSelect={(instance, groupId) => { views.open(instance.driverInstanceId); setActiveWorkspaceId(groupId); }}
+              onCloseView={views.close}
               onSelectWorkspace={setActiveWorkspaceId} onManage={instance => setManagedInstanceId(instance.driverInstanceId)}
               onDestroy={instance => void destroyInstance(instance)} onDeleteWorkspace={group => void deleteWorkspace(group)}
               onMove={(ref, groupId) => void moveWorkspaceEntry(ref, groupId)} onRestore={ref => void restoreSavedInstance(ref)}

@@ -1,5 +1,5 @@
 import { useState, type DragEvent } from "react";
-import { ChevronDown, ChevronRight, MoreHorizontal, PlugZap, ShieldCheck, RotateCcw, Trash2 } from "lucide-react";
+import { ChevronDown, ChevronRight, MoreHorizontal, PlugZap, ShieldCheck, RotateCcw, Trash2, X } from "lucide-react";
 import { t } from "../i18n";
 import type { InstanceInfo, SavedWorkspace, WorkspaceGroup } from "../host-api";
 import { cn } from "../lib/utils";
@@ -12,10 +12,12 @@ export const workspaceName = (group: WorkspaceGroup) => group.id === "default" ?
 interface Props {
   workspace: SavedWorkspace;
   instances: InstanceInfo[];
+  openInstanceIds: readonly string[];
   activeInstanceId: string | null;
   activeWorkspaceId: string;
   busy: boolean;
   onSelect(instance: InstanceInfo, workspaceId: string): void;
+  onCloseView(instanceId: string): void;
   onSelectWorkspace(workspaceId: string): void;
   onManage(instance: InstanceInfo): void;
   onDestroy(instance: InstanceInfo): void;
@@ -31,7 +33,7 @@ interface Props {
 export function WorkspaceInstances(props: Props) {
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [dropTarget, setDropTarget] = useState<string | null>(null);
-  const { workspace, instances, activeInstanceId, activeWorkspaceId, busy } = props;
+  const { workspace, instances, openInstanceIds, activeInstanceId, activeWorkspaceId, busy } = props;
   const liveIds = new Set(instances.map(instance => instance.driverInstanceId));
   const startDrag = (event: DragEvent, configRef: string) => {
     event.dataTransfer.setData(ENTRY_TYPE, configRef);
@@ -98,6 +100,9 @@ export function WorkspaceInstances(props: Props) {
               <span className="truncate">{instance.name}</span>
             </button>
             <div className="flex shrink-0 items-center pr-1 opacity-0 group-hover/instance:opacity-100 group-focus-within/instance:opacity-100">
+              {openInstanceIds.includes(instance.driverInstanceId) && <Button type="button" variant="ghost" size="icon" className="size-6"
+                disabled={busy} aria-label={t("Close view {name}", { name: instance.name })} title={t("Close view; connection stays open")}
+                onClick={() => props.onCloseView(instance.driverInstanceId)}><X data-icon="inline-start" /></Button>}
               <Button type="button" variant="ghost" size="icon" className="size-6" disabled={busy}
                 title={t("Manage {name}", { name: instance.name })} aria-label={t("Manage {name}", { name: instance.name })}
                 aria-haspopup="dialog" onClick={() => props.onManage(instance)}><MoreHorizontal data-icon="inline-start" /></Button>
