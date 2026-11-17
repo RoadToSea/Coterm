@@ -20,23 +20,29 @@ export function approvalError(reason: unknown): string {
 interface Props {
   draft: ApprovalGroupDraft;
   onChange(draft: ApprovalGroupDraft): void;
-  custom: string;
-  onCustomChange(text: string): void;
   busy: boolean;
   onError(message: string): void;
 }
 
 /** Edits a local group draft and previews it through the host; never saves or executes. */
-export function ApprovalGroupEditor({ draft, onChange, custom, onCustomChange, busy, onError }: Props) {
+export function ApprovalGroupEditor({ draft, onChange, busy, onError }: Props) {
   const [text, setText] = useState("");
   const [preview, setPreview] = useState<boolean | null>(null);
   const [testing, setTesting] = useState(false);
+  const newRuleInput = useRef<HTMLInputElement>(null);
+  const focusNewRule = useRef(false);
   const live = useRef(true);
   useEffect(() => { live.current = true; return () => { live.current = false; }; }, []);
   useEffect(() => { setPreview(null); }, [draft, text]);
+  useEffect(() => {
+    if (!focusNewRule.current) return;
+    focusNewRule.current = false;
+    newRuleInput.current?.focus();
+  }, [draft.patterns.length]);
   const add = () => {
-    if (!custom.trim() || draft.patterns.includes(custom)) return;
-    onChange({ ...draft, patterns: [...draft.patterns, custom] }); onCustomChange("");
+    if (draft.patterns.length >= 128) return;
+    focusNewRule.current = true;
+    onChange({ ...draft, patterns: [...draft.patterns, ""] });
   };
   const test = async () => {
     if (testing || busy) return;
@@ -68,26 +74,24 @@ export function ApprovalGroupEditor({ draft, onChange, custom, onCustomChange, b
         ? "Empty group: all commands require approval." : "Empty group: all commands eligible for matching skip approval.")}</p>}
     </Field>
     <Field>
-      <FieldLabel htmlFor="approval-pattern">{t("Regular expression rules")}</FieldLabel>
-      {draft.patterns.map((pattern, index) => <div key={index} className="flex min-w-0 items-center gap-2">
-        <Input aria-label={t("Rule {number}", { number: index + 1 })} value={pattern} spellCheck={false} maxLength={2048}
+      <FieldLabel>{t("Regular expression rules")}</FieldLabel>
+      {draft.patterns.map((pattern, index) => <div key={index} data-rule-row className="flex min-w-0 items-center gap-2">
+        <Input ref={index === draft.patterns.length - 1 ? newRuleInput : undefined} id={`approval-pattern-${index}`}
+          aria-label={t("Rule {number}", { number: index + 1 })} aria-invalid={!pattern.trim()} value={pattern} spellCheck={false} maxLength={2048}
+          placeholder={t("Enter a regular expression")}
           onChange={event => onChange({ ...draft, patterns: draft.patterns.map((item, position) => position === index ? event.target.value : item) })} />
         <Button type="button" variant="ghost" size="icon" aria-label={t("Remove rule {number}", { number: index + 1 })}
-          onClick={() => onChange({ ...draft, patterns: draft.patterns.filter((_, position) => position !== index) })}><Trash2 /></Button>
+          onClick={() => onChange({ ...draft, patterns: draft.patterns.filter((_, position) => position !== index) })}><Trash2 data-icon="inline-start" /></Button>
       </div>)}
       {!draft.patterns.length && <p className="text-xs text-muted-foreground">{t("No rules yet.")}</p>}
-      <Input id="approval-pattern" value={custom} spellCheck={false} maxLength={2048} placeholder="^pwd$"
-        onChange={event => onCustomChange(event.target.value)} onKeyDown={event => {
-          if (event.key === "Enter" && !event.nativeEvent.isComposing) { event.preventDefault(); add(); }
-        }} />
-      <Button type="button" variant="outline" size="sm" className="self-start" disabled={!custom.trim() || draft.patterns.length >= 128 || draft.patterns.includes(custom)} onClick={add}>
+      <Button type="button" variant="outline" size="sm" className="self-start" disabled={draft.patterns.length >= 128} onClick={add}>
         <Plus data-icon="inline-start" />{t("Add rule")}
       </Button>
     </Field>
     <Field>
       <FieldLabel htmlFor="approval-preview">{t("Test a command")}</FieldLabel>
       <Textarea id="approval-preview" rows={2} value={text} maxLength={65536} onChange={event => setText(event.target.value)} />
-      <Button type="button" variant="outline" size="sm" className="self-start" disabled={!text || !!custom.trim()} onClick={() => void test()}>{t("Test matching")}</Button>
+      <Button type="button" variant="outline" size="sm" className="self-start" disabled={!text || draft.patterns.some(pattern => !pattern.trim())} onClick={() => void test()}>{t("Test matching")}</Button>
       <p role="status" className="text-sm">{preview === null ? "" : t(preview ? "Requires human approval" : "Skips human approval")}</p>
     </Field>
   </FieldGroup>;

@@ -20,7 +20,6 @@ export function ApprovalRuleGroups({ onClose, initialGroupId }: Props) {
   const [catalog, setCatalog] = useState<ApprovalSnapshot | null>(null);
   const [draft, setDraft] = useState<ApprovalGroupDraft | null>(null);
   const [saved, setSaved] = useState<ApprovalRuleGroup | null>(null);
-  const [custom, setCustom] = useState("");
   const [query, setQuery] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -28,9 +27,9 @@ export function ApprovalRuleGroups({ onClose, initialGroupId }: Props) {
   const [details, setDetails] = useState(!!initialGroupId);
   const [pending, setPending] = useState<(() => void) | null>(null);
   const action = useRef(false);
-  const dirty = !!custom || JSON.stringify(draft) !== JSON.stringify(saved);
+  const dirty = JSON.stringify(draft) !== JSON.stringify(saved);
   const users = catalog?.instances.filter(instance => instance.ruleGroupId === draft?.id && draft?.id) ?? [];
-  const canSave = !!draft?.name.trim() && dirty && !custom.trim();
+  const canSave = !!draft?.name.trim() && dirty && !draft.patterns.some(pattern => !pattern.trim());
 
   useEffect(() => {
     let disposed = false;
@@ -49,7 +48,7 @@ export function ApprovalRuleGroups({ onClose, initialGroupId }: Props) {
   };
   const select = (group: ApprovalRuleGroup | null) => {
     setSaved(group); setDraft(group ? structuredClone(group) : { id: null, name: "", mode: "allow_matches", patterns: [] });
-    setCustom(""); setError(""); setDetails(true);
+    setError(""); setDetails(true);
   };
   const perform = async (task: () => Promise<void>) => {
     if (action.current) return;
@@ -64,21 +63,21 @@ export function ApprovalRuleGroups({ onClose, initialGroupId }: Props) {
       const group = await hostAPI.saveApprovalGroup(draft);
       setCatalog(current => current ? { ...current, groups: current.groups.some(item => item.id === group.id)
         ? current.groups.map(item => item.id === group.id ? group : item) : [...current.groups, group] } : current);
-      setDraft(group); setSaved(group); setCustom("");
+      setDraft(group); setSaved(group);
       continuation.run = pending ?? undefined; setPending(null);
     });
     // A pending delete must acquire the action lock after saving releases it.
     continuation.run?.();
   };
   const discard = () => {
-    setDraft(saved ? structuredClone(saved) : null); setCustom(""); setError("");
+    setDraft(saved ? structuredClone(saved) : null); setError("");
     const next = pending; setPending(null); next?.();
   };
   const remove = () => perform(async () => {
     if (!draft?.id || users.length) return;
     await hostAPI.deleteApprovalGroup(draft.id);
     setCatalog(current => current ? { ...current, groups: current.groups.filter(group => group.id !== draft.id) } : current);
-    setSaved(null); setDraft(null); setCustom(""); setDetails(false);
+    setSaved(null); setDraft(null); setDetails(false);
   });
 
   return <Modal id="approval-rule-groups-dialog" title={t("Approval rule groups")} onClose={() => attempt(onClose)}
@@ -106,10 +105,10 @@ export function ApprovalRuleGroups({ onClose, initialGroupId }: Props) {
       <section aria-label={t("Edit rule group")} className={cn("flex min-w-0 flex-col gap-5 p-5", !details && "max-md:hidden")}>
         <Button variant="ghost" size="sm" className="self-start md:hidden" disabled={busy} onClick={() => attempt(() => setDetails(false))}><ArrowLeft data-icon="inline-start" />{t("Rule groups")}</Button>
         {draft ? <>
-          <ApprovalGroupEditor key={draft.id ?? "new"} draft={draft} onChange={next => { setDraft(next); setError(""); }} custom={custom} onCustomChange={setCustom} busy={busy} onError={setError} />
-          <div className="border-t border-border pt-4 text-xs text-muted-foreground" data-group-users>
-            {t(users.length ? "Saving applies to: {names}" : "This group is not assigned to any instance.", { names: users.map(instance => instance.name).join(", ") })}
-          </div>
+          <ApprovalGroupEditor key={draft.id ?? "new"} draft={draft} onChange={next => { setDraft(next); setError(""); }} busy={busy} onError={setError} />
+          {!!users.length && <div className="border-t border-border pt-4 text-xs text-muted-foreground" data-group-users>
+            {t("Saving applies to: {names}", { names: users.map(instance => instance.name).join(", ") })}
+          </div>}
           <div className="flex flex-wrap items-center gap-2 border-t border-border pt-4">
             <Button type="button" variant="outline" size="sm" disabled={busy} onClick={() => attempt(() => {
               select(null); setDraft({ ...structuredClone(draft), id: null, name: t("{name} copy", { name: draft.name }) });
@@ -121,7 +120,7 @@ export function ApprovalRuleGroups({ onClose, initialGroupId }: Props) {
             <Button type="button" variant="ghost" size="sm" className="ml-auto" disabled={busy || !dirty} onClick={discard}>{t("Discard changes")}</Button>
             <Button type="button" size="sm" disabled={busy || !canSave} onClick={() => void save()}>{t("Save group")}</Button>
           </div>
-          <p role="status" className="text-xs text-muted-foreground">{t(custom.trim() ? "Add the typed rule before saving." : dirty ? "Unsaved changes" : "Saved")}</p>
+          {dirty && <p role="status" className="text-xs text-muted-foreground">{t("Unsaved changes")}</p>}
         </> : <p className="py-12 text-sm text-muted-foreground">{t("Select a rule group or create one.")}</p>}
       </section>
     </div>}

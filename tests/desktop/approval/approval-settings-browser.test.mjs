@@ -24,8 +24,11 @@ async function harness(t, scenario) {
   const input = async (id, value) => run(`(() => { const input=document.getElementById(${JSON.stringify(id)});
     Object.getOwnPropertyDescriptor(input instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype,'value').set.call(input,${JSON.stringify(value)});
     input.dispatchEvent(new Event('input',{bubbles:true})); })()`);
+  const ruleInput = async (number, value) => run(`(() => { const input=document.querySelector('input[aria-label="Rule ${number}"]');
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,${JSON.stringify(value)});
+    input.dispatchEvent(new Event('input',{bubbles:true})); })()`);
   const click = text => run(`[...document.querySelectorAll('dialog[open] button')].find(button=>button.textContent===${JSON.stringify(text)}).click()`);
-  return {client,run,wait,input,click,close:async()=>{await session.close();await new Promise(resolve=>server.server.close(resolve));}};
+  return {client,run,wait,input,ruleInput,click,close:async()=>{await session.close();await new Promise(resolve=>server.server.close(resolve));}};
 }
 
 const twoInstances = () => {
@@ -37,12 +40,20 @@ const twoInstances = () => {
 test("independent rule groups work without instances and preserve failed saves and unsaved drafts", async t => {
   const scenario=structuredClone(defaultScenario); scenario.instances=[]; scenario.approvalPreview={ls:false};
   const session=await harness(t,scenario);if(!session)return;
-  const {client,run,wait,input,click}=session;
+  const {client,run,wait,input,ruleInput,click}=session;
   try {
     await run(`document.getElementById('open-settings').click()`);await click('Manage rule groups');
     await wait(`!!document.getElementById('approval-rule-groups-dialog') && !!document.querySelector('button')`);
     await wait(`[...document.querySelectorAll('dialog button')].some(button=>button.textContent==='New rule group')`);
-    await click('New rule group');await input('approval-group-name','Board rules');await input('approval-pattern','^ls$');await click('Add rule');
+    await click('New rule group');await input('approval-group-name','Board rules');
+    assert.equal(await run(`document.querySelector('input[aria-label="Rule 1"]')`),null,"rule inputs are added only after the Add rule action");
+    assert.equal(await run(`document.querySelector('[data-group-users]')`),null,"unassigned groups do not show a redundant status message");
+    assert.equal(await run(`[...document.querySelectorAll('[role=status]')].some(node=>node.textContent==='Saved')`),false,"saved status is omitted");
+    await click('Add rule');await wait(`!!document.querySelector('input[aria-label="Rule 1"]')`);
+    assert.equal(await run(`document.activeElement===document.querySelector('input[aria-label="Rule 1"]')`),true,"new rule input receives focus");
+    assert.equal(await run(`[...document.querySelectorAll('dialog button')].find(button=>button.textContent==='Save group').disabled`),true,"empty rule rows cannot be saved");
+    await ruleInput(1,'^ls$');await click('Add rule');await wait(`!!document.querySelector('input[aria-label="Rule 2"]')`);await ruleInput(2,'^pwd$');
+    assert.ok(await run(`Math.abs(document.querySelector('input[aria-label="Rule 1"]').getBoundingClientRect().width-document.querySelector('input[aria-label="Rule 2"]').getBoundingClientRect().width)<1`),"rule rows align with the same input width");
     assert.equal(await run(`document.querySelector('[aria-labelledby=approval-mode-label]').getAttribute('aria-description')`),'Unmatched commands require approval.');
     assert.equal(await run(`document.querySelector('[aria-labelledby=approval-mode-label]').title`),'Unmatched commands require approval.');
     await run(`window.saveGate=__cotermTest.gate('save_approval_group')`);await click('Save group');await wait(`saveGate.size()===1`);
@@ -51,6 +62,7 @@ test("independent rule groups work without instances and preserve failed saves a
     assert.equal(await run(`document.querySelector('input[aria-label="Rule 1"]').value`),'^ls$');
     assert.equal(await run(`__cotermTest.workspace().approvalRuleGroups.length`),0);
     await click('Save group');await wait(`__cotermTest.workspace().approvalRuleGroups.length===1`);
+    assert.equal(await run(`[...document.querySelectorAll('[role=status]')].some(node=>node.textContent==='Saved')`),false,"successful saves do not leave a static saved message");
     await input('approval-preview','ls');await click('Test matching');await wait(`document.getElementById('approval-rule-groups-dialog').textContent.includes('Skips human approval')`);
     assert.deepEqual(await run(`Object.keys(__cotermTest.invocations.find(call=>call.command==='preview_approval_policy').args.policy).sort()`),['mode','patterns']);
     await click('Matching commands require approval');await click('Save group');
